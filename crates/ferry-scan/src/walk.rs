@@ -133,6 +133,9 @@ impl<'a> Walker<'a> {
     ) -> Result<Option<ScanOutput>, ScanError> {
         // Deepest-first: every dirty descendant is rebuilt before any of its
         // ancestors needs its id.
+        if dirty_closed.is_empty() {
+            return Ok(None);
+        }
         let mut order: Vec<&RelPath> = dirty_closed.iter().collect();
         order.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
@@ -220,7 +223,13 @@ impl<'a> Walker<'a> {
                     names.push(entry.file_name());
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    // A changed FILE path can land in the dirty set (policy
+                    // marks event targets defensively); rebuilding it as a
+                    // directory must degrade to absence, not an error.
+                    || e.kind() == std::io::ErrorKind::NotADirectory =>
+            {
                 // Vanished mid-pass (or between event and pass): record an
                 // empty listing so parents splicing this pass see absence;
                 // the parent's fresh listing will omit (and prune) it.
@@ -430,7 +439,6 @@ mod meta {
 }
 #[cfg(unix)]
 use meta::{mtime_nsec, mtime_sec};
-
 #[cfg(not(unix))]
 fn mtime_sec(_meta: &std::fs::Metadata) -> i64 {
     0
@@ -438,4 +446,423 @@ fn mtime_sec(_meta: &std::fs::Metadata) -> i64 {
 #[cfg(not(unix))]
 fn mtime_nsec(_meta: &std::fs::Metadata) -> u32 {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ignore::NoIgnores as _;
+    use crate::normalize::equivalent_modulo_mtime;
+    use crate::testutil::*;
+    use ferry_store::crypto::PassthroughCipher;
+    use ferry_store::diff::{diff_roots, ChangeSet};
+    use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
+    use std::collections::BTreeSet;
+
+    /// A seeded scenario: real store + real tree, initial full scan done,
+    /// cache seeded — exactly the state an engine hands to incremental
+    /// passes. Deterministic tests drive [`Walker::run`] directly, no
+    /// threads, no kernel timing.
+    struct Fixture {
+        _tmp: tempfile::TempDir,
+        store_dir: tempfile::TempDir,
+        store: Store,
+        poly: u64,
+        root: PathBuf,
+        cache: DirCache,
+        prev_root_tree_id: BlobId,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let store_dir = tempfile::tempdir().unwrap();
+            let store = Store::create(
+                store_dir.path(),
+                fmk(),
+                Box::new(PassthroughCipher),
+            )
+            .unwrap();
+            let root = tmp.path().join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            let mut fx = Fixture {
+                _tmp: tmp,
+                store_dir,
+                store,
+                poly: poly_of(21),
+                root,
+                cache: DirCache::new(),
+                prev_root_tree_id: [0u8; 32],
+            };
+            fx.full_scan();
+            fx
+        }
+
+        /// Full-scan path: what run_full does (snapshot_dir + reseed).
+        fn full_scan(&mut self) -> BlobId {
+            let out = snapshot_dir(&self.store, self.poly, &self.root, &identity((1, 0)))
+                .unwrap();
+            self.cache.reseed(&self.store, &out.root_tree_id).unwrap();
+            self.prev_root_tree_id = out.root_tree_id;
+            out.root_tree_id
+        }
+
+        fn incremental(&mut self, dirty: &[RelPath]) -> Option<ScanOutput> {
+            let closed = close_under_ancestors(dirty);
+            let mut stats = PassStats::default();
+            Walker::run(
+                &self.store,
+                self.poly,
+                &NoIgnoresIgnored,
+                &self.root,
+                &mut self.cache,
+                &closed,
+                Trigger::Events,
+                &identity((2, 0)),
+                self.prev_root_tree_id,
+                &mut stats,
+            )
+            .unwrap()
+        }
+
+        fn incremental_expect(&mut self, dirty: &[RelPath]) -> ScanOutput {
+            self.incremental(dirty)
+                .expect("pass must produce a changed manifest")
+        }
+
+        /// From-scratch oracle on the CURRENT disk state.
+        fn scratch_root_id(&self) -> BlobId {
+            snapshot_dir(&self.store, self.poly, &self.root, &identity((3, 0)))
+                .unwrap()
+                .root_tree_id
+        }
+
+        fn diff_since_baseline(&self, new_root: BlobId) -> ChangeSet {
+            diff_roots(&self.store, &self.prev_root_tree_id, &new_root).unwrap()
+        }
+    }
+
+    struct NoIgnoresIgnored;
+    impl crate::ignore::IgnorePolicy for NoIgnoresIgnored {
+        fn ignored(&self, _rel: &[String]) -> bool {
+            false
+        }
+    }
+
+    fn p(parts: &[&str]) -> RelPath {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn mutations_match_from_scratch_oracle_exactly() {
+        let mut fx = Fixture::new("tree");
+        write_file(&fx.root.join("keep.txt"), b"stable", false, (10, 0));
+        write_file(&fx.root.join("gone.txt"), b"to delete", false, (11, 0));
+        write_file(&fx.root.join("mod.txt"), b"original", false, (12, 0));
+        write_file(&fx.root.join("sub/a.txt"), b"a", false, (13, 0));
+        write_file(&fx.root.join("sub/b.txt"), b"b", true, (14, 0));
+        write_file(&fx.root.join("moved/x.txt"), b"mover", false, (15, 0));
+        fx.full_scan();
+
+        // True mutation set, applied directly to disk:
+        //   create nested/new.txt, modify mod.txt (different length),
+        //   delete gone.txt, rename dir moved -> relocated (contents ride),
+        //   exec-bit flip on sub/a.txt without content change.
+        write_file(&fx.root.join("nested/new.txt"), b"fresh bytes", false, (21, 1));
+        std::fs::remove_file(fx.root.join("gone.txt")).unwrap();
+        write_file(&fx.root.join("mod.txt"), b"original, extended!", false, (22, 2));
+        std::fs::rename(fx.root.join("moved"), fx.root.join("relocated")).unwrap();
+        write_file(&fx.root.join("sub/a.txt"), b"a", true, (13, 0));
+
+        // Dirty set = enclosing dirs of every touched path, closed under
+        // ancestry — precisely what the engine derives from watcher events.
+        let dirty = vec![
+            p(&["nested"]),
+            p(&["nested", "new.txt"]),
+            p(&["gone.txt"]),
+            p(&["mod.txt"]),
+            p(&["moved"]),
+            p(&["relocated"]),
+            p(&["sub", "a.txt"]),
+        ];
+        let out = fx.incremental_expect(&dirty);
+
+        // Strongest form: byte-identical tree to a fresh snapshot_dir.
+        assert_eq!(
+            out.root_tree_id,
+            fx.scratch_root_id(),
+            "incremental splice must reproduce a from-scratch snapshot"
+        );
+
+        // Diff oracle: incremental change set == scratch change set, i.e.
+        // exactly the true mutation set (1 added, 1 removed, 2 content-
+        // modified incl. rename-carry, 1 metadata-modified).
+        let inc_diff = fx.diff_since_baseline(out.root_tree_id);
+        let scratch_diff = fx.diff_since_baseline(fx.scratch_root_id());
+        assert_eq!(inc_diff, scratch_diff);
+        // Subtree flattening: intermediate dirs appear alongside leaves,
+        // parents before children.
+        assert_eq!(inc_diff.added.len(), 4);
+        let added_paths: Vec<_> = inc_diff.added.iter().map(|a| a.path.clone()).collect();
+        assert_eq!(
+            added_paths,
+            vec![
+                p(&["nested"]),
+                p(&["nested", "new.txt"]),
+                p(&["relocated"]),
+                p(&["relocated", "x.txt"])
+            ]
+        );
+        assert_eq!(inc_diff.removed.len(), 3);
+        assert_eq!(
+            inc_diff
+                .removed
+                .iter()
+                .map(|r| r.path.clone())
+                .collect::<Vec<_>>(),
+            vec![p(&["gone.txt"]), p(&["moved"]), p(&["moved", "x.txt"])]
+        );
+        assert_eq!(inc_diff.content_modified.len(), 1, "{inc_diff:?}");
+        assert_eq!(inc_diff.content_modified[0].path, p(&["mod.txt"]));
+        assert_eq!(inc_diff.metadata_modified.len(), 1);
+        assert_eq!(inc_diff.metadata_modified[0].path, p(&["sub", "a.txt"]));
+    }
+
+    #[test]
+    fn short_circuit_zero_change_pass_hashes_nothing() {
+        let mut fx = Fixture::new("t2");
+        write_file(&fx.root.join("x.bin"), &prng(1, 4096), false, (1, 0));
+        write_file(&fx.root.join("d/y.bin"), &prng(2, 8192), true, (2, 0));
+        fx.full_scan();
+
+        // Mark the WHOLE tree dirty with zero disk changes: everything must
+        // hit the size/mtime/exec short-circuit.
+        let mut stats = PassStats::default();
+        let closed = close_under_ancestors(&[p(&[])]);
+        let out = Walker::run(
+            &fx.store,
+            fx.poly,
+            &NoIgnoresIgnored,
+            &fx.root,
+            &mut fx.cache,
+            &closed,
+            Trigger::Events,
+            &identity((9, 9)),
+            fx.prev_root_tree_id,
+            &mut stats,
+        )
+        .unwrap();
+
+        assert!(out.is_none(), "unchanged tree must not emit a manifest");
+        assert_eq!(stats.bytes_chunked, 0, "hasher hook proves zero re-hashing");
+        assert_eq!(stats.files_rehashed, 0);
+        assert!(stats.files > 0, "but files were walked");
+    }
+
+    #[test]
+    fn audit_catches_same_length_tamper_incremental_misses_it() {
+        let mut fx = Fixture::new("t3");
+        let victim = fx.root.join("vault.dat");
+        let original = prng(7, 1024);
+        write_file(&victim, &original, false, (100, 500));
+        write_file(&fx.root.join("other.txt"), b" bystander", false, (101, 0));
+        fx.full_scan();
+        let baseline = fx.prev_root_tree_id;
+
+        // Silent tamper: SAME length, mtime RESTORED — invisible to stat.
+        let mut evil = original.clone();
+        evil[0] ^= 0xff;
+        evil[512] ^= 0x55;
+        write_file(&victim, &evil, false, (100, 500));
+
+        // Half 1: an incremental pass over the whole tree may NOT notice...
+        let mut stats = PassStats::default();
+        let closed = close_under_ancestors(&[p(&[])]);
+        let out = Walker::run(
+            &fx.store,
+            fx.poly,
+            &NoIgnoresIgnored,
+            &fx.root,
+            &mut fx.cache,
+            &closed,
+            Trigger::Events,
+            &identity((4, 0)),
+            baseline,
+            &mut stats,
+        )
+        .unwrap();
+        assert!(out.is_none());
+        assert_eq!(stats.bytes_chunked, 0);
+        assert_eq!(fx.diff_since_baseline(baseline), ChangeSet::default());
+
+        // ...but the cache still matches disk-stat, so a subsequent
+        // incremental also stays silent. Only a full-hash AUDIT repairs.
+        let audited = fx.full_scan();
+        assert_ne!(audited, baseline, "audit must catch the drift");
+        let cs = diff_roots(&fx.store, &baseline, &audited).unwrap();
+        assert_eq!(cs.content_modified.len(), 1);
+        assert_eq!(cs.content_modified[0].path, p(&["vault.dat"]));
+        assert!(
+            !equivalent_modulo_mtime(&fx.store, &baseline, &audited).unwrap(),
+            "tampered content must survive normalization (not mtime noise)"
+        );
+    }
+
+    #[test]
+    fn ignored_subtrees_are_pruned_from_walks_and_cache() {
+        use crate::ignore::IgnorePolicy;
+        struct SkipSecrets;
+        impl IgnorePolicy for SkipSecrets {
+            fn ignored(&self, rel: &[String]) -> bool {
+                rel.first().map(|s| s.as_str()) == Some("secrets")
+            }
+        }
+        let mut fx = Fixture::new("t4");
+        write_file(&fx.root.join("open.txt"), b"visible", false, (1, 0));
+        write_file(&fx.root.join("secrets/key.pem"), b"hidden", false, (2, 0));
+        fx.full_scan();
+
+        // Touch BOTH subtrees; only the open one may enter the manifest.
+        write_file(&fx.root.join("open.txt"), b"visible v2", false, (3, 0));
+        write_file(&fx.root.join("secrets/key.pem"), b"rotated", false, (4, 0));
+
+        let mut stats = PassStats::default();
+        let closed = close_under_ancestors(&[p(&["open.txt"]), p(&["secrets"])]);
+        let out = Walker::run(
+            &fx.store,
+            fx.poly,
+            &SkipSecrets,
+            &fx.root,
+            &mut fx.cache,
+            &closed,
+            Trigger::Events,
+            &identity((5, 0)),
+            fx.prev_root_tree_id,
+            &mut stats,
+        )
+        .unwrap()
+        .expect("open.txt changed");
+
+        // With ignores active the from-scratch oracle (which knows no ignore
+        // rules) is not comparable; assert against the POLICY instead: the
+        // ignored subtree never entered the manifest, the visible change did.
+        let cs = fx.diff_since_baseline(out.root_tree_id);
+        assert_eq!(cs.content_modified.len(), 1);
+        assert_eq!(cs.content_modified[0].path, p(&["open.txt"]));
+        let root_node = ferry_store::manifest::parse_tree_node(
+            &fx.store.get(BlobKind::TreeNode, &out.root_tree_id).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !root_node.entries.iter().any(|e| e.name == "secrets"),
+            "ignored dir must be absent from the manifest"
+        );
+        assert_eq!(stats.bytes_chunked, "visible v2".len() as u64);
+    }
+
+    #[test]
+    fn deleted_dirty_dir_is_spliced_out_and_cache_pruned() {
+        let mut fx = Fixture::new("t5");
+        write_file(&fx.root.join("doomed/deep/file.txt"), b"bye", false, (1, 0));
+        write_file(&fx.root.join("stays.txt"), b"stay", false, (2, 0));
+        fx.full_scan();
+
+        std::fs::remove_dir_all(fx.root.join("doomed")).unwrap();
+        let out = fx.incremental_expect(&[p(&["doomed"])]);
+
+        assert_eq!(out.root_tree_id, fx.scratch_root_id());
+        assert!(fx.cache.node(&p(&["doomed"])).is_none() || {
+            // Cache may hold the empty-splice record, but never stale files.
+            let node = &fx.cache.node(&p(&["doomed"])).unwrap().node;
+            node.entries.is_empty()
+        });
+        assert!(fx.cache.node(&p(&["doomed", "deep"])).is_none());
+        // Diff flattens removed subtrees per path: dir, nested dir, file.
+        let cs = fx.diff_since_baseline(out.root_tree_id);
+        assert_eq!(cs.removed.len(), 3);
+        assert_eq!(
+            cs.removed.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+            vec![p(&["doomed"]), p(&["doomed", "deep"]), p(&["doomed", "deep", "file.txt"])],
+            "parents before children"
+        );
+    }
+
+    #[test]
+    fn randomized_op_sequence_stays_equivalent_to_scratch() {
+        let mut fx = Fixture::new("t6");
+        for i in 0..12i64 {
+            write_file(&fx.root.join(format!("f{i:02}.txt")), &prng(i as u64, 64), false, (i, 0));
+        }
+        for d in ["d0", "d1"] {
+            std::fs::create_dir(fx.root.join(d)).unwrap();
+        }
+        fx.full_scan();
+
+        // Deterministic pseudo-random op sequence (seeded LCG).
+        let mut seed: u64 = 0xC0FFEE;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+
+        let mut all_dirty: BTreeSet<RelPath> = BTreeSet::new();
+        for step in 0..24usize {
+            let pick = next() % 4;
+            match pick {
+                0 => {
+                    let name = format!("f{:02}.txt", next() % 12);
+                    write_file(&fx.root.join(&name), &prng(step as u64 + 50, 96), false, (step as i64, 1));
+                    all_dirty.insert(p(&[&name]));
+                    all_dirty.insert(p(&[]));
+                }
+                1 => {
+                    let name = format!("gen{step}.txt");
+                    write_file(&fx.root.join("d0").join(&name), &prng(100 + step as u64, 32), true, (step as i64, 2));
+                    all_dirty.insert(p(&["d0"]));
+                }
+                2 => {
+                    let name = format!("f{:02}.txt", next() % 12);
+                    if std::fs::remove_file(fx.root.join(&name)).is_ok() {
+                        all_dirty.insert(p(&[&name]));
+                        all_dirty.insert(p(&[]));
+                    }
+                }
+                _ => {
+                    let from = format!("f{:02}.txt", next() % 12);
+                    let to = format!("ren{step}.txt");
+                    if std::fs::rename(fx.root.join(&from), fx.root.join("d1").join(&to)).is_ok() {
+                        all_dirty.insert(p(&[&from]));
+                        all_dirty.insert(p(&["d1"]));
+                        all_dirty.insert(p(&[]));
+                    }
+                }
+            }
+
+            // Batch-settle like the debouncer would: one pass per burst.
+            let batch: Vec<RelPath> = std::mem::take(&mut all_dirty).into_iter().collect();
+            let closed = close_under_ancestors(&batch);
+            let mut stats = PassStats::default();
+            let out = Walker::run(
+                &fx.store,
+                fx.poly,
+                &NoIgnoresIgnored,
+                &fx.root,
+                &mut fx.cache,
+                &closed,
+                Trigger::Events,
+                &identity((6, 0)),
+                fx.prev_root_tree_id,
+                &mut stats,
+            )
+            .unwrap();
+            if let Some(out) = out {
+                fx.prev_root_tree_id = out.root_tree_id;
+            }
+            assert_eq!(
+                fx.prev_root_tree_id,
+                fx.scratch_root_id(),
+                "after op {step}, live tree must equal a from-scratch snapshot"
+            );
+        }
+    }
 }
