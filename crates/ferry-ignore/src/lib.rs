@@ -57,6 +57,7 @@ pub mod defaults;
 pub mod error;
 pub mod policy;
 pub mod presets;
+pub mod secrets;
 
 pub use config::IgnoreConfig;
 pub use error::IgnoreError;
