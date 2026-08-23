@@ -606,6 +606,302 @@ hash so end-to-end integrity checking costs nothing extra. Nothing in this
 document should be duplicated or re-encoded at the transport layer. Framing
 details, chunked transfer resume, and pull negotiation are out of scope here.
 
+## Wire note
+
+The wire protocol below ("Wire protocol v1") is the normative extension of
+this document for T-008. Those messages REUSE the serializations in this
+document byte for byte: tree nodes and root manifests move exactly as stored
+(still encrypted under the folder key, so relays stay blind per
+ADR-0002/0003), index entries become advertisement rows in the index-table
+row format, and whole packs transfer as units named by ciphertext hash so
+end-to-end integrity checking costs nothing extra. Nothing above should be
+duplicated or re-encoded at the transport layer. Chunked transfer resume and
+pull negotiation beyond v1's fixed stages are out of scope here.
+
+## Wire protocol v1
+
+Status: normative for v0. Version 1.0, frozen 2026-08-24. Owner ticket:
+T-008. Reference implementation: `crates/ferry-proto`.
+
+Conformance words follow RFC 2119, as everywhere in this document. All
+multi-byte integers are little-endian EXCEPT the frame length prefix and the
+frame sequence counter, which are big-endian; each is called out again where
+it appears.
+
+### Transport model
+
+A session runs over any byte stream delivering exact reads and writes (a
+`TcpStream` today; a relay pipe per ADR-0003 later). One connection carries
+one session; there is no connection reuse. Either endpoint may be initiator;
+the dialing peer is the initiator by convention. The conversation is strict
+lockstep within each phase — one side writes while the other reads — so no
+phase can deadlock over bounded socket buffers at the sizes v1 targets.
+Known limitation: an entire advert sequence for one folder is written in one
+turn; peers with index tables far beyond tens of thousands of entries need
+the chunked-advert extension (future minor).
+
+### Frame layout
+
+Every unit on the wire is one frame:
+
+```
+offset  size  field
+0       4     body_len (u32 BIG-ENDIAN): length of `body`
+4       ...   body
+```
+
+`body` is always `magic(4) || msg_type(1) || version(2 LE) || payload`. The
+magic is ASCII "FRW1" (46 52 57 31) — deliberately distinct from container
+files' "FERRY". Before authentication completes, body bytes travel as-is.
+Afterwards, the ENTIRE body region (magic included) is sealed:
+
+```
+body_on_wire = ChaCha20-Poly1305_seal(tk_dir,
+                                     nonce = "FPN1" || u64 BE sequence,
+                                     aad   = u32 BE body_len,
+                                     plaintext = magic || type || version || payload)
+```
+
+Rules:
+
+- Readers MUST reject frames whose `body_len` exceeds 67108864 (64 MiB)
+  without allocating; senders MUST NOT exceed it. The ceiling fits a
+  worst-case spec pack (16 MiB target + 8 MiB max-chunk overshoot + footer
+  and tag overhead) in one PACK_ITEM frame.
+- Senders MUST assemble each frame in ONE write; receivers read exactly
+  `body_len` bytes.
+- The length prefix is bound into every sealed frame's tag as AAD, so
+  truncation or splicing between frames breaks authentication.
+- Sequence numbers start at 0 and increase by exactly 1 per sealed frame per
+  direction. A failed open consumes the receiver's counter slot; the ONLY
+  safe continuation after any post-auth tag failure is disconnect. There is
+  no resync.
+- Counter ceiling: the u64 sequence never wraps in any real session.
+  Exhaustion MUST abort the session (`CounterExhausted`) rather than reuse a
+  nonce. v1 defines NO rekey; a future minor may add it behind a feature
+  flag without changing this layout.
+
+### Version negotiation
+
+Each side advertises its maximum version as `(major << 8) | minor` in a u16;
+v1.0 is `0x0100`.
+
+- Majors MUST match exactly. On mismatch both sides send BYE(1) and
+  disconnect ([VersionIncompatible]).
+- The responder chooses the session version: componentwise minimum of the
+  two maxima within the common major, carried in HELLO_ACK's `agreed` field.
+  The initiator verifies it equals that minimum.
+- Every post-auth frame carries the agreed version. Messages defined in
+  minors ABOVE the agreed version MUST NOT be sent, even when both sides
+  understand them.
+- Feature flags (u64) bit 0 = EXTENSION_AWARE ("I implement the
+  skip-if-flagged rule below"); all v1 engines set it. Unknown received
+  bits are ignored, never errors.
+
+Unknown message type rule (normative):
+
+- Any unknown type before authentication completes: protocol violation,
+  BYE(2), disconnect. The pre-auth surface is frozen at four message types.
+- Post-auth, an unknown type is SKIPPED (frame discarded, counters advance,
+  session continues) if and only if BOTH hold: the sender advertised a
+  higher minor than ours within our major, AND the sender advertised flag
+  bits we do not know. Otherwise: protocol violation, BYE(2), disconnect.
+- A skippable frame must still authenticate; garbage inside a skip-eligible
+  type fails the tag check like any tampered frame.
+
+### Handshake and key schedule
+
+Four pre-auth messages establish identity and keys. `eph` keys are fresh
+X25519 keypairs generated per connection; nonces are 32 fresh CSPRNG bytes.
+
+```
+I → R   HELLO       { version=max_I, flags, eph_pub_I, stat_pub_I, nonce_I }
+R → I   HELLO_ACK   { version=max_R, flags, eph_pub_R, stat_pub_R, nonce_R,
+                      agreed = min(I.max, R.max) }
+```
+
+Payload layout of HELLO (106 bytes):
+
+```
+u16 LE version | u64 LE flags | 32B eph_pub | 32B stat_pub | 32B nonce
+```
+
+HELLO_ACK (108 bytes): as HELLO but with `u16 LE agreed` inserted after
+`version`.
+
+`stat_pub` IS the sender's device_id. Each side MUST verify it equals the
+peer it intended to contact (ADR-0003: peers are their public keys) before
+any further processing; mismatch → BYE(3), disconnect.
+
+Both sides then compute three X25519 shared secrets:
+
+```
+e1 = X25519(eph_I,  eph_R)     // fresh per connection → forward secrecy
+m1 = X25519(stat_I, eph_R)     // derivable only with stat_I's secret
+m2 = X25519(stat_R, eph_I)     // derivable only with stat_R's secret
+```
+
+(X25519(x, Y) is symmetric in who evaluates it, so both parties reach all
+three.) With TH = BLAKE3 over the length-prefixed wire images of HELLO and
+HELLO_ACK in conversation order:
+
+```
+ext1 = HKDF-SHA256-EXTRACT(salt = TH,      ikm = e1 || m1 || m2)
+prk  = HKDF-SHA256-EXPAND(ext1, "ferry/v1/handshake")
+htk_I2R = EXPAND(prk, "ferry/v1/htk/i2r")
+htk_R2I = EXPAND(prk, "ferry/v1/htk/r2i")
+```
+
+Mutual proof-of-possession, no signatures: each side sends exactly one
+48-byte AUTH message — Poly1305 tag included — sealing its OWN device_id
+under its direction's auth key with AAD = TH:
+
+```
+I → R   AUTH_INIT    ct = seal(htk_I2R, nonce=0^12, aad=TH, pt=stat_pub_I)
+R → I   AUTH_CONFIRM ct = seal(htk_R2I, nonce=0^12, aad=TH, pt=stat_pub_R)
+```
+
+A peer that cannot produce a valid tag cannot hold the claimed static
+secret; the tag IS the proof. Receivers open the proof, require the
+plaintext device_id to equal the expected peer, and fail BYE(3) otherwise.
+Replay dies structurally: fresh ephemerals and nonces make every
+connection's transcript unique, so a replayed AUTH message authenticates
+against a different salt and fails its tag.
+
+Traffic keys re-root from the PRK on the FINAL transcript hash, which
+includes both auth ciphertexts:
+
+```
+TH2  = BLAKE3(hello_I || hello_R || auth_init_ct_frame || auth_confirm_ct_frame)
+ext2 = EXTRACT(salt = TH2, ikm = prk)
+tk_i2r = EXPAND(ext2, "ferry/v1/tk/i2r")
+tk_r2i = EXPAND(ext2, "ferry/v1/tk/r2i")
+```
+
+All post-auth frames seal under `tk_dir` exactly as specified under Frame
+layout. When an engine runs with session sealing disabled (development mode
+only; production engines MUST seal), handshake and auth still run in full —
+only post-auth bodies travel unsealed.
+
+### Conversation
+
+Strict phases; role decides who speaks first within each.
+
+1. **Offer round 1** — announcement with adverts. The initiator walks its
+   folders sending FOLDER_OFFER followed by that folder's INDEX_ADVERT
+   sequence; the responder mirrors each (its own state, zeros when the
+   folder is unknown). Then roles swap for folders only the responder has.
+   A FOLDER_OFFER with folder_id = 0^16 ends an announcement list.
+2. **Pull stages** — serialized by ROLE so both sides agree without extra
+   messages: the initiator pulls from the responder first (responder
+   serves), then the responder pulls (initiator serves). A side skips its
+   stage when it already holds the peer's manifest. The pulling stage ends
+   with an empty REQUEST_ITEMS marker; the server answers it with a bare
+   empty ITEM_BATCH and returns to listening.
+3. **Offer round 2** — same exchange WITHOUT adverts. Round 2 lets both
+   sides observe post-pull equality.
+4. **Agreement** — locally, no message: when a side's own manifest id and
+   its peer's round-2 offer are equal and nonzero, it records the
+   last-agreed pointer (see that section).
+5. **Bye** — initiator sends BYE(0); responder mirrors; both close.
+
+### Pull procedure
+
+For one folder where the puller lacks or diverges from the target manifest:
+
+1. REQUEST_ITEMS the root MANIFEST blob by id; verify-after-decrypt; store;
+   parse.
+2. Breadth-first walk of the remote tree: REQUEST_ITEMS missing TREE NODES
+   (≤ 512 ids per request), verify, store, parse, enqueue child tree ids,
+   accumulate referenced CHUNK ids.
+3. Chunks missing locally are wanted. Grouped through the SERVER'S
+   ADVERTISED index entries: whole packs by ciphertext name where the
+   granularity policy says so (Auto: ≥ 2 wanted chunks share a pack;
+   PacksOnly: any; ItemsOnly: never), else item-level.
+4. Every received ITEM is verified AFTER decryption — chunks/trees/
+   manifests: BLAKE3(plaintext) == claimed id; packs: BLAKE3(ciphertext) ==
+   claimed name BEFORE storing or decrypting anything. Rejected items are
+   surfaced as typed errors, NEVER written, and re-requested up to the
+   retry budget; exhaustion fails the session cleanly ([MissingItems]).
+
+### Message inventory and payloads
+
+| type | name           | direction | sealed? | payload |
+|------|----------------|-----------|---------|---------|
+| 0x01 | HELLO          | I→R       | no      | 106 B, see layout |
+| 0x02 | HELLO_ACK      | R→I       | no      | 108 B, see layout |
+| 0x03 | AUTH_INIT      | I→R       | n/a¹    | 48 B ciphertext |
+| 0x04 | AUTH_CONFIRM   | R→I       | n/a¹    | 48 B ciphertext |
+| 0x05 | FOLDER_OFFER   | both      | yes²    | 52 B |
+| 0x06 | INDEX_ADVERT   | both      | yes²    | table + flag |
+| 0x07 | REQUEST_ITEMS  | puller    | yes     | 20 + 33n B |
+| 0x08 | REQUEST_PACKS  | puller    | yes     | 20 + 32n B |
+| 0x09 | ITEM_BATCH     | server    | yes     | count + rows |
+| 0x0A | PACK_ITEM      | server    | yes     | 36 + len B |
+| 0x0B | BYE            | both      | yes³    | 1 B reason |
+
+¹ Auth messages carry opaque ciphertext inside unsealed envelopes; the
+envelope exists so the transcript binds them.
+² Sealed whenever session sealing is on (always in production).
+³ BYE is the last frame; it is sealed when sealing is on.
+
+FOLDER_OFFER (52 bytes):
+
+```
+16B folder_id | 32B manifest_id (zeros = none) | u32 LE reserved (zeros)
+```
+
+INDEX_ADVERT: the index-table serialization of this document's Index
+section (u32 LE count, then rows `kind(1) | id(32) | pack(32) |
+plain_off(64 LE) | plain_len(64 LE)` sorted by (kind, id)), followed by one
+continuation byte: 0 = last advert for this folder, 1 = more follow.
+Senders chunk at ≤ 2048 rows per advert; at least one advert is sent per
+announced folder, even when empty.
+
+REQUEST_ITEMS (end-of-stage marker when items is empty):
+
+```
+16B folder_id | u32 LE count | count × { kind(1), id(32) }
+```
+
+REQUEST_PACKS: `16B folder_id | u32 LE count | count × 32B pack_name`.
+
+ITEM_BATCH:
+
+```
+u32 LE count
+count × {
+    u8  kind        # BlobKind byte from this document
+    32B id          # claimed content address; verified against plaintext
+    u64 LE plain_len
+    plain_len bytes # blob plaintext, exactly as stored
+}
+```
+
+An empty batch (count = 0) terminates EVERY response sequence. Servers
+MUST split at ≤ 512 items or 8 MiB per batch. Omitted ids mean "not
+served"; the requester detects gaps after the terminator and retries.
+
+PACK_ITEM: `32B pack_name | u32 LE ct_len | ct_len bytes` — the ENTIRE pack
+ciphertext file under its name. Receivers verify the name before writing
+anything anywhere.
+
+BYE reason codes: 0 normal, 1 version incompatible, 2 protocol violation,
+3 authentication failed, 4 resource limit, 5 internal. BYE is sent
+best-effort before disconnecting on errors; the local typed error carries
+the detail, never the wire.
+
+### Limits (v1)
+
+| limit                  | value                    |
+|------------------------|--------------------------|
+| frame body             | 64 MiB                   |
+| REQUEST_ITEMS items    | 512                      |
+| REQUEST_PACKS packs    | 128                      |
+| ITEM_BATCH items       | 512 per frame, 8 MiB     |
+| INDEX_ADVERT rows      | 2048 per frame           |
+| traffic sequence       | u64 per direction, no wrap |
+
 ## Prior art cross-check
 
 Fetched and checked against both sources on 2026-08-24. restic's design page
