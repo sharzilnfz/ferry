@@ -86,16 +86,20 @@ fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
 /// Stage 1: handshake PRK plus the two single-use auth keys.
 ///
 /// Returns `(htk_a2b, htk_b2a, prk)`; all zeroized on drop.
+/// Handshake-stage outputs: the two single-use auth keys plus the PRK that
+/// traffic keys re-root from. All zeroized on drop.
+pub(crate) type HandshakeKeys = (
+    Zeroizing<[u8; KEY_LEN]>,
+    Zeroizing<[u8; KEY_LEN]>,
+    Box<[u8; KEY_LEN]>,
+);
+
 pub(crate) fn kdf_handshake(
     transcript: &[u8; 32],
     e1: &[u8; 32],
     m1: &[u8; 32],
     m2: &[u8; 32],
-) -> (
-    Zeroizing<[u8; KEY_LEN]>,
-    Zeroizing<[u8; KEY_LEN]>,
-    Box<[u8; KEY_LEN]>,
-) {
+) -> HandshakeKeys {
     let mut ikm = Zeroizing::new([0u8; 96]);
     ikm[..32].copy_from_slice(e1);
     ikm[32..64].copy_from_slice(m1);
@@ -124,7 +128,10 @@ impl SessionKey {
 /// `final_transcript` covers Hello || HelloAck || AuthInit_ct ||
 /// AuthConfirm_ct, chaining the proof bytes into session-key derivation so
 /// any tampering upstream changes every downstream key.
-pub(crate) fn traffic_keys(prk: &[u8; KEY_LEN], final_transcript: &[u8; 32]) -> (SessionKey, SessionKey) {
+pub(crate) fn traffic_keys(
+    prk: &[u8; KEY_LEN],
+    final_transcript: &[u8; 32],
+) -> (SessionKey, SessionKey) {
     let ext = Hkdf::<Sha256>::new(Some(final_transcript), prk);
     let mut root = Zeroizing::new([0u8; KEY_LEN]);
     ext.expand(b"ferry/v1/traffic", root.as_mut())
@@ -209,7 +216,11 @@ impl SessionCipher {
     /// Seal one frame body region (type || version || payload), binding the
     /// wire-visible length prefix into the tag as AAD. Returns ciphertext of
     /// `plaintext.len() + 16`.
-    pub fn seal_frame(&mut self, len_prefix: u32, body_region: &[u8]) -> Result<Vec<u8>, ProtoError> {
+    pub fn seal_frame(
+        &mut self,
+        len_prefix: u32,
+        body_region: &[u8],
+    ) -> Result<Vec<u8>, ProtoError> {
         let nonce = self.next_nonce()?;
         let cipher = ChaCha20Poly1305::new(Key::from_slice(self.key.0.as_ref()));
         cipher
@@ -245,7 +256,9 @@ impl SessionCipher {
 
 impl core::fmt::Debug for SessionCipher {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("SessionCipher").field("seq", &self.seq).finish()
+        f.debug_struct("SessionCipher")
+            .field("seq", &self.seq)
+            .finish()
     }
 }
 
@@ -258,11 +271,14 @@ mod tests {
     fn dh_terms() -> ([Box<[u8; 32]>; 3], [u8; 32]) {
         // Arbitrary-but-fixed terms for wiring tests; real values come from
         // X25519 in the engine.
-        ([
-            Box::new(core::array::from_fn(|i| i as u8 + 1)),
-            Box::new(core::array::from_fn(|i| i as u8 + 41)),
-            Box::new(core::array::from_fn(|i| i as u8 + 91)),
-        ], transcript_hash(&[b"hello", b"ack"]))
+        (
+            [
+                Box::new(core::array::from_fn(|i| i as u8 + 1)),
+                Box::new(core::array::from_fn(|i| i as u8 + 41)),
+                Box::new(core::array::from_fn(|i| i as u8 + 91)),
+            ],
+            transcript_hash(&[b"hello", b"ack"]),
+        )
     }
 
     #[test]
@@ -366,12 +382,7 @@ mod tests {
 
     #[test]
     fn exhausted_counter_is_a_hard_error_never_nonce_reuse() {
-        let (_, _, prk) = kdf_handshake(
-            &[0u8; 32],
-            &[1u8; 32],
-            &[2u8; 32],
-            &[3u8; 32],
-        );
+        let (_, _, prk) = kdf_handshake(&[0u8; 32], &[1u8; 32], &[2u8; 32], &[3u8; 32]);
         let (k, _) = traffic_keys(&prk, &[4u8; 32]);
         let mut c = SessionCipher::at_sequence(k, u64::MAX);
         assert!(matches!(
@@ -386,13 +397,12 @@ mod tests {
         let (k, _) = traffic_keys(&prk, &[5u8; 32]);
         let rendered = format!("{:?}\n{:?}", k, SessionCipher::new(SessionKey(k.0.clone())));
         // The key bytes are 0x.. deterministic; search for their hex pattern.
-        let hexy: String = k
-            .0
-            .as_ref()
-            .iter()
-            .take(4)
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let hexy: String =
+            k.0.as_ref()
+                .iter()
+                .take(4)
+                .map(|b| format!("{b:02x}"))
+                .collect();
         assert!(!rendered.contains(&hexy));
         assert!(!rendered.contains("secret"));
     }
@@ -404,8 +414,12 @@ mod tests {
         let (_, _, prk) = kdf_handshake(&[0u8; 32], &[1; 32], &[2; 32], &[3; 32]);
         let (k, _) = traffic_keys(&prk, &[5u8; 32]);
         let mut tx = k.cipher();
-        let body = FrameBody::new(crate::codec::MSG_ITEM_BATCH, ProtocolVersion::V1_0, vec![7, 7])
-            .encode();
+        let body = FrameBody::new(
+            crate::codec::MSG_ITEM_BATCH,
+            ProtocolVersion::V1_0,
+            vec![7, 7],
+        )
+        .encode();
         let len_prefix = (body.len() + 16) as u32;
         let ct = tx.seal_frame(len_prefix, &body).unwrap();
 

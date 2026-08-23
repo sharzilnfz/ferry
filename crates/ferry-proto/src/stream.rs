@@ -56,8 +56,11 @@ pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
         cv: Condvar::new(),
     });
     (
-        DuplexHalf { shared: Arc::clone(&shared), inbox: 1 }, // a reads b_to_a
-        DuplexHalf { shared, inbox: 0 },                      // b reads a_to_b
+        DuplexHalf {
+            shared: Arc::clone(&shared),
+            inbox: 1,
+        }, // a reads b_to_a
+        DuplexHalf { shared, inbox: 0 }, // b reads a_to_b
     )
 }
 

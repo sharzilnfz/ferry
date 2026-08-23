@@ -487,7 +487,6 @@ impl Store {
         Ok(inner.locations.iter_sorted())
     }
 
-
     /// Address one blob by content. Dedup: when the location table already
     /// knows the id AND at least one candidate pack still exists, nothing is
     /// staged or rewritten (content addressing guarantees identical bytes).

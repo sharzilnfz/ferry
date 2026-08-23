@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use ferry_store::format::{hex, BlobId};
 use ferry_crypto::identity::DeviceId;
+use ferry_store::format::{hex, BlobId};
 
 #[derive(Debug, Error)]
 pub enum LedgerError {
@@ -106,18 +106,12 @@ impl AgreementLedger {
 
     /// Record (or overwrite) the last-agreed pointer. Atomic via temp +
     /// rename, matching every other Ferry write.
-    pub fn record(
-        &self,
-        folder_id: &[u8; 16],
-        rec: &AgreementRecord,
-    ) -> Result<(), LedgerError> {
+    pub fn record(&self, folder_id: &[u8; 16], rec: &AgreementRecord) -> Result<(), LedgerError> {
         std::fs::create_dir_all(&self.dir)?;
         let path = self.path_for(folder_id, &rec.peer);
-        let tmp = self.dir.join(format!(
-            ".tmp-{}-{}",
-            hex(folder_id),
-            hex(&rec.peer)
-        ));
+        let tmp = self
+            .dir
+            .join(format!(".tmp-{}-{}", hex(folder_id), hex(&rec.peer)));
         std::fs::write(&tmp, rec.to_zeroizing().as_ref())?;
         std::fs::rename(&tmp, &path)?;
         Ok(())
@@ -219,7 +213,8 @@ mod tests {
         assert_eq!(ledger.get(&[7; 16], &rec.peer).unwrap().unwrap(), newer);
 
         // No stray temp files left behind.
-        let leftovers: Vec<_> = std::fs::read_dir(&ledger.dir).unwrap()
+        let leftovers: Vec<_> = std::fs::read_dir(&ledger.dir)
+            .unwrap()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with(".tmp-"))
             .collect();

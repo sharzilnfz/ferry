@@ -119,7 +119,9 @@ fn bad(why: &'static str) -> ProtoError {
 /// ferry-store's Reader has no u16 (the store format never needed one); the
 /// wire version field is the first u16, so read it here.
 fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
-    let b = r.take(2).map_err(|_| ProtoError::ProtocolViolation("truncated"))?;
+    let b = r
+        .take(2)
+        .map_err(|_| ProtoError::ProtocolViolation("truncated"))?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
@@ -320,8 +322,14 @@ impl IndexAdvert {
         let entries = ferry_store::index::table_parse(&payload[..payload.len() - 1])
             .map_err(|_| ProtoError::ProtocolViolation("advert table malformed"))?;
         match more_byte {
-            0 => Ok(IndexAdvert { entries, more: false }),
-            1 => Ok(IndexAdvert { entries, more: true }),
+            0 => Ok(IndexAdvert {
+                entries,
+                more: false,
+            }),
+            1 => Ok(IndexAdvert {
+                entries,
+                more: true,
+            }),
             _ => Err(ProtoError::ProtocolViolation("advert flag invalid")),
         }
     }
@@ -368,8 +376,8 @@ impl RequestItems {
         let mut items = Vec::with_capacity(n);
         for _ in 0..n {
             let kb = r.u8().map_err(|_| bad("req short"))?;
-            let kind = BlobKind::from_u8(kb)
-                .ok_or(ProtoError::ProtocolViolation("unknown blob kind"))?;
+            let kind =
+                BlobKind::from_u8(kb).ok_or(ProtoError::ProtocolViolation("unknown blob kind"))?;
             let id = r.array::<32>().map_err(|_| bad("req short"))?;
             items.push((kind, id));
         }
@@ -461,8 +469,8 @@ impl ItemBatch {
         let mut items = Vec::with_capacity(n);
         for _ in 0..n {
             let kb = r.u8().map_err(|_| bad("batch short"))?;
-            let kind = BlobKind::from_u8(kb)
-                .ok_or(ProtoError::ProtocolViolation("unknown blob kind"))?;
+            let kind =
+                BlobKind::from_u8(kb).ok_or(ProtoError::ProtocolViolation("unknown blob kind"))?;
             let id = r.array::<32>().map_err(|_| bad("batch short"))?;
             let len = r.u64().map_err(|_| bad("batch short"))? as usize;
             let bytes = r.take(len).map_err(|_| bad("batch truncated"))?.to_vec();
@@ -534,7 +542,11 @@ mod tests {
     use super::*;
     use ferry_store::format::hex;
 
-    fn roundtrip<T>(value: T, encode: impl Fn(&T) -> Vec<u8>, parse: impl Fn(&[u8]) -> Result<T, ProtoError>) -> T
+    fn roundtrip<T>(
+        value: T,
+        encode: impl Fn(&T) -> Vec<u8>,
+        parse: impl Fn(&[u8]) -> Result<T, ProtoError>,
+    ) -> T
     where
         T: PartialEq + core::fmt::Debug,
     {
@@ -626,7 +638,10 @@ mod tests {
             entry(BlobKind::TreeNode, 2),
             entry(BlobKind::Manifest, 3),
         ];
-        let advert = IndexAdvert { entries: entries.clone(), more: true };
+        let advert = IndexAdvert {
+            entries: entries.clone(),
+            more: true,
+        };
         // Row region is byte-identical to the store's table serialization.
         assert_eq!(
             &advert.encode()[..advert.encode().len() - 1],
@@ -635,9 +650,17 @@ mod tests {
         let parsed = IndexAdvert::parse(&advert.encode()).unwrap();
         assert_eq!(parsed.entries, entries);
         assert!(parsed.more);
-        assert!(!IndexAdvert::parse(&IndexAdvert { entries, more: false }.encode())
+        assert!(
+            !IndexAdvert::parse(
+                &IndexAdvert {
+                    entries,
+                    more: false
+                }
+                .encode()
+            )
             .unwrap()
-            .more);
+            .more
+        );
         // Flag byte must be 0 or 1.
         let mut evil = advert.encode();
         *evil.last_mut().unwrap() = 2;
@@ -751,10 +774,7 @@ mod tests {
         assert!(AuthProof::new(vec![0u8; 47]).is_err());
         assert!(AuthProof::new(vec![0u8; 49]).is_err());
         let ok = AuthProof::new(vec![0xAB; 48]).unwrap();
-        assert_eq!(
-            AuthProof::parse(&ok.encode()).unwrap(),
-            ok
-        );
+        assert_eq!(AuthProof::parse(&ok.encode()).unwrap(), ok);
         assert_eq!(hex(&ok.encode()[..3]), "ababab");
     }
 

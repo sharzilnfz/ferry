@@ -45,9 +45,7 @@ pub enum ProtoError {
     #[error("transport i/o: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error(
-        "version negotiation failed: we speak {ours}, they advertised {theirs}"
-    )]
+    #[error("version negotiation failed: we speak {ours}, they advertised {theirs}")]
     VersionIncompatible {
         ours: ProtocolVersion,
         theirs: ProtocolVersion,
@@ -65,9 +63,7 @@ pub enum ProtoError {
     #[error("authentication failed: {0}")]
     Auth(&'static str),
 
-    #[error(
-        "authenticated peer identity {got} does not match the expected peer {expected}"
-    )]
+    #[error("authenticated peer identity {got} does not match the expected peer {expected}")]
     IdentityMismatch { expected: String, got: String },
 
     #[error("received blob failed verification: kind {kind:?} id {id} ({why})")]
@@ -83,7 +79,9 @@ pub enum ProtoError {
     #[error("peer closed with BYE({reason:?})")]
     ByeReceived { reason: ByeReason },
 
-    #[error("per-direction frame counter exhausted; session keys must be rekeyed (v1 has no rekey)")]
+    #[error(
+        "per-direction frame counter exhausted; session keys must be rekeyed (v1 has no rekey)"
+    )]
     CounterExhausted,
 
     #[error("folder {folder} is not shared by the peer")]

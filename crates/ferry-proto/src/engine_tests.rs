@@ -10,8 +10,8 @@ use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, FLAG_EXTENSION_AWARE};
 use crate::engine::Session;
 use crate::error::ByeReason;
 use crate::frame::{read_body, write_body};
-use crate::stream::{duplex_pair, ByteStream, DuplexHalf};
 use crate::secure::{kdf_handshake, traffic_keys, transcript_hash};
+use crate::stream::{duplex_pair, DuplexHalf};
 use crate::version::ProtocolVersion;
 use crate::{run_engine, EngineConfig, Granularity, ProtoError, Role};
 
@@ -82,7 +82,10 @@ fn major_version_mismatch_is_a_clean_bye_disconnect() {
     );
 
     let err = server.join().unwrap().unwrap_err();
-    assert!(matches!(err, ProtoError::VersionIncompatible { .. }), "{err}");
+    assert!(
+        matches!(err, ProtoError::VersionIncompatible { .. }),
+        "{err}"
+    );
 }
 
 #[test]
@@ -124,14 +127,16 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
 
     let reply = read_frame(&mut dial);
     assert_eq!(reply.msg_type, codec::MSG_BYE);
-    assert_eq!(Bye::parse(&reply.payload).unwrap().reason, ByeReason::AuthFailed);
+    assert_eq!(
+        Bye::parse(&reply.payload).unwrap().reason,
+        ByeReason::AuthFailed
+    );
 
     let err = server.join().unwrap().unwrap_err();
     assert!(
         matches!(
             err,
-            ProtoError::IdentityMismatch { .. }
-                | ProtoError::Io(_) // peer vanished after BYE
+            ProtoError::IdentityMismatch { .. } | ProtoError::Io(_) // peer vanished after BYE
         ),
         "{err}"
     );
@@ -212,7 +217,10 @@ fn policy_session<'a>(
 fn unknown_type_same_version_is_a_protocol_violation() {
     let (mut inject, mut inbox) = duplex_pair();
     let mut sess = policy_session(&mut inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
-    write_frame(&mut inject, &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]));
+    write_frame(
+        &mut inject,
+        &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
+    );
     let err = sess.recv_frame().unwrap_err();
     assert!(matches!(err, ProtoError::UnknownMessage { msg_type: 0x7F }));
 }
@@ -227,7 +235,10 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
     );
     // Unknown flagged type is consumed INSIDE the next recv_frame call;
     // the following real message is what that call returns.
-    write_frame(&mut inject, &FrameBody::new(0x7F, ProtocolVersion::new(1, 5), vec![]));
+    write_frame(
+        &mut inject,
+        &FrameBody::new(0x7F, ProtocolVersion::new(1, 5), vec![]),
+    );
     write_frame(
         &mut inject,
         &FrameBody::new(codec::MSG_ITEM_BATCH, ProtocolVersion::V1_0, vec![]),
@@ -240,7 +251,10 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
 fn unknown_type_higher_minor_without_new_flags_still_violates() {
     let (mut inject, mut inbox) = duplex_pair();
     let mut sess = policy_session(&mut inbox, ProtocolVersion::new(1, 5), FLAG_EXTENSION_AWARE);
-    write_frame(&mut inject, &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]));
+    write_frame(
+        &mut inject,
+        &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
+    );
     assert!(sess.recv_frame().is_err());
 }
 

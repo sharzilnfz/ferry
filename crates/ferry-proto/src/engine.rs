@@ -38,16 +38,18 @@ use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload};
 use ferry_store::store::Store;
 
 use crate::agreement::{AgreementLedger, AgreementRecord};
+use crate::codec::FLAG_EXTENSION_AWARE;
 use crate::codec::{
     self, AuthProof, Bye, FolderOffer, FrameBody, Hello, HelloAck, IndexAdvert, ItemBatch,
     PackItem, RequestItems, RequestPacks,
 };
 use crate::error::{ByeReason, ProtoError};
-use crate::secure::{kdf_handshake, open_auth, seal_auth, traffic_keys, transcript_hash, SessionCipher};
+use crate::secure::{
+    kdf_handshake, open_auth, seal_auth, traffic_keys, transcript_hash, SessionCipher,
+};
 use crate::stream::ByteStream;
 use crate::version::negotiate;
 use crate::version::ProtocolVersion;
-use crate::codec::FLAG_EXTENSION_AWARE;
 
 /// Zero folder_id marks "end of announcement list" in offer rounds.
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
@@ -153,7 +155,9 @@ pub fn run_engine<S: ByteStream>(
             if !matches!(e, ProtoError::ByeReceived { .. } | ProtoError::Io(_)) {
                 let reason = match e {
                     ProtoError::VersionIncompatible { .. } => ByeReason::VersionIncompatible,
-                    ProtoError::Auth(_) | ProtoError::IdentityMismatch { .. } => ByeReason::AuthFailed,
+                    ProtoError::Auth(_) | ProtoError::IdentityMismatch { .. } => {
+                        ByeReason::AuthFailed
+                    }
                     _ => ByeReason::ProtocolViolation,
                 };
                 let _ = send_plain(&mut io, codec::MSG_BYE, our_max, &[reason as u8]);
@@ -192,10 +196,22 @@ pub fn run_engine<S: ByteStream>(
     // Clean shutdown: initiator sends BYE first, responder mirrors it.
     let bye_result = match role {
         Role::Initiator => sess
-            .send_frame(codec::MSG_BYE, Bye { reason: ByeReason::Normal }.encode())
+            .send_frame(
+                codec::MSG_BYE,
+                Bye {
+                    reason: ByeReason::Normal,
+                }
+                .encode(),
+            )
             .and_then(|()| sess.recv_expect_bye()),
         Role::Responder => sess.recv_expect_bye().and_then(|()| {
-            sess.send_frame(codec::MSG_BYE, Bye { reason: ByeReason::Normal }.encode())
+            sess.send_frame(
+                codec::MSG_BYE,
+                Bye {
+                    reason: ByeReason::Normal,
+                }
+                .encode(),
+            )
         }),
     };
     if let Err(e) = bye_result {
@@ -251,7 +267,10 @@ fn send_plain<S: ByteStream>(
     version: ProtocolVersion,
     payload: &[u8],
 ) -> Result<(), ProtoError> {
-    crate::frame::write_body(io, &full_wire(&FrameBody::new(msg_type, version, payload.to_vec())).as_slice()[4..])
+    crate::frame::write_body(
+        io,
+        &full_wire(&FrameBody::new(msg_type, version, payload.to_vec())).as_slice()[4..],
+    )
 }
 
 /// Send one pre-auth frame, returning its exact wire image.
@@ -371,10 +390,7 @@ fn unexpected(t: u8) -> ProtoError {
 }
 
 fn store_err(e: ferry_store::store::StoreError) -> ProtoError {
-    ProtoError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    ))
+    ProtoError::Io(std::io::Error::other(e.to_string()))
 }
 
 // --- handshake -----------------------------------------------------------------
@@ -421,8 +437,7 @@ fn handshake<S: ByteStream>(
     // --- exchange hellos ---
     let (peer_hello, hello_wires) = match role {
         Role::Initiator => {
-            let my_wire =
-                send_preauth(io, codec::MSG_HELLO, our_max, &my_hello.encode())?;
+            let my_wire = send_preauth(io, codec::MSG_HELLO, our_max, &my_hello.encode())?;
             let (fb, _) = recv_preauth(io)?;
             let ack = HelloAck::parse(&fb.payload)?;
             check_identity(ack.stat_pub, cfg.expected_peer)?;
@@ -491,12 +506,16 @@ fn handshake<S: ByteStream>(
     // m1 authenticates the INITIATOR's static key, m2 the RESPONDER's.
     let (m1, m2): ([u8; 32], [u8; 32]) = match role {
         Role::Initiator => (
-            *cfg.identity.diffie_hellman(&peer_eph).map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // A.stat × B.eph
-            dh(&esk, peer_stat)?,                     // A.eph × B.stat
+            *cfg.identity
+                .diffie_hellman(&peer_eph)
+                .map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // A.stat × B.eph
+            dh(&esk, peer_stat)?, // A.eph × B.stat
         ),
         Role::Responder => (
-            dh(&esk, peer_stat)?,                                     // B.eph × A.stat == A.stat × B.eph
-            *cfg.identity.diffie_hellman(&peer_eph).map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // B.stat × A.eph
+            dh(&esk, peer_stat)?, // B.eph × A.stat == A.stat × B.eph
+            *cfg.identity
+                .diffie_hellman(&peer_eph)
+                .map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // B.stat × A.eph
         ),
     };
 
@@ -587,9 +606,6 @@ fn check_identity(got: DeviceId, expected: DeviceId) -> Result<(), ProtoError> {
     }
 }
 
-
-
-
 // --- folder phases ---------------------------------------------------------------
 
 /// Peer view of one folder, learned from offers.
@@ -619,7 +635,7 @@ fn folder_phases<S: ByteStream>(
     outcomes: &mut [FolderOutcome],
 ) -> Result<(), ProtoError> {
     // Round 1: full announcements with adverts.
-    let (peer_folders, peer_adverts) = exchange_offers(sess, role, cfg, true)?;
+    let (peer_folders, peer_adverts) = exchange_offers(sess, role, cfg, outcomes, true)?;
     for out in outcomes.iter_mut() {
         out.remote_manifest = peer_folders.get(&out.folder_id).and_then(|p| p.manifest);
     }
@@ -633,7 +649,14 @@ fn folder_phases<S: ByteStream>(
     match role {
         Role::Initiator => {
             if !initiator_stage.is_empty() {
-                run_stage(sess, cfg, &initiator_stage, &peer_folders, &peer_adverts, outcomes)?;
+                run_stage(
+                    sess,
+                    cfg,
+                    &initiator_stage,
+                    &peer_folders,
+                    &peer_adverts,
+                    outcomes,
+                )?;
             }
             if !responder_stage.is_empty() {
                 serve_stage(sess, cfg)?;
@@ -644,7 +667,14 @@ fn folder_phases<S: ByteStream>(
                 serve_stage(sess, cfg)?;
             }
             if !responder_stage.is_empty() {
-                run_stage(sess, cfg, &responder_stage, &peer_folders, &peer_adverts, outcomes)?;
+                run_stage(
+                    sess,
+                    cfg,
+                    &responder_stage,
+                    &peer_folders,
+                    &peer_adverts,
+                    outcomes,
+                )?;
             }
         }
     }
@@ -730,7 +760,10 @@ fn run_stage<S: ByteStream>(
 }
 
 /// Serve the peer's pull stage until its end-of-stage marker arrives.
-fn serve_stage<S: ByteStream>(sess: &mut Session<'_, S>, cfg: &EngineConfig) -> Result<(), ProtoError> {
+fn serve_stage<S: ByteStream>(
+    sess: &mut Session<'_, S>,
+    cfg: &EngineConfig,
+) -> Result<(), ProtoError> {
     loop {
         let fb = match sess.recv_frame()? {
             Some(fb) => fb,
@@ -780,9 +813,12 @@ fn serve_items<S: ByteStream>(
             sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: batch }.encode()?)?;
         }
     }
-    // Exactly one trailing batch; empty when nothing remains — the
-    // response terminator.
-    sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: acc }.encode()?)
+    // Exactly one trailing EMPTY batch closes the response: flush any
+    // remainder first, then the terminator.
+    if !acc.is_empty() {
+        sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: acc }.encode()?)?;
+    }
+    sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch::TERMINATOR.encode()?)
 }
 
 fn serve_packs<S: ByteStream>(
@@ -797,7 +833,10 @@ fn serve_packs<S: ByteStream>(
         if let Ok(bytes) = std::fs::read(&path) {
             // Serve only bytes that verify against their own name.
             if *blake3::hash(&bytes).as_bytes() == name {
-                sess.send_frame(codec::MSG_PACK_ITEM, PackItem { pack: name, bytes }.encode()?)?;
+                sess.send_frame(
+                    codec::MSG_PACK_ITEM,
+                    PackItem { pack: name, bytes }.encode()?,
+                )?;
             }
         }
     }
@@ -811,94 +850,195 @@ fn serve_packs<S: ByteStream>(
 /// offer ends an announcement list. Round 2 (`with_adverts = false`)
 /// re-announces post-pull state so equality is observable on both sides.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn exchange_offers<S: ByteStream>(
     sess: &mut Session<'_, S>,
     role: Role,
     cfg: &EngineConfig,
+    outcomes: &[FolderOutcome],
     with_adverts: bool,
-) -> Result<(
-    BTreeMap<[u8; 16], PeerFolder>,
-    BTreeMap<[u8; 16], AdvertMap>,
-), ProtoError> {
+) -> Result<
+    (
+        BTreeMap<[u8; 16], PeerFolder>,
+        BTreeMap<[u8; 16], AdvertMap>,
+    ),
+    ProtoError,
+> {
     let mut peer_folders: BTreeMap<[u8; 16], PeerFolder> = BTreeMap::new();
     let mut peer_adverts: BTreeMap<[u8; 16], AdvertMap> = BTreeMap::new();
 
-    let announce_one = |sess: &mut Session<'_, S>, f: &FolderState| -> Result<(), ProtoError> {
-        sess.send_frame(codec::MSG_FOLDER_OFFER, FolderOffer {
-            folder_id: f.folder_id,
-            manifest_id: f.current_manifest.unwrap_or([0; 32]),
-            reserved: 0,
-        }.encode())?;
+    // Our EFFECTIVE manifest for a folder: the post-pull outcome pointer
+    // when known (round 2 must reflect adoptions), else the configured one.
+    fn effective_manifest(
+        cfg: &EngineConfig,
+        outcomes: &[FolderOutcome],
+        folder_id: [u8; 16],
+    ) -> Option<BlobId> {
+        outcomes
+            .iter()
+            .find(|o| o.folder_id == folder_id)
+            .and_then(|o| o.local_manifest_after)
+            .or_else(|| {
+                cfg.folders
+                    .iter()
+                    .find(|f| f.folder_id == folder_id)
+                    .and_then(|f| f.current_manifest)
+            })
+    }
+
+    // Announce one of OUR folders: offer (+adverts in round 1).
+    fn announce<T: ByteStream>(
+        sess: &mut Session<'_, T>,
+        cfg: &EngineConfig,
+        outcomes: &[FolderOutcome],
+        f: &FolderState,
+        with_adverts: bool,
+    ) -> Result<(), ProtoError> {
+        sess.send_frame(
+            codec::MSG_FOLDER_OFFER,
+            FolderOffer {
+                folder_id: f.folder_id,
+                manifest_id: effective_manifest(cfg, outcomes, f.folder_id).unwrap_or([0; 32]),
+                reserved: 0,
+            }
+            .encode(),
+        )?;
         if with_adverts {
             send_my_adverts(sess, Some(&f.store))?;
         }
         Ok(())
-    };
+    }
 
-    let echo_as_mirror = |sess: &mut Session<'_, S>,
-                          cfg: &EngineConfig,
-                          folder_id: [u8; 16]|
-     -> Result<(), ProtoError> {
-        let mine = cfg.folders.iter().find(|f| f.folder_id == folder_id);
-        sess.send_frame(codec::MSG_FOLDER_OFFER, FolderOffer {
-            folder_id,
-            manifest_id: mine.and_then(|f| f.current_manifest).unwrap_or([0; 32]),
-            reserved: 0,
-        }.encode())?;
+    // As the MIRROR of an announced folder: reply with our state (+adverts).
+    fn echo<T: ByteStream>(
+        sess: &mut Session<'_, T>,
+        cfg: &EngineConfig,
+        outcomes: &[FolderOutcome],
+        folder_id: [u8; 16],
+        with_adverts: bool,
+    ) -> Result<(), ProtoError> {
+        sess.send_frame(
+            codec::MSG_FOLDER_OFFER,
+            FolderOffer {
+                folder_id,
+                manifest_id: effective_manifest(cfg, outcomes, folder_id).unwrap_or([0; 32]),
+                reserved: 0,
+            }
+            .encode(),
+        )?;
         if with_adverts {
-            match mine {
-                Some(f) => send_my_adverts(sess, Some(&f.store))?,
+            match cfg
+                .folders
+                .iter()
+                .find(|f| f.folder_id == folder_id)
+                .map(|f| &f.store)
+            {
+                Some(store) => send_my_adverts(sess, Some(store))?,
                 None => send_my_adverts(sess, None)?,
             }
         }
         Ok(())
+    }
+
+    // Mirror-side consumption: the offer is already read by the caller;
+    // this records it plus its advert tail.
+    fn consume_announcement<T: ByteStream>(
+        po: FolderOffer,
+        sess: &mut Session<'_, T>,
+        with_adverts: bool,
+        peer_folders: &mut BTreeMap<[u8; 16], PeerFolder>,
+        peer_adverts: &mut BTreeMap<[u8; 16], AdvertMap>,
+    ) -> Result<(), ProtoError> {
+        let map = if with_adverts {
+            recv_advert_map(sess)?
+        } else {
+            AdvertMap::new()
+        };
+        if with_adverts {
+            peer_adverts.insert(po.folder_id, map);
+        }
+        peer_folders.insert(
+            po.folder_id,
+            PeerFolder {
+                manifest: nonzero_manifest(po.manifest_id),
+            },
+        );
+        Ok(())
+    }
+
+    // Announcer-side consumption after announcing: read the echo offer and
+    // its advert tail.
+    fn consume_echo<S: ByteStream>(
+        sess: &mut Session<'_, S>,
+        with_adverts: bool,
+        peer_folders: &mut BTreeMap<[u8; 16], PeerFolder>,
+        peer_adverts: &mut BTreeMap<[u8; 16], AdvertMap>,
+    ) -> Result<(), ProtoError> {
+        let po = expect_offer(sess)?;
+        let map = if with_adverts {
+            recv_advert_map(sess)?
+        } else {
+            AdvertMap::new()
+        };
+        if with_adverts {
+            peer_adverts.insert(po.folder_id, map);
+        }
+        peer_folders.insert(
+            po.folder_id,
+            PeerFolder {
+                manifest: nonzero_manifest(po.manifest_id),
+            },
+        );
+        Ok(())
+    }
+
+    let send_sentinel = |sess: &mut Session<'_, S>| -> Result<(), ProtoError> {
+        sess.send_frame(
+            codec::MSG_FOLDER_OFFER,
+            FolderOffer {
+                folder_id: FOLDER_SENTINEL,
+                manifest_id: [0; 32],
+                reserved: 0,
+            }
+            .encode(),
+        )
     };
 
     match role {
         Role::Initiator => {
-            // Announce my folders; read the mirror's reply per folder.
             for f in &cfg.folders {
-                announce_one(sess, f)?;
-                record_offer(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
+                announce(sess, cfg, outcomes, f, with_adverts)?;
+                consume_echo(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
             }
-            sess.send_frame(codec::MSG_FOLDER_OFFER, FolderOffer {
-                folder_id: FOLDER_SENTINEL,
-                manifest_id: [0; 32],
-                reserved: 0,
-            }.encode())?;
-            // Mirror the peer's own extras.
+            send_sentinel(sess)?;
             loop {
                 let po = expect_offer(sess)?;
                 if po.folder_id == FOLDER_SENTINEL {
                     break;
                 }
-                record_offer(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
-                echo_as_mirror(sess, cfg, po.folder_id)?;
+                let folder_id = po.folder_id;
+                consume_announcement(po, sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
+                echo(sess, cfg, outcomes, folder_id, with_adverts)?;
             }
         }
         Role::Responder => {
-            // Mirror the initiator's list.
             loop {
                 let po = expect_offer(sess)?;
                 if po.folder_id == FOLDER_SENTINEL {
                     break;
                 }
-                record_offer(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
-                echo_as_mirror(sess, cfg, po.folder_id)?;
+                let folder_id = po.folder_id;
+                consume_announcement(po, sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
+                echo(sess, cfg, outcomes, folder_id, with_adverts)?;
             }
-            // Announce MY extras (folders the initiator did not mention).
             for f in &cfg.folders {
                 if peer_folders.contains_key(&f.folder_id) {
                     continue;
                 }
-                announce_one(sess, f)?;
-                record_offer(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
+                announce(sess, cfg, outcomes, f, with_adverts)?;
+                consume_echo(sess, with_adverts, &mut peer_folders, &mut peer_adverts)?;
             }
-            sess.send_frame(codec::MSG_FOLDER_OFFER, FolderOffer {
-                folder_id: FOLDER_SENTINEL,
-                manifest_id: [0; 32],
-                reserved: 0,
-            }.encode())?;
+            send_sentinel(sess)?;
         }
     }
 
@@ -908,26 +1048,6 @@ fn exchange_offers<S: ByteStream>(
 fn expect_offer<S: ByteStream>(sess: &mut Session<'_, S>) -> Result<FolderOffer, ProtoError> {
     let fb = sess.expect_frame(codec::MSG_FOLDER_OFFER)?;
     FolderOffer::parse(&fb.payload)
-}
-
-fn record_offer<S: ByteStream>(
-    sess: &mut Session<'_, S>,
-    with_adverts: bool,
-    peer_folders: &mut BTreeMap<[u8; 16], PeerFolder>,
-    peer_adverts: &mut BTreeMap<[u8; 16], AdvertMap>,
-) -> Result<(), ProtoError> {
-    let po = expect_offer(sess)?;
-    if with_adverts {
-        let map = recv_advert_map(sess)?;
-        peer_adverts.insert(po.folder_id, map);
-    }
-    peer_folders.insert(
-        po.folder_id,
-        PeerFolder {
-            manifest: nonzero_manifest(po.manifest_id),
-        },
-    );
-    Ok(())
 }
 
 fn nonzero_manifest(id: BlobId) -> Option<BlobId> {
@@ -964,13 +1084,27 @@ fn send_my_adverts<S: ByteStream>(
         None => Vec::new(),
     };
     if entries.is_empty() {
-        sess.send_frame(codec::MSG_INDEX_ADVERT, IndexAdvert { entries: vec![], more: false }.encode())?;
+        sess.send_frame(
+            codec::MSG_INDEX_ADVERT,
+            IndexAdvert {
+                entries: vec![],
+                more: false,
+            }
+            .encode(),
+        )?;
         return Ok(());
     }
     let chunks: Vec<&[IndexEntry]> = entries.chunks(IndexAdvert::MAX_ROWS).collect();
     let last = chunks.len() - 1;
     for (i, c) in chunks.into_iter().enumerate() {
-        sess.send_frame(codec::MSG_INDEX_ADVERT, IndexAdvert { entries: c.to_vec(), more: i != last }.encode())?;
+        sess.send_frame(
+            codec::MSG_INDEX_ADVERT,
+            IndexAdvert {
+                entries: c.to_vec(),
+                more: i != last,
+            }
+            .encode(),
+        )?;
     }
     Ok(())
 }
@@ -998,10 +1132,14 @@ fn fetch_blobs<S: ByteStream>(
         }
         let mut got: BTreeSet<BlobId> = BTreeSet::new();
         for group in outstanding.chunks(codec::MAX_REQUEST_ITEMS) {
-            sess.send_frame(codec::MSG_REQUEST_ITEMS, RequestItems {
-                folder_id,
-                items: group.iter().map(|id| (kind, *id)).collect(),
-            }.encode()?)?;
+            sess.send_frame(
+                codec::MSG_REQUEST_ITEMS,
+                RequestItems {
+                    folder_id,
+                    items: group.iter().map(|id| (kind, *id)).collect(),
+                }
+                .encode()?,
+            )?;
             got.extend(read_item_batches(sess, store, rejections)?);
         }
         outstanding.retain(|id| !got.contains(id));
@@ -1074,10 +1212,14 @@ fn fetch_via_packs<S: ByteStream>(
         .collect();
 
     for group in packs.chunks(codec::MAX_REQUEST_PACKS) {
-        sess.send_frame(codec::MSG_REQUEST_PACKS, RequestPacks {
-            folder_id,
-            packs: group.to_vec(),
-        }.encode()?)?;
+        sess.send_frame(
+            codec::MSG_REQUEST_PACKS,
+            RequestPacks {
+                folder_id,
+                packs: group.to_vec(),
+            }
+            .encode()?,
+        )?;
         loop {
             let fb = sess.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
             if fb.msg_type == codec::MSG_PACK_ITEM {
@@ -1146,7 +1288,15 @@ fn pull_folder<S: ByteStream>(
     rejections: &mut usize,
 ) -> Result<(), ProtoError> {
     // 1. The peer's root manifest, by id, verified after receipt.
-    fetch_blobs(sess, folder_id, BlobKind::Manifest, &[target], store, retries, rejections)?;
+    fetch_blobs(
+        sess,
+        folder_id,
+        BlobKind::Manifest,
+        &[target],
+        store,
+        retries,
+        rejections,
+    )?;
     let man_bytes = store.get(BlobKind::Manifest, &target).map_err(store_err)?;
     let manifest = parse_manifest(&man_bytes)
         .map_err(|_| ProtoError::ProtocolViolation("peer manifest failed to parse"))?;
@@ -1163,7 +1313,15 @@ fn pull_folder<S: ByteStream>(
             return Err(ProtoError::MissingItems(queue.len()));
         }
         let batch = std::mem::take(&mut queue);
-        fetch_blobs(sess, folder_id, BlobKind::TreeNode, &batch, store, retries, rejections)?;
+        fetch_blobs(
+            sess,
+            folder_id,
+            BlobKind::TreeNode,
+            &batch,
+            store,
+            retries,
+            rejections,
+        )?;
         for id in batch {
             let bytes = store.get(BlobKind::TreeNode, &id).map_err(store_err)?;
             let node = parse_tree_node(&bytes)
@@ -1193,14 +1351,21 @@ fn pull_folder<S: ByteStream>(
         .collect();
 
     // 4-5. Packs first (policy-driven), items for the remainder.
-    let satisfied =
-        fetch_via_packs(sess, folder_id, &wanted, adverts, gran, store, rejections)?;
+    let satisfied = fetch_via_packs(sess, folder_id, &wanted, adverts, gran, store, rejections)?;
     let leftover: Vec<BlobId> = wanted
         .into_iter()
         .filter(|id| !satisfied.contains(id))
         .collect();
     if !leftover.is_empty() {
-        fetch_blobs(sess, folder_id, BlobKind::DataChunk, &leftover, store, retries, rejections)?;
+        fetch_blobs(
+            sess,
+            folder_id,
+            BlobKind::DataChunk,
+            &leftover,
+            store,
+            retries,
+            rejections,
+        )?;
     }
 
     let _ = current; // adoption handled by run_stage via outcomes
@@ -1218,25 +1383,21 @@ fn finish_after_sync<S: ByteStream>(
     cfg: &EngineConfig,
     outcomes: &mut [FolderOutcome],
 ) -> Result<(), ProtoError> {
-    let (peer_folders, _) = exchange_offers(sess, role, cfg, false)?;
+    let (peer_folders, _) = exchange_offers(sess, role, cfg, outcomes, false)?;
 
-    for idx in 0..outcomes.len() {
-        let folder_id = outcomes[idx].folder_id;
-        if let Some(pf) = peer_folders.get(&folder_id) {
-            outcomes[idx].remote_manifest = pf.manifest;
+    for out in outcomes.iter_mut() {
+        if let Some(pf) = peer_folders.get(&out.folder_id) {
+            out.remote_manifest = pf.manifest;
         }
-        let (mine_now, theirs_now) = (
-            outcomes[idx].local_manifest_after,
-            outcomes[idx].remote_manifest,
-        );
+        let (mine_now, theirs_now) = (out.local_manifest_after, out.remote_manifest);
         if let (Some(mine), Some(theirs)) = (mine_now, theirs_now) {
             if mine == theirs {
-                let store = find_store(cfg, folder_id)?;
+                let store = find_store(cfg, out.folder_id)?;
                 let ledger = AgreementLedger::new(store.store_dir());
                 let (sec, nsec) = now_secs_nsecs();
                 ledger
                     .record(
-                        &folder_id,
+                        &out.folder_id,
                         &AgreementRecord {
                             peer: sess.peer_id,
                             manifest_id: mine,
@@ -1244,10 +1405,8 @@ fn finish_after_sync<S: ByteStream>(
                             agreed_nsec: nsec,
                         },
                     )
-                    .map_err(|e| {
-                        ProtoError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-                    })?;
-                outcomes[idx].agreement_recorded = Some(mine);
+                    .map_err(|e| ProtoError::Io(std::io::Error::other(e.to_string())))?;
+                out.agreement_recorded = Some(mine);
             }
         }
     }

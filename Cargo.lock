@@ -262,6 +262,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
  "x25519-dalek",
  "zeroize",
 ]

@@ -62,7 +62,10 @@ impl core::fmt::Display for ProtocolVersion {
 ///
 /// Returns [`ProtoError::VersionIncompatible`] on any major mismatch — the
 /// caller translates that into BYE(1) and a clean disconnect.
-pub fn negotiate(ours: ProtocolVersion, theirs: ProtocolVersion) -> Result<ProtocolVersion, ProtoError> {
+pub fn negotiate(
+    ours: ProtocolVersion,
+    theirs: ProtocolVersion,
+) -> Result<ProtocolVersion, ProtoError> {
     if ours.major() != theirs.major() {
         return Err(ProtoError::VersionIncompatible { ours, theirs });
     }
