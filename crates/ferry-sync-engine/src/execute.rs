@@ -361,7 +361,12 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), EngineError> {
     {
         std::os::unix::fs::symlink(target, at).map_err(|e| io_at(at, e))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Needs developer mode/admin on Windows; failure surfaces loudly.
+        std::os::windows::fs::symlink(target, at).map_err(|e| io_at(at, e))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (target, at);
         Err(EngineError::Io {

@@ -652,6 +652,23 @@ mod tests {
     }
 
     #[test]
+    fn decomposed_paths_are_treated_as_one_name_against_nfc_patterns() {
+        // T-012 NFC audit, ignore layer: a path arriving in a decomposed
+        // spelling (defensive NFC at the boundary) matches an NFC-composed
+        // pattern — one name, not two.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::write(root.join("ferry.ignore"), "rapport-ann\u{e9}e.md\n").unwrap();
+        let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
+        assert!(
+            ig(&f, "rapport-anne\u{301}e.md"),
+            "decomposed path must match composed pattern"
+        );
+        assert!(ig(&f, "rapport-ann\u{e9}e.md"));
+        assert!(!ig(&f, "rapport-annee.md"));
+    }
+
+    #[test]
     fn unknown_preset_id_fails_loudly() {
         let (_t, root) = tree(&[]);
         let cfg = IgnoreConfig {

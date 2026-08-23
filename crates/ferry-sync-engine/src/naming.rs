@@ -19,6 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use ferry_store::format::hex;
+use unicode_normalization::UnicodeNormalization;
 
 /// First 8 lowercase hex chars of a device id.
 pub fn device_short(device: &[u8; 32]) -> String {
@@ -26,13 +27,20 @@ pub fn device_short(device: &[u8; 32]) -> String {
 }
 
 /// The deterministic first-choice conflict name for one loser copy.
+///
+/// The original name is defensively NFC-normalized: stored names are already
+/// NFC by construction, but quarantine naming is the last line of display,
+/// so a decomposed spelling can never leak into a conflict filename (and
+/// then look like two files to users on folding hosts). NFC-equal input
+/// therefore yields the identical conflict name everywhere (T-012 audit).
 pub fn conflict_display_name(
     original_name: &str,
     loser_device: &[u8; 32],
     loser_mtime_sec: i64,
 ) -> String {
+    let nfc: String = original_name.nfc().collect();
     format!(
-        "{original_name}.ferry-conflict.{}-{}",
+        "{nfc}.ferry-conflict.{}-{}",
         device_short(loser_device),
         crate::timefmt::fmt_compact(loser_mtime_sec)
     )
@@ -79,6 +87,21 @@ mod tests {
         let name = conflict_display_name("notes.txt", &dev, 1_787_574_896);
         assert_eq!(name, "notes.txt.ferry-conflict.abababab-20260824-123456");
         assert_eq!(device_short(&dev), "abababab");
+    }
+
+    #[test]
+    fn decomposed_names_normalize_to_one_conflict_name() {
+        // T-012 NFC audit: decomposed and precomposed spellings of the same
+        // name MUST produce the identical quarantine filename — one name,
+        // not two, regardless of which spelling the manifest carried.
+        let dev = [0xCD; 32];
+        let decomposed = conflict_display_name("rapport-anne\u{301}e.md", &dev, 1_787_574_896);
+        let composed = conflict_display_name("rapport-ann\u{e9}e.md", &dev, 1_787_574_896);
+        assert_eq!(decomposed, composed);
+        assert_eq!(
+            composed,
+            "rapport-ann\u{e9}e.md.ferry-conflict.cdcdcdcd-20260824-123456"
+        );
     }
 
     #[test]

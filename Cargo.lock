@@ -381,8 +381,9 @@ name = "ferry-sync"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-materialize",
+ "ferry-platform",
  "ferry-store",
- "libc",
  "rand",
  "tempfile",
  "thiserror",
@@ -400,6 +401,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
 ]
 
 [[package]]

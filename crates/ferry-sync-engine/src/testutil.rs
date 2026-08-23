@@ -35,10 +35,15 @@ pub fn write_file(path: &Path, bytes: &[u8], exec: bool, mt: (i64, u32)) {
         std::fs::create_dir_all(p).unwrap();
     }
     std::fs::write(path, bytes).unwrap();
-    let mut perm = std::fs::metadata(path).unwrap().permissions();
-    use std::os::unix::fs::PermissionsExt;
-    perm.set_mode(if exec { 0o755 } else { 0o644 });
-    std::fs::set_permissions(path, perm).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(path).unwrap().permissions();
+        perm.set_mode(if exec { 0o755 } else { 0o644 });
+        std::fs::set_permissions(path, perm).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = exec;
     set_mtime(path, mt.0, mt.1);
 }
 
