@@ -51,6 +51,21 @@ pub fn is_preauth_type(t: u8) -> bool {
     )
 }
 
+/// Every message type this version understands, in registry order.
+pub const KNOWN_TYPES: &[u8] = &[
+    MSG_HELLO,
+    MSG_HELLO_ACK,
+    MSG_AUTH_INIT,
+    MSG_AUTH_CONFIRM,
+    MSG_FOLDER_OFFER,
+    MSG_INDEX_ADVERT,
+    MSG_REQUEST_ITEMS,
+    MSG_REQUEST_PACKS,
+    MSG_ITEM_BATCH,
+    MSG_PACK_ITEM,
+    MSG_BYE,
+];
+
 /// A frame body before sealing: `magic || type || version || payload`.
 ///
 /// The magic rides INSIDE the body (not in the length prefix) so that even
@@ -127,8 +142,10 @@ pub struct Hello {
 }
 
 impl Hello {
+    pub const PAYLOAD_LEN: usize = 2 + 8 + 32 + 32 + 32;
+
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(106);
+        let mut out = Vec::with_capacity(Self::PAYLOAD_LEN);
         put_u16(&mut out, self.version.to_u16());
         put_u64(&mut out, self.flags);
         put_bytes(&mut out, &self.eph_pub);
@@ -155,9 +172,55 @@ impl Hello {
     }
 }
 
-/// Responder's half of the hello exchange. `version` is the CHOSEN agreed
-/// version (min of both maxima), not the responder's own maximum.
-pub type HelloAck = Hello;
+/// Responder's half of the hello exchange. Carries BOTH the responder's own
+/// maximum (`version`) and the CHOSEN session version (`agreed`) — the
+/// latter governs every subsequent frame, the former feeds the
+/// unknown-extension rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HelloAck {
+    /// Responder's maximum protocol version.
+    pub version: ProtocolVersion,
+    /// Chosen session version: min of both maxima within the common major.
+    pub agreed: ProtocolVersion,
+    pub flags: u64,
+    pub eph_pub: [u8; 32],
+    pub stat_pub: ferry_crypto::identity::DeviceId,
+    pub nonce: [u8; 32],
+}
+
+impl HelloAck {
+    pub const PAYLOAD_LEN: usize = 4 + 8 + 32 + 32 + 32;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::PAYLOAD_LEN);
+        put_u16(&mut out, self.version.to_u16());
+        put_u16(&mut out, self.agreed.to_u16());
+        put_u64(&mut out, self.flags);
+        put_bytes(&mut out, &self.eph_pub);
+        put_bytes(&mut out, &self.stat_pub);
+        put_bytes(&mut out, &self.nonce);
+        out
+    }
+
+    pub fn parse(payload: &[u8]) -> Result<Self, ProtoError> {
+        let mut r = Reader::new(payload);
+        let version = ProtocolVersion::from_u16(rd_u16(&mut r)?);
+        let agreed = ProtocolVersion::from_u16(rd_u16(&mut r)?);
+        let flags = r.u64().map_err(|_| bad("ack short"))?;
+        let eph_pub = r.array::<32>().map_err(|_| bad("ack short"))?;
+        let stat_pub = r.array::<32>().map_err(|_| bad("ack short"))?;
+        let nonce = r.array::<32>().map_err(|_| bad("ack short"))?;
+        r.expect_end().map_err(|_| bad("ack trailing"))?;
+        Ok(HelloAck {
+            version,
+            agreed,
+            flags,
+            eph_pub,
+            stat_pub,
+            nonce,
+        })
+    }
+}
 
 // --- AUTH_INIT / AUTH_CONFIRM ----------------------------------------------
 
@@ -266,11 +329,14 @@ impl IndexAdvert {
 
 // --- REQUEST_ITEMS / REQUEST_PACKS ------------------------------------------
 
-/// Ask the peer for specific blobs by kind + id. Served items arrive in
-/// ITEM_BATCH frames; unservable ids are silently omitted (the requester
-/// detects gaps after the terminator).
+/// Ask the peer for specific blobs by kind + id within one folder. Served
+/// items arrive in ITEM_BATCH frames; unservable ids are silently omitted
+/// (the requester detects gaps after the terminator). An EMPTY items list
+/// is the end-of-pull-stage marker: the server replies with a bare empty
+/// ITEM_BATCH and returns to listening.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestItems {
+    pub folder_id: [u8; 16],
     pub items: Vec<(BlobKind, BlobId)>,
 }
 
@@ -282,7 +348,8 @@ impl RequestItems {
                 max: MAX_REQUEST_ITEMS,
             });
         }
-        let mut out = Vec::with_capacity(4 + self.items.len() * 33);
+        let mut out = Vec::with_capacity(20 + self.items.len() * 33);
+        put_bytes(&mut out, &self.folder_id);
         put_u32(&mut out, self.items.len() as u32);
         for (kind, id) in &self.items {
             put_u8(&mut out, kind.to_u8());
@@ -293,6 +360,7 @@ impl RequestItems {
 
     pub fn parse(payload: &[u8]) -> Result<Self, ProtoError> {
         let mut r = Reader::new(payload);
+        let folder_id = r.array::<16>().map_err(|_| bad("req short"))?;
         let n = r.u32().map_err(|_| bad("req short"))? as usize;
         if n > MAX_REQUEST_ITEMS {
             return Err(ProtoError::ProtocolViolation("request too many items"));
@@ -306,13 +374,14 @@ impl RequestItems {
             items.push((kind, id));
         }
         r.expect_end().map_err(|_| bad("req trailing"))?;
-        Ok(RequestItems { items })
+        Ok(RequestItems { folder_id, items })
     }
 }
 
-/// Ask the peer for whole packs by ciphertext name.
+/// Ask the peer for whole packs by ciphertext name within one folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestPacks {
+    pub folder_id: [u8; 16],
     pub packs: Vec<BlobId>,
 }
 
@@ -324,7 +393,8 @@ impl RequestPacks {
                 max: MAX_REQUEST_PACKS,
             });
         }
-        let mut out = Vec::with_capacity(4 + self.packs.len() * 32);
+        let mut out = Vec::with_capacity(20 + self.packs.len() * 32);
+        put_bytes(&mut out, &self.folder_id);
         put_u32(&mut out, self.packs.len() as u32);
         for p in &self.packs {
             put_bytes(&mut out, p);
@@ -334,6 +404,7 @@ impl RequestPacks {
 
     pub fn parse(payload: &[u8]) -> Result<Self, ProtoError> {
         let mut r = Reader::new(payload);
+        let folder_id = r.array::<16>().map_err(|_| bad("reqp short"))?;
         let n = r.u32().map_err(|_| bad("reqp short"))? as usize;
         if n > MAX_REQUEST_PACKS {
             return Err(ProtoError::ProtocolViolation("request too many packs"));
@@ -343,7 +414,7 @@ impl RequestPacks {
             packs.push(r.array::<32>().map_err(|_| bad("reqp short"))?);
         }
         r.expect_end().map_err(|_| bad("reqp trailing"))?;
-        Ok(RequestPacks { packs })
+        Ok(RequestPacks { folder_id, packs })
     }
 }
 
@@ -486,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn hello_layout_is_106_bytes_and_round_trips() {
+    fn hello_and_ack_layouts_are_pinned_and_round_trip() {
         let h = Hello {
             version: ProtocolVersion::V1_0,
             flags: FLAG_EXTENSION_AWARE,
@@ -494,7 +565,8 @@ mod tests {
             stat_pub: [2; 32],
             nonce: [3; 32],
         };
-        assert_eq!(h.encode().len(), 2 + 8 + 32 + 32 + 32);
+        assert_eq!(h.encode().len(), Hello::PAYLOAD_LEN);
+        assert_eq!(h.encode().len(), 106);
         // Truncation at every prefix length fails loudly, never guesses.
         let bytes = h.encode();
         for cut in 0..bytes.len() {
@@ -506,6 +578,22 @@ mod tests {
         assert!(Hello::parse(&long).is_err());
         // Full round trip last (consumes h).
         roundtrip(h, |x| x.encode(), Hello::parse);
+
+        let ack = HelloAck {
+            version: ProtocolVersion::new(1, 9),
+            agreed: ProtocolVersion::V1_0,
+            flags: FLAG_EXTENSION_AWARE,
+            eph_pub: [4; 32],
+            stat_pub: [5; 32],
+            nonce: [6; 32],
+        };
+        assert_eq!(ack.encode().len(), HelloAck::PAYLOAD_LEN);
+        assert_eq!(ack.encode().len(), 108);
+        let ack_bytes = ack.encode();
+        for cut in 0..ack_bytes.len() {
+            assert!(HelloAck::parse(&ack_bytes[..cut]).is_err(), "cut {cut}");
+        }
+        roundtrip(ack, |a| a.encode(), HelloAck::parse);
     }
 
     #[test]
@@ -562,11 +650,13 @@ mod tests {
     #[test]
     fn request_and_batch_caps_are_enforced_on_both_sides() {
         let big_req = RequestItems {
+            folder_id: [0; 16],
             items: vec![(BlobKind::DataChunk, [0; 32]); MAX_REQUEST_ITEMS + 1],
         };
         assert!(big_req.encode().is_err());
         // Hand-serialize an oversized count to attack the parser directly.
         let mut evil = Vec::new();
+        put_bytes(&mut evil, &[0; 16]);
         put_u32(&mut evil, (MAX_REQUEST_ITEMS + 1) as u32);
         assert!(matches!(
             RequestItems::parse(&evil),
@@ -582,9 +672,26 @@ mod tests {
         assert!(ItemBatch::parse(&evil_b).is_err());
 
         let big_packs = RequestPacks {
+            folder_id: [0; 16],
             packs: vec![[0; 32]; MAX_REQUEST_PACKS + 1],
         };
         assert!(big_packs.encode().is_err());
+        let mut evil_p = Vec::new();
+        put_bytes(&mut evil_p, &[0; 16]);
+        put_u32(&mut evil_p, (MAX_REQUEST_PACKS + 1) as u32);
+        assert!(RequestPacks::parse(&evil_p).is_err());
+
+        // Round trips including the empty done-marker.
+        let ok = RequestItems {
+            folder_id: [7; 16],
+            items: vec![(BlobKind::Manifest, [1; 32])],
+        };
+        roundtrip(ok, |r| r.encode().unwrap(), RequestItems::parse);
+        let marker = RequestItems {
+            folder_id: [7; 16],
+            items: vec![],
+        };
+        roundtrip(marker, |r| r.encode().unwrap(), RequestItems::parse);
     }
 
     #[test]

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use ferry_store::format::{hex, unhex, BlobId};
+use ferry_store::format::{hex, BlobId};
 use ferry_crypto::identity::DeviceId;
 
 #[derive(Debug, Error)]
@@ -232,6 +232,5 @@ mod tests {
             ledger.get(&[7; 16], &newer.peer),
             Err(LedgerError::BadLength { .. })
         ));
-        let _ = unhex::<16>("00"); // silence unused import if refactors move it
     }
 }

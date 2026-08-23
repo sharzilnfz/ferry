@@ -48,9 +48,8 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::codec::{AuthProof, FrameBody};
+use crate::codec::AuthProof;
 use crate::error::ProtoError;
-use crate::version::ProtocolVersion;
 
 pub const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -248,23 +247,6 @@ impl core::fmt::Debug for SessionCipher {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SessionCipher").field("seq", &self.seq).finish()
     }
-}
-
-/// Build the post-auth version of a [`FrameBody`] region ready for sealing:
-/// type || version || payload.
-pub(crate) fn region_of(body: &FrameBody) -> Vec<u8> {
-    body.encode()[4..].to_vec() // strip WIRE_MAGIC; magic is cleartext-only convention
-}
-
-/// Parse a decrypted region back into a [`FrameBody`] with our magic
-/// prepended.
-pub(crate) fn body_from_region(region: &[u8], _version: ProtocolVersion) -> Result<FrameBody, ProtoError> {
-    if region.len() < 3 {
-        return Err(ProtoError::ProtocolViolation("sealed body truncated"));
-    }
-    let msg_type = region[0];
-    let ver = ProtocolVersion::from_u16(u16::from_le_bytes([region[1], region[2]]));
-    Ok(FrameBody::new(msg_type, ver, region[3..].to_vec()))
 }
 
 #[cfg(test)]
