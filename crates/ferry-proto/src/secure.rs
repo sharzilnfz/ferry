@@ -338,25 +338,35 @@ mod tests {
     fn frames_seal_open_with_counters_and_reject_reorder_replay_tamper() {
         let (terms, th) = dh_terms();
         let (_, _, prk) = kdf_handshake(&th, &terms[0], &terms[1], &terms[2]);
-        let (ka, kb) = traffic_keys(&prk, &th);
-        // Both ENDS of a direction hold that direction's key; derive it
-        // twice (deterministic schedule) so tx and rx share `a2b`.
-        let (kbis, _) = traffic_keys(&prk, &th);
-        let mut tx = kbis.cipher();
-        let mut rx = ka.cipher();
-        drop(kb);
+        // Both ENDS of a direction hold that direction's key; derive twice
+        // (deterministic schedule) so tx and rx share `a2b`.
+        let (ka, _) = traffic_keys(&prk, &th);
+        let (kb2, _) = traffic_keys(&prk, &th);
+        let mut tx = ka.cipher();
+        let mut rx = kb2.cipher();
 
         let f0 = tx.seal_frame(100, b"first").unwrap();
         let f1 = tx.seal_frame(105, b"second").unwrap();
         assert_ne!(f0, f1, "counter must change the ciphertext");
 
-        assert_eq!(rx.open_frame(100, &f0).unwrap(), b"first");
-
-        // Reordering: frame 1 arrives before its counter is due → tag fail.
+        // Out-of-order delivery: f1 arrives while rx expects sequence 0.
+        // Wrong nonce → tag failure. One failure burns rx's counter slot,
+        // so the session is dead afterwards BY DESIGN (fatal-error policy;
+        // the engine disconnects rather than resync).
         assert!(rx.open_frame(105, &f1).is_err());
 
-        // Replay of an ALREADY-consumed counter fails even in order.
-        assert!(rx.open_frame(100, &f0).is_err());
+        // Fresh pair, happy path first, then the abuse cases.
+        let (ka3, _) = traffic_keys(&prk, &th);
+        let (ka4, _) = traffic_keys(&prk, &th);
+        let mut tx = ka3.cipher();
+        let mut rx = ka4.cipher();
+        let g0 = tx.seal_frame(100, b"first").unwrap();
+        let g1 = tx.seal_frame(105, b"second").unwrap();
+        assert_eq!(rx.open_frame(100, &g0).unwrap(), b"first");
+        assert_eq!(rx.open_frame(105, &g1).unwrap(), b"second");
+
+        // Replay of an ALREADY-consumed frame fails (counter moved on).
+        assert!(rx.open_frame(100, &g0).is_err());
 
         // Tamper anywhere fails.
         let fresh = tx.seal_frame(10, b"payload").unwrap();
