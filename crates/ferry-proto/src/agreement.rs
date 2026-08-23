@@ -178,16 +178,9 @@ mod tests {
     fn parse_rejects_wrong_length_and_nonzero_flags() {
         let bytes = fixture().to_canonical();
         // Too-short at every cut, plus one too-long input.
-        for bad in [
-            &bytes[..0],
-            &bytes[..1],
-            &bytes[..76],
-            {
-                let mut long = bytes.to_vec();
-                long.push(0);
-                &long[..]
-            },
-        ] {
+        let mut long = bytes.to_vec();
+        long.push(0);
+        for bad in [&bytes[..0], &bytes[..1], &bytes[..76], &long[..]] {
             assert!(AgreementRecord::from_canonical(bad).is_err());
         }
         let mut flagged = bytes;
