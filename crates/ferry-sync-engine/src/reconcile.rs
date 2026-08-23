@@ -113,11 +113,20 @@ fn same_content(l: &EntryState, r: &EntryState) -> bool {
 
 /// Newer mtime wins; exact ties go to the higher manifest device id. The
 /// comparison is symmetric, so both devices pick the same winner.
-fn pick_winner(l: &EntryState, r: &EntryState, local_dev: &[u8; 32], remote_dev: &[u8; 32]) -> Side {
+fn pick_winner(
+    l: &EntryState,
+    r: &EntryState,
+    local_dev: &[u8; 32],
+    remote_dev: &[u8; 32],
+) -> Side {
     let l_mt = (l.mtime_sec, l.mtime_nsec);
     let r_mt = (r.mtime_sec, r.mtime_nsec);
     if l_mt != r_mt {
-        return if l_mt > r_mt { Side::Local } else { Side::Remote };
+        return if l_mt > r_mt {
+            Side::Local
+        } else {
+            Side::Remote
+        };
     }
     if local_dev > remote_dev {
         Side::Local
@@ -133,7 +142,10 @@ enum Decision {
     /// Silent local win (nothing to do locally; content goes on the send list).
     KeepLocal,
     /// Real divergence; `winner` keeps its bytes live at the path.
-    Conflict { kind: ConflictKind, winner: Side },
+    Conflict {
+        kind: ConflictKind,
+        winner: Side,
+    },
 }
 
 /// Every chunk id referenced by any file in a manifest's trees.
@@ -178,7 +190,10 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
 
     // Base root: the agreed manifest's tree, or the empty tree for initial
     // sync (add-vs-add treats the empty tree as the ancestor).
-    let empty_root = store.put_meta(BlobKind::TreeNode, &serialize_tree_node(&TreeNode::default()))?;
+    let empty_root = store.put_meta(
+        BlobKind::TreeNode,
+        &serialize_tree_node(&TreeNode::default()),
+    )?;
     let base_root = base.map(|m| m.root_tree_id).unwrap_or(empty_root);
 
     let local_view = index_change_set(&diff_roots(store, &base_root, &local.root_tree_id)?);
@@ -255,14 +270,13 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
                                 let winner = match kind {
                                     // The edit always beats the deletion.
                                     ConflictKind::DeleteVsEdit => {
-                                        if l.is_some() { Side::Local } else { Side::Remote }
+                                        if l.is_some() {
+                                            Side::Local
+                                        } else {
+                                            Side::Remote
+                                        }
                                     }
-                                    _ => pick_winner(
-                                        ls,
-                                        rs,
-                                        &local.device_id,
-                                        &remote.device_id,
-                                    ),
+                                    _ => pick_winner(ls, rs, &local.device_id, &remote.device_id),
                                 };
                                 Decision::Conflict { kind, winner }
                             }
@@ -272,7 +286,11 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
                             // was caught by l == r).
                             Decision::Conflict {
                                 kind: ConflictKind::DeleteVsEdit,
-                                winner: if l.is_some() { Side::Local } else { Side::Remote },
+                                winner: if l.is_some() {
+                                    Side::Local
+                                } else {
+                                    Side::Remote
+                                },
                             }
                         }
                     }
@@ -660,7 +678,10 @@ mod tests {
         }
         assert!(plan.materialize.is_empty(), "winner is live already");
         assert!(!plan.send.is_empty(), "B needs A's winner bytes");
-        assert!(!plan.fetch.is_empty(), "quarantining B's loser needs its blob");
+        assert!(
+            !plan.fetch.is_empty(),
+            "quarantining B's loser needs its blob"
+        );
     }
 
     #[test]
@@ -670,7 +691,11 @@ mod tests {
             &|t| write_file(&t.join("tie.txt"), b"from B", false, (42, 42)),
         );
         let plan = plan_on_a(&p);
-        assert_eq!(plan.conflicts[0].winner, Side::Remote, "tie: DEV_B is the higher device id");
+        assert_eq!(
+            plan.conflicts[0].winner,
+            Side::Remote,
+            "tie: DEV_B is the higher device id"
+        );
 
         // Mirror view on A must agree — the rule is symmetric.
         let mirrored = reconcile(ReconcileInput {
@@ -680,7 +705,11 @@ mod tests {
             base: None,
         })
         .unwrap();
-        assert_eq!(mirrored.conflicts[0].winner, Side::Local, "B's local copy (DEV_B) wins on B too");
+        assert_eq!(
+            mirrored.conflicts[0].winner,
+            Side::Local,
+            "B's local copy (DEV_B) wins on B too"
+        );
     }
 
     #[test]
@@ -708,8 +737,15 @@ mod tests {
         .unwrap();
         assert_eq!(plan.conflicts.len(), 1);
         assert_eq!(plan.conflicts[0].kind, ConflictKind::DeleteVsEdit);
-        assert_eq!(plan.conflicts[0].winner, Side::Local, "the edit beats the deletion");
-        assert!(plan.quarantine.is_empty(), "nothing to save; deletion has no bytes");
+        assert_eq!(
+            plan.conflicts[0].winner,
+            Side::Local,
+            "the edit beats the deletion"
+        );
+        assert!(
+            plan.quarantine.is_empty(),
+            "nothing to save; deletion has no bytes"
+        );
         assert!(plan.materialize.is_empty(), "edit stays live on the editor");
     }
 
@@ -736,7 +772,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(plan.conflicts.len(), 1);
-        assert_eq!(plan.conflicts[0].winner, Side::Remote, "B edited, A deleted");
+        assert_eq!(
+            plan.conflicts[0].winner,
+            Side::Remote,
+            "B edited, A deleted"
+        );
         assert_eq!(plan.materialize.len(), 1, "A resurrects B's edit locally");
         assert!(plan.quarantine.is_empty());
     }
@@ -760,7 +800,12 @@ mod tests {
         std::fs::remove_dir_all(p.a.tree.join("d")).unwrap();
         write_file(&p.a.tree.join("d"), b"now a file", false, (80, 0));
         // B edits inside it.
-        write_file(&p.b.tree.join("d/inner.txt"), b"edited inner", false, (81, 0));
+        write_file(
+            &p.b.tree.join("d/inner.txt"),
+            b"edited inner",
+            false,
+            (81, 0),
+        );
         let sa = p.a.snapshot();
         let sb = p.b.snapshot();
         transfer_manifest(&p.a.store, &p.b.store, &sa.manifest, sa.manifest_id);
@@ -773,6 +818,9 @@ mod tests {
             base: Some(&base),
         })
         .unwrap_err();
-        assert!(matches!(err, ReconcileError::StructuralConflict { .. }), "{err}");
+        assert!(
+            matches!(err, ReconcileError::StructuralConflict { .. }),
+            "{err}"
+        );
     }
 }

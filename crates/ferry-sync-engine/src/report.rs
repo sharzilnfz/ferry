@@ -79,7 +79,7 @@ pub fn append_entries(state_dir: &Path, entries: &[ConflictEntry]) -> Result<(),
     }
     let path = log_path(state_dir);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| io_at(&parent, e))?;
+        std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
     }
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -148,7 +148,14 @@ mod tests {
             path: path.to_string(),
             kind: kind.to_string(),
             winner: stamp("bb".repeat(32).as_str(), Some(100)),
-            loser: stamp("cc".repeat(32).as_str(), if kind == "delete_vs_edit" { None } else { Some(90) }),
+            loser: stamp(
+                "cc".repeat(32).as_str(),
+                if kind == "delete_vs_edit" {
+                    None
+                } else {
+                    Some(90)
+                },
+            ),
             quarantined_as: quarantined.map(str::to_string),
         }
     }
@@ -158,9 +165,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sd = dir.path();
         let batch = vec![
-            entry("f.txt", "both_changed", Some("f.txt.ferry-conflict.cccccccc-20260824-090000")),
+            entry(
+                "f.txt",
+                "both_changed",
+                Some("f.txt.ferry-conflict.cccccccc-20260824-090000"),
+            ),
             entry("g.txt", "delete_vs_edit", None),
-            entry("h.txt", "add_vs_add", Some("h.txt.ferry-conflict.cccccccc-20260823-080000")),
+            entry(
+                "h.txt",
+                "add_vs_add",
+                Some("h.txt.ferry-conflict.cccccccc-20260823-080000"),
+            ),
         ];
         append_entries(sd, &batch).unwrap();
         // A second empty call appends nothing.
@@ -197,8 +212,14 @@ mod tests {
         let raw = std::fs::read_to_string(log_path(sd)).unwrap();
         assert!(raw.starts_with("{\"ts\":\"2026-"));
         for key in [
-            "\"folder_id\"", "\"path\"", "\"kind\"", "\"winner\"", "\"loser\"",
-            "\"quarantined_as\"", "\"mtime_sec\"", "\"device\"",
+            "\"folder_id\"",
+            "\"path\"",
+            "\"kind\"",
+            "\"winner\"",
+            "\"loser\"",
+            "\"quarantined_as\"",
+            "\"mtime_sec\"",
+            "\"device\"",
         ] {
             assert!(raw.contains(key), "missing {key}");
         }

@@ -46,9 +46,7 @@ pub enum LoserContent {
     /// overwrite, verifying them region-by-region against the chunk list
     /// the local manifest declares. A mismatch surfaces as `Diverged`
     /// before anything is written anywhere.
-    LiveLocal {
-        expected_chunks: Vec<(BlobId, u64)>,
-    },
+    LiveLocal { expected_chunks: Vec<(BlobId, u64)> },
     /// The local live SYMLINK is the loser: recreate it from the target the
     /// local manifest declares after checking the live link still matches.
     LiveLocalSymlink { expected_target: String },

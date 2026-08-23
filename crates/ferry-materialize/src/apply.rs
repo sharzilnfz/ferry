@@ -3,10 +3,12 @@
 //! Execution pipeline for every apply call:
 //!
 //! 1. **Validate** every stored path component (traversal defense).
-//! 2. **Plan** against live disk state: stat-level fast path marks
+//! 2. **Plan** against live disk state: stat-level checks mark
 //!    already-correct entries as skips (idempotence: a second identical
-//!    apply performs zero mutations). Only genuine ambiguity (size and
-//!    exec agree, mtime disagrees) pays for a content comparison.
+//!    apply performs zero mutations). Whenever size and exec bit agree,
+//!    content is verified against the store before trusting the file —
+//!    equal-length edits can share a timestamp (reconciliation ties produce
+//!    exactly that), so mtime alone never proves equality.
 //! 3. **Guard** (`Overwrite::Expect`): verify every path about to be
 //!    mutated still matches the caller's base expectation. Any divergence
 //!    aborts with the complete list BEFORE anything is touched.
@@ -776,8 +778,9 @@ fn record_creation(stats: &mut ApplyStats, rel: &[String]) {
 // Planning
 // ---------------------------------------------------------------------------
 
-/// Decide what one upsert must do given live state. Pure stat fast path;
-/// content is compared only when size and exec agree but mtime disagrees.
+/// Decide what one upsert must do given live state. Size and exec are
+/// checked first; content is verified against the store whenever those
+/// agree, so a same-size divergent file is rewritten rather than skipped.
 fn plan_upsert(
     store: &Store,
     abs: &Path,
@@ -841,17 +844,20 @@ fn plan_upsert(
             if md.len() != size || live_exec(&md) != exec {
                 return Ok(()); // cheap facts differ: full rewrite
             }
+            // Size and exec agree; bytes may still differ (equal-length
+            // edits CAN share a timestamp — reconciliation ties produce
+            // exactly that). Prove content before trusting anything.
+            if !content_matches(store, abs, &chunks)? {
+                return Ok(()); // divergent bytes: full rewrite
+            }
             let (lsec, lnsec) = split_unix_time(md.modified().map_err(|e| io_at(abs, e))?);
             if lsec == sec && lnsec == nsec {
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
                 return Ok(());
             }
-            // Ambiguous: same size/exec, different mtime. Compare content
-            // against the store; equal bytes need only an mtime restore.
-            if content_matches(store, abs, &chunks)? {
-                up.mutation = Mutation::RestoreMtime { sec, nsec };
-            }
+            // Bytes correct, recorded mtime drifted: restore it only.
+            up.mutation = Mutation::RestoreMtime { sec, nsec };
             Ok(())
         }
     }

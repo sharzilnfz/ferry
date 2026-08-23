@@ -101,7 +101,10 @@ pub fn execute(
             .map_err(|e| io_at(root.join(&candidate), e))?;
         if let LoserContent::LiveLocal { expected_chunks } = &op.content {
             let live_abs = abs_under(root, &op.path);
-            buffers.insert(idx, read_live_verified(&live_abs, &op.path, expected_chunks)?);
+            buffers.insert(
+                idx,
+                read_live_verified(&live_abs, &op.path, expected_chunks)?,
+            );
         }
         dest_rel.push(join_path(&rel_under(root, &abs)));
         dest_abs.push(abs);
@@ -109,7 +112,13 @@ pub fn execute(
 
     // 3: write the loser copies.
     for (idx, op) in plan.quarantine.iter().enumerate() {
-        write_loser_copy(store, root, op, &dest_abs[idx], buffers.get(&idx).map(Vec::as_slice))?;
+        write_loser_copy(
+            store,
+            root,
+            op,
+            &dest_abs[idx],
+            buffers.get(&idx).map(Vec::as_slice),
+        )?;
     }
 
     // 4: fold transitions into one change set and apply under guard.
@@ -120,9 +129,12 @@ pub fn execute(
     let apply = if cs.is_empty() {
         ApplyStats::default()
     } else {
-        let expected = plan.guard_expected.as_ref().ok_or(MaterializeError::BadComponent {
-            component: "plan missing guard_expected".to_string(),
-        })?;
+        let expected = plan
+            .guard_expected
+            .as_ref()
+            .ok_or(MaterializeError::BadComponent {
+                component: "plan missing guard_expected".to_string(),
+            })?;
         Applier::new(store, root)
             .overwrite(Overwrite::Expect {
                 expected: expected.clone(),
@@ -147,8 +159,15 @@ pub fn execute(
             folder_id: folder_id.clone(),
             path: join_path(&c.path),
             kind: kind_str(c.kind).to_string(),
-            winner: stamp(c.winner_device, Some((c.winner_mtime_sec, c.winner_mtime_nsec))),
-            loser: stamp(c.loser_device, c.loser_mtime_sec.map(|s| (s, c.loser_mtime_nsec.unwrap_or(0)))),
+            winner: stamp(
+                c.winner_device,
+                Some((c.winner_mtime_sec, c.winner_mtime_nsec)),
+            ),
+            loser: stamp(
+                c.loser_device,
+                c.loser_mtime_sec
+                    .map(|s| (s, c.loser_mtime_nsec.unwrap_or(0))),
+            ),
             quarantined_as: plan
                 .quarantine
                 .iter()
@@ -221,10 +240,13 @@ fn read_live_verified(
     }
     let mut trailing = [0u8; 1];
     if f.read(&mut trailing).unwrap_or(1) > 0 {
-        return Err(diverged(rel, DivergeReason::SizeMismatch {
-            expected: declared_total,
-            found: declared_total + 1,
-        }));
+        return Err(diverged(
+            rel,
+            DivergeReason::SizeMismatch {
+                expected: declared_total,
+                found: declared_total + 1,
+            },
+        ));
     }
     Ok(out)
 }
@@ -251,9 +273,14 @@ fn write_loser_copy(
         std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
     }
     let display = join_path(&op.path);
-    let tmp = abs_dest.parent().expect("dest always has a parent").join(
-        temp_name_for(&display, TempStyle::current(), &fresh_entropy()),
-    );
+    let tmp = abs_dest
+        .parent()
+        .expect("dest always has a parent")
+        .join(temp_name_for(
+            &display,
+            TempStyle::current(),
+            &fresh_entropy(),
+        ));
     let rename = |tmp: &Path, dest: &Path| -> Result<(), EngineError> {
         std::fs::rename(tmp, dest).map_err(|e| {
             let _ = std::fs::remove_file(tmp);
@@ -268,17 +295,27 @@ fn write_loser_copy(
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if &actual != expected_target {
-                return Err(diverged(&op.path, DivergeReason::TargetMismatch {
-                    expected: expected_target.clone(),
-                    found: actual,
-                }));
+                return Err(diverged(
+                    &op.path,
+                    DivergeReason::TargetMismatch {
+                        expected: expected_target.clone(),
+                        found: actual,
+                    },
+                ));
             }
             make_symlink(expected_target, &tmp)?;
             rename(&tmp, abs_dest)
         }
         LoserContent::LiveLocal { .. } => {
             let bytes = live_bytes.expect("pre-verified buffer must exist");
-            write_bytes_with_meta(&tmp, abs_dest, bytes, op.exec, op.loser_mtime_sec, op.loser_mtime_nsec)
+            write_bytes_with_meta(
+                &tmp,
+                abs_dest,
+                bytes,
+                op.exec,
+                op.loser_mtime_sec,
+                op.loser_mtime_nsec,
+            )
         }
         LoserContent::FromStore {
             kind,
@@ -293,7 +330,9 @@ fn write_loser_copy(
             } else {
                 let mut bytes = Vec::with_capacity(chunks.iter().map(|c| c.1 as usize).sum());
                 for (id, len) in chunks {
-                    let piece = store.get(BlobKind::DataChunk, id).map_err(EngineError::from)?;
+                    let piece = store
+                        .get(BlobKind::DataChunk, id)
+                        .map_err(EngineError::from)?;
                     if piece.len() as u64 != *len {
                         return Err(EngineError::Materialize(MaterializeError::ChunkCorrupt {
                             path: display,
@@ -346,8 +385,12 @@ fn write_bytes_with_meta(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(std::fs::Permissions::from_mode(if exec { 0o755 } else { 0o644 }))
-                .map_err(|e| io_at(tmp, e))?;
+            f.set_permissions(std::fs::Permissions::from_mode(if exec {
+                0o755
+            } else {
+                0o644
+            }))
+            .map_err(|e| io_at(tmp, e))?;
         }
         f.write_all(bytes).map_err(|e| io_at(tmp, e))?;
         f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
@@ -418,11 +461,10 @@ fn fold_into_change_set(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{ActionPlan as _, MaterializeOp, Side};
-    use crate::report::list_conflicts;
+    use crate::plan::{MaterializeOp, Side};
     use crate::reconcile::{reconcile, ReconcileInput};
+    use crate::report::list_conflicts;
     use crate::testutil::*;
-    use ferry_store::snapshot::SnapshotOutput;
 
     const DEV_A: [u8; 32] = [0xA1; 32];
     const DEV_B: [u8; 32] = [0xB2; 32];
@@ -431,9 +473,7 @@ mod tests {
     /// content so A wins everywhere; manifests are exchanged and the plan
     /// is computed ON B (whose live copy must be saved then overwritten).
     struct Rig {
-        a: Device,
         b: Device,
-        sb: SnapshotOutput,
         plan_for_b: ActionPlan,
     }
 
@@ -468,7 +508,7 @@ mod tests {
             );
         }
         plan_for_b.guard_expected = Some(sb.manifest.clone());
-        Rig { a, b, sb, plan_for_b }
+        Rig { b, plan_for_b }
     }
 
     #[test]
@@ -491,17 +531,17 @@ mod tests {
         assert_eq!(stats.quarantined.len(), 1);
         let q = &stats.quarantined[0];
         assert_eq!(
-            q,
-            "f.txt.ferry-conflict.b2b2b2b2-19700101-000230",
+            q, "f.txt.ferry-conflict.b2b2b2b2-19700101-000230",
             "name carries LOSER device short id + loser mtime UTC"
         );
-        assert_eq!(
-            std::fs::read(rig.b.tree.join(q)).unwrap(),
-            b"loser on B"
-        );
+        assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
         // The copy keeps the loser's mtime so devices converge exactly.
         let md = std::fs::symlink_metadata(rig.b.tree.join(q)).unwrap();
-        let mt = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        let mt = md
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
         assert_eq!((mt.as_secs(), mt.subsec_nanos()), (150, 0));
 
         // Report entry persisted and complete.
@@ -516,7 +556,7 @@ mod tests {
 
     #[test]
     fn tampered_live_file_surfaces_diverged_before_any_writes() {
-        let mut rig = rig();
+        let rig = rig();
         // Tamper AFTER the snapshot the plan was computed from.
         std::fs::write(rig.b.tree.join("f.txt"), b"tampered!!").unwrap();
 
@@ -619,8 +659,18 @@ mod tests {
         let mut cs = ChangeSet::default();
         fold_into_change_set(None, Some(&st(vec![])), &["a".into()], &mut cs);
         fold_into_change_set(Some(&st(vec![])), None, &["b".into()], &mut cs);
-        fold_into_change_set(Some(&st(vec![([1u8; 32], 4)])), Some(&st(vec![([2u8; 32], 4)])), &["c".into()], &mut cs);
-        fold_into_change_set(Some(&st(vec![([1u8; 32], 4)])), Some(&st(vec![([1u8; 32], 4)])), &["d".into()], &mut cs);
+        fold_into_change_set(
+            Some(&st(vec![([1u8; 32], 4)])),
+            Some(&st(vec![([2u8; 32], 4)])),
+            &["c".into()],
+            &mut cs,
+        );
+        fold_into_change_set(
+            Some(&st(vec![([1u8; 32], 4)])),
+            Some(&st(vec![([1u8; 32], 4)])),
+            &["d".into()],
+            &mut cs,
+        );
         assert_eq!(cs.added.len(), 1);
         assert_eq!(cs.removed.len(), 1);
         assert_eq!(cs.content_modified.len(), 1);

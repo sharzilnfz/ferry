@@ -84,7 +84,11 @@ mod tests {
     #[test]
     fn collisions_append_counters_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("f.txt.ferry-conflict.aa-20000101-000000"), b"x").unwrap();
+        std::fs::write(
+            dir.path().join("f.txt.ferry-conflict.aa-20000101-000000"),
+            b"x",
+        )
+        .unwrap();
 
         // First choice taken → NAME-2.
         let d1 = unique_conflict_dest(dir.path(), &[], "f.txt.ferry-conflict.aa-20000101-000000")

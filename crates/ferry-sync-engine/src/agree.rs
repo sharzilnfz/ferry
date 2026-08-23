@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ferry_store::format::{hex, unhex, put_bytes, put_i64, put_u32, Reader};
+use ferry_store::format::{hex, put_bytes, put_i64, put_u32, unhex, Reader};
 use thiserror::Error;
 
 /// Size of one v1 canonical record.
@@ -145,10 +145,9 @@ impl PeerState {
     pub fn record(&self, rec: &AgreedRecord) -> Result<(), StateError> {
         std::fs::create_dir_all(&self.peers_dir).map_err(|e| io_at(&self.peers_dir, e))?;
         let path = self.path_for(&rec.peer_device_id);
-        let tmp = self.peers_dir.join(format!(
-            ".{}.tmp",
-            hex(&rec.peer_device_id)
-        ));
+        let tmp = self
+            .peers_dir
+            .join(format!(".{}.tmp", hex(&rec.peer_device_id)));
         std::fs::write(&tmp, serialize_agreed_record(rec)).map_err(|e| io_at(&tmp, e))?;
         std::fs::rename(&tmp, &path).map_err(|e| io_at(&path, e))?;
         Ok(())
@@ -246,7 +245,10 @@ mod tests {
         std::fs::write(&path, &full[..70]).unwrap();
         assert!(matches!(
             ps.load(&peer),
-            Err(StateError::Corrupt { reason: "wrong length", .. })
+            Err(StateError::Corrupt {
+                reason: "wrong length",
+                ..
+            })
         ));
 
         // Trailing garbage.
@@ -255,26 +257,23 @@ mod tests {
         std::fs::write(&path, &padded).unwrap();
         assert!(matches!(
             ps.load(&peer),
-            Err(StateError::Corrupt { reason: "wrong length", .. })
+            Err(StateError::Corrupt {
+                reason: "wrong length",
+                ..
+            })
         ));
 
         // Nonzero flags byte.
         let mut flagged = full.clone();
         flagged[76] = 1;
         std::fs::write(&path, &flagged).unwrap();
-        assert!(matches!(
-            ps.load(&peer),
-            Err(StateError::Corrupt { .. })
-        ));
+        assert!(matches!(ps.load(&peer), Err(StateError::Corrupt { .. })));
 
         // Record body names a different peer than the file.
         let mut swapped = full;
         swapped[0] ^= 0xFF;
         std::fs::write(&path, &swapped).unwrap();
-        assert!(matches!(
-            ps.load(&peer),
-            Err(StateError::Corrupt { .. })
-        ));
+        assert!(matches!(ps.load(&peer), Err(StateError::Corrupt { .. })));
     }
 
     #[test]

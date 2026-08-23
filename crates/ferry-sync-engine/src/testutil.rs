@@ -9,17 +9,11 @@ use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 use std::path::{Path, PathBuf};
 
 pub fn fmk() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| (i * 11 + 5) as u8)
-}
-
-pub fn fresh_store() -> (tempfile::TempDir, Store) {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::create(dir.path(), fmk(), Box::new(PassthroughCipher)).unwrap();
-    (dir, store)
 }
 
 pub fn poly_of(seed: u64) -> u64 {
@@ -49,26 +43,27 @@ pub fn write_file(path: &Path, bytes: &[u8], exec: bool, mt: (i64, u32)) {
 }
 
 pub fn set_mtime(path: &Path, sec: i64, nsec: u32) {
-    let f = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .unwrap();
-    f.set_times(std::fs::FileTimes::new().set_modified(
-        std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec),
-    ))
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    f.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
+    )
     .unwrap();
 }
 
 /// Directories need a read-only handle for futimens.
 pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
     let f = std::fs::File::open(path).unwrap();
-    f.set_times(std::fs::FileTimes::new().set_modified(
-        std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec),
-    ))
+    f.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
+    )
     .unwrap();
 }
 
 pub struct Device {
+    /// Holds the temp dir open for the whole test; never read directly.
+    #[allow(dead_code)]
     pub dir: tempfile::TempDir,
     pub store: Store,
     pub tree: PathBuf,
@@ -111,7 +106,11 @@ impl Device {
 }
 
 /// Simulate the transport: copy blobs from one store to another.
-pub fn transfer(from: &Store, to: &Store, ids: &[(ferry_store::format::BlobKind, ferry_store::format::BlobId)]) {
+pub fn transfer(
+    from: &Store,
+    to: &Store,
+    ids: &[(ferry_store::format::BlobKind, ferry_store::format::BlobId)],
+) {
     for (kind, id) in ids {
         if to.get(*kind, id).is_err() {
             let bytes = from.get(*kind, id).expect("source blob missing");
@@ -136,8 +135,9 @@ pub fn transfer_manifest(
             continue;
         }
         transfer(from, to, &[(BlobKind::TreeNode, id)]);
-        let node = ferry_store::manifest::parse_tree_node(&to.get(BlobKind::TreeNode, &id).unwrap())
-            .unwrap();
+        let node =
+            ferry_store::manifest::parse_tree_node(&to.get(BlobKind::TreeNode, &id).unwrap())
+                .unwrap();
         for e in node.entries {
             if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } = e.payload {
                 stack.push(child_tree_id);

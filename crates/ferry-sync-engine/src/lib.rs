@@ -74,6 +74,8 @@ pub mod timefmt;
 pub use agree::{AgreedRecord, PeerState, StateError};
 pub use execute::{execute, ExecuteStats};
 pub use naming::{conflict_display_name, device_short, unique_conflict_dest};
-pub use plan::{ActionPlan, ConflictKind, LoserContent, MaterializeOp, PlannedConflict, QuarantineOp, Side};
+pub use plan::{
+    ActionPlan, ConflictKind, LoserContent, MaterializeOp, PlannedConflict, QuarantineOp, Side,
+};
 pub use reconcile::{reconcile, ReconcileError};
 pub use report::{append_entries, list_conflicts, ConflictEntry, DeviceStamp, LogError};

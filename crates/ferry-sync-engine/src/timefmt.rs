@@ -80,7 +80,10 @@ mod tests {
             let doy = (153 * mp + 2) / 5 + d as i64 - 1;
             let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
             let days = era * 146_097 + doe - 719_468;
-            assert_eq!(days * 86_400 + h as i64 * 3600 + mi as i64 * 60 + s as i64, secs);
+            assert_eq!(
+                days * 86_400 + h as i64 * 3600 + mi as i64 * 60 + s as i64,
+                secs
+            );
         }
     }
 }
