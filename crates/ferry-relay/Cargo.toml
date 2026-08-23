@@ -1,0 +1,22 @@
+[package]
+name = "ferry-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Pinned to the same iroh 1.0.x set as ferry-iroh; bump together.
+iroh = "=1.0.3"
+iroh-relay = { version = "=1.0.3", features = ["server"] }
+tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "signal", "time"] }
+futures-util = "0.3"
+
+# Log capture for the plaintext-absence proof (tests) and normal logging.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"
+
+[dev-dependencies]
+
+[[bin]]
+name = "ferry-relay"
+path = "src/bin/ferry_relay.rs"
