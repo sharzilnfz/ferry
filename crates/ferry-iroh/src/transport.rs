@@ -86,6 +86,10 @@ struct Inner {
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
+    /// Relay URLs from config. Attached to dialed EndpointAddrs so
+    /// key-only dialing can resolve through OUR relay (deployment rule:
+    /// peers we sync with are clients of the same self-hosted relay).
+    relay_urls: Vec<iroh::RelayUrl>,
 }
 
 impl Inner {
@@ -148,6 +152,10 @@ impl IrohTransport {
 
         let ep = rt.block_on(build_endpoint(&cfg, seed))?;
         let my_id = ep.id();
+        let relay_urls = match &cfg.relays {
+            RelaySetting::Custom(urls) => urls.iter().filter_map(|u| u.parse().ok()).collect(),
+            _ => Vec::new(),
+        };
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
@@ -157,6 +165,7 @@ impl IrohTransport {
                 dial_timeout: cfg.dial_timeout,
                 closed: AtomicBool::new(false),
                 observations: Mutex::new(HashMap::new()),
+                relay_urls,
             }),
         })
     }
@@ -199,6 +208,13 @@ impl IrohTransport {
         let mut addr = EndpointAddr::new(id);
         for h in hints {
             addr.addrs.insert(TransportAddr::Ip(h));
+        }
+        // Our relays are legitimate addressing information for peers we
+        // sync with (same self-hosted relay, ADR-0003). With IP transports
+        // stripped (force_relay) this is REQUIRED: without it iroh refuses
+        // with "no addressing information available".
+        for url in &self.inner.relay_urls {
+            addr.addrs.insert(TransportAddr::Relay(url.clone()));
         }
         // Connect AND open our bi-stream in one async step: the dialer gets
         // back a ready pipe, and accept_bi on the peer resolves immediately.

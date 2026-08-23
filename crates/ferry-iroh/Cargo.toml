@@ -16,6 +16,9 @@ iroh-mdns-address-lookup = "=0.5.0"
 tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
+anyhow = "1"
+ferry-store = { path = "../ferry-store" }
+ferry-relay = { path = "../ferry-relay" }
 tempfile = "3"
 rand = "0.8"
 

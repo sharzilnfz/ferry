@@ -134,6 +134,9 @@ pub struct LocalRelay {
     http_addr: SocketAddr,
     ledger: Ledger,
     server: Arc<Mutex<Option<RelayServer>>>,
+    /// Hosts the relay supervisor tasks. Must outlive [`LocalRelay::server`];
+    /// dropping this tears the relay down.
+    _rt: Mutex<Option<tokio::runtime::Runtime>>,
 }
 
 impl LocalRelay {
@@ -197,17 +200,66 @@ pub async fn spawn(opts: RelayOptions) -> Result<LocalRelay, String> {
         http_addr,
         ledger,
         server: Arc::new(Mutex::new(Some(server))),
+        _rt: Mutex::new(None),
     })
 }
 
-/// Spawn using the current tokio runtime handle from sync code (tests).
+/// Spawn using a NEW owned tokio runtime that lives as long as the relay
+/// (sync-code entry point, e.g. tests and scripts).
 pub fn spawn_sync(opts: RelayOptions) -> Result<LocalRelay, String> {
-    tokio::runtime::Builder::new_multi_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .map_err(|e| format!("runtime: {e}"))?
-        .block_on(spawn(opts))
+        .map_err(|e| format!("runtime: {e}"))?;
+    let relay = rt.block_on(spawn(opts))?;
+    *relay._rt.lock().unwrap() = Some(rt);
+    Ok(relay)
+}
+
+/// Install the process-global tracing subscriber writing every log line
+/// (any level) into `buffer`. Test support for the plaintext-absence proof:
+/// whatever the relay WOULD have logged is captured verbatim for scanning.
+///
+/// Only the FIRST call in a process wins (tracing allows one global
+/// subscriber); later calls return Ok(false).
+#[doc(hidden)]
+pub fn install_capturing_subscriber(
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+) -> Result<bool, String> {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::Layer as _;
+    struct BufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+        type Writer = BufWriterClone;
+        fn make_writer(&'a self) -> Self::Writer {
+            BufWriterClone(self.0.clone())
+        }
+    }
+    struct BufWriterClone(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for BufWriterClone {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let subscriber = tracing_subscriber::registry().with(
+        // Everything, TRACE down: the proof scans what the operator could
+        // see plus internals that might leak if they were going to.
+        tracing_subscriber::fmt::layer()
+            .with_writer(BufWriter(buffer))
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
+    );
+    // Everything: the proof scans what the operator could see, plus
+    // internals that might leak if they were going to.
+    // set_global_default consumes the subscriber; registry+layer wire up
+    // through the extension traits imported above.
+    Ok(tracing::subscriber::set_global_default(subscriber).is_ok())
 }
 
 #[cfg(test)]

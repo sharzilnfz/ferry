@@ -16,6 +16,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 
 [dev-dependencies]
+ferry-iroh = { path = "../ferry-iroh" }
+ferry-sync = { path = "../ferry-sync" }
+tempfile = "3"
 
 [[bin]]
 name = "ferry-relay"
