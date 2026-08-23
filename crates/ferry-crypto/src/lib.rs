@@ -62,6 +62,7 @@ pub mod config_head;
 pub mod crc32;
 pub mod folder_key;
 pub mod identity;
+pub mod pack_cipher;
 
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in
 /// Debug impls and logs.
