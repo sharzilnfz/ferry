@@ -59,3 +59,15 @@
 
 pub mod base32;
 pub mod crc32;
+pub mod identity;
+
+/// First 8 bytes of `data` as lowercase hex, for non-secret display in
+/// Debug impls and logs.
+pub(crate) fn hex_short(data: &[u8]) -> String {
+    let mut s = String::new();
+    for b in &data[..8.min(data.len())] {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+    }
+    s
+}
