@@ -159,44 +159,8 @@ pub fn unwrap_folder_key(
 mod tests {
     use super::*;
     use crate::identity::DeviceIdentity;
+    use crate::testing::FixedRng;
     use ferry_store::format::unhex;
-
-    /// Deterministic CSPRNG stand-in yielding a repeating 32-byte pattern;
-    /// lets tests pin exact envelopes.
-    struct FixedRng {
-        pattern: [u8; 32],
-        pos: usize,
-    }
-    impl FixedRng {
-        fn new(hex_pattern: &str) -> Self {
-            FixedRng { pattern: unhex(hex_pattern).expect("hex"), pos: 0 }
-        }
-    }
-    impl RngCore for FixedRng {
-        fn next_u32(&mut self) -> u32 {
-            rand_core_compat_next_u32(self)
-        }
-        fn next_u64(&mut self) -> u64 {
-            u64::from(self.next_u32()) << 32 | self.next_u32() as u64
-        }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            for b in dest {
-                *b = self.pattern[self.pos % 32];
-                self.pos += 1;
-            }
-        }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-            self.fill_bytes(dest);
-            Ok(())
-        }
-    }
-    impl CryptoRng for FixedRng {}
-    // tiny local helpers so the test RNG stays self-contained
-    fn rand_core_compat_next_u32(rng: &mut FixedRng) -> u32 {
-        let mut b = [0u8; 4];
-        rng.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
-    }
 
     const ALICE_SK_HEX: &str =
         "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";

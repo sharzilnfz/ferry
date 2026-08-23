@@ -63,6 +63,7 @@ pub mod crc32;
 pub mod folder_key;
 pub mod identity;
 pub mod pack_cipher;
+pub mod pairing;
 
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in
 /// Debug impls and logs.
@@ -73,4 +74,48 @@ pub(crate) fn hex_short(data: &[u8]) -> String {
         s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
     }
     s
+}
+
+/// Shared test fixtures. Compiled only for tests within this crate.
+#[cfg(test)]
+pub(crate) mod testing {
+    use rand::{CryptoRng, RngCore};
+
+    /// Deterministic CSPRNG stand-in yielding a repeating 32-byte pattern,
+    /// letting tests pin vectors that would otherwise be random.
+    pub(crate) struct FixedRng {
+        pattern: [u8; 32],
+        pos: usize,
+    }
+
+    impl FixedRng {
+        pub(crate) fn new(hex_pattern: &str) -> Self {
+            FixedRng {
+                pattern: ferry_store::format::unhex(hex_pattern).expect("valid hex"),
+                pos: 0,
+            }
+        }
+    }
+
+    impl RngCore for FixedRng {
+        fn next_u32(&mut self) -> u32 {
+            let mut b = [0u8; 4];
+            self.fill_bytes(&mut b);
+            u32::from_le_bytes(b)
+        }
+        fn next_u64(&mut self) -> u64 {
+            (u64::from(self.next_u32()) << 32) | u64::from(self.next_u32())
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for b in dest {
+                *b = self.pattern[self.pos % 32];
+                self.pos += 1;
+            }
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+    impl CryptoRng for FixedRng {}
 }
