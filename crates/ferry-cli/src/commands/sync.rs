@@ -7,6 +7,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferry_sync::transport::Transport;
@@ -47,6 +48,8 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
     let folder_path: PathBuf = args.folder.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     let opened = folder::open_folder(&folder_path)?;
     let transport = ferry_sync::TcpTransport;
+    let ignore: Arc<dyn ferry_scan::IgnorePolicy> =
+        Arc::new(folder::load_rules(&opened.root, &opened.settings)?);
 
     let session = FolderSession {
         state_dir: opened.state_dir(),
@@ -55,6 +58,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         folder_id: opened.folder_id,
         device_id: current_device_id(),
         poly: opened.poly,
+        ignore,
     };
 
     let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);

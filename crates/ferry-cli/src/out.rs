@@ -3,6 +3,7 @@
 //! stability live in docs/cli-json.md.
 
 /// What a command produced.
+#[derive(Debug)]
 pub struct Output {
     /// The stable machine document (`--json`). One value per invocation;
     /// progress chatter goes to stderr, never here.

@@ -8,6 +8,7 @@ pub mod exchange;
 pub mod folder;
 pub mod home;
 pub mod out;
+pub mod scan;
 
 /// Resolve the device identity under the resolved FERRY_HOME, creating it on
 /// first use. Shared by several commands.

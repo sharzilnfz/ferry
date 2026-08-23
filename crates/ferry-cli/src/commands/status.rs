@@ -34,8 +34,8 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     }?;
     let device_id = hex(identity.public());
 
-    // Fresh full snapshot: manifest id reflects the tree RIGHT NOW.
-    let scan = scan_now(&opened)?;
+    // Fresh policy-aware scan: manifest id reflects the tree RIGHT NOW.
+    let scan = crate::scan::one_shot(&opened, *identity.public())?;
     let manifest = &scan.manifest;
     let manifest_id = hex(&scan.manifest_id);
 
@@ -115,27 +115,16 @@ fn display(d: std::path::Display<'_>) -> String {
     d.to_string()
 }
 
-/// A fresh full scan into the folder's store (status/sync path; the daemon
-/// uses ScanEngine instead).
+/// A fresh policy-aware scan into the folder's store.
 pub fn scan_now(
     opened: &OpenFolder,
-) -> CliResult<ferry_store::snapshot::SnapshotOutput> {
-    use std::time::{SystemTime, UNIX_EPOCH};
+) -> CliResult<crate::scan::OneShot> {
     let identity = {
         let home = crate::home::ferry_home()?;
         ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home))
             .map_err(|e| crate::error::CliError::new("identity-corrupt", e.to_string(), "restore or replace your device.key"))
     }?;
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let id = ferry_store::snapshot::SnapshotIdentity {
-        folder_id: opened.folder_id,
-        device_id: *identity.public(),
-        parent_manifest_id: [0u8; 32],
-        created_sec: d.as_secs() as i64,
-        created_nsec: d.subsec_nanos(),
-    };
-    ferry_store::snapshot::snapshot_dir(&opened.store, opened.poly, &opened.root, &id)
-        .map_err(|e| crate::error::CliError::new("scan", e.to_string(), "check the folder for unreadable paths; refused entries are listed in verbose mode"))
+    crate::scan::one_shot(opened, *identity.public())
 }
 
 /// Every peer this folder has agreement state for, plus best-effort

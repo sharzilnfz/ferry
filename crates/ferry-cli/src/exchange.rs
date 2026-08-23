@@ -52,6 +52,8 @@ pub struct FolderSession {
     pub device_id: [u8; 32],
     /// The folder chunker polynomial (from the store's polynomial record).
     pub poly: u64,
+    /// Compiled selective rules for policy-aware scans.
+    pub ignore: Arc<dyn ferry_scan::IgnorePolicy>,
 }
 
 impl FolderSession {
@@ -225,19 +227,16 @@ pub struct Snapshot {
 }
 
 pub fn scan_snapshot(session: &FolderSession) -> CliResult<Snapshot> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let identity = ferry_store::snapshot::SnapshotIdentity {
-        folder_id: session.folder_id,
-        device_id: session.device_id,
-        parent_manifest_id: [0u8; 32],
-        created_sec: d.as_secs() as i64,
-        created_nsec: d.subsec_nanos(),
-    };
-    let out = ferry_store::snapshot::snapshot_dir(&session.store, session.poly, &session.tree_root, &identity)
-        .map_err(|e| CliError::new("scan", e.to_string(), "check the folder for unreadable paths"))?;
+    let out = crate::scan::one_shot_raw(
+        &session.tree_root,
+        &session.store,
+        session.poly,
+        session.folder_id,
+        session.device_id,
+        session.ignore.clone(),
+    )?;
     Ok(Snapshot {
-        manifest_bytes: ferry_store::manifest::serialize_manifest(&out.manifest),
+        manifest_bytes: out.manifest_bytes,
         manifest: out.manifest,
         manifest_id: out.manifest_id,
     })

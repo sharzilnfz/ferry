@@ -94,7 +94,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             opened.root.clone(),
             handle,
             Default::default(),
-            rules as Arc<dyn ferry_scan::IgnorePolicy>,
+            Arc::clone(&rules) as Arc<dyn ferry_scan::IgnorePolicy>,
         )
         .map_err(|e| CliError::new("watch", e.to_string(), "check the folder exists and is readable"))?;
         let session = FolderSession {
@@ -104,6 +104,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             folder_id: opened.folder_id,
             device_id,
             poly: opened.poly,
+            ignore: rules,
         };
         eprintln!(
             "watching {} (folder {})",
