@@ -636,7 +636,89 @@ mod tests {
 
         // A directory named ferry.ignore makes read_to_string fail (EISDIR).
         std::fs::create_dir(root.join("ferry.ignore")).unwrap();
-        let err = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap_err();
+        let err = FerryIgnore::new(&root, &cfg_placeholder()).unwrap_err();
         assert!(matches!(err, IgnoreError::ReadRootRule { .. }));
+    }
+
+    fn cfg_placeholder() -> IgnoreConfig {
+        IgnoreConfig::default()
+    }
+
+    #[test]
+    fn trait_ignored_resolves_dir_only_patterns_against_disk() {
+        let (_t, root) = tree(&[("ferry.ignore", "build/\nmaybe/\n")]);
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        std::fs::write(root.join("maybe"), b"a file, despite the pattern").unwrap();
+        let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
+
+        use ferry_scan::IgnorePolicy as _;
+        // Real dir: dir-only pattern bites.
+        assert!(f.ignored(&rel("build")));
+        // Real FILE with the same shape of name: survives.
+        assert!(!f.ignored(&rel("maybe")));
+        // Children of an ignored dir are unreachable.
+        assert!(f.ignored(&rel("build/inner.txt")));
+    }
+
+    #[test]
+    fn trait_ignored_keeps_quarantine_files_even_on_disk() {
+        let (_t, root) = tree(&[("ferry.ignore", "*.ferry-conflict.*\n")]);
+        std::fs::write(
+            root.join("doc.txt.ferry-conflict.devA-1727000000"),
+            b"conflicted copy",
+        )
+        .unwrap();
+        let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
+        use ferry_scan::IgnorePolicy as _;
+        assert!(!f.ignored(&rel("doc.txt.ferry-conflict.devA-1727000000")));
+    }
+
+    #[test]
+    fn perf_ten_thousand_patterns_answer_in_milliseconds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        // 10k mixed-shape patterns: literals, suffix globs, doublestars.
+        let mut text = String::with_capacity(1 << 17);
+        for i in 0..2500 {
+            text.push_str(&format!("/pkg/mod{i}/\n"));
+            text.push_str(&format!("**/gen{i}.cache\n"));
+            text.push_str(&format!("*.tmp{i}\n"));
+            text.push_str(&format!("assets/sprite{i}.bin\n"));
+        }
+        std::fs::write(root.join("ferry.ignore"), text).unwrap();
+        let built = std::time::Instant::now();
+        let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
+        let build_ms = built.elapsed().as_millis();
+        assert!(
+            build_ms < 5_000,
+            "compiling 10k patterns took {build_ms}ms"
+        );
+
+        let started = std::time::Instant::now();
+        let mut hits = 0usize;
+        for i in 0..500usize {
+            for (path, want) in [
+                (format!("pkg/mod{i}/x.rs").as_str(), true),
+                (format!("deep/nested/gen{i}.cache").as_str(), true),
+                ("notes.tmp7".to_string().as_str(), true),
+                (format!("assets/sprite{i}.bin").as_str(), true),
+                (format!("src/main{i}.rs").as_str(), false),
+                ("keep/me.txt".to_string().as_str(), false),
+            ] {
+                let got = ig(&f, path);
+                assert_eq!(got, want, "{path}");
+                if got {
+                    hits += 1;
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+        // 3000 queries over a 10k-pattern set: sanity bound, not a benchmark.
+        assert!(
+            elapsed.as_millis() < 10_000,
+            "3000 queries took {}ms",
+            elapsed.as_millis()
+        );
+        assert_eq!(hits, 2000);
     }
 }
