@@ -59,6 +59,7 @@
 
 pub mod base32;
 pub mod crc32;
+pub mod folder_key;
 pub mod identity;
 
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in

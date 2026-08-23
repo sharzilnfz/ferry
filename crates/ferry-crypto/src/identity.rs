@@ -43,6 +43,8 @@ pub enum IdentityError {
         path: PathBuf,
         reason: &'static str,
     },
+    #[error("peer public key produced a degenerate (small-order) shared secret")]
+    DegeneratePeerKey,
 }
 
 /// One device's long-lived identity keypair.
@@ -101,10 +103,7 @@ impl DeviceIdentity {
     ) -> Result<Zeroizing<[u8; 32]>, IdentityError> {
         let shared = self.sk.diffie_hellman(&PublicKey::from(*peer_public));
         if !shared.was_contributory() {
-            return Err(IdentityError::Corrupted {
-                path: PathBuf::from("<peer-key>"),
-                reason: "peer public key produced a degenerate shared secret",
-            });
+            return Err(IdentityError::DegeneratePeerKey);
         }
         let mut out: DeviceId = [0u8; 32];
         out.copy_from_slice(shared.as_bytes());
@@ -376,7 +375,7 @@ mod tests {
         let zero = [0u8; 32];
         assert!(matches!(
             id.diffie_hellman(&zero),
-            Err(IdentityError::Corrupted { .. })
+            Err(IdentityError::DegeneratePeerKey)
         ));
     }
 }
