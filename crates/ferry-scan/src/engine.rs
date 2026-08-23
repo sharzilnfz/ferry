@@ -730,6 +730,11 @@ fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
 }
 
 fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
+    for c in rel {
+        if crate::walk::is_store_component(c) {
+            return true;
+        }
+    }
     for i in 1..=rel.len() {
         if ignore.ignored(&rel[..i]) {
             return true;
@@ -842,9 +847,10 @@ fn sweep_dir(
         let Some(component) = name.to_str().map(|s| s.nfc().collect::<String>()) else {
             continue;
         };
+        let store_skip = crate::walk::is_store_component(&component);
         let mut child_rel = rel.clone();
-        child_rel.push(component);
-        if ignore.ignored(&child_rel) {
+        child_rel.push(component.clone());
+        if ignore.ignored(&child_rel) || store_skip {
             continue;
         }
         let child_disk = disk.join(&name);
@@ -854,7 +860,9 @@ fn sweep_dir(
         };
         let ft = meta.file_type();
         if ft.is_dir() {
-            sweep_dir(disk_root, &child_rel, cache, ignore, out);
+            if !crate::walk::is_store_component(&component) {
+                sweep_dir(disk_root, &child_rel, cache, ignore, out);
+            }
         } else if ft.is_file() {
             let exec = meta.permissions().mode() & 0o111 != 0;
             let name_str = child_rel.last().expect("non-empty").as_str();

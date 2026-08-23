@@ -56,6 +56,14 @@ use crate::state::{CachedDir, DirCache};
 /// Exec-bit detection, same constant as ferry-store's snapshot walker.
 const EXEC_MODE_BITS: u32 = 0o111;
 
+/// Structural exclusion: the store directory never enters manifests, walks,
+/// watches, or sweeps. This is folder-layout contract (`docs/store-format.md`),
+/// not an ignore rule — hence hard-coded rather than routed through
+/// [`IgnorePolicy`].
+pub(crate) fn is_store_component(name: &str) -> bool {
+    name == ferry_store::store::STORE_DIR_NAME
+}
+
 /// Counters describing one completed pass. `bytes_chunked` is the
 /// short-circuit proof hook: a pass over an untouched tree must report 0.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -206,6 +214,22 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// Record an empty listing for `rel`: vanished mid-pass, a file path
+    /// mis-marked as dirty, or the structurally excluded store directory.
+    /// Parents splicing this pass see absence and omit (and prune) it.
+    fn splice_absent(&mut self, rel: &RelPath) -> Result<BlobId, ScanError> {
+        self.cache.remove_prefix(rel);
+        let empty_bytes = serialize_tree_node(&TreeNode { entries: vec![] });
+        let empty = CachedDir {
+            id: *blake3::hash(&empty_bytes).as_bytes(),
+            node: TreeNode { entries: vec![] },
+        };
+        self.cache.insert(rel.clone(), empty);
+        let id = self.store.put_meta(BlobKind::TreeNode, &empty_bytes)?;
+        self.rebuilt.insert(rel.clone(), id);
+        Ok(id)
+    }
+
     /// List `rel` on disk, build its TreeNode reusing cache where valid,
     /// store it, update the cache, prune stale children. Returns the node id.
     fn rebuild_dir(
@@ -213,6 +237,11 @@ impl<'a> Walker<'a> {
         rel: &RelPath,
         dirty_closed: &BTreeSet<RelPath>,
     ) -> Result<BlobId, ScanError> {
+        // Inside or at the store directory: structurally excluded. Behave
+        // exactly like absence so parents never point at it.
+        if rel.last().map(|c| is_store_component(c)).unwrap_or(false) {
+            return self.splice_absent(rel);
+        }
         let disk = self.disk_path(rel);
 
         let mut names: Vec<std::ffi::OsString> = Vec::new();
@@ -230,20 +259,7 @@ impl<'a> Walker<'a> {
                     // directory must degrade to absence, not an error.
                     || e.kind() == std::io::ErrorKind::NotADirectory =>
             {
-                // Vanished mid-pass (or between event and pass): record an
-                // empty listing so parents splicing this pass see absence;
-                // the parent's fresh listing will omit (and prune) it.
-                self.cache.remove_prefix(rel);
-                let empty_bytes = serialize_tree_node(&TreeNode { entries: vec![] });
-                let empty = CachedDir {
-                    id: *blake3::hash(&empty_bytes).as_bytes(),
-                    node: TreeNode { entries: vec![] },
-                };
-                self.cache.insert(rel.clone(), empty);
-                let bytes = serialize_tree_node(&TreeNode { entries: vec![] });
-                let id = self.store.put_meta(BlobKind::TreeNode, &bytes)?;
-                self.rebuilt.insert(rel.clone(), id);
-                return Ok(id);
+                return self.splice_absent(rel);
             }
             Err(e) => return Err(Self::io_err(&disk)(e)),
         }
@@ -268,6 +284,10 @@ impl<'a> Walker<'a> {
                     continue;
                 }
             };
+            // Structural exclusion: the store directory is not user content.
+            if is_store_component(&component) {
+                continue;
+            }
             let mut child_rel = rel.clone();
             child_rel.push(component.clone());
             if self.ignore.ignored(&child_rel) {
@@ -785,6 +805,66 @@ mod tests {
             vec![p(&["doomed"]), p(&["doomed", "deep"]), p(&["doomed", "deep", "file.txt"])],
             "parents before children"
         );
+    }
+
+    #[test]
+    fn store_directory_is_structurally_excluded() {
+        let mut fx = Fixture::new("t7");
+        // Store dir appears FIRST, alone: a whole-tree pass must ignore it.
+        write_file(&fx.root.join(".ferry/packs/x.pack"), b"pack bytes", false, (1, 0));
+        let mut stats = PassStats::default();
+        let closed = close_under_ancestors(&[p(&[])]);
+        let none = Walker::run(
+            &fx.store,
+            fx.poly,
+            &NoIgnoresIgnored,
+            &fx.root,
+            &mut fx.cache,
+            &closed,
+            Trigger::Events,
+            &identity((1, 5)),
+            fx.prev_root_tree_id,
+            &mut stats,
+        )
+        .unwrap();
+        assert!(none.is_none(), "store-only content must not move the tree");
+        assert_eq!(stats.bytes_chunked, 0);
+
+        // Real user content lands normally.
+        write_file(&fx.root.join("real.txt"), b"user content", false, (2, 0));
+        let out = fx.incremental_expect(&[p(&["real.txt"])]);
+        assert_eq!(out.stats.bytes_chunked, "user content".len() as u64);
+        let cs = fx.diff_since_baseline(out.root_tree_id);
+        assert_eq!(cs.added.len(), 1, "{cs:?}");
+        assert_eq!(cs.added[0].path, p(&["real.txt"]));
+
+        let root_node = ferry_store::manifest::parse_tree_node(
+            &fx.store.get(BlobKind::TreeNode, &out.root_tree_id).unwrap(),
+        )
+        .unwrap();
+        assert!(!root_node.entries.iter().any(|e| e.name == ".ferry"));
+        assert!(root_node.entries.iter().any(|e| e.name == "real.txt"));
+
+        // Pack churn behind the watcher stays invisible too. The scratch
+        // oracle cannot be used alongside .ferry because snapshot_dir has no
+        // exclusion rule; the structural exclusion IS the spec here.
+        write_file(&fx.root.join(".ferry/packs/x.pack"), b"more pack bytes!", false, (3, 0));
+        let closed = close_under_ancestors(&[p(&[".ferry"])]);
+        let out2 = Walker::run(
+            &fx.store,
+            fx.poly,
+            &NoIgnoresIgnored,
+            &fx.root,
+            &mut fx.cache,
+            &closed,
+            Trigger::Events,
+            &identity((4, 0)),
+            out.root_tree_id,
+            &mut stats,
+        )
+        .unwrap();
+        assert!(out2.is_none(), "store-only changes must not move the tree");
+        assert_eq!(stats.bytes_chunked, 0);
     }
 
     #[test]
