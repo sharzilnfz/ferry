@@ -378,6 +378,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry-sync-engine"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ferry-materialize",
+ "ferry-store",
+ "rand",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
