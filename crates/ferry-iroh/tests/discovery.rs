@@ -12,6 +12,7 @@
 use std::time::{Duration, Instant};
 
 use ferry_iroh::{IrohConfig, IrohTransport};
+use ferry_sync::Transport as _;
 
 fn mdns_transport(seed_byte: u8, service: String) -> IrohTransport {
     let mut seed = [seed_byte; 32];
