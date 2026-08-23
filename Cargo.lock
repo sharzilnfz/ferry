@@ -322,6 +322,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry-platform"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "ferry-proto"
 version = "0.1.0"
 dependencies = [
