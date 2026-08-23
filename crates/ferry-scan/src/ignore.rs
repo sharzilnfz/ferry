@@ -39,9 +39,11 @@ mod tests {
     fn no_ignores_ignores_nothing() {
         assert!(!NoIgnores.ignored(&[]));
         assert!(!NoIgnores.ignored(&["node_modules".to_string()]));
-        assert!(
-            !NoIgnores.ignored(&["deep".to_string(), "nesting".to_string(), "x.txt".to_string()])
-        );
+        assert!(!NoIgnores.ignored(&[
+            "deep".to_string(),
+            "nesting".to_string(),
+            "x.txt".to_string()
+        ]));
     }
 
     #[test]

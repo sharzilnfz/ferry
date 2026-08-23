@@ -59,7 +59,6 @@ fn fill_block(buf: &mut [u8], seed: &mut u64) {
 }
 
 fn machine_info() -> String {
-    let os = std::env::consts::OS;
     #[cfg(target_os = "macos")]
     {
         let cpu = std::process::Command::new("sysctl")
@@ -72,7 +71,12 @@ fn machine_info() -> String {
             .args(["-n", "hw.memsize"])
             .output()
             .ok()
-            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
             .map(|b| format!("{:.0} GiB", b as f64 / 1024.0 / 1024.0 / 1024.0))
             .unwrap_or_else(|| "unknown".into());
         let cores = std::process::Command::new("sysctl")
@@ -91,6 +95,7 @@ fn machine_info() -> String {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let os = std::env::consts::OS;
         format!("{os} (fill in CPU/RAM from /proc on Linux hosts)")
     }
 }
@@ -129,12 +134,10 @@ fn main() {
     );
 
     // ---- 2. store inside the watched root ----------------------------------
-    let store = Arc::new(
-        Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap(),
-    );
+    let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
-        poly: 0x25b4_6883_8dcb_75 | (1 << 53),
+        poly: 0x0025_b468_838d_cb75 | (1 << 53),
         folder_id: [7; 16],
         device_id: [8; 32],
     };
@@ -146,9 +149,13 @@ fn main() {
         poll_interval: Duration::from_secs(10),
     };
     let t0 = Instant::now();
-    let engine =
-        ScanEngine::watch_with(fixture.clone(), handle, cfg, Arc::new(ferry_scan::NoIgnores))
-            .expect("initial scan");
+    let engine = ScanEngine::watch_with(
+        fixture.clone(),
+        handle,
+        cfg,
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .expect("initial scan");
     let init_secs = t0.elapsed().as_secs_f64();
     let baseline = engine.current().expect("baseline published");
     println!(
@@ -160,16 +167,21 @@ fn main() {
     );
     assert_eq!(baseline.stats.files, DIRS * FILES_PER_DIR);
 
-    // ---- 4. change exactly 100 files ---------------------------------------
+    // ---- 4. change exactly 100 DISTINCT files ------------------------------
     let mut rng_state = 0xC10C_u64;
+    let n = (DIRS * FILES_PER_DIR) as u64;
+    // Deterministic shuffle => 100 distinct targets, spread across the tree.
+    let mut idx: Vec<u64> = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = splitmix64(&mut rng_state) % (i + 1);
+        idx.swap(i as usize, j as usize);
+    }
     let mut changed: Vec<PathBuf> = Vec::with_capacity(CHANGED_COUNT);
-    for i in 0..CHANGED_COUNT {
-        // Spread across the whole tree deterministically.
-        let idx = splitmix64(&mut rng_state) % (DIRS * FILES_PER_DIR) as u64;
-        let d = idx / FILES_PER_DIR as u64;
-        let f = idx % FILES_PER_DIR as u64;
-        let p = file_path(&fixture, d as usize, f as usize);
-        let mut seed = 0xF00D_0000 + i as u64;
+    for &file_idx in &idx[..CHANGED_COUNT] {
+        let d = (file_idx / FILES_PER_DIR as u64) as usize;
+        let f = (file_idx % FILES_PER_DIR as u64) as usize;
+        let p = file_path(&fixture, d, f);
+        let mut seed = 0xF00D_0000 + file_idx;
         let len = p.metadata().unwrap().len() as usize;
         let mut buf = vec![0u8; len];
         fill_block(&mut buf, &mut seed);
@@ -182,10 +194,13 @@ fn main() {
     std::thread::sleep(Duration::from_millis(700));
 
     // ---- 5. GATE: incremental rescan of those 100 --------------------------
-    let t1 = Instant::now();
-    let run = engine.scan_once().expect("incremental pass");
-    let incr_secs = t1.elapsed().as_secs_f64();
-    let updated = run.published.expect("changed tree must publish");
+    // The worker may win the race (it debounces 150 ms then scans), or this
+    // scan_once may drain the queue first; either way the measured quantity
+    // is the completed PASS duration recorded in stats (walk+hash+store IO).
+    let _ = engine.scan_once();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let updated = wait_for_new_current(&engine, &baseline.manifest_id, deadline);
+    let incr_secs = updated.stats.duration.as_secs_f64();
     println!(
         "INCREMENTAL after {CHANGED_COUNT} changes: {incr_secs:.3} s \
          ({} dirs rebuilt, {} files rehashed, {} KiB hashed) [gate <{INCR_GATE}s] {}",
@@ -224,6 +239,22 @@ fn verdict(ok: bool) -> &'static str {
         "PASS"
     } else {
         "FAIL"
+    }
+}
+
+fn wait_for_new_current(
+    engine: &ScanEngine,
+    prev: &ferry_store::BlobId,
+    deadline: Instant,
+) -> Arc<ferry_scan::CurrentScan> {
+    loop {
+        assert!(Instant::now() < deadline, "no new scan published in time");
+        if let Some(c) = engine.current() {
+            if &c.manifest_id != prev {
+                return c;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 

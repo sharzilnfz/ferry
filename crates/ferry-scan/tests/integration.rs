@@ -66,7 +66,10 @@ fn wait_until<T>(deadline: Instant, mut f: impl FnMut() -> Option<T>) -> T {
         if let Some(v) = f() {
             return v;
         }
-        assert!(Instant::now() < deadline, "condition not met within deadline");
+        assert!(
+            Instant::now() < deadline,
+            "condition not met within deadline"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -118,7 +121,13 @@ fn overflow_injection_triggers_full_rescan_and_repairs_arbitrary_drift() {
     let (env, store) = env("overflow");
     write(&env.root.join("a.txt"), b"one");
     write(&env.root.join("d/b.txt"), b"two");
-    let engine = ScanEngine::watch_with(env.root.clone(), handle_for(&store), fast_cfg(), Arc::new(ferry_scan::NoIgnores)).unwrap();
+    let engine = ScanEngine::watch_with(
+        env.root.clone(),
+        handle_for(&store),
+        fast_cfg(),
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .unwrap();
     let baseline = engine.current().unwrap();
 
     // Drift that produces NO watcher events we can rely on in CI timing:
@@ -146,7 +155,13 @@ fn poll_fallback_converges_when_watch_is_unavailable() {
     let (env, store) = env("polled");
     write(&env.root.join("watched-ok/x.txt"), b"native");
     write(&env.root.join("unwatchable/y.txt"), b"poll me");
-    let engine = ScanEngine::watch_with(env.root.clone(), handle_for(&store), fast_cfg(), Arc::new(ferry_scan::NoIgnores)).unwrap();
+    let engine = ScanEngine::watch_with(
+        env.root.clone(),
+        handle_for(&store),
+        fast_cfg(),
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .unwrap();
 
     // Declare the subtree unwatchable through the normal signal path
     // (what ENOSPC during watch registration produces).
@@ -180,7 +195,13 @@ fn audit_timer_detects_silent_same_length_rewrite() {
         audit_interval: Duration::from_millis(250),
         poll_interval: Duration::from_millis(100),
     };
-    let engine = ScanEngine::watch_with(env.root.clone(), handle_for(&store), cfg, Arc::new(ferry_scan::NoIgnores)).unwrap();
+    let engine = ScanEngine::watch_with(
+        env.root.clone(),
+        handle_for(&store),
+        cfg,
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .unwrap();
     let baseline = engine.current().unwrap();
 
     // Same length, mtime restored: invisible to stat-based short-circuits.
@@ -203,9 +224,7 @@ fn audit_timer_detects_silent_same_length_rewrite() {
     });
     assert_eq!(cur.root_tree_id, scratch_root(&store, &env.root));
     let cs = diff_manifests(&store, &baseline.manifest, &cur.manifest).unwrap();
-    let mut touched = cs.content_modified.len()
-        + cs.added.len()
-        + cs.removed.len();
+    let mut touched = cs.content_modified.len() + cs.added.len() + cs.removed.len();
     touched += cs.metadata_modified.len();
     assert!(touched >= 1, "{cs:?}");
 }
@@ -214,11 +233,20 @@ fn audit_timer_detects_silent_same_length_rewrite() {
 fn burst_of_writes_coalesces_and_subscribers_are_notified() {
     let (env, store) = env("burst");
     write(&env.root.join("seed.txt"), b"seed");
-    let engine = ScanEngine::watch_with(env.root.clone(), handle_for(&store), fast_cfg(), Arc::new(ferry_scan::NoIgnores)).unwrap();
+    let engine = ScanEngine::watch_with(
+        env.root.clone(),
+        handle_for(&store),
+        fast_cfg(),
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .unwrap();
     let rx = engine.subscribe();
 
     for i in 0..30 {
-        write(&env.root.join(format!("burst{i}.txt")), format!("payload{i}").as_bytes());
+        write(
+            &env.root.join(format!("burst{i}.txt")),
+            format!("payload{i}").as_bytes(),
+        );
     }
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -237,7 +265,10 @@ fn burst_of_writes_coalesces_and_subscribers_are_notified() {
         }
         None
     });
-    assert_eq!(updates, 1, "a single burst must coalesce into ONE update event");
+    assert_eq!(
+        updates, 1,
+        "a single burst must coalesce into ONE update event"
+    );
 
     // And the final state matches disk truth.
     let cur = engine.current().unwrap();
@@ -252,10 +283,19 @@ fn burst_of_writes_coalesces_and_subscribers_are_notified() {
 fn incremental_pass_matches_scratch_after_event_driven_mutations() {
     let (env, store) = env("events");
     for i in 0..10 {
-        write(&env.root.join(format!("f{i}.txt")), format!("v{i}").as_bytes());
+        write(
+            &env.root.join(format!("f{i}.txt")),
+            format!("v{i}").as_bytes(),
+        );
     }
     write(&env.root.join("nested/deep.txt"), b"deep");
-    let engine = ScanEngine::watch_with(env.root.clone(), handle_for(&store), fast_cfg(), Arc::new(ferry_scan::NoIgnores)).unwrap();
+    let engine = ScanEngine::watch_with(
+        env.root.clone(),
+        handle_for(&store),
+        fast_cfg(),
+        Arc::new(ferry_scan::NoIgnores),
+    )
+    .unwrap();
     let baseline = engine.current().unwrap();
 
     std::fs::remove_file(env.root.join("f3.txt")).unwrap();
@@ -285,8 +325,9 @@ fn write(path: &std::path::Path, bytes: &[u8]) {
 
 fn set_mtime(path: &std::path::Path) {
     let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-    f.set_times(std::fs::FileTimes::new().set_modified(
-        std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-    ))
+    f.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+    )
     .unwrap();
 }

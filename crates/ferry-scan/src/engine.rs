@@ -30,9 +30,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_store::manifest::EntryPayload;
-use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
+use ferry_store::snapshot::SnapshotIdentity;
 use ferry_store::store::Store;
-use ferry_store::{BlobId};
+use ferry_store::BlobId;
 use notify::{Error as NotifyError, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::config::ScanConfig;
@@ -139,7 +139,10 @@ impl SignalQueue {
             if now >= deadline {
                 return false;
             }
-            let (g2, t) = self.cv.wait_timeout(g, deadline - now).expect("signal queue");
+            let (g2, t) = self
+                .cv
+                .wait_timeout(g, deadline - now)
+                .expect("signal queue");
             g = g2;
             if t.timed_out() {
                 return !g.is_empty();
@@ -182,8 +185,7 @@ impl Parts {
         fallback_trigger: Trigger,
     ) -> Result<ScanRun, ScanError> {
         let run = self.execute_inner(signals, fallback_trigger)?;
-        self.core.lock().expect("core").last_pass =
-            Some((run.stats.trigger, run.stats.clone()));
+        self.core.lock().expect("core").last_pass = Some((run.stats.trigger, run.stats.clone()));
         Ok(run)
     }
 
@@ -211,10 +213,8 @@ impl Parts {
                             trigger = Trigger::Audit
                         }
                     }
-                    WatchSignal::PolledChanged(_) => {
-                        if trigger == Trigger::Events {
-                            trigger = Trigger::Poll
-                        }
+                    WatchSignal::PolledChanged(_) if trigger == Trigger::Events => {
+                        trigger = Trigger::Poll
                     }
                     _ => {}
                 }
@@ -263,52 +263,62 @@ impl Parts {
         }
     }
 
-    /// From-scratch snapshot (initial scan, audit, overflow recovery). The
-    /// cache reseeds from stored blobs afterwards so drift cannot persist.
+    /// From-scratch scan (initial, audit, overflow recovery): runs the SAME
+    /// walker incremental passes use, but against an EMPTY cache so every
+    /// file is read and hashed fresh. One walking codepath means a full scan
+    /// and an incremental pass can never disagree about what belongs in the
+    /// manifest (e.g. the structurally excluded store directory, which
+    /// ferry-store's own snapshot_dir does not filter). The cache reseeds
+    /// from the fresh walk afterwards, so pre-existing cache drift cannot
+    /// survive an audit.
     fn run_full(&self, trigger: Trigger, reason: &str) -> Result<ScanRun, ScanError> {
         let _ = reason; // surfaced via trigger; kept for future logging
+        let _started = Instant::now();
         let mut core = self.core.lock().expect("core");
         if !core.disk_root.is_dir() {
             core.root_gone = true;
             return Ok(idle_run(trigger));
         }
         let identity = Self::identity_now(&core);
-        let out = snapshot_dir(
+        let mut fresh_cache = DirCache::new();
+        let mut closed = BTreeSet::new();
+        closed.insert(Vec::new());
+        let mut stats = PassStats {
+            trigger,
+            ..PassStats::default()
+        };
+        let out = Walker::run(
             &core.handle.store,
             core.handle.poly,
+            core.ignore.as_ref(),
             &core.disk_root,
-            &identity,
-        )?;
-        let changed = out.root_tree_id != core.prev_root_tree_id;
-
-        let store = core.handle.store.clone();
-        core.cache.reseed(&store, &out.root_tree_id)?;
-        core.prev_root_tree_id = out.root_tree_id;
-        core.prev_manifest_id = out.manifest_id;
-
-        let stats = PassStats {
+            &mut fresh_cache,
+            &closed,
             trigger,
-            files: out.stats.files,
-            dirs: out.stats.dirs,
-            symlinks: out.stats.symlinks,
-            bytes_chunked: out.stats.bytes_chunked,
-            files_rehashed: out.stats.files,
-            dirty_dirs: 0,
-        };
+            &identity,
+            core.prev_root_tree_id,
+            &mut stats,
+        )?;
 
-        let published = if changed || trigger == Trigger::Initial {
-            let cur = Arc::new(CurrentScan {
-                manifest: out.manifest,
-                manifest_id: out.manifest_id,
-                root_tree_id: out.root_tree_id,
-                trigger,
-                stats: stats.clone(),
-                finished_unix_secs: unix_now().0,
-            });
-            self.publish(cur.clone());
-            Some(cur)
-        } else {
-            None
+        // Adopt the freshly built cache unconditionally: this IS the reseed.
+        core.cache = fresh_cache;
+
+        let published = match out {
+            Some(out) => {
+                core.prev_root_tree_id = out.root_tree_id;
+                core.prev_manifest_id = out.manifest_id;
+                let cur = Arc::new(CurrentScan {
+                    manifest: out.manifest,
+                    manifest_id: out.manifest_id,
+                    root_tree_id: out.root_tree_id,
+                    trigger,
+                    stats: stats.clone(),
+                    finished_unix_secs: unix_now().0,
+                });
+                self.publish(cur.clone());
+                Some(cur)
+            }
+            None => None,
         };
         Ok(ScanRun { published, stats })
     }
@@ -369,7 +379,10 @@ impl Parts {
                     stats,
                 })
             }
-            None => Ok(ScanRun { published: None, stats }),
+            None => Ok(ScanRun {
+                published: None,
+                stats,
+            }),
         }
     }
 
@@ -401,7 +414,12 @@ impl ScanEngine {
     /// [`NoIgnores`](crate::ignore::NoIgnores)) and run the initial full scan
     /// before returning.
     pub fn watch(root: impl Into<PathBuf>, handle: StoreHandle) -> Result<Self, ScanError> {
-        Self::watch_with(root, handle, ScanConfig::default(), Arc::new(crate::ignore::NoIgnores))
+        Self::watch_with(
+            root,
+            handle,
+            ScanConfig::default(),
+            Arc::new(crate::ignore::NoIgnores),
+        )
     }
 
     /// Full control variant. See crate docs for the threading model and the
@@ -453,7 +471,9 @@ impl ScanEngine {
 
         // Initial full scan, synchronous: consumers always have a baseline
         // before any watcher exists to race with.
-        engine.parts.run_full(Trigger::Initial, "initial snapshot")?;
+        engine
+            .parts
+            .run_full(Trigger::Initial, "initial snapshot")?;
 
         engine.spawn_watcher()?;
         engine.spawn_worker();
@@ -540,8 +560,11 @@ impl ScanEngine {
                         });
                         return;
                     }
-                    let rels: Vec<RelPath> =
-                        ev.paths.iter().filter_map(|p| abs_to_rel(&root_for_cb, p)).collect();
+                    let rels: Vec<RelPath> = ev
+                        .paths
+                        .iter()
+                        .filter_map(|p| abs_to_rel(&root_for_cb, p))
+                        .collect();
                     let filtered: Vec<RelPath> = rels
                         .into_iter()
                         .filter(|r| !any_prefix_ignored(r, ignore.as_ref()))
@@ -571,7 +594,7 @@ impl ScanEngine {
         Ok(())
     }
 
-    fn spawn_worker(self: &Self) {
+    fn spawn_worker(&self) {
         let parts = self.parts.clone();
         let stop = self.stop.clone();
         let quiet = parts.core.lock().expect("core").cfg.quiet_window;
@@ -909,7 +932,6 @@ fn meta_mtime_nsec(_m: &std::fs::Metadata) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ignore::NoIgnores as _;
     use crate::testutil::*;
 
     fn rel(parts: &[&str]) -> RelPath {
@@ -931,9 +953,31 @@ mod tests {
             created_sec: 1,
             created_nsec: 0,
         };
-        let out = ferry_store::snapshot::snapshot_dir(&store, poly_of(3), dir, &id).unwrap();
+        let _ = id;
         let mut cache = DirCache::new();
-        cache.reseed(&store, &out.root_tree_id).unwrap();
+        let mut closed = BTreeSet::new();
+        closed.insert(Vec::new());
+        let mut stats = PassStats::default();
+        Walker::run(
+            &store,
+            poly_of(3),
+            &crate::ignore::NoIgnores,
+            dir,
+            &mut cache,
+            &closed,
+            Trigger::Initial,
+            &ferry_store::snapshot::SnapshotIdentity {
+                folder_id: [1; 16],
+                device_id: [2; 32],
+                parent_manifest_id: [0; 32],
+                created_sec: 1,
+                created_nsec: 0,
+            },
+            [0u8; 32],
+            &mut stats,
+        )
+        .unwrap()
+        .expect("seed pass publishes");
         (store_dir, store, cache)
     }
 
@@ -946,7 +990,7 @@ mod tests {
         write_file(&root.join("changed.txt"), b"bbb", false, (2, 0));
         write_file(&root.join("sub/deep.txt"), b"ccc", true, (3, 0));
 
-        let (_sd, store, cache) = seeded_cache(&root);
+        let (_sd, _store, cache) = seeded_cache(&root);
 
         // Mutate behind the watcher's back:
         //  - same.txt untouched,
@@ -961,8 +1005,14 @@ mod tests {
         let mut got = found.clone();
         got.sort();
 
-        assert!(got.contains(&rel(&["changed.txt"])), "content change flagged: {got:?}");
-        assert!(got.contains(&rel(&["fresh.txt"])), "new file flagged: {got:?}");
+        assert!(
+            got.contains(&rel(&["changed.txt"])),
+            "content change flagged: {got:?}"
+        );
+        assert!(
+            got.contains(&rel(&["fresh.txt"])),
+            "new file flagged: {got:?}"
+        );
         assert!(
             got.contains(&rel(&[])) || got.contains(&rel(&["sub"])),
             "deleted file surfaces via its parent dir: {got:?}"

@@ -9,11 +9,9 @@
 
 use std::collections::HashMap;
 
-use ferry_store::manifest::{parse_tree_node, TreeEntry, TreeNode};
-use ferry_store::store::Store;
-use ferry_store::{BlobId, BlobKind};
+use ferry_store::manifest::{TreeEntry, TreeNode};
+use ferry_store::BlobId;
 
-use crate::error::ScanError;
 use crate::policy::RelPath;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,44 +30,6 @@ impl DirCache {
         DirCache::default()
     }
 
-    /// Rebuild the whole cache from a stored tree. Used after full snapshots
-    /// (initial scan, audit, overflow recovery): drift between cache and
-    /// disk cannot survive a reseed.
-    pub(crate) fn reseed(
-        &mut self,
-        store: &Store,
-        root_tree_id: &BlobId,
-    ) -> Result<(), ScanError> {
-        self.dirs.clear();
-        let root = parse_tree_node(&store.get(BlobKind::TreeNode, root_tree_id)?)?;
-        self.insert_recursive(store, Vec::new(), *root_tree_id, root)
-    }
-
-    fn insert_recursive(
-        &mut self,
-        store: &Store,
-        rel: RelPath,
-        id: BlobId,
-        node: TreeNode,
-    ) -> Result<(), ScanError> {
-        for e in &node.entries {
-            if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } = &e.payload {
-                let child_rel = {
-                    let mut r = rel.clone();
-                    r.push(e.name.clone());
-                    r
-                };
-                if !self.dirs.contains_key(&child_rel) {
-                    let child =
-                        parse_tree_node(&store.get(BlobKind::TreeNode, child_tree_id)?)?;
-                    self.insert_recursive(store, child_rel, *child_tree_id, child)?;
-                }
-            }
-        }
-        self.dirs.insert(rel, CachedDir { id, node });
-        Ok(())
-    }
-
     pub(crate) fn node(&self, rel: &RelPath) -> Option<&CachedDir> {
         self.dirs.get(rel)
     }
@@ -81,7 +41,12 @@ impl DirCache {
     /// The previous entry recorded for `name` inside cached dir `parent`.
     /// This is what the size/mtime/exec short-circuit compares against.
     pub(crate) fn child_entry(&self, parent: &RelPath, name: &str) -> Option<&TreeEntry> {
-        self.dirs.get(parent)?.node.entries.iter().find(|e| e.name == name)
+        self.dirs
+            .get(parent)?
+            .node
+            .entries
+            .iter()
+            .find(|e| e.name == name)
     }
 
     /// Drop `prefix` and everything below it (deleted or renamed-away
@@ -96,9 +61,9 @@ impl DirCache {
         &'c self,
         parent: &'c RelPath,
     ) -> impl Iterator<Item = &'c RelPath> {
-        self.dirs.keys().filter(move |k| {
-            k.len() == parent.len() + 1 && k[..parent.len()] == parent[..]
-        })
+        self.dirs
+            .keys()
+            .filter(move |k| k.len() == parent.len() + 1 && k[..parent.len()] == parent[..])
     }
 
     /// Iterate all cached directories whose path is inside `subtree`.
@@ -115,11 +80,6 @@ impl DirCache {
     pub(crate) fn len(&self) -> usize {
         self.dirs.len()
     }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.dirs.is_empty()
-    }
 }
 
 /// Component-vector prefix test; `[..]` is a prefix of everything.
@@ -130,28 +90,47 @@ pub(crate) fn starts_with(path: &RelPath, prefix: &RelPath) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::Trigger;
     use crate::testutil::*;
+    use crate::walk::Walker;
+    use std::collections::BTreeSet;
 
     fn key(parts: &[&str]) -> RelPath {
         parts.iter().map(|s| s.to_string()).collect()
     }
 
+    /// Seed the cache the way the engine does after a full scan: one
+    /// whole-tree pass against an empty cache.
+    fn seed(store: &ferry_store::store::Store, root: &std::path::Path) -> (DirCache, BlobId) {
+        let mut cache = DirCache::new();
+        let mut closed = BTreeSet::new();
+        closed.insert(Vec::new());
+        let mut stats = Default::default();
+        let out = Walker::run(
+            store,
+            poly_of(3),
+            &crate::ignore::NoIgnores,
+            root,
+            &mut cache,
+            &closed,
+            Trigger::Initial,
+            &identity((1, 0)),
+            [0u8; 32],
+            &mut stats,
+        )
+        .unwrap()
+        .expect("initial pass publishes");
+        (cache, out.root_tree_id)
+    }
+
     #[test]
-    fn reseed_recovers_full_hierarchy_from_store() {
+    fn full_walk_seeds_full_hierarchy() {
         let (_d, store) = fresh_store();
         let root = _d.path().join("t");
         write_file(&root.join("a.txt"), b"alpha", false, (1, 0));
         write_file(&root.join("sub/deep/b.txt"), b"beta", true, (2, 0));
-        let out = ferry_store::snapshot::snapshot_dir(
-            &store,
-            poly_of(3),
-            &root,
-            &identity((1, 0)),
-        )
-        .unwrap();
 
-        let mut cache = DirCache::new();
-        cache.reseed(&store, &out.root_tree_id).unwrap();
+        let (cache, root_id) = seed(&store, &root);
         // Root, sub, sub/deep.
         assert_eq!(cache.len(), 3);
 
@@ -171,6 +150,12 @@ mod tests {
             deep,
             "cached id matches parent's pointer"
         );
+        // And the seeded tree matches the from-scratch store primitive.
+        let scratch =
+            ferry_store::snapshot::snapshot_dir(&store, poly_of(3), &root, &identity((2, 0)))
+                .unwrap()
+                .root_tree_id;
+        assert_eq!(root_id, scratch);
     }
 
     #[test]
@@ -200,16 +185,10 @@ mod tests {
         let (_d, store) = fresh_store();
         let root = _d.path().join("t");
         write_file(&root.join("x.txt"), b"data", false, (9, 9));
-        let out = ferry_store::snapshot::snapshot_dir(
-            &store,
-            poly_of(4),
-            &root,
-            &identity((1, 0)),
-        )
-        .unwrap();
-        let mut cache = DirCache::new();
-        cache.reseed(&store, &out.root_tree_id).unwrap();
-        let e = cache.child_entry(&key(&[]), "x.txt").expect("record present");
+        let (cache, _) = seed(&store, &root);
+        let e = cache
+            .child_entry(&key(&[]), "x.txt")
+            .expect("record present");
         assert_eq!(e.mtime_sec, 9);
         assert!(cache.child_entry(&key(&[]), "missing.txt").is_none());
     }

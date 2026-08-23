@@ -1,12 +1,13 @@
 //! Manual probe for debugging the worker pipeline (not a test).
 //! Run: cargo run -p ferry-scan --example probe
 
-use std::time::Duration;
 use ferry_scan::engine::{ScanEngine, StoreHandle};
 use ferry_scan::policy::WatchSignal;
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::store::Store;
+use notify::Watcher as _;
 use rand::SeedableRng;
+use std::time::Duration;
 
 fn main() {
     let tmp = tempfile::tempdir().unwrap();
@@ -22,23 +23,46 @@ fn main() {
         device_id: [6; 32],
     };
     let engine = ScanEngine::watch(&root, handle).unwrap();
-    println!("initial: {:?}", engine.current().map(|c| (c.trigger, c.stats.files)));
+    println!(
+        "initial: {:?}",
+        engine.current().map(|c| (c.trigger, c.stats.files))
+    );
 
     std::fs::write(root.join("x.txt"), b"hello").unwrap();
-    engine.debug_inject_signal(WatchSignal::Overflow { reason: "probe".into() });
+    engine.debug_inject_signal(WatchSignal::Overflow {
+        reason: "probe".into(),
+    });
     std::thread::sleep(Duration::from_secs(2));
     println!(
         "after inject: {:?}",
-        engine.current().map(|c| (c.trigger, c.stats.files, c.stats.bytes_chunked))
+        engine
+            .current()
+            .map(|c| (c.trigger, c.stats.files, c.stats.bytes_chunked))
     );
 
     // Real-event path: write files, wait past quiet window, check worker.
+    // ALSO attach a raw second watcher to see what notify itself reports.
+    let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+    let mut raw = notify::RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            let _ = raw_tx.send(res.map(|e| format!("{:?} {:?}", e.kind, e.paths)));
+        },
+        notify::Config::default(),
+    )
+    .unwrap();
+    raw.watch(&root, notify::RecursiveMode::Recursive).unwrap();
+
     for i in 0..5 {
         std::fs::write(root.join(format!("e{i}.txt")), format!("data{i}")).unwrap();
     }
     std::thread::sleep(Duration::from_secs(2));
+    println!("raw notify events observed: {}", raw_rx.try_iter().count());
     println!(
         "after real events: {:?}",
         engine.current().map(|c| (c.trigger, c.stats.files))
+    );
+    println!(
+        "last_pass: {:?}",
+        engine.last_pass().map(|(t, s)| (t, s.files))
     );
 }

@@ -14,7 +14,9 @@
 use std::collections::HashMap;
 
 use blake3::Hasher;
-use ferry_store::manifest::{parse_tree_node, serialize_tree_node, EntryPayload, TreeEntry, TreeNode};
+use ferry_store::manifest::{
+    parse_tree_node, serialize_tree_node, EntryPayload, TreeEntry, TreeNode,
+};
 use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
@@ -113,10 +115,7 @@ mod tests {
             equivalent_modulo_mtime(&store, &ta, &tb).unwrap(),
             "mtime-only difference must normalize away"
         );
-        assert_ne!(
-            ta, tb,
-            "raw ids differ because raw serialized bytes differ"
-        );
+        assert_ne!(ta, tb, "raw ids differ because raw serialized bytes differ");
     }
 
     #[test]

@@ -16,18 +16,18 @@
 //!       read+chunked — the hasher hook used by tests and the benchmark),
 //!     - changed/new files are read, CDC-chunked through the folder's chunker,
 //!       and stored like `snapshot_dir` does,
-//!     - untouched subdirectories keep their cached node and id wholesale —
-//!       not even a stat is spent on their contents,
-//!     - symlinks are re-read (cheap) and NFC/UTF-8 rules applied.
+//!    - untouched subdirectories keep their cached node and id wholesale —
+//!      not even a stat is spent on their contents,
+//!    - symlinks are re-read (cheap) and NFC/UTF-8 rules applied.
 //! 3. Walk rules mirror `snapshot.rs` exactly: NFC names, loud refusals for
-//!     non-UTF-8 names/targets and unsupported file types, sibling-collision
-//!     hard errors, exec-bit-only permissions. One documented divergence:
-//!     an entry that vanishes mid-pass is skipped rather than failed — the
-//!     next event or audit repairs it, and racing deletions are not a scan
-//!     bug.
+//!    non-UTF-8 names/targets and unsupported file types, sibling-collision
+//!    hard errors, exec-bit-only permissions. One documented divergence:
+//!    an entry that vanishes mid-pass is skipped rather than failed — the
+//!    next event or audit repairs it, and racing deletions are not a scan
+//!    bug.
 //! 4. The new root id is compared with the previous one. Only a CHANGED root
-//!     produces a manifest (parent = previous manifest id), so no-op bursts
-//!     write zero pack bytes.
+//!    produces a manifest (parent = previous manifest id), so no-op bursts
+//!    write zero pack bytes.
 //!
 //! Cache hygiene: when a rebuilt listing lacks a previously cached child
 //! directory, that whole prefix is dropped from the cache so deleted or
@@ -37,6 +37,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -44,7 +45,7 @@ use ferry_store::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, EntryPayload,
     RootManifest, TreeEntry, TreeNode,
 };
-use ferry_store::snapshot::{ensure_no_sibling_collisions, RefusedPath, RefusalReason};
+use ferry_store::snapshot::{ensure_no_sibling_collisions, RefusalReason, RefusedPath};
 use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
@@ -80,6 +81,9 @@ pub struct PassStats {
     pub files_rehashed: usize,
     /// Dirty directories rebuilt.
     pub dirty_dirs: usize,
+    /// Wall-clock time of the pass itself (walk + hash + store IO),
+    /// excluding debounce/event latency.
+    pub duration: Duration,
 }
 
 /// Result of one incremental pass whose root changed.
@@ -147,6 +151,7 @@ impl<'a> Walker<'a> {
         let mut order: Vec<&RelPath> = dirty_closed.iter().collect();
         order.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
 
+        let started = std::time::Instant::now();
         let mut w = Walker {
             store,
             poly,
@@ -179,6 +184,7 @@ impl<'a> Walker<'a> {
         })?;
 
         w.stats.dirty_dirs = w.rebuilt.len();
+        w.stats.duration = started.elapsed();
         *stats_out = w.stats.clone();
 
         if root_id == prev_root_tree_id {
@@ -434,10 +440,12 @@ fn find_entry<'n>(node: &'n TreeNode, name: &str) -> Option<&'n TreeEntry> {
 fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     match &prev.payload {
         EntryPayload::File {
-            size: prev_size,
-            ..
+            size: prev_size, ..
         } => {
-            prev.mtime_sec == mt.0 && prev.mtime_nsec == mt.1 && *prev_size == size && prev.exec == exec
+            prev.mtime_sec == mt.0
+                && prev.mtime_nsec == mt.1
+                && *prev_size == size
+                && prev.exec == exec
         }
         _ => false,
     }
@@ -471,12 +479,11 @@ fn mtime_nsec(_meta: &std::fs::Metadata) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ignore::NoIgnores as _;
     use crate::normalize::equivalent_modulo_mtime;
     use crate::testutil::*;
     use ferry_store::crypto::PassthroughCipher;
     use ferry_store::diff::{diff_roots, ChangeSet};
-    use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
+    use ferry_store::snapshot::snapshot_dir;
     use std::collections::BTreeSet;
 
     /// A seeded scenario: real store + real tree, initial full scan done,
@@ -485,7 +492,7 @@ mod tests {
     /// threads, no kernel timing.
     struct Fixture {
         _tmp: tempfile::TempDir,
-        store_dir: tempfile::TempDir,
+        _store_dir: tempfile::TempDir,
         store: Store,
         poly: u64,
         root: PathBuf,
@@ -497,17 +504,13 @@ mod tests {
         fn new(name: &str) -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let store_dir = tempfile::tempdir().unwrap();
-            let store = Store::create(
-                store_dir.path(),
-                fmk(),
-                Box::new(PassthroughCipher),
-            )
-            .unwrap();
+            let store =
+                Store::create(store_dir.path(), fmk(), Box::new(PassthroughCipher)).unwrap();
             let root = tmp.path().join(name);
             std::fs::create_dir_all(&root).unwrap();
             let mut fx = Fixture {
                 _tmp: tmp,
-                store_dir,
+                _store_dir: store_dir,
                 store,
                 poly: poly_of(21),
                 root,
@@ -518,13 +521,31 @@ mod tests {
             fx
         }
 
-        /// Full-scan path: what run_full does (snapshot_dir + reseed).
+        /// Full-scan path: what run_full does — whole-tree pass against an
+        /// EMPTY cache, then adopt it (the reseed IS the fresh cache).
         fn full_scan(&mut self) -> BlobId {
-            let out = snapshot_dir(&self.store, self.poly, &self.root, &identity((1, 0)))
-                .unwrap();
-            self.cache.reseed(&self.store, &out.root_tree_id).unwrap();
-            self.prev_root_tree_id = out.root_tree_id;
-            out.root_tree_id
+            let mut fresh = DirCache::new();
+            let mut closed = BTreeSet::new();
+            closed.insert(Vec::new());
+            let mut stats = PassStats::default();
+            let out = Walker::run(
+                &self.store,
+                self.poly,
+                &NoIgnoresIgnored,
+                &self.root,
+                &mut fresh,
+                &closed,
+                Trigger::Initial,
+                &identity((1, 0)),
+                self.prev_root_tree_id,
+                &mut stats,
+            )
+            .unwrap();
+            std::mem::swap(&mut self.cache, &mut fresh);
+            if let Some(out) = out {
+                self.prev_root_tree_id = out.root_tree_id;
+            }
+            self.prev_root_tree_id
         }
 
         fn incremental(&mut self, dirty: &[RelPath]) -> Option<ScanOutput> {
@@ -588,9 +609,19 @@ mod tests {
         //   create nested/new.txt, modify mod.txt (different length),
         //   delete gone.txt, rename dir moved -> relocated (contents ride),
         //   exec-bit flip on sub/a.txt without content change.
-        write_file(&fx.root.join("nested/new.txt"), b"fresh bytes", false, (21, 1));
+        write_file(
+            &fx.root.join("nested/new.txt"),
+            b"fresh bytes",
+            false,
+            (21, 1),
+        );
         std::fs::remove_file(fx.root.join("gone.txt")).unwrap();
-        write_file(&fx.root.join("mod.txt"), b"original, extended!", false, (22, 2));
+        write_file(
+            &fx.root.join("mod.txt"),
+            b"original, extended!",
+            false,
+            (22, 2),
+        );
         std::fs::rename(fx.root.join("moved"), fx.root.join("relocated")).unwrap();
         write_file(&fx.root.join("sub/a.txt"), b"a", true, (13, 0));
 
@@ -791,18 +822,27 @@ mod tests {
         let out = fx.incremental_expect(&[p(&["doomed"])]);
 
         assert_eq!(out.root_tree_id, fx.scratch_root_id());
-        assert!(fx.cache.node(&p(&["doomed"])).is_none() || {
-            // Cache may hold the empty-splice record, but never stale files.
-            let node = &fx.cache.node(&p(&["doomed"])).unwrap().node;
-            node.entries.is_empty()
-        });
+        assert!(
+            fx.cache.node(&p(&["doomed"])).is_none() || {
+                // Cache may hold the empty-splice record, but never stale files.
+                let node = &fx.cache.node(&p(&["doomed"])).unwrap().node;
+                node.entries.is_empty()
+            }
+        );
         assert!(fx.cache.node(&p(&["doomed", "deep"])).is_none());
         // Diff flattens removed subtrees per path: dir, nested dir, file.
         let cs = fx.diff_since_baseline(out.root_tree_id);
         assert_eq!(cs.removed.len(), 3);
         assert_eq!(
-            cs.removed.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
-            vec![p(&["doomed"]), p(&["doomed", "deep"]), p(&["doomed", "deep", "file.txt"])],
+            cs.removed
+                .iter()
+                .map(|r| r.path.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                p(&["doomed"]),
+                p(&["doomed", "deep"]),
+                p(&["doomed", "deep", "file.txt"])
+            ],
             "parents before children"
         );
     }
@@ -811,7 +851,12 @@ mod tests {
     fn store_directory_is_structurally_excluded() {
         let mut fx = Fixture::new("t7");
         // Store dir appears FIRST, alone: a whole-tree pass must ignore it.
-        write_file(&fx.root.join(".ferry/packs/x.pack"), b"pack bytes", false, (1, 0));
+        write_file(
+            &fx.root.join(".ferry/packs/x.pack"),
+            b"pack bytes",
+            false,
+            (1, 0),
+        );
         let mut stats = PassStats::default();
         let closed = close_under_ancestors(&[p(&[])]);
         let none = Walker::run(
@@ -848,7 +893,12 @@ mod tests {
         // Pack churn behind the watcher stays invisible too. The scratch
         // oracle cannot be used alongside .ferry because snapshot_dir has no
         // exclusion rule; the structural exclusion IS the spec here.
-        write_file(&fx.root.join(".ferry/packs/x.pack"), b"more pack bytes!", false, (3, 0));
+        write_file(
+            &fx.root.join(".ferry/packs/x.pack"),
+            b"more pack bytes!",
+            false,
+            (3, 0),
+        );
         let closed = close_under_ancestors(&[p(&[".ferry"])]);
         let out2 = Walker::run(
             &fx.store,
@@ -871,7 +921,12 @@ mod tests {
     fn randomized_op_sequence_stays_equivalent_to_scratch() {
         let mut fx = Fixture::new("t6");
         for i in 0..12i64 {
-            write_file(&fx.root.join(format!("f{i:02}.txt")), &prng(i as u64, 64), false, (i, 0));
+            write_file(
+                &fx.root.join(format!("f{i:02}.txt")),
+                &prng(i as u64, 64),
+                false,
+                (i, 0),
+            );
         }
         for d in ["d0", "d1"] {
             std::fs::create_dir(fx.root.join(d)).unwrap();
@@ -881,7 +936,9 @@ mod tests {
         // Deterministic pseudo-random op sequence (seeded LCG).
         let mut seed: u64 = 0xC0FFEE;
         let mut next = move || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) as usize
         };
 
@@ -891,13 +948,23 @@ mod tests {
             match pick {
                 0 => {
                     let name = format!("f{:02}.txt", next() % 12);
-                    write_file(&fx.root.join(&name), &prng(step as u64 + 50, 96), false, (step as i64, 1));
+                    write_file(
+                        &fx.root.join(&name),
+                        &prng(step as u64 + 50, 96),
+                        false,
+                        (step as i64, 1),
+                    );
                     all_dirty.insert(p(&[&name]));
                     all_dirty.insert(p(&[]));
                 }
                 1 => {
                     let name = format!("gen{step}.txt");
-                    write_file(&fx.root.join("d0").join(&name), &prng(100 + step as u64, 32), true, (step as i64, 2));
+                    write_file(
+                        &fx.root.join("d0").join(&name),
+                        &prng(100 + step as u64, 32),
+                        true,
+                        (step as i64, 2),
+                    );
                     all_dirty.insert(p(&["d0"]));
                 }
                 2 => {

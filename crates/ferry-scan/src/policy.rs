@@ -13,11 +13,12 @@ use std::collections::BTreeSet;
 pub type RelPath = Vec<String>;
 
 /// What caused a completed scan pass.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Trigger {
     /// First scan in the life of an engine (always a full snapshot).
     Initial,
     /// Debounced native filesystem events.
+    #[default]
     Events,
     /// Poll-fallback sweep found mismatches.
     Poll,
@@ -25,12 +26,6 @@ pub enum Trigger {
     OverflowRecovery,
     /// Scheduled full-hash audit.
     Audit,
-}
-
-impl Default for Trigger {
-    fn default() -> Self {
-        Trigger::Events
-    }
 }
 
 /// Something the platform layer observed. Relative paths only: the engine
@@ -73,9 +68,13 @@ pub enum Action {
     RescanSubtrees(Vec<RelPath>),
     /// Discard incremental state and snapshot from scratch. Repairs any
     /// drift by construction.
-    FullRescan { reason: String },
+    FullRescan {
+        reason: String,
+    },
     /// Begin poll fallback for a subtree native watching could not cover.
-    StartPolling { subtree: RelPath },
+    StartPolling {
+        subtree: RelPath,
+    },
     /// Run the scheduled full-hash audit now.
     RunAudit,
 }
@@ -164,9 +163,9 @@ mod tests {
     #[test]
     fn changed_paths_mark_self_and_parent() {
         let a = PolicyState::default().apply(&WatchSignal::Changed(vec![
-            p(&["a.txt"]),              // file: parent [] does the work
-            p(&["src", "lib.rs"]),      // nested file
-            p(&["src", "sub"]),         // dir itself must rebuild too
+            p(&["a.txt"]),         // file: parent [] does the work
+            p(&["src", "lib.rs"]), // nested file
+            p(&["src", "sub"]),    // dir itself must rebuild too
         ]));
         match a {
             Action::RescanSubtrees(dirs) => {
@@ -204,11 +203,14 @@ mod tests {
 
     #[test]
     fn overflow_always_triggers_full_rescan_with_reason() {
-        let a = PolicyState::default()
-            .apply(&WatchSignal::Overflow { reason: "inotify queue overflow".into() });
+        let a = PolicyState::default().apply(&WatchSignal::Overflow {
+            reason: "inotify queue overflow".into(),
+        });
         assert_eq!(
             a,
-            Action::FullRescan { reason: "inotify queue overflow".into() },
+            Action::FullRescan {
+                reason: "inotify queue overflow".into()
+            },
             "lost events can only be repaired by a from-scratch pass"
         );
     }
@@ -220,10 +222,21 @@ mod tests {
             subtree: p(&["node_modules"]),
             reason: "ENOSPC".into(),
         });
-        assert_eq!(a, Action::StartPolling { subtree: p(&["node_modules"]) });
-        assert!(st.polling.contains(&p(&["node_modules"])), "state remembers the fallback");
+        assert_eq!(
+            a,
+            Action::StartPolling {
+                subtree: p(&["node_modules"])
+            }
+        );
+        assert!(
+            st.polling.contains(&p(&["node_modules"])),
+            "state remembers the fallback"
+        );
         // A second failure for another subtree accumulates.
-        st.apply(&WatchSignal::Unwatchable { subtree: p(&["big2"]), reason: "EMFILE".into() });
+        st.apply(&WatchSignal::Unwatchable {
+            subtree: p(&["big2"]),
+            reason: "EMFILE".into(),
+        });
         assert_eq!(st.polling.len(), 2);
     }
 
@@ -252,7 +265,9 @@ mod tests {
         );
         assert_eq!(
             PolicyState::default().apply(&WatchSignal::RootReturned),
-            Action::FullRescan { reason: "watched root reappeared".into() }
+            Action::FullRescan {
+                reason: "watched root reappeared".into()
+            }
         );
     }
 }
