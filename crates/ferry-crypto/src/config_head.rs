@@ -49,14 +49,20 @@ pub struct WrappedKeyEntry {
 
 impl WrappedKeyEntry {
     pub fn new(device_pub: DeviceId, wrapped: [u8; WRAPPED_LEN]) -> Self {
-        WrappedKeyEntry { device_pub, wrapped }
+        WrappedKeyEntry {
+            device_pub,
+            wrapped,
+        }
     }
 }
 
 /// Serialize a complete CONFIG_HEAD container (header + body).
 pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HEADER_LEN + BODY_PREAMBLE_LEN + entries.len() * ENTRY_FIXED_LEN);
-    out.extend_from_slice(&write_header(ferry_store::format::ContainerKind::ConfigHead));
+    let mut out =
+        Vec::with_capacity(HEADER_LEN + BODY_PREAMBLE_LEN + entries.len() * ENTRY_FIXED_LEN);
+    out.extend_from_slice(&write_header(
+        ferry_store::format::ContainerKind::ConfigHead,
+    ));
     out.extend_from_slice(folder_id);
     put_u32(&mut out, 0); // reserved
     put_u32(&mut out, entries.len() as u32);
@@ -95,7 +101,10 @@ pub fn parse_config_head(bytes: &[u8]) -> Result<ConfigHead, ConfigHeadError> {
             return Err(ConfigHeadError::BadWrappedLen(wrapped_len));
         }
         let wrapped = r.array::<WRAPPED_LEN>()?;
-        entries.push(WrappedKeyEntry { device_pub, wrapped });
+        entries.push(WrappedKeyEntry {
+            device_pub,
+            wrapped,
+        });
     }
     r.expect_end()?;
     Ok(ConfigHead { folder_id, entries })
@@ -109,12 +118,9 @@ mod tests {
     use ferry_store::format::{hex, unhex};
 
     const FOLDER_ID_HEX: &str = "00112233445566778899aabbccddeeff";
-    const ALICE_PK_HEX: &str =
-        "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
-    const BOB_PK_HEX: &str =
-        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
-    const ENVELOPE_A_HEX: &str =
-        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f\
+    const ALICE_PK_HEX: &str = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
+    const BOB_PK_HEX: &str = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
+    const ENVELOPE_A_HEX: &str = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f\
          f59b0b9d840ca51536831c1af980f10ca51ac5030c2a56bab74061b5f68749\
          e835e64c6ec363b6ff0f670500b7cb59be";
 
@@ -128,18 +134,17 @@ mod tests {
         );
         assert_eq!(
             hex(&head),
-            format!(
-                concat!(
-                    "46455252",          // "FERR"
-                    "59",                // "Y"     magic complete
-                    "04",                // kind = CONFIG_HEAD
-                    "01000000",          // format_version 1 LE
-                    "00112233445566778899aabbccddeeff", // folder_id
-                    "00000000",          // reserved zeros
-                    "01000000",          // wrapped_key_count = 1 LE
-                    "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", // device pub
-                    "50000000",          // wrapped_len = 80 = 0x50 LE
-                ) ) + ENVELOPE_A_HEX,
+            String::from(concat!(
+                "46455252",                                                         // "FERR"
+                "59",                               // "Y"     magic complete
+                "04",                               // kind = CONFIG_HEAD
+                "01000000",                         // format_version 1 LE
+                "00112233445566778899aabbccddeeff", // folder_id
+                "00000000",                         // reserved zeros
+                "01000000",                         // wrapped_key_count = 1 LE
+                "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", // device pub
+                "50000000",                         // wrapped_len = 80 = 0x50 LE
+            )) + ENVELOPE_A_HEX,
             "CONFIG_HEAD must match the spec byte-for-byte"
         );
         assert_eq!(head.len(), 10 + 16 + 4 + 4 + 32 + 4 + 80);
@@ -205,7 +210,9 @@ mod tests {
     fn wrapped_len_must_be_80() {
         // A well-formed header/body whose entry claims wrapped_len 79.
         let mut b = Vec::new();
-        b.extend_from_slice(&write_header(ferry_store::format::ContainerKind::ConfigHead));
+        b.extend_from_slice(&write_header(
+            ferry_store::format::ContainerKind::ConfigHead,
+        ));
         b.extend_from_slice(&[0u8; 16]);
         b.extend_from_slice(&0u32.to_le_bytes()); // reserved
         b.extend_from_slice(&1u32.to_le_bytes()); // one entry

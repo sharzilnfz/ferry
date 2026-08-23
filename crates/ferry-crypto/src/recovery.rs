@@ -75,6 +75,9 @@ pub enum RecoveryError {
     IdentityExists(std::path::PathBuf),
 }
 
+/// Decrypted export payload: `(fmk, device_secret)`, both zeroized on drop.
+pub type RestoredMaterial = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
+
 /// Everything needed to resurrect a device after total loss.
 pub struct RecoveryExport<'a> {
     pub fmk: &'a [u8; 32],
@@ -100,7 +103,10 @@ impl<'a> RecoveryExport<'a> {
         let ct = cipher
             .encrypt(
                 Nonce::from_slice(&nonce),
-                Payload { msg: pt.as_ref(), aad: PURPOSE },
+                Payload {
+                    msg: pt.as_ref(),
+                    aad: PURPOSE,
+                },
             )
             .expect("AEAD encryption cannot fail for these inputs");
 
@@ -118,7 +124,7 @@ impl<'a> RecoveryExport<'a> {
     ///
     /// Wrong passphrase, bitrot, and truncation all collapse into
     /// [`RecoveryError::AuthFailed`] or shape errors — never garbage success.
-    pub fn open(bytes: &[u8], passphrase: &str) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>), RecoveryError> {
+    pub fn open(bytes: &[u8], passphrase: &str) -> Result<RestoredMaterial, RecoveryError> {
         if bytes.len() != EXPORT_LEN {
             return Err(RecoveryError::Truncated {
                 need: EXPORT_LEN,
@@ -138,7 +144,13 @@ impl<'a> RecoveryExport<'a> {
         let wrap_key = derive_wrap_key(passphrase, &salt);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(wrap_key.as_ref()));
         let pt = cipher
-            .decrypt(Nonce::from_slice(&nonce), Payload { msg: ct, aad: PURPOSE })
+            .decrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: ct,
+                    aad: PURPOSE,
+                },
+            )
             .map_err(|_| RecoveryError::AuthFailed)?;
         let mut fmk: [u8; 32] = [0; 32];
         fmk.copy_from_slice(&pt[..32]);
@@ -160,8 +172,7 @@ impl<'a> RecoveryExport<'a> {
         std::fs::write(dest, self.seal(passphrase))?;
         let bytes = std::fs::read(dest)?;
         let (fmk, sk) = Self::open(&bytes, passphrase)?;
-        crate::identity::import_identity(identity_dir, &sk)
-            .map_err(io_err)?;
+        crate::identity::import_identity(identity_dir, &sk).map_err(io_err)?;
         Ok(fmk)
     }
 }
@@ -187,15 +198,17 @@ mod tests {
     use crate::identity::{load_or_create, DeviceIdentity, IdentityError};
     use ferry_store::format::unhex;
 
-    const ALICE_SK_HEX: &str =
-        "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+    const ALICE_SK_HEX: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
 
     fn fixture() -> RecoveryExport<'static> {
         // Leak-free test fixture via Box::leak keeps lifetimes simple; the
         // bytes are fixed RFC vectors, not real secrets.
         let fmk: &'static [u8; 32] = Box::leak(Box::new(core::array::from_fn(|i| i as u8 + 1)));
         let sk: &'static [u8; 32] = Box::leak(Box::new(unhex(ALICE_SK_HEX).unwrap()));
-        RecoveryExport { fmk, device_secret: sk }
+        RecoveryExport {
+            fmk,
+            device_secret: sk,
+        }
     }
 
     #[test]
@@ -253,7 +266,9 @@ mod tests {
             assert!(
                 matches!(
                     err,
-                    RecoveryError::AuthFailed | RecoveryError::BadMagic | RecoveryError::BadVersion(_)
+                    RecoveryError::AuthFailed
+                        | RecoveryError::BadMagic
+                        | RecoveryError::BadVersion(_)
                 ),
                 "flip at {idx} gave {err:?}"
             );
@@ -282,7 +297,10 @@ mod tests {
 
         let fmk: [u8; 32] = core::array::from_fn(|i| i as u8 + 7);
         let sk: [u8; 32] = unhex(ALICE_SK_HEX).unwrap();
-        let exp = RecoveryExport { fmk: &fmk, device_secret: &sk };
+        let exp = RecoveryExport {
+            fmk: &fmk,
+            device_secret: &sk,
+        };
 
         let restored = exp
             .round_trip_through_files("hunter2 but longer", &export_path, &wiped_dir)
@@ -292,11 +310,15 @@ mod tests {
         // The wiped device now HAS its old identity back: loading it yields
         // the same public key the export carried.
         let reborn = load_or_create(&wiped_dir).unwrap();
-        assert_eq!(*reborn.public(), *DeviceIdentity::from_secret_bytes(&sk).public());
+        assert_eq!(
+            *reborn.public(),
+            *DeviceIdentity::from_secret_bytes(&sk).public()
+        );
 
         // And it can unwrap envelopes addressed to that identity.
         let folder_id = [2u8; 16];
-        let wrapped = crate::folder_key::wrap_folder_key(&fmk, &folder_id, reborn.public()).unwrap();
+        let wrapped =
+            crate::folder_key::wrap_folder_key(&fmk, &folder_id, reborn.public()).unwrap();
         assert_eq!(
             *crate::folder_key::unwrap_folder_key(&wrapped, &folder_id, &reborn).unwrap(),
             fmk
@@ -315,6 +337,9 @@ mod tests {
         assert!(matches!(err, IdentityError::Io(_)), "{err}");
         // The pre-existing identity survived untouched.
         let kept = load_or_create(&existing).unwrap();
-        assert_ne!(*kept.public(), *DeviceIdentity::from_secret_bytes(&sk).public());
+        assert_ne!(
+            *kept.public(),
+            *DeviceIdentity::from_secret_bytes(&sk).public()
+        );
     }
 }

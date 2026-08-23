@@ -36,7 +36,13 @@ impl PackCipher for ChaChaCipher {
     ) -> Result<Vec<u8>, CryptoError> {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
         cipher
-            .encrypt(Nonce::from_slice(nonce), Payload { msg: plaintext, aad })
+            .encrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|_| {
                 // Encryption cannot fail for these inputs (no padding oracles,
                 // no RNG); the error type demands a total mapping anyway.
@@ -55,11 +61,19 @@ impl PackCipher for ChaChaCipher {
             return Err(CryptoError::MalformedCiphertext);
         }
         let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
-        cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad }).map_err(|_| {
-            // Authentication failure: wrong key, tampered bytes, or foreign
-            // construction. Never returns "decrypted garbage".
-            CryptoError::TagMismatch
-        })
+        cipher
+            .decrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
+            .map_err(|_| {
+                // Authentication failure: wrong key, tampered bytes, or foreign
+                // construction. Never returns "decrypted garbage".
+                CryptoError::TagMismatch
+            })
     }
 }
 
@@ -67,8 +81,8 @@ impl PackCipher for ChaChaCipher {
 mod tests {
     use super::*;
     use ferry_store::crypto::{
-        body_aad, body_nonce, derive_pack_key, footer_aad, segment_count,
-        PassthroughCipher, FOOTER_NONCE, SEGMENT_PLAIN_LEN,
+        body_aad, body_nonce, derive_pack_key, footer_aad, segment_count, PassthroughCipher,
+        FOOTER_NONCE, SEGMENT_PLAIN_LEN,
     };
     use ferry_store::format::{hex, unhex, write_header, BlobKind, ContainerKind};
 
@@ -82,8 +96,7 @@ mod tests {
         // exact same seam packs use. Pins key/nonce/aad ordering into the
         // underlying crate.
         let key: [u8; 32] = core::array::from_fn(|i| 0x80 + i as u8);
-        let nonce: [u8; 12] =
-            unhex("070000004041424344454647").unwrap();
+        let nonce: [u8; 12] = unhex("070000004041424344454647").unwrap();
         let aad = unhex::<12>("50515253c0c1c2c3c4c5c6c7").unwrap();
         let pt = b"Ladies and Gentlemen of the class of '99: If I could offer you \
                    only one tip for the future, sunscreen would be it.";
@@ -155,12 +168,17 @@ mod tests {
         let c = cipher();
         let key = [9u8; 32];
         let nonce = body_nonce(2, 1);
-        let ct = c.seal(&key, &nonce, b"aad", vec![42u8; 1000].as_slice()).unwrap();
+        let ct = c
+            .seal(&key, &nonce, b"aad", vec![42u8; 1000].as_slice())
+            .unwrap();
         for idx in [0usize, 500, ct.len() - 17, ct.len() - 1] {
             let mut evil = ct.clone();
             evil[idx] ^= 0x80;
             assert!(
-                matches!(c.open(&key, &nonce, b"aad", &evil), Err(CryptoError::TagMismatch)),
+                matches!(
+                    c.open(&key, &nonce, b"aad", &evil),
+                    Err(CryptoError::TagMismatch)
+                ),
                 "flip at {idx} undetected"
             );
         }
@@ -227,10 +245,25 @@ mod tests {
         ];
         for body in bodies {
             let id = *blake3::hash(body).as_bytes();
-            let entries = [FooterEntry { kind: BlobKind::DataChunk, id, plain_off: 0, plain_len: body.len() as u64 }];
+            let entries = [FooterEntry {
+                kind: BlobKind::DataChunk,
+                id,
+                plain_off: 0,
+                plain_len: body.len() as u64,
+            }];
 
-            let stub_pack = seal_pack_bytes(ContainerKind::PackData, &fmk, &salt, body, &entries, &passthrough).unwrap();
-            let real_pack = seal_pack_bytes(ContainerKind::PackData, &fmk, &salt, body, &entries, &real).unwrap();
+            let stub_pack = seal_pack_bytes(
+                ContainerKind::PackData,
+                &fmk,
+                &salt,
+                body,
+                &entries,
+                &passthrough,
+            )
+            .unwrap();
+            let real_pack =
+                seal_pack_bytes(ContainerKind::PackData, &fmk, &salt, body, &entries, &real)
+                    .unwrap();
 
             assert_eq!(stub_pack.len(), real_pack.len(), "pack sizes must match");
             // Conformance identity from the spec, holding for BOTH writers.
@@ -263,7 +296,13 @@ mod tests {
             // silently misreading it.
             let sid = *blake3::hash(&stub_pack).as_bytes();
             assert!(ferry_store::pack::read_blob(
-                &stub_pack, &sid, &fmk, &real, BlobKind::DataChunk, &id, None,
+                &stub_pack,
+                &sid,
+                &fmk,
+                &real,
+                BlobKind::DataChunk,
+                &id,
+                None,
             )
             .is_err());
         }

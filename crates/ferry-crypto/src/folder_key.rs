@@ -80,10 +80,20 @@ pub fn derive_wrap_key(
     hkdf_wrap_key(shared, &salt)
 }
 
-fn seal_fmk(wrap_key: &[u8; 32], folder_id: &[u8; 16], fmk: &Fmk) -> Result<Vec<u8>, FolderKeyError> {
+fn seal_fmk(
+    wrap_key: &[u8; 32],
+    folder_id: &[u8; 16],
+    fmk: &Fmk,
+) -> Result<Vec<u8>, FolderKeyError> {
     let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(wrap_key));
     cipher
-        .encrypt(Nonce::from_slice(&[0u8; 12]), Payload { msg: fmk, aad: folder_id })
+        .encrypt(
+            Nonce::from_slice(&[0u8; 12]),
+            Payload {
+                msg: fmk,
+                aad: folder_id,
+            },
+        )
         .map_err(|_| FolderKeyError::Auth)
 }
 
@@ -94,7 +104,13 @@ fn open_fmk(
 ) -> Result<Zeroizing<[u8; 32]>, FolderKeyError> {
     let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(wrap_key));
     let pt = cipher
-        .decrypt(Nonce::from_slice(&[0u8; 12]), Payload { msg: ciphertext, aad: folder_id })
+        .decrypt(
+            Nonce::from_slice(&[0u8; 12]),
+            Payload {
+                msg: ciphertext,
+                aad: folder_id,
+            },
+        )
         .map_err(|_| FolderKeyError::Auth)?;
     let mut fmk: Fmk = [0u8; 32];
     fmk.copy_from_slice(&pt);
@@ -162,16 +178,11 @@ mod tests {
     use crate::testing::FixedRng;
     use ferry_store::format::unhex;
 
-    const ALICE_SK_HEX: &str =
-        "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
-    const ALICE_PK_HEX: &str =
-        "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
-    const BOB_SK_HEX: &str =
-        "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
-    const BOB_PK_HEX: &str =
-        "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
-    const RFC_SHARED_HEX: &str =
-        "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
+    const ALICE_SK_HEX: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+    const ALICE_PK_HEX: &str = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
+    const BOB_SK_HEX: &str = "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb";
+    const BOB_PK_HEX: &str = "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f";
+    const RFC_SHARED_HEX: &str = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
 
     #[test]
     fn fmk_generation_is_32_random_distinct_bytes() {
@@ -280,7 +291,9 @@ mod tests {
         let fmk: Fmk = core::array::from_fn(|i| i as u8 + 1);
         let folder_id: [u8; 16] = core::array::from_fn(|i| i as u8);
 
-        let wrapped = wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), FixedRng::new(BOB_SK_HEX)).unwrap();
+        let wrapped =
+            wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), FixedRng::new(BOB_SK_HEX))
+                .unwrap();
         assert_eq!(wrapped.len(), 80);
         // Independently computed: a pure-Python RFC 8439 + RFC 5869
         // reference implementation (validated against the RFC's own 2.8.2
@@ -293,6 +306,9 @@ mod tests {
             "envelope bytes drifted from the pinned vector"
         );
         // And it still opens.
-        assert_eq!(*unwrap_folder_key(&wrapped, &folder_id, &alice).unwrap(), fmk);
+        assert_eq!(
+            *unwrap_folder_key(&wrapped, &folder_id, &alice).unwrap(),
+            fmk
+        );
     }
 }

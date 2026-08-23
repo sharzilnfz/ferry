@@ -84,8 +84,7 @@ mod tests {
         // Each single-symbol encoding decodes to its numeric value in the top
         // 5 bits: guards against off-by-one in the letter offset.
         for (i, &sym) in ALPHABET.iter().enumerate() {
-            let s =
-                String::from_utf8(vec![sym, ALPHABET[0], ALPHABET[0], ALPHABET[0]]).unwrap();
+            let s = String::from_utf8(vec![sym, ALPHABET[0], ALPHABET[0], ALPHABET[0]]).unwrap();
             let decoded = decode(&s).unwrap();
             assert_eq!((decoded[0] >> 3) as usize, i, "symbol {}", sym as char);
         }

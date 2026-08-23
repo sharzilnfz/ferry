@@ -48,9 +48,7 @@
 
 use crate::base32::{self, Base32Error};
 use crate::crc32::crc32;
-use crate::folder_key::{
-    wrap_folder_key, Fmk, FolderKeyError, WRAPPED_LEN,
-};
+use crate::folder_key::{wrap_folder_key, Fmk, FolderKeyError, WRAPPED_LEN};
 use crate::identity::{DeviceId, DeviceIdentity};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -138,11 +136,7 @@ impl std::fmt::Debug for PairingOffer {
 
 impl PairingOffer {
     /// Fresh offer with a CSPRNG one-time secret.
-    pub fn create(
-        folder_id: [u8; 16],
-        initiator: &DeviceIdentity,
-        now_sec: i64,
-    ) -> Self {
+    pub fn create(folder_id: [u8; 16], initiator: &DeviceIdentity, now_sec: i64) -> Self {
         Self::create_with_rng(folder_id, initiator, now_sec, rand::rngs::OsRng)
     }
 
@@ -254,8 +248,8 @@ impl PairingResponse {
         one_time_secret: &[u8; 32],
         responder_pub: &DeviceId,
     ) -> [u8; 32] {
-        let mut mac = Hmac::<Sha256>::new_from_slice(one_time_secret)
-            .expect("HMAC accepts any key length");
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(one_time_secret).expect("HMAC accepts any key length");
         mac.update(TRANSCRIPT_INFO);
         mac.update(offer_bytes);
         mac.update(responder_pub);
@@ -315,7 +309,11 @@ pub fn respond(offer: &PairingOffer, responder: &DeviceIdentity, now_sec: i64) -
     let offer_bytes = offer.serialize();
     PairingResponse {
         responder_pub: *responder.public(),
-        mac: PairingResponse::compute_mac(&offer_bytes, offer.one_time_secret(), responder.public()),
+        mac: PairingResponse::compute_mac(
+            &offer_bytes,
+            offer.one_time_secret(),
+            responder.public(),
+        ),
         created_sec: now_sec,
     }
 }
@@ -374,7 +372,7 @@ pub fn short_code_for(offer_bytes: &[u8], hints: TransportHints) -> String {
         &main[4..8],
         &main[8..12],
         &main[12..16],
-        &tail
+        tail
     )
 }
 
@@ -421,8 +419,7 @@ mod tests {
     use crate::testing::FixedRng;
     use ferry_store::format::unhex;
 
-    const ALICE_SK_HEX: &str =
-        "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+    const ALICE_SK_HEX: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
 
     fn alice() -> DeviceIdentity {
         DeviceIdentity::from_secret_bytes(&unhex(ALICE_SK_HEX).unwrap())
@@ -433,9 +430,7 @@ mod tests {
             [3u8; 16],
             &alice(),
             1_700_000_000,
-            FixedRng::new(
-                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-            ),
+            FixedRng::new("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
         );
         let bytes = offer.serialize();
         (offer, bytes)
@@ -451,10 +446,7 @@ mod tests {
         assert_eq!(&bytes[5..21], &[3u8; 16]);
         assert_eq!(&bytes[21..53], &alice().device_id()[..]);
         // One-time secret came from the fixed RNG pattern.
-        assert_eq!(
-            &bytes[53..85],
-            &(0u8..=0x1f).collect::<Vec<u8>>()[..]
-        );
+        assert_eq!(&bytes[53..85], &(0u8..=0x1f).collect::<Vec<u8>>()[..]);
         assert_eq!(&bytes[85..], &1_700_000_000i64.to_le_bytes());
     }
 
@@ -469,10 +461,16 @@ mod tests {
 
         let mut evil = bytes.clone();
         evil[0] = b'X';
-        assert!(matches!(PairingOffer::parse(&evil), Err(PairingError::BadMagic)));
+        assert!(matches!(
+            PairingOffer::parse(&evil),
+            Err(PairingError::BadMagic)
+        ));
         evil = bytes.clone();
         evil[4] = 2;
-        assert!(matches!(PairingOffer::parse(&evil), Err(PairingError::BadVersion(2))));
+        assert!(matches!(
+            PairingOffer::parse(&evil),
+            Err(PairingError::BadVersion(2))
+        ));
         evil = bytes[..92].to_vec();
         assert!(matches!(
             PairingOffer::parse(&evil),
@@ -510,8 +508,11 @@ mod tests {
     fn single_symbol_typo_anywhere_is_rejected() {
         let (_offer, bytes) = test_offer();
         let code = short_code_for(&bytes, TransportHints::default());
-        let symbols: Vec<(usize, char)> =
-            code.chars().enumerate().filter(|(_, c)| *c != '-').collect();
+        let symbols: Vec<(usize, char)> = code
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c != '-')
+            .collect();
 
         for pos in 0..symbols.len() {
             let original = symbols[pos].1;
@@ -522,7 +523,8 @@ mod tests {
                 }
                 let mut typed: Vec<char> = code.chars().collect();
                 typed[symbols[pos].0] = *sub;
-                let err = verify_short_code(&typed.into_iter().collect::<String>(), &bytes).unwrap_err();
+                let err =
+                    verify_short_code(&typed.into_iter().collect::<String>(), &bytes).unwrap_err();
                 assert!(
                     matches!(
                         err,
@@ -550,8 +552,8 @@ mod tests {
     }
 
     const ALPHABET_TEST: &[char] = &[
-        '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J',
-        'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+        '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K',
+        'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     ];
 
     #[test]
@@ -603,7 +605,11 @@ mod tests {
     #[test]
     fn response_serialization_layout() {
         let responder = DeviceIdentity::generate();
-        let resp = respond(&PairingOffer::parse(&test_offer().1).unwrap(), &responder, 42);
+        let resp = respond(
+            &PairingOffer::parse(&test_offer().1).unwrap(),
+            &responder,
+            42,
+        );
         let bytes = resp.serialize();
         assert_eq!(bytes.len(), RESPONSE_LEN);
         assert_eq!(bytes.len(), 77);
@@ -624,8 +630,8 @@ mod tests {
         // The module matrix: width x width cells, non-degenerate.
         let colors = qr.to_colors();
         assert_eq!(colors.len(), qr.width() * qr.width());
-        assert!(colors.iter().any(|c| *c == qrcode::Color::Dark));
-        assert!(colors.iter().any(|c| *c == qrcode::Color::Light));
+        assert!(colors.contains(&qrcode::Color::Dark));
+        assert!(colors.contains(&qrcode::Color::Light));
     }
 
     #[test]
@@ -649,18 +655,12 @@ mod tests {
         let done = complete_pairing(&offer, &offer_bytes, &resp, &fmk, &a).unwrap();
         assert_eq!(done.peer_pub, *b.public());
 
-        let got_a = crate::folder_key::unwrap_folder_key(
-            &done.wrapped_for_self,
-            &offer.folder_id,
-            &a,
-        )
-        .unwrap();
-        let got_b = crate::folder_key::unwrap_folder_key(
-            &done.wrapped_for_peer,
-            &offer.folder_id,
-            &b,
-        )
-        .unwrap();
+        let got_a =
+            crate::folder_key::unwrap_folder_key(&done.wrapped_for_self, &offer.folder_id, &a)
+                .unwrap();
+        let got_b =
+            crate::folder_key::unwrap_folder_key(&done.wrapped_for_peer, &offer.folder_id, &b)
+                .unwrap();
         assert_eq!(*got_a, fmk);
         assert_eq!(*got_b, fmk);
     }
