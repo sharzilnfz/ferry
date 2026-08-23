@@ -21,5 +21,6 @@ pub mod error;
 pub mod temp;
 
 pub use apply::{Applier, ApplyStats, Overwrite};
+pub use apply::set_symlink_times;
 pub use error::{DivergeReason, Divergence, MaterializeError};
 pub use temp::{sweep_stale_temps, TempStyle, DEFAULT_STALE_TEMP_AGE_SECS};

@@ -314,6 +314,7 @@ name = "ferry-materialize"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-platform",
  "ferry-store",
  "libc",
  "rand",
