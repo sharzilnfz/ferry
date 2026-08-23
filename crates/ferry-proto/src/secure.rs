@@ -18,9 +18,9 @@
 //! ```text
 //! ext1 = EXTRACT(salt = hash(Hello || HelloAck), ikm = e1 || m1 || m2)
 //! prk  = EXPAND(ext1, "ferry/v1/handshake")
-//! auth keys: EXPAND(prk, "ferry/v1/htk/{a2b|b2a}")
+//! auth keys: EXPAND(prk, "ferry/v1/htk/{i2r|r2i}")
 //! ext2 = EXTRACT(salt = hash(... || AuthInit_ct || AuthConfirm_ct), ikm = prk)
-//! traffic keys: EXPAND(ext2, "ferry/v1/tk/{a2b|b2a}")
+//! traffic keys: EXPAND(ext2, "ferry/v1/tk/{i2r|r2i}")
 //! ```
 //!
 //! Each side seals exactly ONE message under its auth key — an [`AuthProof`]
@@ -56,10 +56,10 @@ const NONCE_LEN: usize = 12;
 
 // HKDF info labels (normative strings).
 pub const INFO_HANDSHAKE: &[u8] = b"ferry/v1/handshake";
-pub const INFO_HTK_A2B: &[u8] = b"ferry/v1/htk/a2b";
-pub const INFO_HTK_B2A: &[u8] = b"ferry/v1/htk/b2a";
-pub const INFO_TK_A2B: &[u8] = b"ferry/v1/tk/a2b";
-pub const INFO_TK_B2A: &[u8] = b"ferry/v1/tk/b2a";
+pub const INFO_HTK_I2R: &[u8] = b"ferry/v1/htk/i2r";
+pub const INFO_HTK_R2I: &[u8] = b"ferry/v1/htk/r2i";
+pub const INFO_TK_I2R: &[u8] = b"ferry/v1/tk/i2r";
+pub const INFO_TK_R2I: &[u8] = b"ferry/v1/tk/r2i";
 
 /// Traffic-nonce prefix "FPN1" || u64 BE sequence.
 const TRAFFIC_NONCE_PREFIX: [u8; 4] = *b"FPN1";
@@ -85,7 +85,7 @@ fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
 
 /// Stage 1: handshake PRK plus the two single-use auth keys.
 ///
-/// Returns `(htk_a2b, htk_b2a, prk)`; all zeroized on drop.
+/// Returns `(htk_i2r, htk_r2i, prk)`; all zeroized on drop.
 /// Handshake-stage outputs: the two single-use auth keys plus the PRK that
 /// traffic keys re-root from. All zeroized on drop.
 pub(crate) type HandshakeKeys = (
@@ -108,9 +108,9 @@ pub(crate) fn kdf_handshake(
     let mut prk_box = Box::new([0u8; KEY_LEN]);
     ext.expand(INFO_HANDSHAKE, prk_box.as_mut())
         .expect("valid prk length");
-    let htk_a2b = expand_from(prk_box.as_slice(), INFO_HTK_A2B);
-    let htk_b2a = expand_from(prk_box.as_slice(), INFO_HTK_B2A);
-    (htk_a2b, htk_b2a, prk_box)
+    let htk_i2r = expand_from(prk_box.as_slice(), INFO_HTK_I2R);
+    let htk_r2i = expand_from(prk_box.as_slice(), INFO_HTK_R2I);
+    (htk_i2r, htk_r2i, prk_box)
 }
 
 /// A traffic-direction key. Zeroized on drop, never cloned out.
@@ -137,8 +137,8 @@ pub(crate) fn traffic_keys(
     ext.expand(b"ferry/v1/traffic", root.as_mut())
         .expect("valid root length");
     (
-        SessionKey(expand_from(root.as_slice(), INFO_TK_A2B)),
-        SessionKey(expand_from(root.as_slice(), INFO_TK_B2A)),
+        SessionKey(expand_from(root.as_slice(), INFO_TK_I2R)),
+        SessionKey(expand_from(root.as_slice(), INFO_TK_R2I)),
     )
 }
 

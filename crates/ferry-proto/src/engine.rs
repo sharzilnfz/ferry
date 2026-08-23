@@ -519,11 +519,11 @@ fn handshake<S: ByteStream>(
         ),
     };
 
-    let (htk_a2b, htk_b2a, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
+    let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
 
     // --- mutual proofs: initiator first, then responder ---
-    let proof_a: AuthProof = seal_auth(&htk_a2b, &th_hello, cfg.identity.device_id())?;
-    let proof_b_key = htk_b2a.clone();
+    let proof_a: AuthProof = seal_auth(&htk_i2r, &th_hello, cfg.identity.device_id())?;
+    let proof_b_key = htk_r2i.clone();
 
     let auth_wires = match role {
         Role::Initiator => {
@@ -541,10 +541,10 @@ fn handshake<S: ByteStream>(
         Role::Responder => {
             let (fb, w_init) = recv_preauth(io)?;
             let proof_i = AuthProof::parse(&fb.payload)?;
-            let got = open_auth(&htk_a2b, &th_hello, &proof_i)
+            let got = open_auth(&htk_i2r, &th_hello, &proof_i)
                 .map_err(|_| ProtoError::Auth("initiator failed its possession proof"))?;
             check_identity(got, cfg.expected_peer)?;
-            let proof_b = seal_auth(&htk_b2a, &th_hello, cfg.identity.device_id())?;
+            let proof_b = seal_auth(&htk_r2i, &th_hello, cfg.identity.device_id())?;
             let w_resp = send_preauth(io, codec::MSG_AUTH_CONFIRM, agreed, &proof_b.encode())?;
             AuthWires {
                 initiator: w_init,
@@ -559,12 +559,12 @@ fn handshake<S: ByteStream>(
         &auth_wires.initiator,
         &auth_wires.responder,
     ]);
-    let (tk_a2b, tk_b2a) = traffic_keys(&prk, &th_final);
+    let (tk_i2r, tk_r2i) = traffic_keys(&prk, &th_final);
 
     let (tx, rx) = if cfg.encryption {
         let (mine, theirs) = match role {
-            Role::Initiator => (tk_a2b, tk_b2a),
-            Role::Responder => (tk_b2a, tk_a2b),
+            Role::Initiator => (tk_i2r, tk_r2i),
+            Role::Responder => (tk_r2i, tk_i2r),
         };
         (Some(mine.cipher()), Some(theirs.cipher()))
     } else {
