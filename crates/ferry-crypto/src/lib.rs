@@ -64,6 +64,7 @@ pub mod folder_key;
 pub mod identity;
 pub mod pack_cipher;
 pub mod pairing;
+pub mod recovery;
 
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in
 /// Debug impls and logs.

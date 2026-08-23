@@ -181,29 +181,65 @@ pub fn load_or_create(root: &Path) -> Result<DeviceIdentity, IdentityError> {
     }
 }
 
-fn create_identity(root: &Path, file: &Path) -> Result<(), IdentityError> {
+fn write_identity_file(root: &Path, file: &Path, id: &DeviceIdentity) -> Result<(), IdentityError> {
     #[cfg(unix)]
     {
+        use std::io::Write;
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         std::fs::DirBuilder::new()
             .mode(0o700)
             .recursive(true)
             .create(root)?;
-        let id = DeviceIdentity::generate();
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(file)?;
-        std::io::Write::write_all(&mut f, &id.to_file_bytes())?;
+        f.write_all(&id.to_file_bytes())?;
     }
     #[cfg(not(unix))]
     {
+        use std::io::Write;
         std::fs::create_dir_all(root)?;
-        let id = DeviceIdentity::generate();
-        std::fs::write(file, id.to_file_bytes())?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(file)?;
+        f.write_all(&id.to_file_bytes())?;
     }
     Ok(())
+}
+
+fn create_identity(root: &Path, file: &Path) -> Result<(), IdentityError> {
+    write_identity_file(root, file, &DeviceIdentity::generate())
+}
+
+/// Install known secret bytes as the device identity under `root`
+/// (disaster-recovery import). Refuses when an identity file already exists:
+/// overwriting live trust roots silently would fork trust exactly like
+/// silent regeneration does.
+pub fn import_identity(
+    root: &Path,
+    secret: &[u8; 32],
+) -> Result<DeviceIdentity, IdentityError> {
+    let file = root.join(FILE_NAME);
+    match std::fs::metadata(&file) {
+        Ok(_) => Err(IdentityError::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "identity already exists at {}; delete it deliberately before importing",
+                file.display()
+            ),
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let id = DeviceIdentity::from_secret_bytes(secret);
+            write_identity_file(root, &file, &id)?;
+            // Read back through the standard parse path.
+            let bytes = std::fs::read(&file).expect("just written");
+            DeviceIdentity::from_file_bytes(&file, &bytes)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[cfg(test)]
