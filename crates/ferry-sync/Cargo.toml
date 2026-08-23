@@ -1,0 +1,24 @@
+[package]
+name = "ferry-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-store = { path = "../ferry-store" }
+blake3 = "1.5"
+rand = "0.8"
+thiserror = "2"
+
+# unix only: symlink mtime restoration via utimensat(AT_SYMLINK_NOFOLLOW).
+# std cannot set times on a link itself; see materialize.rs.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rand = "0.8"
+tempfile = "3"
+
+[[bin]]
+name = "ferry-sync"
+path = "src/bin/ferry_sync.rs"
