@@ -19,4 +19,5 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 ferry-store = { path = "../ferry-store" }
+rand = "0.8"
 tempfile = "3"

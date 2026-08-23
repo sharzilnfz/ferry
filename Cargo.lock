@@ -300,6 +300,7 @@ dependencies = [
  "ferry-scan",
  "ferry-store",
  "ignore",
+ "rand",
  "regex",
  "serde",
  "serde_json",
