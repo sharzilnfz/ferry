@@ -477,6 +477,17 @@ impl Store {
         &self.root
     }
 
+    /// Snapshot of every location entry currently known (disk-backed packs
+    /// plus sealed staging). Read-only convenience for transport (T-008):
+    /// the wire protocol advertises index entries to peers, and rebuilding
+    /// that view from pack footers outside the crate would duplicate format
+    /// logic. Purely additive; no write path uses it.
+    pub fn index_entries(&self) -> Result<Vec<crate::index::IndexEntry>, StoreError> {
+        let inner = self.lock()?;
+        Ok(inner.locations.iter_sorted())
+    }
+
+
     /// Address one blob by content. Dedup: when the location table already
     /// knows the id AND at least one candidate pack still exists, nothing is
     /// staged or rewritten (content addressing guarantees identical bytes).

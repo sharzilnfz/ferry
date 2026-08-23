@@ -414,10 +414,23 @@ mod tests {
     }
 
     #[test]
-    fn region_round_trip_strips_and_restores_magic() {
-        let body = FrameBody::new(crate::codec::MSG_FOLDER_OFFER, ProtocolVersion::V1_0, vec![1, 2]);
-        let region = region_of(&body);
-        assert_eq!(region.len(), body.encode().len() - 4);
-        assert_eq!(body_from_region(&region, ProtocolVersion::V1_0).unwrap(), body);
+    fn sealed_frames_carry_the_full_encoded_body_including_magic() {
+        use crate::frame::{read_body, write_body};
+        use crate::stream::duplex_pair;
+        let (_, _, prk) = kdf_handshake(&[0u8; 32], &[1; 32], &[2; 32], &[3; 32]);
+        let (k, _) = traffic_keys(&prk, &[5u8; 32]);
+        let mut tx = k.cipher();
+        let body = FrameBody::new(crate::codec::MSG_ITEM_BATCH, ProtocolVersion::V1_0, vec![7, 7])
+            .encode();
+        let len_prefix = (body.len() + 16) as u32;
+        let ct = tx.seal_frame(len_prefix, &body).unwrap();
+
+        let (mut a, mut b) = duplex_pair();
+        write_body(&mut a, &ct).unwrap();
+        let got = read_body(&mut b).unwrap();
+        assert_eq!(got.len(), body.len() + 16);
+        let (k2, _) = traffic_keys(&prk, &[5u8; 32]);
+        let plain = k2.cipher().open_frame(len_prefix, &got).unwrap();
+        assert_eq!(FrameBody::parse(&plain).unwrap().payload, vec![7, 7]);
     }
 }

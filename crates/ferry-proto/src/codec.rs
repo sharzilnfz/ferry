@@ -228,21 +228,39 @@ impl FolderOffer {
 
 // --- INDEX_ADVERT ------------------------------------------------------------
 
-/// Advertisement of the sender's blob locations for one folder: EXACTLY the
-/// index-table serialization from `docs/store-format.md` (u32 count, rows of
-/// `kind || id || pack || off || len`, sorted by `(kind, id)`).
+/// Advertisement of the sender's blob locations for one folder. Rows are
+/// EXACTLY index-table rows (`kind || id || pack || off || len`, sorted by
+/// `(kind, id)`) behind the table's u32 count; a trailing u8 continuation
+/// flag ends the advert sequence deterministically (1 = more adverts follow
+/// for this folder, 0 = last).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexAdvert(pub Vec<IndexEntry>);
+pub struct IndexAdvert {
+    pub entries: Vec<IndexEntry>,
+    pub more: bool,
+}
 
 impl IndexAdvert {
+    /// Rows per advert frame; senders split larger tables.
+    pub const MAX_ROWS: usize = 2048;
+
     pub fn encode(&self) -> Vec<u8> {
-        ferry_store::index::table_plain(&self.0)
+        let mut out = ferry_store::index::table_plain(&self.entries);
+        out.push(u8::from(self.more));
+        out
     }
 
     pub fn parse(payload: &[u8]) -> Result<Self, ProtoError> {
-        let entries = ferry_store::index::table_parse(payload)
+        if payload.is_empty() {
+            return Err(ProtoError::ProtocolViolation("advert empty"));
+        }
+        let more_byte = payload[payload.len() - 1];
+        let entries = ferry_store::index::table_parse(&payload[..payload.len() - 1])
             .map_err(|_| ProtoError::ProtocolViolation("advert table malformed"))?;
-        Ok(IndexAdvert(entries))
+        match more_byte {
+            0 => Ok(IndexAdvert { entries, more: false }),
+            1 => Ok(IndexAdvert { entries, more: true }),
+            _ => Err(ProtoError::ProtocolViolation("advert flag invalid")),
+        }
     }
 }
 
@@ -520,9 +538,25 @@ mod tests {
             entry(BlobKind::TreeNode, 2),
             entry(BlobKind::Manifest, 3),
         ];
-        let advert = IndexAdvert(entries);
-        assert_eq!(advert.encode(), ferry_store::index::table_plain(&advert.0));
-        roundtrip(advert, |a| a.encode(), IndexAdvert::parse);
+        let advert = IndexAdvert { entries: entries.clone(), more: true };
+        // Row region is byte-identical to the store's table serialization.
+        assert_eq!(
+            &advert.encode()[..advert.encode().len() - 1],
+            ferry_store::index::table_plain(&entries).as_slice()
+        );
+        let parsed = IndexAdvert::parse(&advert.encode()).unwrap();
+        assert_eq!(parsed.entries, entries);
+        assert!(parsed.more);
+        assert!(!IndexAdvert::parse(&IndexAdvert { entries, more: false }.encode())
+            .unwrap()
+            .more);
+        // Flag byte must be 0 or 1.
+        let mut evil = advert.encode();
+        *evil.last_mut().unwrap() = 2;
+        assert!(matches!(
+            IndexAdvert::parse(&evil),
+            Err(ProtoError::ProtocolViolation("advert flag invalid"))
+        ));
     }
 
     #[test]
