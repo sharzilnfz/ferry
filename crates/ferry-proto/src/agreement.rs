@@ -15,7 +15,7 @@
 //! u8  flags              # must be 0 in v1
 //! ```
 //!
-//! 105 bytes total. This is LOCAL state: peers re-derive agreement by
+//! 77 bytes total. This is LOCAL state: peers re-derive agreement by
 //! exchanging manifests; the ledger is the three-way-reconciliation ancestor
 //! pointer, never a wire message.
 
@@ -31,14 +31,14 @@ use ferry_crypto::identity::DeviceId;
 pub enum LedgerError {
     #[error("io error touching agreement ledger: {0}")]
     Io(#[from] std::io::Error),
-    #[error("agreement record for {peer} is {len} bytes, expected 105")]
+    #[error("agreement record for {peer} is {len} bytes, expected 77")]
     BadLength { peer: String, len: usize },
     #[error("agreement record flags byte is nonzero; refusing v0-incompatible state")]
     BadFlags,
 }
 
 /// The canonical serialization length.
-pub const RECORD_LEN: usize = 105;
+pub const RECORD_LEN: usize = 77;
 
 /// One recorded agreement point.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,7 +156,7 @@ mod tests {
     fn canonical_serialization_matches_the_documented_layout_byte_for_byte() {
         let rec = fixture();
         let bytes = rec.to_canonical();
-        assert_eq!(bytes.len(), 105);
+        assert_eq!(bytes.len(), 77);
         // Hand-computed expectation straight from docs/store-format.md.
         let mut expect = Vec::new();
         expect.extend_from_slice(&rec.peer); // 32B peer
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn parse_rejects_wrong_length_and_nonzero_flags() {
         let bytes = fixture().to_canonical();
-        for cut in [0usize, 1, 104, 106, 200] {
+        for cut in [0usize, 1, 76, 78, 200] {
             let short = &bytes[..bytes.len().min(cut)];
             assert!(AgreementRecord::from_canonical(short).is_err(), "len {cut}");
         }
