@@ -292,9 +292,14 @@ mod tests {
             ".env",
             &format!("AWS_ACCESS_KEY_ID={AWS}\nOPENAI_API_KEY={OPENAI}\n"),
         )]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env".into()], ..Default::default() })
-                .unwrap();
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
         assert!(classes(&ws).contains(&WarningClass::EnvFile), "{ws:?}");
         assert!(classes(&ws).contains(&WarningClass::AwsKey), "{ws:?}");
@@ -319,9 +324,14 @@ mod tests {
     #[test]
     fn clean_included_env_still_warns_about_the_path_itself() {
         let (_t, root) = tree(&[(".env", "APP_ENV=dev\nLOG_LEVEL=info\n")]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env".into()], ..Default::default() })
-                .unwrap();
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
         assert_eq!(ws.len(), 1);
         assert_eq!(ws[0].class, WarningClass::EnvFile);
@@ -331,9 +341,14 @@ mod tests {
     #[test]
     fn previews_are_redacted_and_carry_length() {
         let (_t, root) = tree(&[(".env", &format!("AWS_ACCESS_KEY_ID={AWS}\n"))]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env".into()], ..Default::default() })
-                .unwrap();
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
         let aws = ws.iter().find(|w| w.class == WarningClass::AwsKey).unwrap();
         assert!(aws.preview.starts_with("AKIA"), "{}", aws.preview);
@@ -343,17 +358,18 @@ mod tests {
 
     #[test]
     fn all_ticket_pattern_classes_fire() {
-        let body = format!(
-            "AWS={AWS}\nKEY={OPENAI}\nTOK={GH}\nSLACK={SLACK}\npassword=hunter2secret\n"
-        );
+        let body =
+            format!("AWS={AWS}\nKEY={OPENAI}\nTOK={GH}\nSLACK={SLACK}\npassword=hunter2secret\n");
         let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n";
-        let (_t, root) = tree(&[
-            (".env.keys", &body),
-            ("server.pem", pem),
-        ]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env.*".into(), "!server.pem".into(), "!*.pem".into()], ..Default::default() })
-                .unwrap();
+        let (_t, root) = tree(&[(".env.keys", &body), ("server.pem", pem)]);
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env.*".into(), "!server.pem".into(), "!*.pem".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
         let cs = classes(&ws);
         for want in [
@@ -371,14 +387,20 @@ mod tests {
 
     #[test]
     fn generic_assignment_is_case_insensitive_and_flexible() {
-        let (_t, root) = tree(&[
-            (".env", "API_KEY=abcd1234\nmy_secret = top\nToken:\tzzz\n"),
-        ]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env".into()], ..Default::default() })
-                .unwrap();
+        let (_t, root) = tree(&[(".env", "API_KEY=abcd1234\nmy_secret = top\nToken:\tzzz\n")]);
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
-        let generic = ws.iter().filter(|w| w.class == WarningClass::GenericAssignment).count();
+        let generic = ws
+            .iter()
+            .filter(|w| w.class == WarningClass::GenericAssignment)
+            .count();
         assert_eq!(generic, 3, "{ws:?}");
     }
 
@@ -401,13 +423,15 @@ mod tests {
 
     #[test]
     fn quarantine_named_env_still_gets_scanned() {
-        let (_t, root) = tree(&[(
-            ".env.ferry-conflict.devB-123",
-            &format!("AWS={AWS}\n"),
-        )]);
-        let rules =
-            FerryIgnore::new(&root, &IgnoreConfig { overrides: vec!["!.env.*".into()], ..Default::default() })
-                .unwrap();
+        let (_t, root) = tree(&[(".env.ferry-conflict.devB-123", &format!("AWS={AWS}\n"))]);
+        let rules = FerryIgnore::new(
+            &root,
+            &IgnoreConfig {
+                overrides: vec!["!.env.*".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ws = scan_for_secrets(&rules, &root);
         assert!(!ws.is_empty());
     }

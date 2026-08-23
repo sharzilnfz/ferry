@@ -50,7 +50,13 @@ mod tests {
         assert_eq!(
             DEFAULT_RULES,
             &[
-                ".DS_Store", "Thumbs.db", "desktop.ini", "*.swp", "*~", "node_modules/", ".env",
+                ".DS_Store",
+                "Thumbs.db",
+                "desktop.ini",
+                "*.swp",
+                "*~",
+                "node_modules/",
+                ".env",
                 ".env.*"
             ]
         );

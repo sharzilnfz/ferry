@@ -35,12 +35,7 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) {
 
 /// Recursively flatten a tree node into relative paths (dirs included,
 /// parents before children) — the manifest's exact content set.
-fn collect_paths(
-    store: &Store,
-    id: &BlobId,
-    prefix: &mut Vec<String>,
-    out: &mut Vec<Vec<String>>,
-) {
+fn collect_paths(store: &Store, id: &BlobId, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     let bytes = store.get(BlobKind::TreeNode, id).unwrap();
     let node = parse_tree_node(&bytes).unwrap();
     for e in node.entries {
@@ -76,19 +71,26 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         b"*.log\n!node_modules/\n!.env\nscratch/\n",
     );
     write_file(&root.join("README.md"), b"hello");
-    write_file(&root.join(".env"), b"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n");
+    write_file(
+        &root.join(".env"),
+        b"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+    );
     write_file(&root.join("app/main.rs"), b"fn main() {}\n");
     write_file(&root.join("debug.log"), b"noise");
     write_file(&root.join("scratch/junk.bin"), b"ignored churn target");
     write_file(&root.join("sub/ferry.ignore"), b"!keep.log\n");
     write_file(&root.join("sub/keep.log"), b"kept by deeper file");
     write_file(&root.join("sub/other.log"), b"still ignored at root layer");
-    write_file(&root.join("node_modules/pkg/index.js"), b"module.exports={}");
+    write_file(
+        &root.join("node_modules/pkg/index.js"),
+        b"module.exports={}",
+    );
     write_file(&root.join(".DS_Store"), b"finder junk");
     write_file(&root.join("notes.txt~"), b"editor junk");
 
     let store_dir = TempDir::new().unwrap();
-    let store = Arc::new(Store::create(store_dir.path(), key(), Box::new(PassthroughCipher)).unwrap());
+    let store =
+        Arc::new(Store::create(store_dir.path(), key(), Box::new(PassthroughCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
         poly: poly(),
@@ -104,8 +106,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         audit_interval: Duration::from_secs(3600),
         poll_interval: Duration::from_millis(50),
     };
-    let engine =
-        ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();
+    let engine = ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();
 
     let current = engine.current().expect("initial scan published");
     let mut paths = Vec::new();
@@ -136,9 +137,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     // Watcher-event filtering: an event UNDER an ignored subtree must not
     // dirty anything. Inject through the same pipeline real events take.
     write_file(&root.join("scratch/junk.bin"), b"churn");
-    engine.debug_inject_signal(WatchSignal::Changed(vec![rel(
-        "scratch/junk.bin",
-    )]));
+    engine.debug_inject_signal(WatchSignal::Changed(vec![rel("scratch/junk.bin")]));
     let run = engine.scan_once().unwrap();
     assert!(
         run.published.is_none(),
@@ -153,8 +152,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     let published = run.published.expect("allowed-file change must publish");
     assert!(run.stats.files_rehashed >= 1);
     assert_eq!(
-        published.manifest.parent_manifest_id,
-        current.manifest_id,
+        published.manifest.parent_manifest_id, current.manifest_id,
         "manifest lineage chains"
     );
 
@@ -167,7 +165,9 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         .iter()
         .any(|w| w.class == WarningClass::EnvFile && w.path == vec![".env"]));
     assert!(warnings.iter().any(|w| w.class == WarningClass::AwsKey));
-    assert!(warnings.iter().all(|w| !w.preview.contains("AKIAIOSFODNN7EXAMPLE")));
+    assert!(warnings
+        .iter()
+        .all(|w| !w.preview.contains("AKIAIOSFODNN7EXAMPLE")));
 }
 
 #[test]

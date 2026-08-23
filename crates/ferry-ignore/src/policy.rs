@@ -352,7 +352,10 @@ mod tests {
         let (_t, root) = tree(&[("ferry.ignore", "/build\n/root.txt\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "build")); // anchored match at root
-        assert!(!ig(&f, "deep/build"), "anchored pattern must not match deeper");
+        assert!(
+            !ig(&f, "deep/build"),
+            "anchored pattern must not match deeper"
+        );
         assert!(ig(&f, "root.txt"));
         assert!(!ig(&f, "deep/root.txt"));
     }
@@ -362,7 +365,10 @@ mod tests {
         let (_t, root) = tree(&[("ferry.ignore", "*.rs\nfoo*bar\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "main.rs"));
-        assert!(ig(&f, "sub/main.rs"), "slash-less patterns apply at every level");
+        assert!(
+            ig(&f, "sub/main.rs"),
+            "slash-less patterns apply at every level"
+        );
         // Git matches slash-less patterns against the BASENAME at any depth,
         // so even a nested lib.rs is caught by `*.rs`.
         assert!(ig(&f, "sub/mod/lib.rs"));
@@ -377,7 +383,10 @@ mod tests {
         let (_t, root) = tree(&[("ferry.ignore", "sub/*.tmp\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "sub/a.tmp"));
-        assert!(!ig(&f, "sub/deep/a.tmp"), "partial anchoring stops at one level");
+        assert!(
+            !ig(&f, "sub/deep/a.tmp"),
+            "partial anchoring stops at one level"
+        );
         assert!(!ig(&f, "a.tmp"));
     }
 
@@ -432,8 +441,14 @@ mod tests {
         ]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "noise.log"));
-        assert!(ig(&f, "sub/noise.log"), "root rule still applies where nested is silent");
-        assert!(!ig(&f, "sub/keep.log"), "deeper file wins inside its subtree");
+        assert!(
+            ig(&f, "sub/noise.log"),
+            "root rule still applies where nested is silent"
+        );
+        assert!(
+            !ig(&f, "sub/keep.log"),
+            "deeper file wins inside its subtree"
+        );
         assert!(ig(&f, "other/keep.log"), "...but only there");
     }
 
@@ -489,7 +504,10 @@ mod tests {
         };
         let f = FerryIgnore::new(&root, &cfg).unwrap();
         assert!(ig(&f, "other.envish"));
-        assert!(!ig(&f, "needed.envish"), "ferry.ignore lines compile after .gitignore");
+        assert!(
+            !ig(&f, "needed.envish"),
+            "ferry.ignore lines compile after .gitignore"
+        );
     }
 
     #[test]
@@ -531,7 +549,10 @@ mod tests {
 
         let (_t2, root2) = tree(&[("ferry.ignore", "!node_modules/\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
-        assert!(!ig_dir(&f2, "node_modules"), "user opt-in beats default layer");
+        assert!(
+            !ig_dir(&f2, "node_modules"),
+            "user opt-in beats default layer"
+        );
         assert!(!ig(&f2, "node_modules/pkg/index.js"));
     }
 
@@ -547,8 +568,14 @@ mod tests {
         let (_t2, root2) = tree(&[("ferry.ignore", "!.env\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(!ig(&f2, ".env"));
-        assert!(ig(&f2, ".env.local"), "opting in .env must not drag the family in");
-        assert!(!ig(&f2, "deploy/.env"), "negation without slash anchors to root");
+        assert!(
+            ig(&f2, ".env.local"),
+            "opting in .env must not drag the family in"
+        );
+        assert!(
+            !ig(&f2, "deploy/.env"),
+            "negation without slash anchors to root"
+        );
     }
 
     #[test]
@@ -561,7 +588,10 @@ mod tests {
         let f = FerryIgnore::new(&root, &cfg).unwrap();
         assert!(!ig(&f, ".DS_Store"), "overrides are the top layer");
         assert!(ig(&f, "Thumbs.db"), "siblings unaffected");
-        assert!(ig(&f, "id.key"), "overrides absent => lower layers still apply");
+        assert!(
+            ig(&f, "id.key"),
+            "overrides absent => lower layers still apply"
+        );
     }
 
     #[test]
@@ -578,7 +608,10 @@ mod tests {
             ..IgnoreConfig::default()
         };
         let f = FerryIgnore::new(&root, &cfg).unwrap();
-        assert!(ig(&f, "telemetry/ping.json"), "preset (layer above ferry.ignore) wins");
+        assert!(
+            ig(&f, "telemetry/ping.json"),
+            "preset (layer above ferry.ignore) wins"
+        );
         assert!(!ig_dir(&f, "statsig"), "override beats preset exclusion");
         // Preset includes rescue from its own excludes.
         assert!(
@@ -689,10 +722,7 @@ mod tests {
         let built = std::time::Instant::now();
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         let build_ms = built.elapsed().as_millis();
-        assert!(
-            build_ms < 5_000,
-            "compiling 10k patterns took {build_ms}ms"
-        );
+        assert!(build_ms < 5_000, "compiling 10k patterns took {build_ms}ms");
 
         let started = std::time::Instant::now();
         let mut hits = 0usize;
