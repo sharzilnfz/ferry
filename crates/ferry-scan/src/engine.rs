@@ -1,0 +1,836 @@
+//! The [`ScanEngine`]: owns the watcher, the debounced worker, the poll
+//! fallback, the audit timer, and the published-current-manifest accessor.
+//!
+//! Threading model (std only, no async runtime):
+//!
+//! - **watcher thread** (inside `notify`): raw OS events/errors mapped onto
+//!   [`crate::policy::WatchSignal`]s — see the crate-doc policy matrix,
+//! - **worker thread**: waits for work, applies the debounce quiet window
+//!   (extending on each arrival so bursts coalesce into ONE pass), then
+//!   executes policy actions,
+//! - **poll thread**: every `poll_interval`, checks root liveness
+//!   (Mutagen's cheap safety net on every platform) and stat-sweeps
+//!   unwatchable subtrees, feeding mismatches back through the same
+//!   machinery as native events,
+//! - **audit thread**: every `audit_interval`, requests a full-hash audit,
+//! - **callers**: [`ScanEngine::scan_once`] shares the worker's core mutex,
+//!   so synchronous passes and background passes serialize cleanly.
+//!
+//! Publication: completed scans update the `current()` accessor atomically
+//! and fan out to subscribers. A failed pass keeps the last good manifest
+//! visible and emits [`ScanEvent::Failed`] instead.
+
+use std::collections::{BTreeSet, VecDeque};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use ferry_store::manifest::EntryPayload;
+use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
+use ferry_store::store::Store;
+use ferry_store::{BlobId};
+use notify::{Error as NotifyError, Event, RecommendedWatcher, RecursiveMode, Watcher};
+
+use crate::config::ScanConfig;
+use crate::error::ScanError;
+use crate::ignore::IgnorePolicy;
+use crate::policy::{Action, PolicyState, RelPath, Trigger, WatchSignal};
+use crate::state::DirCache;
+use crate::walk::{close_under_ancestors, PassStats, Walker};
+use unicode_normalization::UnicodeNormalization;
+
+/// Everything the engine needs to address the store: shared handle, folder
+/// chunker polynomial, and stable manifest lineage fields. Timestamps and
+/// the parent pointer are filled per pass by the engine itself.
+#[derive(Clone)]
+pub struct StoreHandle {
+    pub store: Arc<Store>,
+    pub poly: u64,
+    pub folder_id: [u8; 16],
+    pub device_id: [u8; 32],
+}
+
+/// The latest completed scan, as served by [`ScanEngine::current`].
+#[derive(Clone, Debug)]
+pub struct CurrentScan {
+    pub manifest: ferry_store::manifest::RootManifest,
+    pub manifest_id: BlobId,
+    pub root_tree_id: BlobId,
+    pub trigger: Trigger,
+    pub stats: PassStats,
+    pub finished_unix_secs: i64,
+}
+
+/// Subscriber notifications. `Failed` carries the error text; the previous
+/// good manifest remains current until a later pass succeeds.
+#[derive(Clone, Debug)]
+pub enum ScanEvent {
+    Updated(Arc<CurrentScan>),
+    Failed(String),
+}
+
+/// What one [`ScanEngine::scan_once`] (or worker pass) did.
+#[derive(Clone, Debug)]
+pub struct ScanRun {
+    /// Set when this pass produced a NEW manifest; `None` means the tree was
+    /// unchanged (or there was nothing to do) and no pack bytes were spent.
+    pub published: Option<Arc<CurrentScan>>,
+    /// Stats even for unpublished passes — this is where the short-circuit
+    /// proof (`bytes_chunked == 0`) is read off.
+    pub stats: PassStats,
+}
+
+struct SignalQueue {
+    q: Mutex<VecDeque<WatchSignal>>,
+    cv: std::sync::Condvar,
+}
+
+impl SignalQueue {
+    fn new() -> Self {
+        SignalQueue {
+            q: Mutex::new(VecDeque::new()),
+            cv: std::sync::Condvar::new(),
+        }
+    }
+
+    fn push(&self, s: WatchSignal) {
+        self.q.lock().expect("signal queue").push_back(s);
+        self.cv.notify_all();
+    }
+
+    fn wake(&self) {
+        self.cv.notify_all();
+    }
+
+    fn drain(&self) -> Vec<WatchSignal> {
+        let mut g = self.q.lock().expect("signal queue");
+        let out: Vec<WatchSignal> = g.drain(..).collect();
+        out
+    }
+
+    /// True when anything is pending (re-checking `stop` periodically).
+    fn wait_nonempty(&self, stop: &AtomicBool, tick: Duration) -> bool {
+        let mut g = self.q.lock().expect("signal queue");
+        loop {
+            if !g.is_empty() {
+                return true;
+            }
+            if stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            let (g2, _) = self.cv.wait_timeout(g, tick).expect("signal queue");
+            g = g2;
+        }
+    }
+
+    /// Wait up to `dur`; true if something arrived meanwhile.
+    fn wait_arrival(&self, dur: Duration) -> bool {
+        let deadline = Instant::now() + dur;
+        let mut g = self.q.lock().expect("signal queue");
+        loop {
+            if !g.is_empty() {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let (g2, t) = self.cv.wait_timeout(g, deadline - now).expect("signal queue");
+            g = g2;
+            if t.timed_out() {
+                return !g.is_empty();
+            }
+        }
+    }
+}
+
+struct Core {
+    handle: StoreHandle,
+    cfg: ScanConfig,
+    ignore: Arc<dyn IgnorePolicy>,
+    disk_root: PathBuf,
+    cache: DirCache,
+    policy: PolicyState,
+    prev_manifest_id: BlobId,
+    prev_root_tree_id: BlobId,
+    root_gone: bool,
+}
+
+/// The pieces of an engine shared between caller threads and background
+/// threads. Pass execution lives here so the worker never needs the
+/// `ScanEngine` handle itself.
+struct Parts {
+    queue: Arc<SignalQueue>,
+    core: Arc<Mutex<Core>>,
+    current: Arc<RwLock<Option<Arc<CurrentScan>>>>,
+    subs: Arc<Mutex<Vec<Sender<ScanEvent>>>>,
+}
+
+impl Parts {
+    /// Drive one batch of signals through policy and execution. Empty
+    /// batches yield a cheap idle run.
+    fn execute(
+        &self,
+        signals: Vec<WatchSignal>,
+        fallback_trigger: Trigger,
+    ) -> Result<ScanRun, ScanError> {
+        let mut dirty: Vec<RelPath> = Vec::new();
+        let mut full_reason: Option<String> = None;
+        let mut audit = false;
+        let mut trigger = fallback_trigger;
+
+        {
+            let mut c = self.core.lock().expect("core");
+            for s in &signals {
+                // Trigger attribution for mixed batches: loss-recovery wins,
+                // then audit, then poll, then plain events.
+                match s {
+                    WatchSignal::Overflow { .. } | WatchSignal::RootReturned => {
+                        trigger = Trigger::OverflowRecovery
+                    }
+                    WatchSignal::AuditDue => {
+                        if trigger == Trigger::Events {
+                            trigger = Trigger::Audit
+                        }
+                    }
+                    WatchSignal::PolledChanged(_) => {
+                        if trigger == Trigger::Events {
+                            trigger = Trigger::Poll
+                        }
+                    }
+                    _ => {}
+                }
+                match c.policy.apply(s) {
+                    Action::Nothing => {}
+                    Action::RescanSubtrees(dirs) => dirty.extend(dirs),
+                    Action::FullRescan { reason } => {
+                        if full_reason.is_none() {
+                            full_reason = Some(reason)
+                        }
+                    }
+                    Action::StartPolling { .. } => {}
+                    Action::RunAudit => audit = true,
+                }
+            }
+        }
+
+        // Precedence: loss recovery > scheduled audit > incremental splice.
+        if let Some(reason) = full_reason {
+            return self.run_full(trigger, &reason);
+        }
+        if audit {
+            return self.run_full(Trigger::Audit, "scheduled audit");
+        }
+        if dirty.is_empty() {
+            return Ok(ScanRun {
+                published: None,
+                stats: PassStats {
+                    trigger,
+                    ..PassStats::default()
+                },
+            });
+        }
+        let closed = close_under_ancestors(&dirty);
+        self.run_incremental(closed, trigger)
+    }
+
+    fn identity_now(core: &Core) -> SnapshotIdentity {
+        let (sec, nsec) = unix_now();
+        SnapshotIdentity {
+            folder_id: core.handle.folder_id,
+            device_id: core.handle.device_id,
+            parent_manifest_id: core.prev_manifest_id,
+            created_sec: sec,
+            created_nsec: nsec,
+        }
+    }
+
+    /// From-scratch snapshot (initial scan, audit, overflow recovery). The
+    /// cache reseeds from stored blobs afterwards so drift cannot persist.
+    fn run_full(&self, trigger: Trigger, reason: &str) -> Result<ScanRun, ScanError> {
+        let _ = reason; // surfaced via trigger; kept for future logging
+        let mut core = self.core.lock().expect("core");
+        if !core.disk_root.is_dir() {
+            core.root_gone = true;
+            return Ok(idle_run(trigger));
+        }
+        let identity = Self::identity_now(&core);
+        let out = snapshot_dir(
+            &core.handle.store,
+            core.handle.poly,
+            &core.disk_root,
+            &identity,
+        )?;
+        let changed = out.root_tree_id != core.prev_root_tree_id;
+
+        let store = core.handle.store.clone();
+        core.cache.reseed(&store, &out.root_tree_id)?;
+        core.prev_root_tree_id = out.root_tree_id;
+        core.prev_manifest_id = out.manifest_id;
+
+        let stats = PassStats {
+            trigger,
+            files: out.stats.files,
+            dirs: out.stats.dirs,
+            symlinks: out.stats.symlinks,
+            bytes_chunked: out.stats.bytes_chunked,
+            files_rehashed: out.stats.files,
+            dirty_dirs: 0,
+        };
+
+        let published = if changed || trigger == Trigger::Initial {
+            let cur = Arc::new(CurrentScan {
+                manifest: out.manifest,
+                manifest_id: out.manifest_id,
+                root_tree_id: out.root_tree_id,
+                trigger,
+                stats: stats.clone(),
+                finished_unix_secs: unix_now().0,
+            });
+            self.publish(cur.clone());
+            Some(cur)
+        } else {
+            None
+        };
+        Ok(ScanRun { published, stats })
+    }
+
+    fn run_incremental(
+        &self,
+        closed: BTreeSet<RelPath>,
+        trigger: Trigger,
+    ) -> Result<ScanRun, ScanError> {
+        let mut core = self.core.lock().expect("core");
+        if !core.disk_root.is_dir() {
+            core.root_gone = true;
+            return Ok(idle_run(trigger));
+        }
+        let identity = Self::identity_now(&core);
+        // Destructure the guard so the walker's borrows are disjoint.
+        let Core {
+            handle,
+            ignore,
+            disk_root,
+            cache,
+            prev_root_tree_id,
+            ..
+        } = &mut *core;
+        let mut stats = PassStats {
+            trigger,
+            ..PassStats::default()
+        };
+        let out = Walker::run(
+            &handle.store,
+            handle.poly,
+            ignore.as_ref(),
+            disk_root,
+            cache,
+            &closed,
+            trigger,
+            &identity,
+            *prev_root_tree_id,
+            &mut stats,
+        )?;
+
+        match out {
+            Some(out) => {
+                core.prev_root_tree_id = out.root_tree_id;
+                core.prev_manifest_id = out.manifest_id;
+                let cur = Arc::new(CurrentScan {
+                    manifest: out.manifest,
+                    manifest_id: out.manifest_id,
+                    root_tree_id: out.root_tree_id,
+                    trigger,
+                    stats: stats.clone(),
+                    finished_unix_secs: unix_now().0,
+                });
+                drop(core);
+                self.publish(cur.clone());
+                Ok(ScanRun {
+                    published: Some(cur),
+                    stats,
+                })
+            }
+            None => Ok(ScanRun { published: None, stats }),
+        }
+    }
+
+    fn publish(&self, cur: Arc<CurrentScan>) {
+        *self.current.write().expect("current lock") = Some(cur.clone());
+        let mut subs = self.subs.lock().expect("subs lock");
+        subs.retain(|tx| tx.send(ScanEvent::Updated(cur.clone())).is_ok());
+    }
+
+    fn report_failure(&self, err: &ScanError) {
+        let mut subs = self.subs.lock().expect("subs lock");
+        subs.retain(|tx| tx.send(ScanEvent::Failed(err.to_string())).is_ok());
+    }
+}
+
+/// Filesystem scan engine for one watched folder. Create with
+/// [`ScanEngine::watch`]; the initial full scan completes synchronously
+/// before it returns.
+pub struct ScanEngine {
+    parts: Arc<Parts>,
+    stop: Arc<AtomicBool>,
+    handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    // Keeps the notify runtime thread alive for the engine's lifetime.
+    _watcher: Option<RecommendedWatcher>,
+}
+
+impl ScanEngine {
+    /// Watch `root` with default configuration ([`ScanConfig::default`],
+    /// [`NoIgnores`](crate::ignore::NoIgnores)) and run the initial full scan
+    /// before returning.
+    pub fn watch(root: impl Into<PathBuf>, handle: StoreHandle) -> Result<Self, ScanError> {
+        Self::watch_with(root, handle, ScanConfig::default(), Arc::new(crate::ignore::NoIgnores))
+    }
+
+    /// Full control variant. See crate docs for the threading model and the
+    /// per-OS watcher policy matrix.
+    pub fn watch_with(
+        root: impl Into<PathBuf>,
+        handle: StoreHandle,
+        cfg: ScanConfig,
+        ignore: Arc<dyn IgnorePolicy>,
+    ) -> Result<Self, ScanError> {
+        let disk_root = root.into();
+        if !disk_root.is_dir() {
+            return Err(ScanError::Watch(format!(
+                "watch root {} is not a directory",
+                disk_root.display()
+            )));
+        }
+
+        let parts = Arc::new(Parts {
+            queue: Arc::new(SignalQueue::new()),
+            core: Arc::new(Mutex::new(Core {
+                handle,
+                cfg,
+                ignore: ignore.clone(),
+                disk_root: disk_root.clone(),
+                cache: DirCache::new(),
+                policy: PolicyState::default(),
+                prev_manifest_id: [0u8; 32],
+                prev_root_tree_id: [0u8; 32],
+                root_gone: false,
+            })),
+            current: Arc::new(RwLock::new(None)),
+            subs: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let mut engine = ScanEngine {
+            parts,
+            stop: Arc::new(AtomicBool::new(false)),
+            handles: Mutex::new(Vec::new()),
+            _watcher: None,
+        };
+
+        // Initial full scan, synchronous: consumers always have a baseline
+        // before any watcher exists to race with.
+        engine.parts.execute(Vec::new(), Trigger::Initial)?;
+
+        engine.spawn_watcher()?;
+        engine.spawn_worker();
+        engine.spawn_poller();
+        engine.spawn_auditor();
+        Ok(engine)
+    }
+
+    /// Run one scan pass right now, draining whatever signals are queued.
+    ///
+    /// With an empty queue this is a cheap idle pass (zero stats); to prove
+    /// the short-circuit, enqueue a change signal (see
+    /// [`ScanEngine::debug_inject_signal`], or touch real files and wait past
+    /// the quiet window) and then call this: the walk runs, unchanged files
+    /// are stat-only, and `run.stats.bytes_chunked == 0`.
+    pub fn scan_once(&self) -> Result<ScanRun, ScanError> {
+        let signals = self.parts.queue.drain();
+        self.parts.execute(signals, Trigger::Events)
+    }
+
+    /// Latest completed scan, if any (always set after `watch` returns).
+    pub fn current(&self) -> Option<Arc<CurrentScan>> {
+        self.parts.current.read().expect("current lock").clone()
+    }
+
+    /// Subscribe to scan completions/failures. Unbounded; subscribers whose
+    /// receivers are dropped are pruned on the next event.
+    pub fn subscribe(&self) -> std::sync::mpsc::Receiver<ScanEvent> {
+        let (tx, rx) = channel();
+        self.parts.subs.lock().expect("subs lock").push(tx);
+        rx
+    }
+
+    /// Test seam: push a synthetic signal through the exact pipeline real
+    /// watchers use. Execution happens in the next `scan_once()` or debounced
+    /// worker pass.
+    #[doc(hidden)]
+    pub fn debug_inject_signal(&self, s: WatchSignal) {
+        self.parts.queue.push(s);
+    }
+
+    /// Stop background threads. Also implied by `Drop`.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.parts.queue.wake();
+        let handles = std::mem::take(&mut *self.handles.lock().expect("handles"));
+        for h in handles {
+            let _ = h.join();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Threads
+    // ------------------------------------------------------------------
+
+    fn spawn_watcher(&mut self) -> Result<(), ScanError> {
+        let queue = self.parts.queue.clone();
+        let ignore = {
+            let core = self.parts.core.lock().expect("core");
+            core.ignore.clone()
+        };
+        let root = {
+            let core = self.parts.core.lock().expect("core");
+            core.disk_root.clone()
+        };
+        let root_for_cb = root.clone();
+
+        let mut watcher = RecommendedWatcher::new(
+            move |res: Result<Event, NotifyError>| match res {
+                Ok(ev) => {
+                    if ev.paths.is_empty() {
+                        // Platform synthetic markers (FSEvents resync flags,
+                        // inotify overflow notices) arrive as pathless
+                        // events; treat unproven claims as loss.
+                        queue.push(WatchSignal::Overflow {
+                            reason: "synthetic watcher event without paths".into(),
+                        });
+                        return;
+                    }
+                    let rels: Vec<RelPath> =
+                        ev.paths.iter().filter_map(|p| abs_to_rel(&root_for_cb, p)).collect();
+                    let filtered: Vec<RelPath> = rels
+                        .into_iter()
+                        .filter(|r| !any_prefix_ignored(r, ignore.as_ref()))
+                        .collect();
+                    if !filtered.is_empty() {
+                        queue.push(WatchSignal::Changed(filtered));
+                    }
+                }
+                Err(e) => match classify_watch_error(&e) {
+                    ErrClass::Unwatchable(subtree) => queue.push(WatchSignal::Unwatchable {
+                        subtree,
+                        reason: e.to_string(),
+                    }),
+                    ErrClass::Loss => queue.push(WatchSignal::Overflow {
+                        reason: format!("watcher error treated as event loss: {e}"),
+                    }),
+                },
+            },
+            notify::Config::default(),
+        )
+        .map_err(|e| ScanError::Watch(e.to_string()))?;
+
+        watcher
+            .watch(&root, RecursiveMode::Recursive)
+            .map_err(|e| ScanError::Watch(format!("recursive watch failed: {e}")))?;
+        self._watcher = Some(watcher);
+        Ok(())
+    }
+
+    fn spawn_worker(self: &Self) {
+        let parts = self.parts.clone();
+        let stop = self.stop.clone();
+        let quiet = parts.core.lock().expect("core").cfg.quiet_window;
+        let h = std::thread::Builder::new()
+            .name("ferry-scan-worker".into())
+            .spawn(move || {
+                loop {
+                    if !parts.queue.wait_nonempty(&stop, Duration::from_millis(200)) {
+                        return; // stopped
+                    }
+                    // Debounce: the quiet window extends on every arrival so
+                    // write bursts coalesce into a single pass.
+                    let mut deadline = Instant::now() + quiet;
+                    while !stop.load(Ordering::Relaxed) {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        if parts.queue.wait_arrival(deadline - now) {
+                            deadline = Instant::now() + quiet;
+                        }
+                    }
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let signals = parts.queue.drain();
+                    if signals.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = parts.execute(signals, Trigger::Events) {
+                        parts.report_failure(&e);
+                    }
+                }
+            })
+            .expect("spawn worker");
+        self.handles.lock().expect("handles").push(h);
+    }
+
+    fn spawn_poller(&self) {
+        let parts = self.parts.clone();
+        let stop = self.stop.clone();
+        let interval = parts.core.lock().expect("core").cfg.poll_interval;
+        let h = std::thread::Builder::new()
+            .name("ferry-scan-poller".into())
+            .spawn(move || {
+                loop {
+                    sleep_slices(&stop, interval);
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    // Root liveness everywhere (Mutagen's cheap safety net).
+                    {
+                        let mut c = parts.core.lock().expect("core");
+                        let exists = c.disk_root.is_dir();
+                        if exists && c.root_gone {
+                            c.root_gone = false;
+                            drop(c);
+                            parts.queue.push(WatchSignal::RootReturned);
+                            continue;
+                        }
+                        if !exists && !c.root_gone {
+                            c.root_gone = true;
+                            drop(c);
+                            parts.queue.push(WatchSignal::RootVanished);
+                            continue;
+                        }
+                    }
+                    // Stat-sweep unwatchable subtrees; mismatches ride the
+                    // normal pipeline as change signals.
+                    let subtrees: Vec<RelPath> = {
+                        let c = parts.core.lock().expect("core");
+                        c.policy.polling.iter().cloned().collect()
+                    };
+                    for st in subtrees {
+                        let mismatches = {
+                            let c = parts.core.lock().expect("core");
+                            stat_sweep(&c.disk_root, &st, &c.cache, c.ignore.as_ref())
+                        };
+                        if !mismatches.is_empty() {
+                            parts.queue.push(WatchSignal::PolledChanged(mismatches));
+                        }
+                    }
+                }
+            })
+            .expect("spawn poller");
+        self.handles.lock().expect("handles").push(h);
+    }
+
+    fn spawn_auditor(&self) {
+        let parts = self.parts.clone();
+        let stop = self.stop.clone();
+        let interval = parts.core.lock().expect("core").cfg.audit_interval;
+        let h = std::thread::Builder::new()
+            .name("ferry-scan-audit".into())
+            .spawn(move || loop {
+                sleep_slices(&stop, interval);
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                parts.queue.push(WatchSignal::AuditDue);
+            })
+            .expect("spawn auditor");
+        self.handles.lock().expect("handles").push(h);
+    }
+}
+
+impl Drop for ScanEngine {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn idle_run(trigger: Trigger) -> ScanRun {
+    ScanRun {
+        published: None,
+        stats: PassStats {
+            trigger,
+            ..PassStats::default()
+        },
+    }
+}
+
+fn unix_now() -> (i64, u32) {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
+        Err(e) => (-(e.duration().as_secs() as i64), 0),
+    }
+}
+
+fn sleep_slices(stop: &AtomicBool, total: Duration) {
+    let mut remaining = total;
+    while remaining > Duration::ZERO && !stop.load(Ordering::Relaxed) {
+        let slice = remaining.min(Duration::from_millis(100));
+        std::thread::sleep(slice);
+        remaining = remaining.saturating_sub(slice);
+    }
+}
+
+/// Map an absolute path under `root` to NFC relative components. Unmappable
+/// paths (non-UTF-8 components) yield None; correctness for those cases is
+/// carried by overflow-style safety nets rather than precise tracking.
+fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
+    let stripped = p.strip_prefix(root).ok()?;
+    let mut rel = Vec::with_capacity(stripped.as_os_str().len());
+    for c in stripped.components() {
+        let s = c.as_os_str().to_str()?;
+        rel.push(s.nfc().collect::<String>());
+    }
+    Some(rel)
+}
+
+fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
+    for i in 1..=rel.len() {
+        if ignore.ignored(&rel[..i]) {
+            return true;
+        }
+    }
+    false
+}
+
+enum ErrClass {
+    /// Watch registration impossible for this subtree (descriptor limits).
+    Unwatchable(RelPath),
+    /// Anything else: assume events were lost.
+    Loss,
+}
+
+fn classify_watch_error(e: &NotifyError) -> ErrClass {
+    use notify::ErrorKind::*;
+    let subtree_of = |paths: &[std::path::PathBuf]| -> Option<RelPath> {
+        paths
+            .first()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| vec![s.nfc().collect::<String>()])
+    };
+    match &e.kind {
+        MaxFilesWatch => ErrClass::Unwatchable(Vec::new()),
+        Io(ioe) => match ioe.raw_os_error() {
+            // ENOSPC (inotify watches/space), EMFILE/ENFILE (fd exhaustion).
+            Some(28) | Some(24) | Some(23) => {
+                ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default())
+            }
+            _ => ErrClass::Loss,
+        },
+        _ => ErrClass::Loss,
+    }
+}
+
+/// Stat-only sweep of a polled subtree: report paths whose size/mtime/exec
+/// disagree with the cache (or that are missing on disk). No hashing here —
+/// the resulting dirty-subtree pass does the real work through the standard
+/// short-circuit path.
+fn stat_sweep(
+    disk_root: &Path,
+    subtree: &RelPath,
+    cache: &DirCache,
+    ignore: &dyn IgnorePolicy,
+) -> Vec<RelPath> {
+    let mut out = Vec::new();
+    let mut start = disk_root.to_path_buf();
+    for c in subtree {
+        start.push(c);
+    }
+    if !start.is_dir() {
+        // Vanished polled subtree: mark its parent dirty; rebuild omits it.
+        let parent = subtree[..subtree.len().saturating_sub(1)].to_vec();
+        out.push(parent);
+        return out;
+    }
+    sweep_dir(disk_root, subtree, cache, ignore, &mut out);
+    out
+}
+
+fn sweep_dir(
+    disk_root: &Path,
+    rel: &RelPath,
+    cache: &DirCache,
+    ignore: &dyn IgnorePolicy,
+    out: &mut Vec<RelPath>,
+) {
+    let mut disk = disk_root.to_path_buf();
+    for c in rel {
+        disk.push(c);
+    }
+    let Ok(rd) = std::fs::read_dir(&disk) else {
+        out.push(rel[..rel.len().saturating_sub(1)].to_vec());
+        return;
+    };
+    let mut names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
+    names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    for name in names {
+        let Some(component) = name.to_str().map(|s| s.nfc().collect::<String>()) else {
+            continue;
+        };
+        let mut child_rel = rel.clone();
+        child_rel.push(component);
+        if ignore.ignored(&child_rel) {
+            continue;
+        }
+        let child_disk = disk.join(&name);
+        let Ok(meta) = std::fs::symlink_metadata(&child_disk) else {
+            out.push(rel.clone());
+            continue;
+        };
+        let ft = meta.file_type();
+        if ft.is_dir() {
+            sweep_dir(disk_root, &child_rel, cache, ignore, out);
+        } else if ft.is_file() {
+            let exec = meta.permissions().mode() & 0o111 != 0;
+            let name_str = child_rel.last().expect("non-empty").as_str();
+            let matches = cache.child_entry(rel, name_str).is_some_and(|prev| {
+                matches!(&prev.payload, EntryPayload::File { size, .. } if
+                    prev.exec == exec
+                        && prev.mtime_sec == meta_mtime_sec(&meta)
+                        && prev.mtime_nsec == meta_mtime_nsec(&meta)
+                        && *size == meta.len())
+            });
+            if !matches {
+                out.push(child_rel);
+            }
+        } else {
+            // Symlinks and oddities are cheap to recheck precisely during the
+            // real pass; flagging the path forces that.
+            out.push(child_rel);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn meta_mtime_sec(meta: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.mtime()
+}
+
+#[cfg(unix)]
+fn meta_mtime_nsec(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    u32::try_from(meta.mtime_nsec()).unwrap_or(0)
+}
+
+#[cfg(not(unix))]
+fn meta_mtime_sec(_m: &std::fs::Metadata) -> i64 {
+    0
+}
+
+#[cfg(not(unix))]
+fn meta_mtime_nsec(_m: &std::fs::Metadata) -> u32 {
+    0
+}
