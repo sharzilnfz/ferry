@@ -352,6 +352,7 @@ name = "ferry-scan"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-platform",
  "ferry-store",
  "notify",
  "rand",

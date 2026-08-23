@@ -34,18 +34,19 @@
 //! renamed-away subtrees can never satisfy later short-circuits.
 
 use std::collections::{BTreeSet, HashMap};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ferry_platform::{classify_link, is_reserved_device_name};
 use unicode_normalization::UnicodeNormalization;
 
 use ferry_store::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, EntryPayload,
     RootManifest, TreeEntry, TreeNode,
 };
-use ferry_store::snapshot::{ensure_no_sibling_collisions, RefusalReason, RefusedPath};
+use ferry_store::snapshot::{
+    ensure_no_collisions, RefusalReason, RefusedPath,
+};
 use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
@@ -55,7 +56,7 @@ use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
 
 /// Exec-bit detection, same constant as ferry-store's snapshot walker.
-const EXEC_MODE_BITS: u32 = 0o111;
+/// (Kept for reference; the live check lives in `live_exec`.)
 
 /// Structural exclusion: the store directory never enters manifests, walks,
 /// watches, or sweeps. This is folder-layout contract (`docs/store-format.md`),
@@ -269,14 +270,14 @@ impl<'a> Walker<'a> {
             }
             Err(e) => return Err(Self::io_err(&disk)(e)),
         }
-        names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
         let old_node: Option<TreeNode> = self.cache.node(rel).map(|c| c.node.clone());
         let mut entries: Vec<TreeEntry> = Vec::with_capacity(names.len());
         let mut listed_dirs: Vec<RelPath> = Vec::new();
 
         for name in names {
-            let raw = name.as_bytes();
+            let raw = name.as_encoded_bytes();
             if raw == b"." || raw == b".." {
                 continue;
             }
@@ -299,6 +300,15 @@ impl<'a> Walker<'a> {
             if self.ignore.ignored(&child_rel) {
                 continue;
             }
+            // Reserved Windows device names can never materialize on a
+            // Windows endpoint; refuse loudly at the source (T-012).
+            if is_reserved_device_name(&component) {
+                self.refused.push(RefusedPath {
+                    path: child_rel,
+                    reason: RefusalReason::ReservedName,
+                });
+                continue;
+            }
             let child_disk = disk.join(&name);
 
             let meta = match std::fs::symlink_metadata(&child_disk) {
@@ -312,12 +322,28 @@ impl<'a> Walker<'a> {
             let entry = if ft.is_symlink() {
                 let target = std::fs::read_link(&child_disk).map_err(Self::io_err(&child_disk))?;
                 match target.to_str() {
-                    // Stored verbatim apart from UTF-8 validation, byte-for-
-                    // byte identical to the snapshot_dir oracle (T-003).
-                    Some(t) => {
-                        self.stats.symlinks += 1;
-                        symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), t)
-                    }
+                    // T-012 policy: relative internal targets sync as links;
+                    // absolute or root-escaping targets are refused loudly.
+                    Some(t) => match classify_link(rel.len(), t) {
+                        ferry_platform::LinkDecision::SyncAsLink => {
+                            self.stats.symlinks += 1;
+                            symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), t)
+                        }
+                        ferry_platform::LinkDecision::Refuse(reason) => {
+                            self.refused.push(RefusedPath {
+                                path: child_rel,
+                                reason: match reason {
+                                    ferry_platform::LinkRefusal::AbsoluteTarget => {
+                                        RefusalReason::AbsoluteSymlinkTarget
+                                    }
+                                    ferry_platform::LinkRefusal::EscapesRoot => {
+                                        RefusalReason::EscapingSymlinkTarget
+                                    }
+                                },
+                            });
+                            continue;
+                        }
+                    },
                     None => {
                         self.refused.push(RefusedPath {
                             path: child_rel,
@@ -334,7 +360,7 @@ impl<'a> Walker<'a> {
             } else if ft.is_file() {
                 let size = meta.len();
                 let mt = (mtime_sec(&meta), mtime_nsec(&meta));
-                let exec = meta.permissions().mode() & EXEC_MODE_BITS != 0;
+                let exec = live_exec(&meta.permissions());
                 self.stats.files += 1;
 
                 let chunks = match old_node.as_ref().and_then(|n| find_entry(n, &component)) {
@@ -369,10 +395,19 @@ impl<'a> Walker<'a> {
             entries.push(entry);
         }
 
-        ensure_no_sibling_collisions(rel, &entries).map_err(|e| match e {
+        ensure_no_collisions(rel, &entries).map_err(|e| match e {
             ferry_store::snapshot::SnapshotError::NameCollision { parent, name } => {
                 ScanError::NameCollision { parent, name }
             }
+            ferry_store::snapshot::SnapshotError::CaseCollision {
+                parent,
+                first,
+                second,
+            } => ScanError::CaseCollision {
+                parent,
+                first,
+                second,
+            },
             other => ScanError::Snapshot(other),
         })?;
 
@@ -451,29 +486,34 @@ fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     }
 }
 
-// Metadata accessors mirroring snapshot.rs's unix-only rules. This crate is
-// unix-gated the same way ferry-store's snapshot module is.
-#[cfg(unix)]
-mod meta {
-    use std::os::unix::fs::MetadataExt;
-
-    pub(super) fn mtime_sec(meta: &std::fs::Metadata) -> i64 {
-        meta.mtime()
+/// Exec-bit reading (SPEC subset); needs POSIX mode bits. Hosts without
+/// them report false uniformly — the same documented deviation as
+/// ferry-materialize's `live_exec` and ferry-store's snapshot walker.
+fn live_exec(perm: &std::fs::Permissions) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        const EXEC_MODE_BITS: u32 = 0o111;
+        perm.mode() & EXEC_MODE_BITS != 0
     }
-
-    pub(super) fn mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-        u32::try_from(meta.mtime_nsec()).expect("mtime nanoseconds out of u32 range")
+    #[cfg(not(unix))]
+    {
+        let _ = perm;
+        false
     }
 }
-#[cfg(unix)]
-use meta::{mtime_nsec, mtime_sec};
-#[cfg(not(unix))]
-fn mtime_sec(_meta: &std::fs::Metadata) -> i64 {
-    0
+
+// Metadata accessors mirroring snapshot.rs's rules, now cross-platform:
+// mtime via `Metadata::modified()` with timespec-style negatives; hosts that
+// cannot represent an mtime read as epoch.
+fn split_mtime(t: std::time::SystemTime) -> (i64, u32) {
+    ferry_platform::split_unix(t)
 }
-#[cfg(not(unix))]
-fn mtime_nsec(_meta: &std::fs::Metadata) -> u32 {
-    0
+fn mtime_sec(meta: &std::fs::Metadata) -> i64 {
+    meta.modified().map(split_mtime).unwrap_or((0, 0)).0
+}
+fn mtime_nsec(meta: &std::fs::Metadata) -> u32 {
+    meta.modified().map(split_mtime).unwrap_or((0, 0)).1
 }
 
 #[cfg(test)]
@@ -546,6 +586,33 @@ mod tests {
                 self.prev_root_tree_id = out.root_tree_id;
             }
             self.prev_root_tree_id
+        }
+
+        /// Same as [`Self::full_scan`] but returns the refusal ledger.
+        fn full_scan_with_ledger(&mut self) -> Vec<ferry_store::snapshot::RefusedPath> {
+            let mut fresh = DirCache::new();
+            let mut closed = BTreeSet::new();
+            closed.insert(Vec::new());
+            let mut stats = PassStats::default();
+            let out = Walker::run(
+                &self.store,
+                self.poly,
+                &NoIgnoresIgnored,
+                &self.root,
+                &mut fresh,
+                &closed,
+                Trigger::Initial,
+                &identity((1, 0)),
+                self.prev_root_tree_id,
+                &mut stats,
+            )
+            .unwrap();
+            let refused = out.as_ref().map(|o| o.refused.clone()).unwrap_or_default();
+            std::mem::swap(&mut self.cache, &mut fresh);
+            if let Some(out) = out {
+                self.prev_root_tree_id = out.root_tree_id;
+            }
+            refused
         }
 
         fn incremental(&mut self, dirty: &[RelPath]) -> Option<ScanOutput> {
@@ -915,6 +982,46 @@ mod tests {
         .unwrap();
         assert!(out2.is_none(), "store-only changes must not move the tree");
         assert_eq!(stats.bytes_chunked, 0);
+    }
+
+    #[test]
+    fn t12_policy_refusals_match_scratch_oracle_incrementally() {
+        // Reserved device names and policy-refused symlinks must behave
+        // identically in FULL and INCREMENTAL passes: loud ledger entries,
+        // absent from the manifest, with from-scratch parity preserved.
+        let mut fx = Fixture::new("t12policy");
+        write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
+        write_file(&fx.root.join("aux.txt"), b"reserved", false, (2, 0));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc/hostname", fx.root.join("abs_link")).unwrap();
+            std::os::unix::fs::symlink("keep.txt", fx.root.join("ok_link")).unwrap();
+        }
+        let first = fx.full_scan_with_ledger();
+
+        use ferry_store::snapshot::RefusalReason;
+        assert!(first.iter().any(|r| r.reason == RefusalReason::ReservedName));
+        #[cfg(unix)]
+        assert!(first
+            .iter()
+            .any(|r| r.reason == RefusalReason::AbsoluteSymlinkTarget));
+
+        // Incremental burst over the root keeps tree-id parity with a
+        // from-scratch snapshot; refused entries stay out of the manifest.
+        write_file(&fx.root.join("keep.txt"), b"k2", false, (3, 0));
+        let out = fx.incremental_expect(&[p(&[])]);
+        let root = ferry_store::manifest::parse_tree_node(
+            &fx.store.get(ferry_store::BlobKind::TreeNode, &out.root_tree_id).unwrap(),
+        )
+        .unwrap();
+        let names: Vec<&str> = root.entries.iter().map(|e| e.name.as_str()).collect();
+        let expected: Vec<&str> = if cfg!(unix) {
+            vec!["keep.txt", "ok_link"]
+        } else {
+            vec!["keep.txt"]
+        };
+        assert_eq!(names, expected);
+        assert_eq!(out.root_tree_id, fx.scratch_root_id());
     }
 
     #[test]

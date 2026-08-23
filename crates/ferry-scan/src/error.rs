@@ -18,6 +18,15 @@ pub enum ScanError {
     },
     #[error("siblings under {parent} collide after NFC normalization: {name}")]
     NameCollision { parent: String, name: String },
+    #[error(
+        "case-conflict under {parent}: {first:?} and {second:?} differ only by case and cannot \
+         coexist on this filesystem; rename one of them (ferry never picks silently)"
+    )]
+    CaseCollision {
+        parent: String,
+        first: String,
+        second: String,
+    },
     #[error("store rejected a blob: {0}")]
     Store(#[from] StoreError),
     #[error("full snapshot failed: {0}")]
