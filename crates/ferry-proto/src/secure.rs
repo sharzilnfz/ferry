@@ -252,6 +252,8 @@ impl core::fmt::Debug for SessionCipher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::FrameBody;
+    use crate::version::ProtocolVersion;
 
     fn dh_terms() -> ([Box<[u8; 32]>; 3], [u8; 32]) {
         // Arbitrary-but-fixed terms for wiring tests; real values come from

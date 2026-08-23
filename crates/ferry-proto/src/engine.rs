@@ -278,15 +278,15 @@ fn recv_preauth<S: ByteStream>(io: &mut S) -> Result<(FrameBody, Vec<u8>), Proto
 
 // --- session state ------------------------------------------------------------
 
-struct Session<'a, S: ByteStream> {
-    io: &'a mut S,
-    version: ProtocolVersion,
-    peer_max: ProtocolVersion,
-    peer_flags: u64,
+pub(crate) struct Session<'a, S: ByteStream> {
+    pub(crate) io: &'a mut S,
+    pub(crate) version: ProtocolVersion,
+    pub(crate) peer_max: ProtocolVersion,
+    pub(crate) peer_flags: u64,
     /// The authenticated peer identity (verified during handshake).
-    peer_id: DeviceId,
-    tx: Option<SessionCipher>,
-    rx: Option<SessionCipher>,
+    pub(crate) peer_id: DeviceId,
+    pub(crate) tx: Option<SessionCipher>,
+    pub(crate) rx: Option<SessionCipher>,
 }
 
 impl<S: ByteStream> Session<'_, S> {
@@ -316,7 +316,7 @@ impl<S: ByteStream> Session<'_, S> {
     ///   protocol violation → clean disconnect.
     ///
     /// Returns `Ok(None)` for skipped frames so callers can loop.
-    fn recv_frame(&mut self) -> Result<Option<FrameBody>, ProtoError> {
+    pub(crate) fn recv_frame(&mut self) -> Result<Option<FrameBody>, ProtoError> {
         loop {
             let raw = crate::frame::read_body(self.io)?;
             let plain = match self.rx.as_mut() {

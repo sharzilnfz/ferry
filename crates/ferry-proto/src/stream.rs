@@ -24,7 +24,7 @@ impl<T: io::Read + io::Write> ByteStream for T {}
 
 /// One end of an in-memory duplex pair.
 ///
-/// Reads block until bytes are available or the peer closes. Writes append
+/// Reads block until bytes are available or the pipe closes. Writes append
 /// one record per call and wake the reader.
 pub struct DuplexHalf {
     shared: Arc<DuplexShared>,
@@ -34,18 +34,26 @@ pub struct DuplexHalf {
 }
 
 struct DuplexShared {
-    queues: [Mutex<VecDeque<Vec<u8>>>; 2],
+    /// ONE lock guards both queues and the open flag: a Condvar may only
+    /// ever wait on a single Mutex.
+    state: Mutex<DuplexState>,
     cv: Condvar,
-    open: Mutex<bool>,
+}
+
+struct DuplexState {
+    queues: [VecDeque<Vec<u8>>; 2],
+    open: bool,
 }
 
 /// Build a connected in-memory pair `(a, b)`; whatever `a` writes, `b`
 /// reads, and vice versa.
 pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
     let shared = Arc::new(DuplexShared {
-        queues: [Mutex::new(VecDeque::new()), Mutex::new(VecDeque::new())],
+        state: Mutex::new(DuplexState {
+            queues: [VecDeque::new(), VecDeque::new()],
+            open: true,
+        }),
         cv: Condvar::new(),
-        open: Mutex::new(true),
     });
     (
         DuplexHalf { shared: Arc::clone(&shared), inbox: 1 }, // a reads b_to_a
@@ -53,14 +61,28 @@ pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
     )
 }
 
-impl DuplexHalf {
-    /// Close this half's OUTBOX direction from the peer's perspective:
-    /// further reads on the peer return Ok(0) once its inbox drains.
-    pub fn close(&self) {
-        let mut open = self.shared.open.lock().expect("duplex lock");
-        *open = false;
+impl Drop for DuplexHalf {
+    fn drop(&mut self) {
+        // A dropped half tears the pipe down (socketpair semantics): the
+        // peer's blocked readers wake with EOF instead of hanging forever
+        // after an error on this side.
+        let mut st = self.shared.state.lock().expect("duplex lock");
+        st.open = false;
         self.shared.cv.notify_all();
-    }    fn outbox_of(&self) -> usize {
+    }
+}
+
+impl DuplexHalf {
+    /// Shut the pipe down explicitly: blocked and future reads drain then
+    /// return Ok(0). Mirrors a transport teardown, not a graceful protocol
+    /// close.
+    pub fn close(&self) {
+        let mut st = self.shared.state.lock().expect("duplex lock");
+        st.open = false;
+        self.shared.cv.notify_all();
+    }
+
+    fn outbox_of(&self) -> usize {
         1 - self.inbox
     }
 }
@@ -70,36 +92,31 @@ impl io::Read for DuplexHalf {
         if buf.is_empty() {
             return Ok(0);
         }
-        let mut q = self.shared.queues[self.inbox].lock().expect("duplex lock");
+        let mut st = self.shared.state.lock().expect("duplex lock");
         loop {
-            if let Some(record) = q.pop_front() {
+            if let Some(record) = st.queues[self.inbox].pop_front() {
                 let n = record.len().min(buf.len());
                 buf[..n].copy_from_slice(&record[..n]);
                 if n < record.len() {
                     // Partial consumption of a large record: push the rest
                     // back at the front to preserve stream semantics.
-                    q.push_front(record[n..].to_vec());
+                    st.queues[self.inbox].push_front(record[n..].to_vec());
                 }
                 return Ok(n);
             }
-            if !*self.shared.open.lock().expect("duplex lock") {
+            if !st.open {
                 return Ok(0);
-            }            q = self
-                .shared
-                .cv
-                .wait(q)
-                .expect("duplex condvar lock");
+            }
+            st = self.shared.cv.wait(st).expect("duplex condvar lock");
         }
     }
 }
 
 impl io::Write for DuplexHalf {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut q = self.shared.queues[self.outbox_of()]
-            .lock()
-            .expect("duplex lock");
-        q.push_back(buf.to_vec());
-        drop(q);
+        let mut st = self.shared.state.lock().expect("duplex lock");
+        st.queues[self.outbox_of()].push_back(buf.to_vec());
+        drop(st);
         self.shared.cv.notify_all();
         Ok(buf.len())
     }
@@ -145,6 +162,7 @@ mod tests {
             got
         });
         a.write_all(b"streamed").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
         a.close();
         assert_eq!(reader.join().unwrap(), b"streamed");
     }
@@ -162,5 +180,19 @@ mod tests {
             acc.extend_from_slice(&chunk[..n]);
         }
         assert_eq!(acc, b"abcdefgh");
+    }
+
+    #[test]
+    fn close_wakes_a_blocked_reader_on_the_other_half() {
+        let (_keep_writer_half_alive, mut b) = duplex_pair();
+        // NOTE: writer half intentionally unnamed-but-alive via binding.
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4];
+            b.read(&mut chunk).map(|_| ())
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(_keep_writer_half_alive);
+        let r = reader.join().unwrap();
+        assert!(r.is_ok(), "close yields EOF, not an error");
     }
 }
