@@ -1,0 +1,135 @@
+//! Error and divergence types for materialization.
+
+use std::path::PathBuf;
+
+use ferry_store::diff::{join_path, CompPath};
+use thiserror::Error;
+
+/// Why one live path diverged from the caller's base expectation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DivergeReason {
+    /// The base expectation says nothing lives here, but something does.
+    ExpectedAbsent,
+    /// The base expectation describes an entry here, but the path is gone.
+    ExpectedPresent,
+    /// The entry exists but is a different kind of filesystem object.
+    KindMismatch {
+        expected: ferry_store::diff::EntryKind,
+        found: ferry_store::diff::EntryKind,
+    },
+    ExecMismatch {
+        expected: bool,
+        found: bool,
+    },
+    SizeMismatch {
+        expected: u64,
+        found: u64,
+    },
+    TargetMismatch {
+        expected: String,
+        found: String,
+    },
+    /// Same kind, same size, different bytes (or a store chunk read failed
+    /// while proving equality).
+    ContentMismatch,
+    /// A deletion was requested for a path the expected manifest does not
+    /// describe at all — refusing to destroy unaccounted-for data.
+    NotInBase,
+}
+
+impl std::fmt::Display for DivergeReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DivergeReason::ExpectedAbsent => write!(f, "expected absent, but present on disk"),
+            DivergeReason::ExpectedPresent => write!(f, "expected present, but missing on disk"),
+            DivergeReason::KindMismatch { expected, found } => {
+                write!(f, "kind mismatch: expected {expected:?}, found {found:?}")
+            }
+            DivergeReason::ExecMismatch { expected, found } => {
+                write!(f, "exec bit mismatch: expected {expected}, found {found}")
+            }
+            DivergeReason::SizeMismatch { expected, found } => {
+                write!(f, "size mismatch: expected {expected}, found {found}")
+            }
+            DivergeReason::TargetMismatch { expected, found } => {
+                write!(
+                    f,
+                    "symlink target mismatch: expected {expected:?}, found {found:?}"
+                )
+            }
+            DivergeReason::ContentMismatch => write!(f, "content differs from expected"),
+            DivergeReason::NotInBase => {
+                write!(
+                    f,
+                    "path is described by neither the change nor the expected manifest"
+                )
+            }
+        }
+    }
+}
+
+/// One divergent path found by the [`crate::Overwrite::Expect`] guard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Divergence {
+    pub path: CompPath,
+    pub reason: DivergeReason,
+}
+
+impl std::fmt::Display for Divergence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", join_path(&self.path), self.reason)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum MaterializeError {
+    #[error("store: {0}")]
+    Store(#[from] ferry_store::store::StoreError),
+    #[error("manifest decode failed: {0}")]
+    Manifest(#[from] ferry_store::manifest::ManifestError),
+    #[error("refusing stored name component {component:?} (traversal defense)")]
+    BadComponent { component: String },
+    #[error("{path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "{path}: chunk #{index} failed verification after store read \
+         (expected {expected}, got {found})"
+    )]
+    ChunkCorrupt {
+        path: String,
+        index: usize,
+        expected: String,
+        found: String,
+    },
+    #[error(
+        "{path}: chunk #{index} failed re-verification in temp file before rename \
+         (expected {expected}, got {found}); destination never touched"
+    )]
+    TempWriteVerifyFailed {
+        path: String,
+        index: usize,
+        expected: String,
+        found: String,
+    },
+    #[error("{path}: manifest declares size {declared} but chunks sum to {actual}")]
+    SizeMismatch {
+        path: String,
+        declared: u64,
+        actual: u64,
+    },
+    #[error("live tree diverged from the expected base state; nothing was modified:\n{}",
+        paths.iter().map(|p| format!("  - {p}")).collect::<Vec<_>>().join("\n"))]
+    Diverged { paths: Vec<Divergence> },
+}
+
+/// Wrap an io error with the path it happened at.
+pub(crate) fn io_at(path: impl Into<PathBuf>, e: std::io::Error) -> MaterializeError {
+    MaterializeError::Io {
+        path: path.into(),
+        source: e,
+    }
+}
