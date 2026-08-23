@@ -158,6 +158,9 @@ struct Core {
     prev_manifest_id: BlobId,
     prev_root_tree_id: BlobId,
     root_gone: bool,
+    /// Every COMPLETED pass (published or not), for observability: audits
+    /// and idle scans don't publish, but their stats still matter.
+    last_pass: Option<(Trigger, PassStats)>,
 }
 
 /// The pieces of an engine shared between caller threads and background
@@ -174,6 +177,17 @@ impl Parts {
     /// Drive one batch of signals through policy and execution. Empty
     /// batches yield a cheap idle run.
     fn execute(
+        &self,
+        signals: Vec<WatchSignal>,
+        fallback_trigger: Trigger,
+    ) -> Result<ScanRun, ScanError> {
+        let run = self.execute_inner(signals, fallback_trigger)?;
+        self.core.lock().expect("core").last_pass =
+            Some((run.stats.trigger, run.stats.clone()));
+        Ok(run)
+    }
+
+    fn execute_inner(
         &self,
         signals: Vec<WatchSignal>,
         fallback_trigger: Trigger,
@@ -405,6 +419,12 @@ impl ScanEngine {
                 disk_root.display()
             )));
         }
+        // Canonicalize so watcher callbacks and IO agree on one spelling.
+        // FSEvents reports resolved paths (/private/var/...), while callers
+        // often hand us /var/...; without this, every event would fail
+        // prefix-stripping and be dropped.
+        let disk_root = std::fs::canonicalize(&disk_root)
+            .map_err(|e| ScanError::Watch(format!("cannot resolve watch root: {e}")))?;
 
         let parts = Arc::new(Parts {
             queue: Arc::new(SignalQueue::new()),
@@ -418,6 +438,7 @@ impl ScanEngine {
                 prev_manifest_id: [0u8; 32],
                 prev_root_tree_id: [0u8; 32],
                 root_gone: false,
+                last_pass: None,
             })),
             current: Arc::new(RwLock::new(None)),
             subs: Arc::new(Mutex::new(Vec::new())),
@@ -432,7 +453,7 @@ impl ScanEngine {
 
         // Initial full scan, synchronous: consumers always have a baseline
         // before any watcher exists to race with.
-        engine.parts.execute(Vec::new(), Trigger::Initial)?;
+        engine.parts.run_full(Trigger::Initial, "initial snapshot")?;
 
         engine.spawn_watcher()?;
         engine.spawn_worker();
@@ -456,6 +477,13 @@ impl ScanEngine {
     /// Latest completed scan, if any (always set after `watch` returns).
     pub fn current(&self) -> Option<Arc<CurrentScan>> {
         self.parts.current.read().expect("current lock").clone()
+    }
+
+    /// Stats of the most recent completed pass, published or not. Audits and
+    /// idle passes don't publish; this is how their work stays observable
+    /// (tests, debugging, future metrics).
+    pub fn last_pass(&self) -> Option<(Trigger, PassStats)> {
+        self.parts.core.lock().expect("core").last_pass.clone()
     }
 
     /// Subscribe to scan completions/failures. Unbounded; subscribers whose
@@ -554,26 +582,32 @@ impl ScanEngine {
                     if !parts.queue.wait_nonempty(&stop, Duration::from_millis(200)) {
                         return; // stopped
                     }
-                    // Debounce: the quiet window extends on every arrival so
-                    // write bursts coalesce into a single pass.
+                    // Take ownership of the batch BEFORE debouncing: the
+                    // quiet window extends only on arrivals AFTER this
+                    // drain, otherwise the pending batch itself would keep
+                    // re-arming the window forever.
+                    let mut batch = parts.queue.drain();
                     let mut deadline = Instant::now() + quiet;
-                    while !stop.load(Ordering::Relaxed) {
+                    'debounce: while !stop.load(Ordering::Relaxed) {
                         let now = Instant::now();
                         if now >= deadline {
                             break;
                         }
-                        if parts.queue.wait_arrival(deadline - now) {
-                            deadline = Instant::now() + quiet;
+                        match parts.queue.wait_arrival(deadline - now) {
+                            true => {
+                                batch.extend(parts.queue.drain());
+                                deadline = Instant::now() + quiet;
+                            }
+                            false => break 'debounce,
                         }
                     }
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
-                    let signals = parts.queue.drain();
-                    if signals.is_empty() {
+                    if batch.is_empty() {
                         continue;
                     }
-                    if let Err(e) = parts.execute(signals, Trigger::Events) {
+                    if let Err(e) = parts.execute(batch, Trigger::Events) {
                         parts.report_failure(&e);
                     }
                 }
@@ -755,6 +789,35 @@ fn stat_sweep(
         return out;
     }
     sweep_dir(disk_root, subtree, cache, ignore, &mut out);
+    // Reverse pass: cached entries absent from disk. A disk-only walk cannot
+    // see deletions (vanished names simply don't appear in read_dir), so the
+    // cache is the source of truth for what SHOULD exist.
+    let mut dedup: std::collections::BTreeSet<RelPath> = out.drain(..).collect();
+    for (dir_rel, cached) in cache.iter_within(subtree) {
+        for e in &cached.node.entries {
+            if e.name.contains('/') {
+                continue;
+            }
+            let mut full = dir_rel.clone();
+            full.push(e.name.clone());
+            if ignore.ignored(&full) {
+                continue;
+            }
+            let mut p = disk_root.to_path_buf();
+            for c in &full {
+                p.push(c);
+            }
+            let exists = match &e.payload {
+                EntryPayload::Dir { .. } => p.is_dir(),
+                _ => p.symlink_metadata().is_ok(),
+            };
+            if !exists {
+                dedup.insert(dir_rel.clone());
+                break;
+            }
+        }
+    }
+    out.extend(dedup);
     out
 }
 
@@ -833,4 +896,90 @@ fn meta_mtime_sec(_m: &std::fs::Metadata) -> i64 {
 #[cfg(not(unix))]
 fn meta_mtime_nsec(_m: &std::fs::Metadata) -> u32 {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ignore::NoIgnores as _;
+    use crate::testutil::*;
+
+    fn rel(parts: &[&str]) -> RelPath {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn seeded_cache(dir: &std::path::Path) -> (tempfile::TempDir, Store, DirCache) {
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = Store::create(
+            store_dir.path(),
+            fmk(),
+            Box::new(ferry_store::crypto::PassthroughCipher),
+        )
+        .unwrap();
+        let id = ferry_store::snapshot::SnapshotIdentity {
+            folder_id: [1; 16],
+            device_id: [2; 32],
+            parent_manifest_id: [0; 32],
+            created_sec: 1,
+            created_nsec: 0,
+        };
+        let out = ferry_store::snapshot::snapshot_dir(&store, poly_of(3), dir, &id).unwrap();
+        let mut cache = DirCache::new();
+        cache.reseed(&store, &out.root_tree_id).unwrap();
+        (store_dir, store, cache)
+    }
+
+    #[test]
+    fn stat_sweep_flags_changed_new_and_deleted_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        write_file(&root.join("same.txt"), b"aaa", false, (1, 0));
+        write_file(&root.join("changed.txt"), b"bbb", false, (2, 0));
+        write_file(&root.join("sub/deep.txt"), b"ccc", true, (3, 0));
+
+        let (_sd, store, cache) = seeded_cache(&root);
+
+        // Mutate behind the watcher's back:
+        //  - same.txt untouched,
+        //  - changed.txt content+mtime bump,
+        //  - deep.txt deleted,
+        //  - fresh.txt added.
+        write_file(&root.join("changed.txt"), b"CHANGED", false, (99, 9));
+        std::fs::remove_file(root.join("sub/deep.txt")).unwrap();
+        write_file(&root.join("fresh.txt"), b"new", false, (5, 5));
+
+        let found = super::stat_sweep(&root, &Vec::new(), &cache, &crate::ignore::NoIgnores);
+        let mut got = found.clone();
+        got.sort();
+
+        assert!(got.contains(&rel(&["changed.txt"])), "content change flagged: {got:?}");
+        assert!(got.contains(&rel(&["fresh.txt"])), "new file flagged: {got:?}");
+        assert!(
+            got.contains(&rel(&[])) || got.contains(&rel(&["sub"])),
+            "deleted file surfaces via its parent dir: {got:?}"
+        );
+        assert!(
+            !got.contains(&rel(&["same.txt"])),
+            "untouched file must NOT be flagged: {got:?}"
+        );
+    }
+
+    #[test]
+    fn stat_sweep_respects_ignore_policy() {
+        struct SkipAll;
+        impl crate::ignore::IgnorePolicy for SkipAll {
+            fn ignored(&self, _rel: &[String]) -> bool {
+                true
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t");
+        std::fs::create_dir_all(&root).unwrap();
+        write_file(&root.join("x.txt"), b"a", false, (1, 0));
+        let (_sd, _store, cache) = seeded_cache(&root);
+        write_file(&root.join("x.txt"), b"different", false, (2, 0));
+        let found = super::stat_sweep(&root, &Vec::new(), &cache, &SkipAll);
+        assert!(found.is_empty(), "ignored paths are never swept: {found:?}");
+    }
 }

@@ -101,6 +101,16 @@ impl DirCache {
         })
     }
 
+    /// Iterate all cached directories whose path is inside `subtree`.
+    pub(crate) fn iter_within<'c>(
+        &'c self,
+        subtree: &'c RelPath,
+    ) -> impl Iterator<Item = (&'c RelPath, &'c CachedDir)> {
+        self.dirs
+            .iter()
+            .filter(move |(k, _)| starts_with(k, subtree))
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.dirs.len()
