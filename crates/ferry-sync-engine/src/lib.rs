@@ -67,6 +67,8 @@ pub mod naming;
 pub mod plan;
 pub mod reconcile;
 pub mod report;
+#[cfg(test)]
+pub(crate) mod testutil;
 pub mod timefmt;
 
 pub use agree::{AgreedRecord, PeerState, StateError};

@@ -414,3 +414,222 @@ fn fold_into_change_set(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::{ActionPlan as _, MaterializeOp, Side};
+    use crate::report::list_conflicts;
+    use crate::reconcile::{reconcile, ReconcileInput};
+    use crate::testutil::*;
+    use ferry_store::snapshot::SnapshotOutput;
+
+    const DEV_A: [u8; 32] = [0xA1; 32];
+    const DEV_B: [u8; 32] = [0xB2; 32];
+
+    /// Both devices start from an identical base file; A writes newer
+    /// content so A wins everywhere; manifests are exchanged and the plan
+    /// is computed ON B (whose live copy must be saved then overwritten).
+    struct Rig {
+        a: Device,
+        b: Device,
+        sb: SnapshotOutput,
+        plan_for_b: ActionPlan,
+    }
+
+    fn rig() -> Rig {
+        let mut a = Device::new(1, DEV_A, poly_of(5));
+        let mut b = Device::new(2, DEV_B, poly_of(5));
+        write_file(&a.tree.join("f.txt"), b"base", false, (100, 0));
+        write_file(&b.tree.join("f.txt"), b"base", false, (100, 0));
+        let s0a = a.snapshot();
+        let _s0b = b.snapshot();
+
+        write_file(&a.tree.join("f.txt"), b"winner from A", false, (200, 0));
+        write_file(&b.tree.join("f.txt"), b"loser on B", false, (150, 0));
+        let sa = a.snapshot();
+        let sb = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
+
+        let mut plan_for_b = reconcile(ReconcileInput {
+            store: &b.store,
+            local: &sb.manifest,
+            remote: &sa.manifest,
+            base: Some(&s0a.manifest),
+        })
+        .unwrap();
+        // Simulate fetching the winner blobs before executing.
+        for (id, _) in &plan_for_b.fetch {
+            transfer(
+                &a.store,
+                &b.store,
+                &[(ferry_store::format::BlobKind::DataChunk, *id)],
+            );
+        }
+        plan_for_b.guard_expected = Some(sb.manifest.clone());
+        Rig { a, b, sb, plan_for_b }
+    }
+
+    #[test]
+    fn local_loser_saved_then_overwritten_by_winner() {
+        let rig = rig();
+        let stats = execute(
+            &rig.b.store,
+            &rig.b.tree,
+            &rig.plan_for_b,
+            Some(&rig.b.state_dir),
+            (1_787_574_896, 0),
+        )
+        .unwrap();
+
+        // Winner live, loser quarantined under B's own device tag.
+        assert_eq!(
+            std::fs::read(rig.b.tree.join("f.txt")).unwrap(),
+            b"winner from A"
+        );
+        assert_eq!(stats.quarantined.len(), 1);
+        let q = &stats.quarantined[0];
+        assert_eq!(
+            q,
+            "f.txt.ferry-conflict.b2b2b2b2-19700101-000230",
+            "name carries LOSER device short id + loser mtime UTC"
+        );
+        assert_eq!(
+            std::fs::read(rig.b.tree.join(q)).unwrap(),
+            b"loser on B"
+        );
+        // The copy keeps the loser's mtime so devices converge exactly.
+        let md = std::fs::symlink_metadata(rig.b.tree.join(q)).unwrap();
+        let mt = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        assert_eq!((mt.as_secs(), mt.subsec_nanos()), (150, 0));
+
+        // Report entry persisted and complete.
+        let log = list_conflicts(&rig.b.state_dir).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].path, "f.txt");
+        assert_eq!(log[0].kind, "both_changed");
+        assert_eq!(log[0].winner.device, hex(&DEV_A));
+        assert_eq!(log[0].loser.device, hex(&DEV_B));
+        assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
+    }
+
+    #[test]
+    fn tampered_live_file_surfaces_diverged_before_any_writes() {
+        let mut rig = rig();
+        // Tamper AFTER the snapshot the plan was computed from.
+        std::fs::write(rig.b.tree.join("f.txt"), b"tampered!!").unwrap();
+
+        let err = execute(
+            &rig.b.store,
+            &rig.b.tree,
+            &rig.plan_for_b,
+            Some(&rig.b.state_dir),
+            (1, 0),
+        )
+        .unwrap_err();
+        match err {
+            EngineError::Materialize(MaterializeError::Diverged { paths }) => {
+                assert_eq!(paths.len(), 1);
+                assert_eq!(join_path(&paths[0].path), "f.txt");
+            }
+            other => panic!("expected Diverged, got {other:?}"),
+        }
+        // Nothing was clobbered and no quarantine appeared.
+        assert_eq!(
+            std::fs::read(rig.b.tree.join("f.txt")).unwrap(),
+            b"tampered!!",
+            "the Expect chain refuses to act on diverged state"
+        );
+        assert!(list_conflicts(&rig.b.state_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_plan_is_zero_mutations_and_no_report_lines() {
+        let mut a = Device::new(3, DEV_A, poly_of(9));
+        write_file(&a.tree.join("x.txt"), b"x", false, (1, 0));
+        let _ = a.snapshot();
+        let plan = ActionPlan::default();
+        let stats = execute(&a.store, &a.tree, &plan, Some(&a.state_dir), (5, 0)).unwrap();
+        assert_eq!(stats.apply.mutations(), 0);
+        assert!(stats.conflicts.is_empty());
+        assert!(list_conflicts(&a.state_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resurrection_executes_on_the_deleting_device() {
+        let mut a = Device::new(4, DEV_A, poly_of(11));
+        let mut b = Device::new(5, DEV_B, poly_of(11));
+        write_file(&a.tree.join("f.txt"), b"base", false, (10, 0));
+        write_file(&b.tree.join("f.txt"), b"base", false, (10, 0));
+        let s0a = a.snapshot();
+        let _s0b = b.snapshot();
+
+        // B deletes while A edits; compute A's view? No — this rig runs on B
+        // so B resurrects A's edit.
+        std::fs::remove_file(b.tree.join("f.txt")).unwrap();
+        write_file(&a.tree.join("f.txt"), b"edited on A", false, (20, 0));
+        let sa = a.snapshot();
+        let sb = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
+
+        let plan = reconcile(ReconcileInput {
+            store: &b.store,
+            local: &sb.manifest,
+            remote: &sa.manifest,
+            base: Some(&s0a.manifest),
+        })
+        .unwrap();
+        assert_eq!(plan.conflicts[0].kind, ConflictKind::DeleteVsEdit);
+        assert_eq!(plan.conflicts[0].winner, Side::Remote);
+        for (id, _) in &plan.fetch {
+            transfer(
+                &a.store,
+                &b.store,
+                &[(ferry_store::format::BlobKind::DataChunk, *id)],
+            );
+        }
+
+        let stats = execute(&b.store, &b.tree, &plan, Some(&b.state_dir), (9, 0)).unwrap();
+        assert_eq!(
+            std::fs::read(b.tree.join("f.txt")).unwrap(),
+            b"edited on A",
+            "the edit comes back live"
+        );
+        assert!(stats.quarantined.is_empty());
+        let log = list_conflicts(&b.state_dir).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].kind, "delete_vs_edit");
+        assert_eq!(log[0].loser.mtime_sec, None, "deletion side has no mtime");
+        assert_eq!(log[0].quarantined_as, None);
+    }
+
+    #[test]
+    fn materialize_ops_fold_into_the_right_applier_buckets() {
+        use ferry_store::diff::EntryKind;
+        let st = |chunks: Vec<(BlobId, u64)>| EntryState {
+            kind: EntryKind::File,
+            exec: false,
+            mtime_sec: 1,
+            mtime_nsec: 2,
+            chunks,
+            target: None,
+        };
+        let mut cs = ChangeSet::default();
+        fold_into_change_set(None, Some(&st(vec![])), &["a".into()], &mut cs);
+        fold_into_change_set(Some(&st(vec![])), None, &["b".into()], &mut cs);
+        fold_into_change_set(Some(&st(vec![([1u8; 32], 4)])), Some(&st(vec![([2u8; 32], 4)])), &["c".into()], &mut cs);
+        fold_into_change_set(Some(&st(vec![([1u8; 32], 4)])), Some(&st(vec![([1u8; 32], 4)])), &["d".into()], &mut cs);
+        assert_eq!(cs.added.len(), 1);
+        assert_eq!(cs.removed.len(), 1);
+        assert_eq!(cs.content_modified.len(), 1);
+        assert_eq!(cs.metadata_modified.len(), 1);
+        assert_eq!(cs.type_changed.len(), 0);
+        let _ = MaterializeOp {
+            path: vec![],
+            base: None,
+            result: None,
+        };
+    }
+}

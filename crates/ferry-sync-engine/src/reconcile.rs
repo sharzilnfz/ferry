@@ -187,7 +187,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
     let mut keys: BTreeSet<String> = local_view.keys().cloned().collect();
     keys.extend(remote_view.keys().cloned());
 
-    let mut decisions: BTreeMap<String, Decision> = BTreeMap::new();
+    let mut decided: Vec<(String, Decision, Option<EntryState>, Option<EntryState>)> = Vec::new();
     let mut materialize: Vec<MaterializeOp> = Vec::new();
     let mut quarantine: Vec<QuarantineOp> = Vec::new();
     let mut conflicts: Vec<PlannedConflict> = Vec::new();
@@ -202,11 +202,18 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
             .expect("every key comes from at least one view")
             .0
             .clone();
-        let b = lv
-            .and_then(|(_, v)| v.base.clone())
-            .or_else(|| rv.and_then(|(_, v)| v.base.clone()));
-        let l = lv.and_then(|(_, v)| v.side.clone());
-        let r = rv.and_then(|(_, v)| v.side.clone());
+        // A side whose diff is silent about a path HOLDS THE BASE STATE
+        // there — silence means unchanged, never deleted.
+        let (b, l, r) = match (lv, rv) {
+            (Some((_, lv)), Some((_, rv))) => (
+                lv.base.clone().or_else(|| rv.base.clone()),
+                lv.side.clone(),
+                rv.side.clone(),
+            ),
+            (Some((_, lv)), None) => (lv.base.clone(), lv.side.clone(), lv.base.clone()),
+            (None, Some((_, rv))) => (rv.base.clone(), rv.base.clone(), rv.side.clone()),
+            (None, None) => unreachable!("key came from one of the views"),
+        };
 
         let local_changed = l != b;
         let remote_changed = r != b;
@@ -388,7 +395,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
                 }
             }
         }
-        decisions.insert(key.clone(), decision);
+        decided.push((key.clone(), decision, l, r));
     }
 
     // Subtract what the peer provably has from the send list, and what the
@@ -405,16 +412,34 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         .collect();
 
     // --- structural passes ---------------------------------------------------
+    //
+    // Final live state per decided path: what survives at each conflicting
+    // location once this plan runs. Descendants may not be touched
+    // independently when an ancestor ends up deleted or occupied by
+    // something that is not a directory.
+    let mut final_state: BTreeMap<String, Option<&EntryState>> = BTreeMap::new();
+    for (key, d, l, r) in decided.iter() {
+        let s = match d {
+            Decision::Nothing => continue,
+            Decision::KeepLocal => l.as_ref(),
+            Decision::ApplyRemote => r.as_ref(),
+            Decision::Conflict { winner, .. } => match winner {
+                Side::Local => l.as_ref(),
+                Side::Remote => r.as_ref(),
+            },
+        };
+        final_state.insert(key.clone(), s);
+    }
 
-    let removal_paths: BTreeSet<String> = materialize
+    let removal_keys: Vec<String> = materialize
         .iter()
         .filter(|op| op.result.is_none())
         .map(|op| join(&op.path))
         .collect();
 
     // Paths whose content survives locally against the pure merged result:
-    // local-side conflict winners, quarantine destinations, and any silent
-    // local keep that carries content. Ancestor deletions above these are
+    // local-side conflict winners, quarantine destinations, and silent
+    // local keeps that carry content. Ancestor removals above these are
     // suppressed so a remote teardown cannot eat a resurrection.
     let mut survivors: Vec<CompPath> = Vec::new();
     for q in &quarantine {
@@ -425,12 +450,11 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
             survivors.push(c.path.clone());
         }
     }
-    for (key, d) in &decisions {
-        if matches!(d, Decision::KeepLocal) {
-            if let Some((p, lv)) = local_view.get(key) {
-                if lv.side.is_some() {
-                    survivors.push(p.clone());
-                }
+    for (key, d, l, _) in decided.iter() {
+        if matches!(d, Decision::KeepLocal) && l.is_some() {
+            // Reconstruct the stored components from the views.
+            if let Some((p, _)) = local_view.get(key).or_else(|| remote_view.get(key)) {
+                survivors.push(p.clone());
             }
         }
     }
@@ -439,7 +463,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
     for p in &survivors {
         for i in 1..p.len() {
             let anc = join(&p[..i]);
-            if removal_paths.contains(&anc) {
+            if removal_keys.contains(&anc) {
                 suppressed.insert(anc);
             }
         }
@@ -448,29 +472,59 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         materialize.retain(|op| !(op.result.is_none() && suppressed.contains(&join(&op.path))));
     }
 
-    // Remaining checks: an upsert or quarantine file may not land beneath a
-    // path another operation tears down or replaces with something that is
-    // not a directory.
-    for target in materialize.iter().filter(|op| op.result.is_some()).map(|op| &op.path)
-        .chain(quarantine.iter().map(|q| &q.path))
-    {
+    // Remaining checks: an upsert or quarantine file may not land beneath an
+    // ancestor this cycle leaves deleted or non-directory. Deleted-ancestor
+    // cases are repairable when the deletion was local-only and the base
+    // state there was a directory: synthesize a mkdir so the resurrection
+    // has somewhere to land. Non-directory ancestors abort loudly.
+    let targets: Vec<CompPath> = materialize
+        .iter()
+        .filter(|op| op.result.is_some())
+        .map(|op| op.path.clone())
+        .chain(quarantine.iter().map(|q| q.path.clone()))
+        .collect();
+    let mut synth_dirs: BTreeMap<String, EntryState> = BTreeMap::new();
+    for target in &targets {
         for i in 1..target.len() {
-            let anc = join(&target[..i]);
-            if suppressed.contains(&anc) {
+            let anc_key = join(&target[..i]);
+            if suppressed.contains(&anc_key) || synth_dirs.contains_key(&anc_key) {
                 continue;
             }
-            let replaced_by_non_dir = materialize.iter().any(|op| {
-                op.result.is_some()
-                    && join(&op.path) == anc
-                    && op.result.as_ref().is_some_and(|s| s.kind != EntryKind::Dir)
-            });
-            if replaced_by_non_dir || removal_paths.contains(&anc) {
-                return Err(ReconcileError::StructuralConflict {
-                    ancestor: anc,
-                    path: join(target),
-                });
+            match final_state.get(&anc_key) {
+                Some(None) => {
+                    // Locally deleted, stayed deleted. Rebuild from base.
+                    let base_state = local_view
+                        .get(&anc_key)
+                        .and_then(|(_, v)| v.base.clone())
+                        .or_else(|| remote_view.get(&anc_key).and_then(|(_, v)| v.base.clone()));
+                    match base_state {
+                        Some(s) if s.kind == EntryKind::Dir => {
+                            synth_dirs.insert(anc_key, s);
+                        }
+                        _ => {
+                            return Err(ReconcileError::StructuralConflict {
+                                ancestor: anc_key,
+                                path: join(target),
+                            });
+                        }
+                    }
+                }
+                Some(Some(s)) if s.kind != EntryKind::Dir => {
+                    return Err(ReconcileError::StructuralConflict {
+                        ancestor: anc_key,
+                        path: join(target),
+                    });
+                }
+                _ => {}
             }
         }
+    }
+    for (key, state) in &synth_dirs {
+        materialize.push(MaterializeOp {
+            path: key.split('/').map(str::to_string).collect(),
+            base: None,
+            result: Some(state.clone()),
+        });
     }
 
     conflicts.sort_by(|a, b| a.path.cmp(&b.path));
@@ -483,4 +537,242 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         conflicts,
         guard_expected: Some(local.clone()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+    use std::path::Path;
+
+    use ferry_store::snapshot::SnapshotOutput;
+
+    const DEV_A: [u8; 32] = [0xA1; 32];
+    const DEV_B: [u8; 32] = [0xB2; 32];
+
+    /// Two devices, each with one snapshot of their (possibly different)
+    /// trees. Returns devices plus both snapshots.
+    struct Pair {
+        a: Device,
+        b: Device,
+        sa: SnapshotOutput,
+        sb: SnapshotOutput,
+    }
+
+    fn pair(build_a: &dyn Fn(&Path), build_b: &dyn Fn(&Path)) -> Pair {
+        let poly = poly_of(77);
+        let mut a = Device::new(1, DEV_A, poly);
+        let mut b = Device::new(2, DEV_B, poly);
+        build_a(&a.tree);
+        build_b(&b.tree);
+        let sa = a.snapshot();
+        let sb = b.snapshot();
+        // Metadata-first exchange.
+        transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
+        transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
+        Pair { a, b, sa, sb }
+    }
+
+    fn plan_on_a(p: &Pair) -> ActionPlan {
+        reconcile(ReconcileInput {
+            store: &p.a.store,
+            local: &p.sa.manifest,
+            remote: &p.sb.manifest,
+            base: None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn base_less_disjoint_trees_union_with_no_conflicts() {
+        let p = pair(
+            &|t| write_file(&t.join("only-a.txt"), b"AAA", false, (100, 0)),
+            &|t| write_file(&t.join("only-b.txt"), b"BBB", false, (200, 0)),
+        );
+        let plan = plan_on_a(&p);
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.quarantine.is_empty());
+        // Union semantics: A applies B's new file locally and sends its own.
+        assert_eq!(plan.materialize.len(), 1);
+        assert_eq!(
+            join(&plan.materialize[0].path),
+            "only-b.txt",
+            "remote-only addition is materialized locally"
+        );
+        assert_eq!(
+            plan.send.len(),
+            1,
+            "A's new chunk is the only thing B lacks"
+        );
+        assert_eq!(
+            plan.fetch.len(),
+            1,
+            "B's chunk must be fetched before A can apply it"
+        );
+    }
+
+    #[test]
+    fn identical_base_less_trees_produce_zero_ops() {
+        let build = |t: &Path| {
+            write_file(&t.join("same.txt"), b"identical bytes", true, (555, 7));
+            std::fs::create_dir(t.join("nested")).unwrap();
+            write_file(&t.join("nested/deep.txt"), b"deep", false, (556, 8));
+            set_dir_mtime(&t.join("nested"), 555, 9);
+        };
+        let p = pair(&build, &build);
+        let plan = plan_on_a(&p);
+        assert!(
+            plan.is_empty(),
+            "same content, same metadata → nothing anywhere (got {:?})",
+            (&plan.materialize, &plan.send, &plan.fetch, &plan.conflicts)
+        );
+    }
+
+    #[test]
+    fn add_vs_add_identical_content_differing_mtimes_resolves_silently() {
+        let p = pair(
+            &|t| write_file(&t.join("f.txt"), b"one content", false, (10, 0)),
+            &|t| write_file(&t.join("f.txt"), b"one content", false, (20, 0)),
+        );
+        let plan = plan_on_a(&p);
+        assert!(plan.conflicts.is_empty() && plan.quarantine.is_empty());
+        // B is newer; A applies B's mtime silently.
+        assert_eq!(plan.materialize.len(), 1);
+        assert!(plan.materialize[0].result.as_ref().unwrap().mtime_sec == 20);
+    }
+
+    #[test]
+    fn both_changed_newer_side_wins_and_loser_is_quarantined() {
+        let p = pair(
+            &|t| write_file(&t.join("f.txt"), b"local version", false, (300, 0)),
+            &|t| write_file(&t.join("f.txt"), b"remote older", false, (200, 0)),
+        );
+        let plan = plan_on_a(&p);
+
+        assert_eq!(plan.conflicts.len(), 1);
+        let c = &plan.conflicts[0];
+        assert_eq!(c.winner, Side::Local, "A is newer and wins");
+        assert_eq!(c.kind, ConflictKind::AddVsAdd, "no base existed");
+        assert_eq!(plan.quarantine.len(), 1);
+        match &plan.quarantine[0].content {
+            LoserContent::FromStore { chunks, .. } => assert_eq!(chunks.len(), 1),
+            other => panic!("remote loser must come from the store, got {other:?}"),
+        }
+        assert!(plan.materialize.is_empty(), "winner is live already");
+        assert!(!plan.send.is_empty(), "B needs A's winner bytes");
+        assert!(!plan.fetch.is_empty(), "quarantining B's loser needs its blob");
+    }
+
+    #[test]
+    fn exact_mtime_tie_breaks_on_higher_device_id() {
+        let p = pair(
+            &|t| write_file(&t.join("tie.txt"), b"from A", false, (42, 42)),
+            &|t| write_file(&t.join("tie.txt"), b"from B", false, (42, 42)),
+        );
+        let plan = plan_on_a(&p);
+        assert_eq!(plan.conflicts[0].winner, Side::Remote, "tie: DEV_B is the higher device id");
+
+        // Mirror view on A must agree — the rule is symmetric.
+        let mirrored = reconcile(ReconcileInput {
+            store: &p.b.store,
+            local: &p.sb.manifest,
+            remote: &p.sa.manifest,
+            base: None,
+        })
+        .unwrap();
+        assert_eq!(mirrored.conflicts[0].winner, Side::Local, "B's local copy (DEV_B) wins on B too");
+    }
+
+    #[test]
+    fn delete_vs_edit_resurrects_the_edit() {
+        // Shared base first, then A edits while B deletes.
+        let mut p = pair(
+            &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
+            &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
+        );
+        let base = p.sa.manifest.clone();
+
+        write_file(&p.a.tree.join("f.txt"), b"the edit", false, (60, 0));
+        std::fs::remove_file(p.b.tree.join("f.txt")).unwrap();
+        let sa = p.a.snapshot();
+        let sb = p.b.snapshot();
+        transfer_manifest(&p.a.store, &p.b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&p.b.store, &p.a.store, &sb.manifest, sb.manifest_id);
+
+        let plan = reconcile(ReconcileInput {
+            store: &p.a.store,
+            local: &sa.manifest,
+            remote: &sb.manifest,
+            base: Some(&base),
+        })
+        .unwrap();
+        assert_eq!(plan.conflicts.len(), 1);
+        assert_eq!(plan.conflicts[0].kind, ConflictKind::DeleteVsEdit);
+        assert_eq!(plan.conflicts[0].winner, Side::Local, "the edit beats the deletion");
+        assert!(plan.quarantine.is_empty(), "nothing to save; deletion has no bytes");
+        assert!(plan.materialize.is_empty(), "edit stays live on the editor");
+    }
+
+    #[test]
+    fn edit_vs_delete_resurrection_is_materialized_on_the_deleter() {
+        let mut p = pair(
+            &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
+            &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
+        );
+        let base = p.sa.manifest.clone();
+
+        std::fs::remove_file(p.a.tree.join("f.txt")).unwrap();
+        write_file(&p.b.tree.join("f.txt"), b"edited elsewhere", false, (70, 0));
+        let sa = p.a.snapshot();
+        let sb = p.b.snapshot();
+        transfer_manifest(&p.a.store, &p.b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&p.b.store, &p.a.store, &sb.manifest, sb.manifest_id);
+
+        let plan = reconcile(ReconcileInput {
+            store: &p.a.store,
+            local: &sa.manifest,
+            remote: &sb.manifest,
+            base: Some(&base),
+        })
+        .unwrap();
+        assert_eq!(plan.conflicts.len(), 1);
+        assert_eq!(plan.conflicts[0].winner, Side::Remote, "B edited, A deleted");
+        assert_eq!(plan.materialize.len(), 1, "A resurrects B's edit locally");
+        assert!(plan.quarantine.is_empty());
+    }
+
+    #[test]
+    fn structural_conflict_refuses_dir_replacement_against_nested_edit() {
+        let mut p = pair(
+            &|t| {
+                write_file(&t.join("d/inner.txt"), b"base inner", false, (50, 0));
+                set_dir_mtime(&t.join("d"), 49, 0);
+            },
+            &|t| {
+                write_file(&t.join("d/inner.txt"), b"base inner", false, (50, 0));
+                set_dir_mtime(&t.join("d"), 49, 0);
+            },
+        );
+        let _ = &p.sa;
+        let base = p.sa.manifest.clone();
+
+        // A replaces the whole directory with a file of the same name.
+        std::fs::remove_dir_all(p.a.tree.join("d")).unwrap();
+        write_file(&p.a.tree.join("d"), b"now a file", false, (80, 0));
+        // B edits inside it.
+        write_file(&p.b.tree.join("d/inner.txt"), b"edited inner", false, (81, 0));
+        let sa = p.a.snapshot();
+        let sb = p.b.snapshot();
+        transfer_manifest(&p.a.store, &p.b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&p.b.store, &p.a.store, &sb.manifest, sb.manifest_id);
+
+        let err = reconcile(ReconcileInput {
+            store: &p.a.store,
+            local: &sa.manifest,
+            remote: &sb.manifest,
+            base: Some(&base),
+        })
+        .unwrap_err();
+        assert!(matches!(err, ReconcileError::StructuralConflict { .. }), "{err}");
+    }
 }
