@@ -250,6 +250,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry-proto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "ferry-crypto",
+ "ferry-store",
+ "hkdf",
+ "rand",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "ferry-store"
 version = "0.1.0"
 dependencies = [
