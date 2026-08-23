@@ -250,6 +250,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry-materialize"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ferry-store",
+ "libc",
+ "rand",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "ferry-store"
 version = "0.1.0"
 dependencies = [
