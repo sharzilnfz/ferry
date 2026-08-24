@@ -42,8 +42,7 @@ use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_proto::codec::{self, AuthProof, Bye, FrameBody, Hello, HelloAck};
 use ferry_proto::error::{ByeReason, ProtoError};
 use ferry_proto::secure::{
-    transcript_hash, INFO_HANDSHAKE, INFO_HTK_I2R, INFO_HTK_R2I, INFO_TK_I2R, INFO_TK_R2I,
-    KEY_LEN,
+    transcript_hash, INFO_HANDSHAKE, INFO_HTK_I2R, INFO_HTK_R2I, INFO_TK_I2R, INFO_TK_R2I, KEY_LEN,
 };
 use ferry_proto::version::{negotiate, ProtocolVersion};
 
@@ -203,29 +202,29 @@ impl DirectionCipher {
 fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
     let hk = Hkdf::<Sha256>::from_prk(prk).expect("prk is a valid SHA-256 length");
     let mut okm = Zeroizing::new([0u8; KEY_LEN]);
-    hk.expand(info, okm.as_mut()).expect("32-byte OKM always valid");
+    hk.expand(info, okm.as_mut())
+        .expect("32-byte OKM always valid");
     okm
 }
 
-/// Stage 1: `(htk_i2r, htk_r2i, prk)` from the three DH terms under the
-/// hello transcript hash.
-fn kdf_handshake(
-    th: &[u8; 32],
-    e1: &[u8; 32],
-    m1: &[u8; 32],
-    m2: &[u8; 32],
-) -> (
+/// `(htk_i2r, htk_r2i, prk)` — all zeroizing-on-drop key material.
+type HandshakeKeys = (
     Zeroizing<[u8; KEY_LEN]>,
     Zeroizing<[u8; KEY_LEN]>,
     Box<[u8; KEY_LEN]>,
-) {
+);
+
+/// Stage 1: `(htk_i2r, htk_r2i, prk)` from the three DH terms under the
+/// hello transcript hash.
+fn kdf_handshake(th: &[u8; 32], e1: &[u8; 32], m1: &[u8; 32], m2: &[u8; 32]) -> HandshakeKeys {
     let mut ikm = Zeroizing::new([0u8; 96]);
     ikm[..32].copy_from_slice(e1);
     ikm[32..64].copy_from_slice(m1);
     ikm[64..].copy_from_slice(m2);
     let ext = Hkdf::<Sha256>::new(Some(th), ikm.as_ref());
     let mut prk = Box::new([0u8; KEY_LEN]);
-    ext.expand(INFO_HANDSHAKE, prk.as_mut()).expect("valid prk length");
+    ext.expand(INFO_HANDSHAKE, prk.as_mut())
+        .expect("valid prk length");
     let htk_i2r = expand_from(prk.as_slice(), INFO_HTK_I2R);
     let htk_r2i = expand_from(prk.as_slice(), INFO_HTK_R2I);
     (htk_i2r, htk_r2i, prk)
@@ -253,7 +252,11 @@ fn traffic_keys(prk: &[u8; KEY_LEN], th_final: &[u8; 32]) -> (DirectionCipher, D
 
 /// Seal this side's possession proof: its OWN device_id under its
 /// direction's auth key, AAD = hello transcript hash, fixed zero nonce.
-fn seal_auth(key: &[u8; KEY_LEN], th: &[u8; 32], device_id: &DeviceId) -> Result<AuthProof, ProtoError> {
+fn seal_auth(
+    key: &[u8; KEY_LEN],
+    th: &[u8; 32],
+    device_id: &DeviceId,
+) -> Result<AuthProof, ProtoError> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = [0u8; NONCE_LEN];
     let ct = cipher
@@ -270,7 +273,11 @@ fn seal_auth(key: &[u8; KEY_LEN], th: &[u8; 32], device_id: &DeviceId) -> Result
 
 /// Open the peer's possession proof. Tag failure == they do not hold the
 /// static secret they claim.
-fn open_auth(key: &[u8; KEY_LEN], th: &[u8; 32], proof: &AuthProof) -> Result<DeviceId, ProtoError> {
+fn open_auth(
+    key: &[u8; KEY_LEN],
+    th: &[u8; 32],
+    proof: &AuthProof,
+) -> Result<DeviceId, ProtoError> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = [0u8; NONCE_LEN];
     let pt = cipher
@@ -299,7 +306,11 @@ pub enum ExpectPeer {
     TrustOnFirstUse,
 }
 
-fn check_identity(got: DeviceId, expect: &ExpectPeer, seen_first: Option<DeviceId>) -> Result<DeviceId, ProtoError> {
+fn check_identity(
+    got: DeviceId,
+    expect: &ExpectPeer,
+    seen_first: Option<DeviceId>,
+) -> Result<DeviceId, ProtoError> {
     match expect {
         ExpectPeer::Pin(want) => {
             if got == *want {
@@ -378,7 +389,9 @@ impl<'a> SessionIo<'a> {
                 if higher && flagged {
                     continue; // skip-if-flagged
                 }
-                return Err(ProtoError::UnknownMessage { msg_type: fb.msg_type });
+                return Err(ProtoError::UnknownMessage {
+                    msg_type: fb.msg_type,
+                });
             }
             return Ok(Some(fb));
         }
@@ -387,7 +400,9 @@ impl<'a> SessionIo<'a> {
     pub fn expect_frame(&mut self, msg_type: u8) -> Result<FrameBody, ProtoError> {
         match self.recv_frame()? {
             Some(fb) if fb.msg_type == msg_type => Ok(fb),
-            Some(_) => Err(ProtoError::ProtocolViolation("unexpected message in this state")),
+            Some(_) => Err(ProtoError::ProtocolViolation(
+                "unexpected message in this state",
+            )),
             None => unreachable!("recv_frame loops until a known type or error"),
         }
     }
@@ -397,7 +412,9 @@ impl<'a> SessionIo<'a> {
     pub fn expect_frame_any(&mut self, msg_types: &[u8]) -> Result<FrameBody, ProtoError> {
         match self.recv_frame()? {
             Some(fb) if msg_types.contains(&fb.msg_type) => Ok(fb),
-            Some(_) => Err(ProtoError::ProtocolViolation("unexpected message in this state")),
+            Some(_) => Err(ProtoError::ProtocolViolation(
+                "unexpected message in this state",
+            )),
             None => unreachable!("recv_frame loops until a known type or error"),
         }
     }
@@ -491,9 +508,12 @@ pub fn establish<'a, L: Link>(
                     }
                     _ => ByeReason::ProtocolViolation,
                 };
-                let body =
-                    FrameBody::new(codec::MSG_BYE, ProtocolVersion::V1_0, Bye { reason }.encode())
-                        .encode();
+                let body = FrameBody::new(
+                    codec::MSG_BYE,
+                    ProtocolVersion::V1_0,
+                    Bye { reason }.encode(),
+                )
+                .encode();
                 let _ = link.send_body(&body);
             }
             Err(e)
@@ -581,11 +601,23 @@ fn handshake_core<L: Link>(
     let (peer_max, peer_flags, peer_eph, peer_stat, agreed) = match role {
         ferry_proto::Role::Initiator => {
             let ack = HelloAck::parse(&peer_hello_fb.payload)?;
-            (ack.version, ack.flags, ack.eph_pub, ack.stat_pub, ack.agreed)
+            (
+                ack.version,
+                ack.flags,
+                ack.eph_pub,
+                ack.stat_pub,
+                ack.agreed,
+            )
         }
         ferry_proto::Role::Responder => {
             let h = Hello::parse(&peer_hello_fb.payload)?;
-            (h.version, h.flags, h.eph_pub, h.stat_pub, negotiate(our_max, h.version)?)
+            (
+                h.version,
+                h.flags,
+                h.eph_pub,
+                h.stat_pub,
+                negotiate(our_max, h.version)?,
+            )
         }
     };
 
@@ -669,7 +701,11 @@ fn handshake_core<L: Link>(
         ferry_proto::Role::Initiator => (tk_i2r, tk_r2i),
         ferry_proto::Role::Responder => (tk_r2i, tk_i2r),
     };
-    let (tx, rx) = if encryption { (Some(tx), Some(rx)) } else { (None, None) };
+    let (tx, rx) = if encryption {
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
 
     Ok(HandshakeData {
         agreed,
@@ -712,10 +748,22 @@ mod tests {
     ) -> (Established<'a>, Established<'b>) {
         let (ra, rb) = std::thread::scope(|s| {
             let ha = s.spawn(|| {
-                establish(la, ferry_proto::Role::Initiator, id_a, ExpectPeer::Pin(*id_b.device_id()), encryption)
+                establish(
+                    la,
+                    ferry_proto::Role::Initiator,
+                    id_a,
+                    ExpectPeer::Pin(*id_b.device_id()),
+                    encryption,
+                )
             });
             let hb = s.spawn(|| {
-                establish(lb, ferry_proto::Role::Responder, id_b, ExpectPeer::Pin(*id_a.device_id()), encryption)
+                establish(
+                    lb,
+                    ferry_proto::Role::Responder,
+                    id_b,
+                    ExpectPeer::Pin(*id_a.device_id()),
+                    encryption,
+                )
             });
             (ha.join().unwrap(), hb.join().unwrap())
         });
@@ -740,7 +788,9 @@ mod tests {
             manifest_id: [9; 32],
             reserved: 0,
         };
-        ea.io.send_frame(codec::MSG_FOLDER_OFFER, offer.encode()).unwrap();
+        ea.io
+            .send_frame(codec::MSG_FOLDER_OFFER, offer.encode())
+            .unwrap();
         let fb = eb.io.recv_frame().unwrap().unwrap();
         assert_eq!(fb.msg_type, codec::MSG_FOLDER_OFFER);
         let got = codec::FolderOffer::parse(&fb.payload).unwrap();
@@ -748,7 +798,13 @@ mod tests {
 
         // And back the other way on the responder's independent direction.
         eb.io
-            .send_frame(codec::MSG_BYE, Bye { reason: ByeReason::Normal }.encode())
+            .send_frame(
+                codec::MSG_BYE,
+                Bye {
+                    reason: ByeReason::Normal,
+                }
+                .encode(),
+            )
             .unwrap();
         let fb = ea.io.recv_frame().unwrap().unwrap();
         assert_eq!(fb.msg_type, codec::MSG_BYE);
@@ -763,16 +819,28 @@ mod tests {
             // Dev mode (encryption=false): handshake + proofs still run; the
             // post-auth body travels UNSEALED, so magic and type are visible.
             let ha = s.spawn(|| {
-                let mut est =
-                    establish(&mut la, ferry_proto::Role::Initiator, &id_a, ExpectPeer::Pin(*id_b.device_id()), false)
-                        .unwrap();
+                let mut est = establish(
+                    &mut la,
+                    ferry_proto::Role::Initiator,
+                    &id_a,
+                    ExpectPeer::Pin(*id_b.device_id()),
+                    false,
+                )
+                .unwrap();
                 assert!(!est.encrypted);
-                est.io.send_frame(codec::MSG_FOLDER_OFFER, vec![0xAB; 52]).unwrap();
+                est.io
+                    .send_frame(codec::MSG_FOLDER_OFFER, vec![0xAB; 52])
+                    .unwrap();
             });
             let hb = s.spawn(|| {
-                let mut est =
-                    establish(&mut lb, ferry_proto::Role::Responder, &id_b, ExpectPeer::Pin(*id_a.device_id()), false)
-                        .unwrap();
+                let mut est = establish(
+                    &mut lb,
+                    ferry_proto::Role::Responder,
+                    &id_b,
+                    ExpectPeer::Pin(*id_a.device_id()),
+                    false,
+                )
+                .unwrap();
                 assert!(!est.encrypted);
                 let raw = est.io.link_recv_raw_for_test();
                 // The body region IS magic || type || version || payload
@@ -795,10 +863,22 @@ mod tests {
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
             let ha = s.spawn(|| {
-                establish(&mut la, ferry_proto::Role::Initiator, &id_a, ExpectPeer::Pin(*stranger.device_id()), true)
+                establish(
+                    &mut la,
+                    ferry_proto::Role::Initiator,
+                    &id_a,
+                    ExpectPeer::Pin(*stranger.device_id()),
+                    true,
+                )
             });
             let hb = s.spawn(|| {
-                establish(&mut lb, ferry_proto::Role::Responder, &id_b, ExpectPeer::Pin(*id_a.device_id()), true)
+                establish(
+                    &mut lb,
+                    ferry_proto::Role::Responder,
+                    &id_b,
+                    ExpectPeer::Pin(*id_a.device_id()),
+                    true,
+                )
             });
             let results = (ha.join().unwrap(), hb.join().unwrap());
             // The side whose PIN fails sees IdentityMismatch (after firing a
@@ -810,14 +890,18 @@ mod tests {
                 matches!(
                     err,
                     ProtoError::IdentityMismatch { .. }
-                        | ProtoError::ByeReceived { reason: ByeReason::AuthFailed }
+                        | ProtoError::ByeReceived {
+                            reason: ByeReason::AuthFailed
+                        }
                 )
             };
             let surviving = |err: &ProtoError| {
                 matches!(
                     err,
                     ProtoError::ProtocolViolation(_)
-                        | ProtoError::ByeReceived { reason: ByeReason::AuthFailed }
+                        | ProtoError::ByeReceived {
+                            reason: ByeReason::AuthFailed
+                        }
                         | ProtoError::Io(_)
                 )
             };
@@ -842,18 +926,30 @@ mod tests {
             stat_pub: *id_a.device_id(),
             nonce: [2; 32],
         };
-        let body =
-            FrameBody::new(codec::MSG_HELLO, ProtocolVersion::new(2, 0), evil_hello.encode()).encode();
+        let body = FrameBody::new(
+            codec::MSG_HELLO,
+            ProtocolVersion::new(2, 0),
+            evil_hello.encode(),
+        )
+        .encode();
         // Full literal frame: prefix || body.
         la.0.write_all(&wire_image(&body)).unwrap();
 
-        let res = establish(&mut lb, ferry_proto::Role::Responder, &id_b, ExpectPeer::Pin(*id_a.device_id()), true);
+        let res = establish(
+            &mut lb,
+            ferry_proto::Role::Responder,
+            &id_b,
+            ExpectPeer::Pin(*id_a.device_id()),
+            true,
+        );
         let err = res.unwrap_err();
         assert!(
             matches!(
                 err,
                 ProtoError::VersionIncompatible { .. }
-                    | ProtoError::ByeReceived { reason: ByeReason::VersionIncompatible }
+                    | ProtoError::ByeReceived {
+                        reason: ByeReason::VersionIncompatible
+                    }
             ),
             "{err}"
         );
@@ -892,13 +988,21 @@ mod tests {
                     stat_pub: peer_id,
                     nonce: [4; 32],
                 };
-                let body =
-                    FrameBody::new(codec::MSG_HELLO_ACK, ProtocolVersion::new(2, 0), ack.encode())
-                        .encode();
+                let body = FrameBody::new(
+                    codec::MSG_HELLO_ACK,
+                    ProtocolVersion::new(2, 0),
+                    ack.encode(),
+                )
+                .encode();
                 la.0.write_all(&wire_image(&body)).unwrap();
             });
-            let res =
-                establish(&mut lb, ferry_proto::Role::Initiator, &id_a, ExpectPeer::Pin(peer_id), true);
+            let res = establish(
+                &mut lb,
+                ferry_proto::Role::Initiator,
+                &id_a,
+                ExpectPeer::Pin(peer_id),
+                true,
+            );
             let err = res.unwrap_err();
             assert!(
                 matches!(
@@ -918,10 +1022,22 @@ mod tests {
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
             let ha = s.spawn(|| {
-                establish(&mut la, ferry_proto::Role::Initiator, &id_a, ExpectPeer::TrustOnFirstUse, true)
+                establish(
+                    &mut la,
+                    ferry_proto::Role::Initiator,
+                    &id_a,
+                    ExpectPeer::TrustOnFirstUse,
+                    true,
+                )
             });
             let hb = s.spawn(|| {
-                establish(&mut lb, ferry_proto::Role::Responder, &id_b, ExpectPeer::TrustOnFirstUse, true)
+                establish(
+                    &mut lb,
+                    ferry_proto::Role::Responder,
+                    &id_b,
+                    ExpectPeer::TrustOnFirstUse,
+                    true,
+                )
             });
             let (ea, eb) = (ha.join().unwrap().unwrap(), hb.join().unwrap().unwrap());
             assert_eq!(ea.peer, *id_b.device_id(), "TOFU reports who showed up");
@@ -936,14 +1052,23 @@ mod tests {
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
             let ha = s.spawn(move || {
-                let mut est =
-                    establish(&mut la, ferry_proto::Role::Initiator, &id_a, ExpectPeer::TrustOnFirstUse, true)
-                        .unwrap();
+                let mut est = establish(
+                    &mut la,
+                    ferry_proto::Role::Initiator,
+                    &id_a,
+                    ExpectPeer::TrustOnFirstUse,
+                    true,
+                )
+                .unwrap();
                 // Seal an honest frame, flip one ciphertext byte in flight.
-                let payload =
-                    codec::FolderOffer { folder_id: [1; 16], manifest_id: [2; 32], reserved: 0 }.encode();
-                let body =
-                    FrameBody::new(codec::MSG_FOLDER_OFFER, ProtocolVersion::V1_0, payload).encode();
+                let payload = codec::FolderOffer {
+                    folder_id: [1; 16],
+                    manifest_id: [2; 32],
+                    reserved: 0,
+                }
+                .encode();
+                let body = FrameBody::new(codec::MSG_FOLDER_OFFER, ProtocolVersion::V1_0, payload)
+                    .encode();
                 let len = (body.len() + 16) as u32;
                 let mut ct = est.io.seal_for_test(len, &body).unwrap();
                 let last = ct.len() - 3;
@@ -952,9 +1077,14 @@ mod tests {
                 la.0.write_all(&ct).unwrap();
             });
             let hb = s.spawn(move || {
-                let mut est =
-                    establish(&mut lb, ferry_proto::Role::Responder, &id_b, ExpectPeer::TrustOnFirstUse, true)
-                        .unwrap();
+                let mut est = establish(
+                    &mut lb,
+                    ferry_proto::Role::Responder,
+                    &id_b,
+                    ExpectPeer::TrustOnFirstUse,
+                    true,
+                )
+                .unwrap();
                 let err = est.io.recv_frame().unwrap_err();
                 assert!(matches!(err, ProtoError::Auth(_)), "{err}");
             });

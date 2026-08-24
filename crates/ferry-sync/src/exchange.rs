@@ -51,8 +51,8 @@ use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload, RootM
 use ferry_store::store::Store;
 
 use crate::engine::{IngestError, SessionError};
-use crate::materialize::{BlobSource, InlineMaterializer};
 use crate::materialize::Materializer;
+use crate::materialize::{BlobSource, InlineMaterializer};
 use crate::session::{Established, SessionIo};
 
 /// Zero folder_id marks "end of announcement list" in offer rounds.
@@ -79,12 +79,7 @@ pub trait ExchangeHost {
     /// Adopt `manifest` as our current folder state (no agreement yet).
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError>;
     /// Record the last-agreed pointer against `peer`, locally.
-    fn agree(
-        &self,
-        peer: DeviceId,
-        bytes: &[u8],
-        manifest_id: BlobId,
-    ) -> Result<(), SessionError>;
+    fn agree(&self, peer: DeviceId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError>;
 }
 
 /// The manifest we currently announce as ours. Adoption replaces it
@@ -231,11 +226,11 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
             manifest_id: [0; 32],
             reserved: 0,
         };
-        let mut peer_final: Option<BlobId> = None;
 
         if self.initiator {
             self.send_offer(&my_offer, with_adverts)?;
-            peer_final = Some(self.consume_echo(with_adverts)?);
+            // The echo IS how the initiator learns the peer's state.
+            let echoed = self.consume_echo(with_adverts)?;
             self.send_offer(&sentinel, false)?;
             loop {
                 let po = self.expect_offer()?;
@@ -244,34 +239,37 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
                 }
                 self.echo_announcement(po, with_adverts)?;
             }
-        } else {
-            let mut covered_ours: Option<BlobId> = None;
-            loop {
-                let po = self.expect_offer()?;
-                if po.folder_id == FOLDER_SENTINEL {
-                    break;
-                }
-                if po.folder_id == self.folder_id {
-                    // The announcement IS the peer's current state for our
-                    // folder — in round 2 this is exactly the post-pull id
-                    // we must compare against.
-                    covered_ours = Some(po.manifest_id);
-                }
-                self.echo_announcement(po, with_adverts)?;
+            return Ok(echoed);
+        }
+
+        // Responder: mirror announcements until the initiator's sentinel,
+        // then announce folders only we have, then end the list.
+        let mut covered_ours: Option<BlobId> = None;
+        loop {
+            let po = self.expect_offer()?;
+            if po.folder_id == FOLDER_SENTINEL {
+                break;
             }
-            if let Some(id) = covered_ours {
-                peer_final = Some(id);
-            } else {
+            if po.folder_id == self.folder_id {
+                // The announcement IS the peer's current state for our
+                // folder — in round 2 this is exactly the post-pull id we
+                // must compare against.
+                covered_ours = Some(po.manifest_id);
+            }
+            self.echo_announcement(po, with_adverts)?;
+        }
+        let peer_final = match covered_ours {
+            Some(id) => id,
+            None => {
                 // The initiator never announced our folder ("folders only
                 // the responder has"): announce it ourselves and consume
                 // the echo.
                 self.send_offer(&my_offer, with_adverts)?;
-                peer_final = Some(self.consume_echo(with_adverts)?);
+                self.consume_echo(with_adverts)?
             }
-            self.send_offer(&sentinel, false)?;
-        }
-
-        Ok(peer_final.unwrap_or([0u8; 32]))
+        };
+        self.send_offer(&sentinel, false)?;
+        Ok(peer_final)
     }
 
     fn send_offer(&mut self, offer: &FolderOffer, with_adverts: bool) -> Result<(), SessionError> {
@@ -527,10 +525,9 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
                 }
                 codec::MSG_REQUEST_PACKS => self.serve_packs(RequestPacks::parse(&fb.payload)?)?,
                 _ => {
-                    return Err(ProtoError::ProtocolViolation(
-                        "unexpected message while serving",
+                    return Err(
+                        ProtoError::ProtocolViolation("unexpected message while serving").into(),
                     )
-                    .into())
                 }
             }
         }
@@ -737,19 +734,18 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
 
     /// Adopt a fetched/settled manifest: persist the blob, hand the new
     /// pointer to the host, refresh our own announcement state.
-    fn adopt(
-        &mut self,
-        id: BlobId,
-        bytes: Vec<u8>,
-        man: RootManifest,
-    ) -> Result<(), SessionError> {
+    fn adopt(&mut self, id: BlobId, bytes: Vec<u8>, man: RootManifest) -> Result<(), SessionError> {
         // Keep the manifest as a stored blob: agreement records may
         // reference it across restarts.
         self.store
             .put_meta(BlobKind::Manifest, &bytes)
             .map_err(wire_store_err)?;
         self.host.adopt(&bytes, &man)?;
-        self.cur = CurrentState { id, bytes, manifest: man };
+        self.cur = CurrentState {
+            id,
+            bytes,
+            manifest: man,
+        };
         Ok(())
     }
 }
@@ -760,7 +756,11 @@ struct LocalBlobSource<'x> {
 }
 
 impl BlobSource for LocalBlobSource<'_> {
-    fn get(&self, kind: BlobKind, id: &BlobId) -> Result<Vec<u8>, crate::materialize::MaterializeError> {
+    fn get(
+        &self,
+        kind: BlobKind,
+        id: &BlobId,
+    ) -> Result<Vec<u8>, crate::materialize::MaterializeError> {
         self.store.get(kind, id).map_err(|e| {
             crate::materialize::MaterializeError::MissingBlob(format!("{kind:?} {}: {e}", hex(id)))
         })

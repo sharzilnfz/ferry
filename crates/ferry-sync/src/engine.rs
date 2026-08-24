@@ -41,9 +41,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::exchange::{self, CurrentState, ExchangeHost};
-use crate::materialize::{
-    BlobSource, InlineMaterializer, MaterializeError, Materializer,
-};
+use crate::materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
 use crate::proto::{self, ItemPayload, ProtoError};
 use crate::session::{self, ConnLink, Established, ExpectPeer};
 use crate::state::{device_id_from_tag, AgreedRecord, AgreementStore};
@@ -373,7 +371,9 @@ impl Ctx {
                 return Ok(snap);
             }
             if Instant::now() > deadline {
-                return Err(SessionError::Other("no local folder state available".into()));
+                return Err(SessionError::Other(
+                    "no local folder state available".into(),
+                ));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -526,7 +526,10 @@ impl Ctx {
     /// dies at its tag before any item-level check can run) also count as
     /// rejected transfers so integrity accounting stays complete.
     fn note_session_failure(&self, e: &SessionError) {
-        if matches!(e, SessionError::Wire(ferry_proto::error::ProtoError::Auth(_))) {
+        if matches!(
+            e,
+            SessionError::Wire(ferry_proto::error::ProtoError::Auth(_))
+        ) {
             self.bump_rejected();
         }
         self.bump_failed();
@@ -553,11 +556,7 @@ const MAX_ITEM_RETRIES: u32 = 3;
 /// One protocol v1 session over an established transport connection:
 /// authenticated, sealed handshake first, then the offer/pull/agree/BYE
 /// conversation. Caller holds the per-daemon session lock.
-fn run_session_v1(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    dialer: bool,
-) -> Result<(), SessionError> {
+fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<(), SessionError> {
     let role = if dialer {
         ferry_proto::Role::Initiator
     } else {
@@ -631,12 +630,7 @@ impl ExchangeHost for EngineHost<'_> {
         Ok(())
     }
 
-    fn agree(
-        &self,
-        peer: BlobId,
-        bytes: &[u8],
-        manifest_id: BlobId,
-    ) -> Result<(), SessionError> {
+    fn agree(&self, peer: BlobId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError> {
         self.ctx.record_agreement(peer, bytes, manifest_id)
     }
 }

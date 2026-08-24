@@ -89,7 +89,7 @@ pub use ferry_crypto::identity::DeviceIdentity;
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
 pub use materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
-pub use session::{ExpectPeer, Established};
+pub use session::{Established, ExpectPeer};
 pub use state::{device_id_from_tag, AgreementStore};
 pub use transport::{Connection, Listener, TcpTransport, Transport};
 

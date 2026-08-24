@@ -49,9 +49,7 @@ fn open_store(dir: &Path) -> Arc<Store> {
     if dir.join(ferry_store::store::STORE_DIR_NAME).is_dir() {
         Arc::new(Store::open(dir, fmk, Box::new(ferry_store::crypto::PassthroughCipher)).unwrap())
     } else {
-        Arc::new(
-            Store::create(dir, fmk, Box::new(ferry_store::crypto::PassthroughCipher)).unwrap(),
-        )
+        Arc::new(Store::create(dir, fmk, Box::new(ferry_store::crypto::PassthroughCipher)).unwrap())
     }
 }
 
@@ -81,7 +79,9 @@ fn snapshot_tree(store: &Store, tree: &Path, who: &DeviceIdentity, sec: i64) -> 
         created_sec: sec,
         created_nsec: 0,
     };
-    snapshot_dir(store, poly(), tree, &identity).unwrap().manifest
+    snapshot_dir(store, poly(), tree, &identity)
+        .unwrap()
+        .manifest
 }
 
 /// Snapshot an EMPTY directory into `store` (fresh-device state).
@@ -95,7 +95,9 @@ fn snapshot_empty(store: &Store, tree: &Path, who: &DeviceIdentity) -> RootManif
         created_sec: 1_700_000_001, // NEWER clock than the content fixture
         created_nsec: 0,
     };
-    snapshot_dir(store, poly(), tree, &identity).unwrap().manifest
+    snapshot_dir(store, poly(), tree, &identity)
+        .unwrap()
+        .manifest
 }
 
 fn manifest_id_of(m: &RootManifest) -> [u8; 32] {
@@ -118,7 +120,11 @@ impl ExchangeHost for TestHost {
     fn tree_root(&self) -> &Path {
         &self.tree_root
     }
-    fn adopt(&self, _bytes: &[u8], manifest: &RootManifest) -> Result<(), ferry_sync::SessionError> {
+    fn adopt(
+        &self,
+        _bytes: &[u8],
+        manifest: &RootManifest,
+    ) -> Result<(), ferry_sync::SessionError> {
         self.adopted.lock().unwrap().push(manifest.root_tree_id);
         Ok(())
     }
@@ -143,9 +149,7 @@ impl ExchangeHost for TestHost {
                         agreed_nsec: nsec,
                     },
                 )
-                .map_err(|e| {
-                    ferry_sync::SessionError::Other(format!("agreement ledger: {e}"))
-                })?;
+                .map_err(|e| ferry_sync::SessionError::Other(format!("agreement ledger: {e}")))?;
         }
         *self.agreed.lock().unwrap() = Some(manifest_id);
         Ok(())
@@ -153,13 +157,11 @@ impl ExchangeHost for TestHost {
 }
 
 fn ledger_path(store_dot: &Path, peer: [u8; 32]) -> PathBuf {
-    store_dot
-        .join("agreement")
-        .join(format!(
-            "{}-{}.agree",
-            ferry_sync::format::hex(&DEFAULT_FOLDER_ID),
-            ferry_sync::format::hex(&peer)
-        ))
+    store_dot.join("agreement").join(format!(
+        "{}-{}.agree",
+        ferry_sync::format::hex(&DEFAULT_FOLDER_ID),
+        ferry_sync::format::hex(&peer)
+    ))
 }
 
 fn trees_identical(a: &Path, b: &Path) -> bool {
@@ -278,10 +280,9 @@ fn ferry_sync_stack_interops_with_reference_engine() {
     assert!(trees_identical(&ref_tree, &my_tree), "working trees match");
 
     // Ledgers: canonical 77-byte records on BOTH sides, same ids.
-    let rb = fs::read(ledger_path(&ref_dot, *id_my.device_id()))
-        .expect("reference-side ledger exists");
-    let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id()))
-        .expect("our-side ledger exists");
+    let rb =
+        fs::read(ledger_path(&ref_dot, *id_my.device_id())).expect("reference-side ledger exists");
+    let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id())).expect("our-side ledger exists");
     assert_eq!(rb.len(), 77);
     assert_eq!(mb.len(), 77);
     let rrec = ferry_proto::agreement::AgreementRecord::from_canonical(&rb).unwrap();
@@ -378,7 +379,10 @@ fn reference_initiator_ferry_sync_responder_interop() {
         let _ = kind; // presence checks below via direct gets
     }
     let man_bytes = store_ref
-        .get(ferry_store::BlobKind::Manifest, &ferry_store::BlobId::from(my_manifest_id))
+        .get(
+            ferry_store::BlobKind::Manifest,
+            &ferry_store::BlobId::from(my_manifest_id),
+        )
         .expect("manifest blob landed in the reference store");
     assert_eq!(
         ferry_sync::format::hex(blake3::hash(&man_bytes).as_bytes()),
@@ -468,7 +472,9 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
         reserved: 0,
     }
     .encode();
-    est.io.send_frame(ferry_proto::codec::MSG_FOLDER_OFFER, payload).unwrap();
+    est.io
+        .send_frame(ferry_proto::codec::MSG_FOLDER_OFFER, payload)
+        .unwrap();
 
     // Give the reference side a moment to fail on the tag, then drop our
     // end so the thread cannot block forever on later reads.
