@@ -1,6 +1,6 @@
 # T-19: Bounded scan event delivery — stalled subscribers cannot retain snapshots
 
-Status: ready-for-agent
+Status: done
 
 Audit finding (Low): `ScanEngine::subscribe`
 (crates/ferry-scan/src/engine.rs ~507-513) hands out an unbounded channel;

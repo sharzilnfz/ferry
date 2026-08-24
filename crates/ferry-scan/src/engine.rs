@@ -23,7 +23,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -173,7 +173,41 @@ struct Parts {
     queue: Arc<SignalQueue>,
     core: Arc<Mutex<Core>>,
     current: Arc<RwLock<Option<Arc<CurrentScan>>>>,
-    subs: Arc<Mutex<Vec<Sender<ScanEvent>>>>,
+    subs: Arc<Mutex<Vec<Subscriber>>>,
+}
+
+/// Channel capacity per subscriber. Combined with the staged slot below,
+/// this caps retained snapshots at two per stalled consumer regardless of
+/// how many passes complete while it never receives.
+const SUB_CHANNEL_BOUND: usize = 1;
+
+/// One live subscriber: a capacity-bounded channel plus a single staged
+/// slot holding the newest event the channel has not yet accepted.
+struct Subscriber {
+    tx: SyncSender<ScanEvent>,
+    /// Replaced wholesale on every publish (scan completions coalesce
+    /// naturally), so a receiver that stalls pins O(1) memory instead of
+    /// one full snapshot per pass.
+    staged: Option<ScanEvent>,
+}
+
+impl Subscriber {
+    /// Stage `ev` and flush it into the channel if there is room. Returns
+    /// false when the receiver is gone (subscriber should be pruned).
+    fn offer(&mut self, ev: ScanEvent) -> bool {
+        self.staged = Some(ev);
+        match self
+            .tx
+            .try_send(self.staged.as_ref().expect("just staged").clone())
+        {
+            Ok(()) => self.staged = None,
+            // Channel busy with an older copy; the staged newest folds
+            // forward on the next publish. Bounded, not lost forever.
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => return false,
+        }
+        true
+    }
 }
 
 impl Parts {
@@ -388,13 +422,18 @@ impl Parts {
 
     fn publish(&self, cur: Arc<CurrentScan>) {
         *self.current.write().expect("current lock") = Some(cur.clone());
-        let mut subs = self.subs.lock().expect("subs lock");
-        subs.retain(|tx| tx.send(ScanEvent::Updated(cur.clone())).is_ok());
+        self.deliver(ScanEvent::Updated(cur));
     }
 
     fn report_failure(&self, err: &ScanError) {
+        self.deliver(ScanEvent::Failed(err.to_string()));
+    }
+
+    /// Latest-wins fan-out: stage the event on every subscriber and drop
+    /// the ones whose receivers are gone.
+    fn deliver(&self, ev: ScanEvent) {
         let mut subs = self.subs.lock().expect("subs lock");
-        subs.retain(|tx| tx.send(ScanEvent::Failed(err.to_string())).is_ok());
+        subs.retain_mut(|sub| sub.offer(ev.clone()));
     }
 }
 
@@ -506,11 +545,23 @@ impl ScanEngine {
         self.parts.core.lock().expect("core").last_pass.clone()
     }
 
-    /// Subscribe to scan completions/failures. Unbounded; subscribers whose
-    /// receivers are dropped are pruned on the next event.
+    /// Subscribe to scan completions/failures.
+    ///
+    /// Backpressure is bounded and latest-wins: each subscriber retains at
+    /// most two events (one buffered in a capacity-1 channel, one staged
+    /// slot) no matter how many passes complete while the receiver stalls,
+    /// and each publish replaces the staged event — so a live-but-stalled
+    /// consumer pins O(1) snapshot memory instead of one `CurrentScan` per
+    /// pass. The staged newest folds into the channel on the next publish
+    /// once the receiver drains. Subscribers whose receivers are dropped
+    /// are pruned on the next event.
     pub fn subscribe(&self) -> std::sync::mpsc::Receiver<ScanEvent> {
-        let (tx, rx) = channel();
-        self.parts.subs.lock().expect("subs lock").push(tx);
+        let (tx, rx) = sync_channel(SUB_CHANNEL_BOUND);
+        self.parts
+            .subs
+            .lock()
+            .expect("subs lock")
+            .push(Subscriber { tx, staged: None });
         rx
     }
 
@@ -1037,5 +1088,61 @@ mod tests {
         write_file(&root.join("x.txt"), b"different", false, (2, 0));
         let found = super::stat_sweep(&root, &Vec::new(), &cache, &SkipAll);
         assert!(found.is_empty(), "ignored paths are never swept: {found:?}");
+    }
+
+    /// T-19: a subscriber that never receives must pin O(1) memory —
+    /// after N publishes exactly one event sits buffered, and the staged
+    /// slot holds the LAST published snapshot (latest-wins), not N.
+    #[test]
+    fn stalled_subscriber_retention_is_bounded_latest_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t");
+        std::fs::create_dir_all(&root).unwrap();
+        write_file(&root.join("a.txt"), b"a", false, (1, 0));
+        let (_sd, store) = fresh_store();
+        let engine = ScanEngine::watch(
+            root,
+            StoreHandle {
+                store: Arc::new(store),
+                poly: poly_of(3),
+                folder_id: [1; 16],
+                device_id: [2; 32],
+            },
+        )
+        .unwrap();
+        let baseline = engine.current().expect("initial pass published");
+
+        let rx = engine.subscribe();
+        const N: usize = 64;
+        for _ in 0..N {
+            // Publish directly: the retention contract under test is
+            // per-publish, not tied to how passes are triggered.
+            engine.parts.publish(baseline.clone());
+        }
+
+        // Bounded: capacity-1 channel holds exactly one event.
+        assert!(matches!(rx.try_recv(), Ok(ScanEvent::Updated(_))));
+        assert!(rx.try_recv().is_err(), "retention must be bounded");
+
+        // Latest-wins observable: the staged pending event IS pass N's
+        // snapshot (pointer-identical to the last publish), never an
+        // unbounded backlog of older ones.
+        let subs = engine.parts.subs.lock().expect("subs lock");
+        assert_eq!(subs.len(), 1);
+        match &subs[0].staged {
+            Some(ScanEvent::Updated(cur)) => assert!(
+                Arc::ptr_eq(cur, &baseline),
+                "staged event must reflect the latest pass"
+            ),
+            other => panic!("expected staged Updated event, got {other:?}"),
+        }
+        drop(subs);
+
+        // Dropped receiver is pruned on the next event.
+        drop(rx);
+        engine.parts.publish(baseline.clone());
+        assert!(engine.parts.subs.lock().expect("subs lock").is_empty());
+
+        engine.stop();
     }
 }
