@@ -11,9 +11,13 @@
 //!    on disk has been touched. This is the fast half of the guard; the slow
 //!    half is the applier's `Overwrite::Expect`, which re-proves the whole
 //!    affected set against the same manifest before mutating.
-//! 3. Write quarantine copies (temp + rename, loser's mtime and exec bit;
-//!    symlinks are recreated with their target, their link mtime is not
-//!    preserved, a documented v1 gap).
+//! 3. Write quarantine copies (temp + CREATE-EXCLUSIVE landing, loser's
+//!    mtime and exec bit; symlinks are recreated with their target, their
+//!    link mtime is not preserved, a documented v1 gap). Landing is
+//!    exclusive so a cross-process executor that resolved the same
+//!    conflict name free can never have its copy overwritten (ADR-0004:
+//!    loser bytes are never destroyed); on collision the name is
+//!    regenerated and the attempt retried, bounded.
 //! 4. Fold materialize transitions into one change set and apply it through
 //!    ferry-materialize guarded by `Overwrite::Expect { expected: local }`.
 //! 5. Append conflict entries to `.ferry/conflicts.jsonl`.
@@ -38,6 +42,12 @@ use thiserror::Error;
 
 use crate::plan::{ActionPlan, ConflictKind, LoserContent, QuarantineOp};
 use crate::report::{append_entries, ConflictEntry, DeviceStamp, LogError};
+
+/// Bounded create-exclusive landing attempts per loser copy: `NAME`, then
+/// `NAME-2`, `NAME-3`, ... Exhausting the bound means the directory is
+/// pathologically contended; failing loudly beats clobbering a racing
+/// writer's copy or leaking temp residue (ADR-0004).
+const MAX_LANDING_ATTEMPTS: u32 = 128;
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -113,15 +123,30 @@ pub fn execute(
         dest_abs.push(abs);
     }
 
-    // 3: write the loser copies.
+    // 3: write the loser copies. Landing is create-exclusive: if a racing
+    // executor claimed the resolved name in the meantime, the copy lands
+    // under the next counter name and the report reflects where it really
+    // went.
     for (idx, op) in plan.quarantine.iter().enumerate() {
-        write_loser_copy(
+        let dest_dir = dest_abs[idx]
+            .parent()
+            .expect("dest always has a parent")
+            .to_path_buf();
+        let candidate_base = dest_abs[idx]
+            .file_name()
+            .expect("dest is never the root")
+            .to_string_lossy()
+            .into_owned();
+        let landed = write_loser_copy(
             store,
             root,
             op,
-            &dest_abs[idx],
+            &dest_dir,
+            &candidate_base,
             buffers.get(&idx).map(Vec::as_slice),
         )?;
+        dest_rel[idx] = join_path(&rel_under(root, &landed));
+        dest_abs[idx] = landed;
     }
 
     // 4: fold transitions into one change set and apply under guard.
@@ -255,34 +280,70 @@ fn diverged(rel: &[String], reason: DivergeReason) -> EngineError {
     })
 }
 
-/// Write one loser copy atomically (temp + rename inside the destination's
-/// parent directory), preserving the loser's exec bit and mtime.
+/// Write one loser copy with create-exclusive landing, preserving the
+/// loser's exec bit and mtime.
+///
+/// The temp sibling is built first, then placed at `candidate_base` — or,
+/// if a cross-process executor claimed that name between resolution and
+/// landing, at the next counter name (`candidate_base-2`, `-3`, ...),
+/// bounded by [`MAX_LANDING_ATTEMPTS`]. Returns the absolute path the copy
+/// actually landed at. Every failure path removes the temp it created; on
+/// bounded-exhaustion the error is loud rather than an overwrite.
 fn write_loser_copy(
     store: &Store,
     root: &Path,
     op: &QuarantineOp,
-    abs_dest: &Path,
+    dest_dir: &Path,
+    candidate_base: &str,
     live_bytes: Option<&[u8]>,
-) -> Result<(), EngineError> {
-    if let Some(parent) = abs_dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
-    }
+) -> Result<PathBuf, EngineError> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| io_at(dest_dir, e))?;
     let display = join_path(&op.path);
-    let tmp = abs_dest
-        .parent()
-        .expect("dest always has a parent")
-        .join(temp_name_for(
+    for attempt in 1..=MAX_LANDING_ATTEMPTS {
+        let name = if attempt == 1 {
+            candidate_base.to_string()
+        } else {
+            format!("{candidate_base}-{attempt}")
+        };
+        let dest = dest_dir.join(&name);
+        let tmp = dest_dir.join(temp_name_for(
             &display,
             TempStyle::current(),
             &fresh_entropy(),
         ));
-    let rename = |tmp: &Path, dest: &Path| -> Result<(), EngineError> {
-        std::fs::rename(tmp, dest).map_err(|e| {
-            let _ = std::fs::remove_file(tmp);
-            io_at(dest, e)
-        })
-    };
+        if let Err(e) = build_tmp(store, root, op, &tmp, live_bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        match rename_exclusive(&tmp, &dest) {
+            Ok(()) => return Ok(dest),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Lost the race for this name; regenerate and retry.
+                let _ = std::fs::remove_file(&tmp);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(io_at(&dest, e));
+            }
+        }
+    }
+    Err(io_at(
+        dest_dir.join(candidate_base),
+        std::io::Error::other(format!(
+            "quarantine landing exhausted {MAX_LANDING_ATTEMPTS} exclusive attempts"
+        )),
+    ))
+}
 
+/// Materialize one loser's bytes (or symlink) at `tmp`. No landing happens
+/// here; the caller places `tmp` exclusively.
+fn build_tmp(
+    store: &Store,
+    root: &Path,
+    op: &QuarantineOp,
+    tmp: &Path,
+    live_bytes: Option<&[u8]>,
+) -> Result<(), EngineError> {
     match &op.content {
         LoserContent::LiveLocalSymlink { expected_target } => {
             // The live link must still point where the manifest says.
@@ -298,19 +359,11 @@ fn write_loser_copy(
                     },
                 ));
             }
-            make_symlink(expected_target, &tmp)?;
-            rename(&tmp, abs_dest)
+            make_symlink(expected_target, tmp)
         }
         LoserContent::LiveLocal { .. } => {
             let bytes = live_bytes.expect("pre-verified buffer must exist");
-            write_bytes_with_meta(
-                &tmp,
-                abs_dest,
-                bytes,
-                op.exec,
-                op.loser_mtime_sec,
-                op.loser_mtime_nsec,
-            )
+            write_bytes_with_meta(tmp, bytes, op.exec, op.loser_mtime_sec, op.loser_mtime_nsec)
         }
         LoserContent::FromStore {
             kind,
@@ -320,8 +373,7 @@ fn write_loser_copy(
         } => {
             if *kind == EntryKind::Symlink {
                 let t = target.clone().unwrap_or_default();
-                make_symlink(&t, &tmp)?;
-                rename(&tmp, abs_dest)
+                make_symlink(&t, tmp)
             } else {
                 let mut bytes = Vec::with_capacity(chunks.iter().map(|c| c.1 as usize).sum());
                 for (id, len) in chunks {
@@ -330,7 +382,7 @@ fn write_loser_copy(
                         .map_err(EngineError::from)?;
                     if piece.len() as u64 != *len {
                         return Err(EngineError::Materialize(MaterializeError::ChunkCorrupt {
-                            path: display,
+                            path: join_path(&op.path),
                             index: usize::MAX,
                             expected: format!("len {len}"),
                             found: format!("len {}", piece.len()),
@@ -339,13 +391,48 @@ fn write_loser_copy(
                     bytes.extend_from_slice(&piece);
                 }
                 write_bytes_with_meta(
-                    &tmp,
-                    abs_dest,
+                    tmp,
                     &bytes,
                     op.exec,
                     op.loser_mtime_sec,
                     op.loser_mtime_nsec,
                 )
+            }
+        }
+    }
+}
+
+/// Place `tmp` at `dest` only when nothing occupies `dest` yet.
+///
+/// Unix: `link()` is atomic create-unless-exists and never follows
+/// symlinks, so loser symlinks land as links, not as their targets. Other
+/// platforms (Windows included): reserve the name with an
+/// `O_CREAT|O_EXCL` probe (`CREATE_NEW`) immediately before the rename,
+/// then rename over our own empty reservation.
+fn rename_exclusive(tmp: &Path, dest: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::hard_link(tmp, dest)?;
+        // Landing succeeded; dropping our temp name is best-effort (its
+        // bytes now also exist under dest, so residue is never data loss).
+        let _ = std::fs::remove_file(tmp);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dest)?,
+        );
+        match std::fs::rename(tmp, dest) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Remove our own reservation so the failure path leaves no
+                // zero-byte impostor at the conflict name.
+                let _ = std::fs::remove_file(dest);
+                Err(e)
             }
         }
     }
@@ -383,9 +470,10 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), EngineError> {
     }
 }
 
+/// Write the loser's bytes to `tmp` with its exec bit and mtime restored.
+/// Landing at the final name happens separately, exclusively.
 fn write_bytes_with_meta(
     tmp: &Path,
-    dest: &Path,
     bytes: &[u8],
     exec: bool,
     sec: i64,
@@ -414,10 +502,7 @@ fn write_bytes_with_meta(
             .map_err(|e| io_at(tmp, e))?;
         f.sync_all().map_err(|e| io_at(tmp, e))?;
     }
-    std::fs::rename(tmp, dest).map_err(|e| {
-        let _ = std::fs::remove_file(tmp);
-        io_at(dest, e)
-    })
+    Ok(())
 }
 
 /// (sec, nsec) → `SystemTime`, matching the manifest's pre-1970 convention.
@@ -569,6 +654,136 @@ mod tests {
         assert_eq!(log[0].winner.device, hex(&DEV_A));
         assert_eq!(log[0].loser.device, hex(&DEV_B));
         assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
+    }
+
+    #[test]
+    fn racing_writer_at_landing_time_cannot_be_overwritten() {
+        // T-08: another executor (CLI sync while daemon runs) resolves the
+        // same conflict name free, then claims it AFTER our resolution but
+        // BEFORE our landing. The exclusive landing must regenerate the
+        // name and never overwrite the racer's bytes.
+        let rig = rig();
+        let op = &rig.plan_for_b.quarantine[0];
+        let base =
+            crate::naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
+        let resolved = crate::naming::unique_conflict_dest(&rig.b.tree, &[], &base).unwrap();
+
+        // The racer wins the name in the resolution→landing window.
+        std::fs::write(&resolved, b"racer's loser copy").unwrap();
+
+        let landed = write_loser_copy(
+            &rig.b.store,
+            &rig.b.tree,
+            op,
+            resolved.parent().unwrap(),
+            resolved.file_name().unwrap().to_str().unwrap(),
+            Some(b"loser on B" as &[u8]),
+        )
+        .unwrap();
+
+        assert!(
+            landed
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with("-2"),
+            "loser copy regenerated past the claimed name: {landed:?}"
+        );
+        assert_eq!(
+            std::fs::read(&resolved).unwrap(),
+            b"racer's loser copy",
+            "the racing writer's copy must survive byte-for-byte"
+        );
+        assert_eq!(std::fs::read(&landed).unwrap(), b"loser on B");
+        // No temp residue from the collision retry.
+        let residue: Vec<_> = std::fs::read_dir(&rig.b.tree)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".ferry."))
+            .collect();
+        assert!(residue.is_empty(), "temp leaked: {residue:?}");
+    }
+
+    #[test]
+    fn execute_reports_where_a_contended_landing_actually_went() {
+        // Same race end-to-end through execute(): pre-create the first
+        // choice so the report's quarantined_as follows the regenerated
+        // name, and both copies keep their own bytes.
+        let rig = rig();
+        let op = &rig.plan_for_b.quarantine[0];
+        let base =
+            crate::naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
+        let claimed = rig.b.tree.join(&base);
+        std::fs::write(&claimed, b"racer's loser copy").unwrap();
+
+        let stats = execute(
+            &rig.b.store,
+            &rig.b.tree,
+            &rig.plan_for_b,
+            Some(&rig.b.state_dir),
+            (1_787_574_896, 0),
+        )
+        .unwrap();
+
+        assert_eq!(stats.quarantined.len(), 1);
+        let q = &stats.quarantined[0];
+        assert_eq!(
+            q.as_str(),
+            format!("{base}-2"),
+            "report uses the real landing name"
+        );
+        assert_eq!(std::fs::read(&claimed).unwrap(), b"racer's loser copy");
+        assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
+        let log = list_conflicts(&rig.b.state_dir).unwrap();
+        assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
+    }
+
+    #[test]
+    fn exhausted_landing_fails_loudly_without_clobbering_or_residue() {
+        let rig = rig();
+        let op = &rig.plan_for_b.quarantine[0];
+        let base =
+            crate::naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
+        // Occupy every candidate name the bounded retry could reach.
+        for counter in 1..=super::MAX_LANDING_ATTEMPTS {
+            let name = if counter == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{counter}")
+            };
+            std::fs::write(rig.b.tree.join(name), b"occupied").unwrap();
+        }
+
+        let err = write_loser_copy(
+            &rig.b.store,
+            &rig.b.tree,
+            op,
+            &rig.b.tree,
+            &base,
+            Some(b"loser on B" as &[u8]),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::Io { .. }),
+            "exhaustion must fail loudly, got {err:?}"
+        );
+        // Every occupied name keeps its owner's bytes; no temp remains.
+        for counter in 1..=super::MAX_LANDING_ATTEMPTS {
+            let name = if counter == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{counter}")
+            };
+            assert_eq!(std::fs::read(rig.b.tree.join(&name)).unwrap(), b"occupied");
+        }
+        let residue: Vec<_> = std::fs::read_dir(&rig.b.tree)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".ferry."))
+            .collect();
+        assert!(residue.is_empty(), "temp leaked: {residue:?}");
     }
 
     #[test]
