@@ -206,7 +206,13 @@ TCP_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
 echo "== mode tcp: converged in <=${ELAPSED}s (agreed=$TCP_AGREED)"
 verify_trees "$A_TREE" "$B_TREE" "$TOTAL_LINES" 51
-echo "== mode tcp: OK, full tree byte-identical"
+# T-014: sessions must be protocol v1 WITH encryption ON by default.
+grep -q "encrypted=yes" "$A_LOG" || fail "[tcp] node A never ran an ENCRYPTED v1 session"
+grep -q "encrypted=yes" "$B_LOG" || fail "[tcp] node B never ran an ENCRYPTED v1 session"
+if grep -q "encrypted=no" "$A_LOG" "$B_LOG"; then
+    fail "[tcp] a session ran with encryption OFF; default must be sealed"
+fi
+echo "== mode tcp: OK, full tree byte-identical, v1 sealed sessions verified"
 echo "tcp agreed=$TCP_AGREED" >> "$MODES_LOG"
 
 # Stop this pair before the next mode.
@@ -265,6 +271,12 @@ IROH_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
 echo "== mode iroh: converged in <=${ELAPSED}s (agreed=$IROH_AGREED)"
 verify_trees "$A_TREE" "$B_TREE" "$TOTAL_LINES" 51
+# T-014: sessions must be protocol v1 WITH encryption ON by default.
+grep -q "encrypted=yes" "$A_LOG" || fail "[iroh] node A never ran an ENCRYPTED v1 session"
+grep -q "encrypted=yes" "$B_LOG" || fail "[iroh] node B never ran an ENCRYPTED v1 session"
+if grep -q "encrypted=no" "$A_LOG" "$B_LOG"; then
+    fail "[iroh] a session ran with encryption OFF; default must be sealed"
+fi
 echo "== mode iroh: OK, full tree byte-identical"
 
 # Blind-relay plaintext scan: every byte the relay printed must be free of
