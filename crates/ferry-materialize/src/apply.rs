@@ -336,9 +336,7 @@ impl<'a> Applier<'a> {
         for (p, _) in &desired {
             validate_components(p)?;
         }
-        ensure_no_fold_collisions(
-            &desired.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
-        )?;
+        ensure_no_fold_collisions(&desired.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())?;
 
         // Extras: live paths absent from the desired state. Descendants are
         // enumerated individually, so children-first ordering falls out of
@@ -425,12 +423,28 @@ impl<'a> Applier<'a> {
     ) -> Result<ApplyStats, MaterializeError> {
         upserts.sort_by(|a, b| a.path.cmp(&b.path));
 
-        // Phase 2: plan each upsert against live state.
+        // Phase 2: plan each upsert against live state. An upsert whose
+        // path folds (case-insensitively) onto a pending REMOVAL must never
+        // degrade to Skip: on folding hosts the old spelling satisfies the
+        // stat check, and executing the removal afterwards would delete the
+        // only copy (the case-only-rename hazard, T-012).
+        let shadowed: HashSet<String> = removes
+            .iter()
+            .map(|r| ferry_platform::fold_key(&join_path(&r.path)))
+            .collect();
         let mut touches: Vec<PlannedTouch> = Vec::new();
         let mut skipped = 0usize;
         for up in &mut upserts {
             let abs = self.abs(&up.path);
-            plan_upsert(self.store, &abs, up, &mut touches, &mut skipped)?;
+            let case_shadowed = shadowed.contains(&ferry_platform::fold_key(&join_path(&up.path)));
+            plan_upsert(
+                self.store,
+                &abs,
+                up,
+                &mut touches,
+                &mut skipped,
+                case_shadowed,
+            )?;
         }
 
         // Phase 3: guard everything that would mutate.
@@ -866,7 +880,14 @@ fn plan_upsert(
     up: &mut PlannedUpsert,
     touches: &mut Vec<PlannedTouch>,
     skipped: &mut usize,
+    case_shadowed: bool,
 ) -> Result<(), MaterializeError> {
+    // A pending removal folds onto this path: whatever lives here now is a
+    // DIFFERENT stored spelling that the removal will delete. Always plan
+    // the real write so the new spelling lands after the removal runs.
+    if case_shadowed {
+        return Ok(());
+    }
     match &up.mutation {
         Mutation::Skip => Ok(()),
         Mutation::Mkdir { sec, nsec } => {
@@ -973,9 +994,10 @@ fn state_mutation(s: &EntryState) -> Mutation {
         },
         EntryKind::Symlink => Mutation::WriteSymlink {
             target: s.target.clone().unwrap_or_default(),
-            // Change-set states carry no timestamps; link times stay
-            // untouched on this path.
-            times: None,
+            // Change-set states DO carry mtimes (diff preserves them), and
+            // restoring them is what lets link-metadata drift converge
+            // across devices instead of oscillating forever (T-012).
+            times: Some((s.mtime_sec, s.mtime_nsec)),
         },
     }
 }
@@ -1480,8 +1502,8 @@ pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), Materia
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    let c = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| MaterializeError::BadComponent {
+    let c =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| MaterializeError::BadComponent {
             component: "path contains NUL".into(),
         })?;
     let ts = libc::timespec {
@@ -2621,7 +2643,11 @@ mod tests {
         // The LINK's own mtime (not its target's) equals the manifest's.
         let md = std::fs::symlink_metadata(target.join("lnk")).unwrap();
         let (sec, nsec) = ferry_platform::split_unix(md.modified().unwrap());
-        assert_eq!((sec, nsec), MT_B, "deferred T-005 piece: link mtime restored");
+        assert_eq!(
+            (sec, nsec),
+            MT_B,
+            "deferred T-005 piece: link mtime restored"
+        );
 
         // A repeat apply is a full no-op: target AND times now match.
         let again = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
@@ -2641,7 +2667,9 @@ mod tests {
             .apply_tree(&root)
             .unwrap_err();
         match &err {
-            MaterializeError::SymlinkRefused { path, target: t, .. } => {
+            MaterializeError::SymlinkRefused {
+                path, target: t, ..
+            } => {
                 assert_eq!(path, "evil");
                 assert_eq!(t, "../../outside");
             }
@@ -2650,7 +2678,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                MaterializeError::SymlinkRefused { reason: ferry_platform::LinkRefusal::EscapesRoot, .. }
+                MaterializeError::SymlinkRefused {
+                    reason: ferry_platform::LinkRefusal::EscapesRoot,
+                    ..
+                }
             ),
             "reason must name the fix"
         );
@@ -2669,7 +2700,10 @@ mod tests {
         let err = Applier::new(&w.store, &target)
             .apply_tree(&root)
             .unwrap_err();
-        assert!(matches!(err, MaterializeError::ReservedName { ref component, .. } if component == "aux.txt"), "{err}");
+        assert!(
+            matches!(err, MaterializeError::ReservedName { ref component, .. } if component == "aux.txt"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2701,6 +2735,37 @@ mod tests {
             assert_eq!(std::fs::read(target.join("README")).unwrap(), b"");
             assert_eq!(std::fs::read(target.join("readme")).unwrap(), b"");
         }
+    }
+
+    #[test]
+    fn case_only_rename_on_folding_host_never_loses_the_file() {
+        // The hazard: on macOS/Windows, `Rename-Me.txt` and `rename-me.TXT`
+        // are one inode. Planning `rename-me.TXT` against live disk sees
+        // the old spelling (same size/content/mtime) and would degrade to
+        // Skip; executing the removal of the old spelling afterwards then
+        // deletes the only copy. The applier must detect the fold-shadowed
+        // upsert and force a real write (T-012).
+        let (w, target) = World::new(36);
+        let v1 = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![file_entry("Rename-Me.txt", false, MT_A.0, MT_A.1, vec![])],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&v1).unwrap();
+
+        let v2 = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![file_entry("rename-me.TXT", false, MT_B.0, MT_B.1, vec![])],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&v2).unwrap();
+
+        assert!(
+            target.join("rename-me.TXT").exists(),
+            "case-only rename lost the file"
+        );
     }
 
     #[test]

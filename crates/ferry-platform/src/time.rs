@@ -40,7 +40,11 @@ mod tests {
 
     #[test]
     fn round_trips_post_epoch() {
-        for (sec, nsec) in [(0i64, 0u32), (1_700_000_000, 123_456_789), (86_400, 999_999_999)] {
+        for (sec, nsec) in [
+            (0i64, 0u32),
+            (1_700_000_000, 123_456_789),
+            (86_400, 999_999_999),
+        ] {
             assert_eq!(split_unix(join_unix(sec, nsec)), (sec, nsec));
         }
     }
@@ -48,7 +52,11 @@ mod tests {
     #[test]
     fn round_trips_pre_epoch_timespec_style() {
         for (sec, nsec) in [(-1i64, 0u32), (-1, 999_999_999), (-50_000, 5), (-9_999, 1)] {
-            assert_eq!(split_unix(join_unix(sec, nsec)), (sec, nsec), "({sec},{nsec})");
+            assert_eq!(
+                split_unix(join_unix(sec, nsec)),
+                (sec, nsec),
+                "({sec},{nsec})"
+            );
         }
     }
 

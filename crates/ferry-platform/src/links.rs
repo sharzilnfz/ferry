@@ -141,7 +141,13 @@ mod tests {
 
     #[test]
     fn absolute_targets_are_refused_on_every_spelling() {
-        for t in ["/etc/passwd", "\\Windows", "\\\\server\\share\\x", "C:\\Windows", "c:x"] {
+        for t in [
+            "/etc/passwd",
+            "\\Windows",
+            "\\\\server\\share\\x",
+            "C:\\Windows",
+            "c:x",
+        ] {
             assert_eq!(
                 classify_link(0, t),
                 LinkDecision::Refuse(LinkRefusal::AbsoluteTarget),

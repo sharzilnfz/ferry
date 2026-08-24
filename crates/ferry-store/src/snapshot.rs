@@ -751,7 +751,10 @@ mod tests {
             .success());
 
         use std::os::unix::ffi::OsStrExt;
-        make_symlink(std::ffi::OsStr::from_bytes(b"\xff\xfe"), &tree.join("bad_link"));
+        make_symlink(
+            std::ffi::OsStr::from_bytes(b"\xff\xfe"),
+            &tree.join("bad_link"),
+        );
 
         // A non-UTF-8 file NAME is possible on unix; if this host allows it,
         // expect a refusal for it too.
@@ -828,7 +831,11 @@ mod tests {
             file_entry("readme", false, 0, 0, vec![]),
         ];
         match ensure_no_host_case_collisions(&["docs".to_string()], &entries) {
-            Err(SnapshotError::CaseCollision { parent, first, second }) => {
+            Err(SnapshotError::CaseCollision {
+                parent,
+                first,
+                second,
+            }) => {
                 assert_eq!(parent, "docs");
                 assert_eq!((first.as_str(), second.as_str()), ("README", "readme"));
             }
@@ -917,7 +924,12 @@ mod tests {
         // Decomposed: e + combining acute (U+0065 U+0301).
         let nfd_dir = tree.join("rapport-anne\u{301}e");
         std::fs::create_dir_all(nfd_dir).unwrap();
-        write_file(&tree.join("rapport-anne\u{301}e/a.txt"), b"x", false, (1, 0));
+        write_file(
+            &tree.join("rapport-anne\u{301}e/a.txt"),
+            b"x",
+            false,
+            (1, 0),
+        );
 
         let out = snapshot_dir(&store, poly_of(7), &tree, &identity((1, 1))).unwrap();
         assert!(out.refused.is_empty());

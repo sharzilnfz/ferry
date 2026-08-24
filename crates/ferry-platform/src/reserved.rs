@@ -67,8 +67,17 @@ mod tests {
     #[test]
     fn ordinary_names_pass() {
         for n in [
-            "console", "auxiliary", "nullify", "com", "lpt", "printer", "auxx", "a.CON",
-            "notes.md", "", " ",
+            "console",
+            "auxiliary",
+            "nullify",
+            "com",
+            "lpt",
+            "printer",
+            "auxx",
+            "a.CON",
+            "notes.md",
+            "",
+            " ",
         ] {
             assert!(!is_reserved_device_name(n), "{n}");
         }

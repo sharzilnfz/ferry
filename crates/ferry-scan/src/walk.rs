@@ -44,9 +44,7 @@ use ferry_store::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, EntryPayload,
     RootManifest, TreeEntry, TreeNode,
 };
-use ferry_store::snapshot::{
-    ensure_no_collisions, RefusalReason, RefusedPath,
-};
+use ferry_store::snapshot::{ensure_no_collisions, RefusalReason, RefusedPath};
 use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
@@ -54,9 +52,6 @@ use crate::error::ScanError;
 use crate::ignore::IgnorePolicy;
 use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
-
-/// Exec-bit detection, same constant as ferry-store's snapshot walker.
-/// (Kept for reference; the live check lives in `live_exec`.)
 
 /// Structural exclusion: the store directory never enters manifests, walks,
 /// watches, or sweeps. This is folder-layout contract (`docs/store-format.md`),
@@ -1000,7 +995,9 @@ mod tests {
         let first = fx.full_scan_with_ledger();
 
         use ferry_store::snapshot::RefusalReason;
-        assert!(first.iter().any(|r| r.reason == RefusalReason::ReservedName));
+        assert!(first
+            .iter()
+            .any(|r| r.reason == RefusalReason::ReservedName));
         #[cfg(unix)]
         assert!(first
             .iter()
@@ -1011,7 +1008,9 @@ mod tests {
         write_file(&fx.root.join("keep.txt"), b"k2", false, (3, 0));
         let out = fx.incremental_expect(&[p(&[])]);
         let root = ferry_store::manifest::parse_tree_node(
-            &fx.store.get(ferry_store::BlobKind::TreeNode, &out.root_tree_id).unwrap(),
+            &fx.store
+                .get(ferry_store::BlobKind::TreeNode, &out.root_tree_id)
+                .unwrap(),
         )
         .unwrap();
         let names: Vec<&str> = root.entries.iter().map(|e| e.name.as_str()).collect();

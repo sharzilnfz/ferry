@@ -335,10 +335,9 @@ fn upsert_symlink(_path: &Path, _target: &str, _mtime: (i64, u32)) -> Result<(),
 #[cfg(unix)]
 fn set_symlink_times(path: &Path, (sec, nsec): (i64, u32)) -> Result<(), MaterializeError> {
     ferry_materialize::set_symlink_times(path, sec, nsec).map_err(|e| match e {
-        ferry_materialize::MaterializeError::Io { path, source } => MaterializeError::Io {
-            path,
-            source,
-        },
+        ferry_materialize::MaterializeError::Io { path, source } => {
+            MaterializeError::Io { path, source }
+        }
         _ => MaterializeError::Unsupported("symlink mtime restoration failed"),
     })
 }

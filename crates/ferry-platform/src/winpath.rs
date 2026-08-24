@@ -117,7 +117,10 @@ mod tests {
 
     #[test]
     fn short_paths_pass_through_untouched() {
-        assert_eq!(extend_path(Path::new(r"C:\Users\a\b.txt")), Path::new(r"C:\Users\a\b.txt"));
+        assert_eq!(
+            extend_path(Path::new(r"C:\Users\a\b.txt")),
+            Path::new(r"C:\Users\a\b.txt")
+        );
         assert!(!needs_extended_length(&win(&[r"C:\short", "file"])));
     }
 
@@ -164,7 +167,10 @@ mod tests {
             s.push_str("\\nested");
         }
         let got = extend_path(Path::new(&s));
-        let expect = format!("\\\\?\\UNC\\{}", s.trim_start_matches('\\').replace('/', "\\"));
+        let expect = format!(
+            "\\\\?\\UNC\\{}",
+            s.trim_start_matches('\\').replace('/', "\\")
+        );
         assert_eq!(got, PathBuf::from(expect));
     }
 
