@@ -99,7 +99,7 @@ grep -v '^!\.env$' "$TREE_A/ferry.ignore" > "$TREE_A/ferry.ignore.tmp" \
 PIDS="$PIDS $!"
 wait_for_file "$TREE_A/.ferry/pair-offer.ferry-pair" 30 || fail "share never emitted its offer"
 grep -q '[█▀▄]' "$TMP/share-a.log" || echo "(note: QR art not detected in log)" >&2
-CODE="$(grep -oE '[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}(-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}){4}' "$TMP/share-a.log" | head -1)"
+CODE="$(grep -oE '[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}(-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}){4}' "$TMP/share-a.log" | head -1)"
 [ -n "$CODE" ] || fail "no short code printed"
 echo "short code: $CODE"
 
