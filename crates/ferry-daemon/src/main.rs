@@ -226,6 +226,12 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         opportunistic_every: d.opportunistic_every,
         bind_addr: None,
         connect_to: None,
+        // Strict peer pinning arrives with T-007's pairing ritual; the
+        // skeleton accepts whichever identity proves key possession.
+        expected_peer_id: None,
+        // Protocol v1 with encryption ON is the only production path; the
+        // retired plaintext framing is reachable programmatically only.
+        legacy_m0_proto: false,
         quiet: false,
     };
 

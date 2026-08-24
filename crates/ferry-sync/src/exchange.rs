@@ -121,17 +121,30 @@ pub fn run_v1_session<'x, 'e, H: ExchangeHost>(
     // Round 1: announcements WITH adverts.
     ex.offer_round(true)?;
 
-    // Pull stages are strictly serialized by ROLE; both sides compute the
-    // same plan from round-1 state (ids differ or not), so no extra
-    // messages are needed. Stage plans are FIXED at this point — an
-    // adoption during the first stage does not cancel the second side's
-    // planned stage, exactly like the reference engine.
-    if ex.pull_needed() {
-        if initiator {
+    // Pull stages are strictly serialized by ROLE; BOTH stage plans are
+    // computable from round-1 state alone, so no extra messages are
+    // needed. The conditions are deliberately asymmetric at the zero
+    // edges, mirroring the reference engine: a side whose OWN pointer is
+    // nothing yet always pulls whatever the other side holds, while a
+    // side holding nothing for the folder is never pulled FROM. Stage
+    // plans are FIXED here — an adoption during the first stage does not
+    // cancel the second side's planned stage.
+    let my_stage = ex.pull_needed();
+    let peer_stage = ex.peer_pulls_from_us();
+    if initiator {
+        if my_stage {
             ex.my_pull_stage()?;
+        }
+        if peer_stage {
             ex.serve_peer_stage()?;
-        } else {
+        }
+    } else {
+        // Responder: the initiator's stage comes first (we serve), ours
+        // second.
+        if peer_stage {
             ex.serve_peer_stage()?;
+        }
+        if my_stage {
             ex.my_pull_stage()?;
         }
     }
@@ -188,6 +201,16 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
     fn pull_needed(&self) -> bool {
         match &self.peer_offer {
             Some(po) => po.manifest_id != [0u8; 32] && po.manifest_id != self.cur.id,
+            None => false,
+        }
+    }
+
+    /// Whether the PEER's stage exists: it wants to pull from us. Same
+    /// rule evaluated from its seat — its pointer may be NOTHING (zero
+    /// offer), in which case it always pulls whatever we hold.
+    fn peer_pulls_from_us(&self) -> bool {
+        match &self.peer_offer {
+            Some(po) => self.cur.id != [0u8; 32] && po.manifest_id != self.cur.id,
             None => false,
         }
     }
@@ -383,13 +406,15 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         } else if theirs_empty && !mine_empty {
             // Bootstrap guard: never trade content for emptiness.
             self.status("SESSION skipping empty peer offer (bootstrap guard)");
-        } else if !lineage_newer(&man, &self.cur.manifest) {
+        } else if !mine_empty && !lineage_newer(&man, &self.cur.manifest) {
             // Stale offer: the peer announced a manifest OLDER than what
             // we already hold (it announced before it saw our latest, or
             // it still runs our own earlier state). Adopting would
             // REGRESS; skip and let the peer catch up from us instead —
             // this is M0's single-direction flow, recovered through
-            // lineage instead of a donor message.
+            // lineage instead of a donor message. A FRESH device (empty
+            // tree) bypasses this guard: bootstrap adoption ignores the
+            // clock, exactly like pick_donor's rule 1.
             self.status("SESSION skipping stale peer offer (lineage guard)");
         } else {
             self.pull_content(&man)?;
