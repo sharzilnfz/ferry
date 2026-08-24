@@ -311,7 +311,11 @@ fn apply_once_path() -> PathBuf {
         .join("../../target")
         .join(profile)
         .join("examples")
-        .join("apply_once");
+        .join(if cfg!(windows) {
+            "apply_once.exe"
+        } else {
+            "apply_once"
+        });
     candidate
         .canonicalize()
         .expect("apply_once example binary not found; run cargo test once more")
