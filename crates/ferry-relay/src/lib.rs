@@ -18,7 +18,14 @@
 //! server does not fight it.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+/// Lock a mutex, tolerating poisoning: the guarded state here (append-only
+/// ledger, server handle slot) is safe to continue using after a panic in
+/// another thread, so recover the guard instead of cascading the panic.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 use iroh::RelayUrl;
 use iroh_relay::server::{
@@ -58,12 +65,12 @@ pub struct Ledger(Arc<Mutex<Vec<LedgerEntry>>>);
 
 impl Ledger {
     fn push(&self, e: LedgerEntry) {
-        self.0.lock().unwrap().push(e);
+        lock(&self.0).push(e);
     }
 
     /// Snapshot of all entries so far.
     pub fn entries(&self) -> Vec<LedgerEntry> {
-        self.0.lock().unwrap().clone()
+        lock(&self.0).clone()
     }
 
     /// Rendered lines, suitable for scanning (tests scan these for
@@ -159,7 +166,7 @@ impl LocalRelay {
     /// Graceful shutdown. The server handle is taken out from behind the
     /// lock BEFORE awaiting, so no guard is held across the await point.
     pub async fn shutdown(self) {
-        let taken = self.server.lock().unwrap().take();
+        let taken = lock(&self.server).take();
         if let Some(server) = taken {
             let _ = server.shutdown().await;
         }
@@ -170,7 +177,7 @@ impl Drop for LocalRelay {
     fn drop(&mut self) {
         // Best effort: the supervisor task dies with its JoinSet when the
         // runtime drops; explicit shutdown() is preferred in tests.
-        if let Some(_server) = self.server.lock().unwrap().take() {
+        if let Some(_server) = lock(&self.server).take() {
             // Server::shutdown is async; dropping here just releases handles.
         }
     }
@@ -216,7 +223,7 @@ pub fn spawn_sync(opts: RelayOptions) -> Result<LocalRelay, String> {
         .build()
         .map_err(|e| format!("runtime: {e}"))?;
     let relay = rt.block_on(spawn(opts))?;
-    *relay._rt.lock().unwrap() = Some(rt);
+    *lock(&relay._rt) = Some(rt);
     Ok(relay)
 }
 
@@ -242,7 +249,7 @@ pub fn install_capturing_subscriber(
     struct BufWriterClone(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for BufWriterClone {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
+            lock(&self.0).extend_from_slice(buf);
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -277,5 +284,38 @@ mod tests {
         assert!(relay.url().as_str().starts_with("http://127.0.0.1:"));
         assert_eq!(relay.ledger().entries().len(), 0, "no clients yet");
         relay.shutdown().await;
+    }
+
+    /// T-04 regression: a panic while holding the ledger mutex poisons it,
+    /// but `lock` must recover the guard so the daemon keeps appending.
+    #[test]
+    fn poisoned_ledger_mutex_still_usable() {
+        let shared = Arc::new(Mutex::new(Vec::<LedgerEntry>::new()));
+        let ledger = Ledger(shared.clone());
+
+        // Deliberately panic while holding the lock; catch_unwind proves
+        // the unwind happened (and poisoned the mutex) without failing.
+        let handle = {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _guard = shared.lock().unwrap();
+                    panic!("deliberate poison while holding the ledger lock");
+                }));
+                assert!(unwound.is_err());
+            })
+        };
+        handle.join().expect("poisoner thread completes");
+
+        // Subsequent operations still work despite the poisoned mutex.
+        ledger.push(LedgerEntry::Disconnected {
+            endpoint_id_hex: "aa".into(),
+        });
+        assert_eq!(
+            ledger.entries(),
+            vec![LedgerEntry::Disconnected {
+                endpoint_id_hex: "aa".into(),
+            }]
+        );
     }
 }

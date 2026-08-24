@@ -1,6 +1,6 @@
 # T-04: Poison-tolerant locks in long-running processes
 
-Status: ready-for-agent
+Status: done
 
 ~12 `lock().unwrap()` sites turn one panicked thread into a total daemon
 crash via mutex poisoning: `crates/ferry-relay/src/lib.rs:61,66,161,172,218,

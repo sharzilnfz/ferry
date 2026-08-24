@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::lock::lock;
+
 use ferry_sync::transport::{
     Connection as DynConnection, Listener as DynListener, MAX_FRAME_BYTES,
 };
@@ -98,7 +100,7 @@ struct Inner {
 
 impl Inner {
     fn observe(&self, id: EndpointId) -> Arc<PathObservation> {
-        let mut map = self.observations.lock().unwrap();
+        let mut map = lock(&self.observations);
         map.entry(*id.as_bytes())
             .or_insert_with(|| Arc::new(PathObservation::default()))
             .clone()
@@ -559,7 +561,7 @@ fn check_incoming_len(len: u32) -> io::Result<()> {
 impl DynConnection for FramedConnection {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         check_outgoing_len(payload.len())?;
-        let mut guard = self.send.lock().unwrap();
+        let mut guard = lock(&self.send);
         let Some(send) = guard.as_mut() else {
             return Err(io_error(
                 io::ErrorKind::NotConnected,
@@ -577,7 +579,7 @@ impl DynConnection for FramedConnection {
     }
 
     fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut guard = self.recv.lock().unwrap();
+        let mut guard = lock(&self.recv);
         let Some(recv) = guard.as_mut() else {
             // Probe connections (engine shutdown dials to its own alias)
             // carry no stream: a clean immediate EOF.

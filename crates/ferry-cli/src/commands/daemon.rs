@@ -19,8 +19,14 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+
+/// Lock a mutex, tolerating poisoning (T-04): a panicked session thread
+/// must not turn into a daemon-wide crash on the next lock.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 use ferry_scan::{ScanEngine, StoreHandle};
 use ferry_store::format::hex;
@@ -231,7 +237,7 @@ fn spawn_accept_loop(
                                 );
                                 continue;
                             };
-                            let _guard = w.lock.lock().unwrap();
+                            let _guard = lock(&w.lock);
                             serve_session(&w, conn.as_mut(), h.device_tag);
                         }
                         Err(e) => {
