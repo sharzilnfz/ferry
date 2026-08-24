@@ -960,6 +960,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferry-daemon"
+version = "0.1.0"
+dependencies = [
+ "ferry-crypto",
+ "ferry-iroh",
+ "ferry-store",
+ "ferry-sync",
+ "rand 0.8.7",
+]
+
+[[package]]
 name = "ferry-iroh"
 version = "0.1.0"
 dependencies = [
@@ -1052,6 +1063,8 @@ name = "ferry-sync"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-crypto",
+ "ferry-iroh",
  "ferry-store",
  "libc",
  "rand 0.8.7",

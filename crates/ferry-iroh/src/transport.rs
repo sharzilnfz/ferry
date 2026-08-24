@@ -86,6 +86,10 @@ struct Inner {
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
+    /// Set by a self-dial (the M0 engine's shutdown probe): the next
+    /// accept() returns a clean-EOF connection instead of waiting, exactly
+    /// like dialing your own TCP listener unblocks its accept.
+    wake: AtomicBool,
     /// Relay URLs from config. Attached to dialed EndpointAddrs so
     /// key-only dialing can resolve through OUR relay (deployment rule:
     /// peers we sync with are clients of the same self-hosted relay).
@@ -165,6 +169,7 @@ impl IrohTransport {
                 dial_timeout: cfg.dial_timeout,
                 closed: AtomicBool::new(false),
                 observations: Mutex::new(HashMap::new()),
+                wake: AtomicBool::new(false),
                 relay_urls,
             }),
         })
@@ -203,7 +208,17 @@ impl IrohTransport {
         let id = EndpointId::from_bytes(&endpoint_id)
             .map_err(|_| DialFailure::Connect("malformed endpoint id".into()))?;
         if id == self.inner.my_id {
-            return Err(DialFailure::SelfDial);
+            // Self-probe (engine shutdown unblock). iroh refuses self-
+            // connects, so we reproduce TCP's observable behavior locally:
+            // the dialer gets a connection that reads as immediate clean
+            // EOF, and the listener's accept wakes with the same thing.
+            self.inner.wake.store(true, Ordering::SeqCst);
+            return Ok(Box::new(FramedConnection {
+                rt: self.inner.rt.handle().clone(),
+                conn: None,
+                send: Mutex::new(None),
+                recv: Mutex::new(None),
+            }));
         }
         let mut addr = EndpointAddr::new(id);
         for h in hints {
@@ -250,7 +265,7 @@ impl IrohTransport {
         spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
             rt: self.inner.rt.handle().clone(),
-            conn,
+            conn: Some(conn),
             send: Mutex::new(Some(send)),
             recv: Mutex::new(Some(recv)),
         }))
@@ -427,20 +442,41 @@ impl DynListener for IrohListener {
     }
 
     fn accept(&self) -> io::Result<Box<dyn DynConnection>> {
+        // Poll the endpoint in short slices so engine shutdown cannot strand
+        // this call: TCP's accept unblocked via a self-connect probe, but
+        // iroh forbids connecting to your own EndpointId, so we watch the
+        // transport-closed flag between slices instead.
         loop {
             if self.inner.closed.load(Ordering::SeqCst) {
-                return Err(io::Error::new(
+                return Err(io_error(
                     io::ErrorKind::ConnectionAborted,
-                    "listener closed",
+                    "listener closed".into(),
                 ));
             }
-            let incoming = self
-                .inner
-                .rt
-                .block_on(self.inner.ep.accept())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::ConnectionAborted, "endpoint closed")
-                })?;
+            // Shutdown probe: surface a clean-EOF connection, mirroring
+            // what dialing your own TCP listener looks like to the M0
+            // accept loop.
+            if self.inner.wake.swap(false, Ordering::SeqCst) {
+                return Ok(Box::new(FramedConnection {
+                    rt: self.inner.rt.handle().clone(),
+                    conn: None,
+                    send: Mutex::new(None),
+                    recv: Mutex::new(None),
+                }));
+            }
+            let next = self.inner.rt.block_on(async {
+                tokio::time::timeout(Duration::from_millis(100), self.inner.ep.accept()).await
+            });
+            let incoming = match next {
+                Ok(Some(incoming)) => incoming,
+                Ok(None) => {
+                    return Err(io_error(
+                        io::ErrorKind::ConnectionAborted,
+                        "endpoint closed".into(),
+                    ))
+                }
+                Err(_elapsed) => continue,
+            };
             // Incoming::accept() is a sync step; the returned Accepting is
             // the future that finishes the handshake.
             let conn = self.inner.rt.block_on(async {
@@ -454,13 +490,12 @@ impl DynListener for IrohListener {
             let obs = self.inner.observe(conn.remote_id());
             spawn_path_sampler(&self.inner.rt.handle(), &conn, obs);
 
-            // Engine shutdown probes dial ourselves; hand back a connection
-            // whose first read is a clean EOF, exactly like a TCP probe
-            // looks to the M0 accept loop.
+            // A genuine inbound from ourselves is unexpected (iroh refuses
+            // self-connects), but if it ever appears treat it like a probe.
             if conn.remote_id() == self.inner.my_id {
                 return Ok(Box::new(FramedConnection {
                     rt: self.inner.rt.handle().clone(),
-                    conn,
+                    conn: Some(conn),
                     send: Mutex::new(None),
                     recv: Mutex::new(None),
                 }));
@@ -473,7 +508,7 @@ impl DynListener for IrohListener {
                 .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
                 rt: self.inner.rt.handle().clone(),
-                conn,
+                conn: Some(conn),
                 send: Mutex::new(Some(streams.0)),
                 recv: Mutex::new(Some(streams.1)),
             }));
@@ -488,9 +523,11 @@ impl DynListener for IrohListener {
 struct FramedConnection {
     rt: Handle,
     /// Held (never read) because dropping the iroh Connection closes the
-    /// underlying QUIC connection — this field IS the keepalive.
+    /// underlying QUIC connection — this field IS the keepalive. `None` on
+    /// local probe connections (engine shutdown wakes), which carry no
+    /// stream and read as immediate clean EOF.
     #[allow(dead_code)]
-    conn: IrohConn,
+    conn: Option<IrohConn>,
     send: Mutex<Option<iroh::endpoint::SendStream>>,
     recv: Mutex<Option<iroh::endpoint::RecvStream>>,
 }

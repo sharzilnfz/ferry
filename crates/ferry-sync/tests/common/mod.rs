@@ -32,6 +32,38 @@ pub fn timeout_from_env() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// Transport selection for the WHOLE suite (T-009 seam payoff):
+///
+/// - unset / `tcp` → the M0 throwaway loopback TCP transport (default).
+/// - `iroh` → both engines ride `ferry_iroh::IrohTransport` end to end.
+///
+/// Run the parity proof with:
+///
+/// ```text
+/// FERRY_SYNC_E2E_TRANSPORT=iroh cargo test -p ferry-sync
+/// ```
+///
+/// The scenarios, assertions, and engine code are byte-identical in both
+/// modes; only this constructor differs. That is the seam doing its job.
+pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
+    match std::env::var("FERRY_SYNC_E2E_TRANSPORT").as_deref() {
+        Ok("iroh") => {
+            // Distinct fixed seeds per call would collide across fixture
+            // nodes; derive per-instance randomness instead. Two calls =
+            // two endpoints = two public keys, exactly like two machines.
+            use rand::RngCore;
+            let mut seed_a = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut seed_a);
+            let t = ferry_iroh::IrohTransport::new(
+                ferry_iroh::IrohConfig::builder().secret(seed_a).build(),
+            )
+            .expect("iroh transport builds");
+            Arc::new(t)
+        }
+        _ => Arc::new(ferry_sync::TcpTransport),
+    }
+}
+
 pub struct EngineFixture {
     pub _dir: tempfile::TempDir,
     listen_addr: std::net::SocketAddr,
@@ -70,8 +102,7 @@ impl EngineFixture {
 
         let mut cfg_a = self_cfg(dir.path(), "a", format!("{name}-a"), poly);
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-        let engine_a =
-            SyncEngine::new(cfg_a, Arc::new(ferry_sync::TcpTransport)).expect("engine A");
+        let engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
@@ -79,7 +110,7 @@ impl EngineFixture {
 
         let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
         cfg_b.connect_to = Some(addr);
-        let tb = transport_b.unwrap_or_else(|| Arc::new(ferry_sync::TcpTransport));
+        let tb = transport_b.unwrap_or_else(default_transport);
         let engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
         let b = engine_b.start();
 

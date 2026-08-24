@@ -137,10 +137,24 @@ fn wrong_key_dial_fails_cleanly_typed() {
 }
 
 #[test]
-fn self_dial_is_refused_not_deadlocked() {
+fn self_dial_wakes_listener_with_clean_eof_probe() {
+    // The M0 engine unblocks its accept loop by dialing its own listener
+    // address. Over iroh we reproduce that observable behavior: dial
+    // succeeds, the accepted side reads immediate clean EOF.
     let a = test_transport(0xE0);
     let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let own = lst.local_addr().unwrap();
-    let err = a.dial(own).err().expect("self-dial refused");
-    assert_eq!(err.kind(), ErrorKind::ConnectionRefused, "{err}");
+
+    let server = std::thread::spawn(move || {
+        let mut probe = lst.accept().expect("probe wakes accept");
+        let err = probe.recv_frame().err().expect("probe read errors");
+        assert_eq!(err.kind(), ErrorKind::UnexpectedEof, "{err}");
+    });
+
+    let mut probe_dialer = a.dial(own).expect("self-dial returns a probe connection");
+    assert_eq!(
+        probe_dialer.recv_frame().err().expect("clean EOF").kind(),
+        ErrorKind::UnexpectedEof
+    );
+    server.join().unwrap();
 }
