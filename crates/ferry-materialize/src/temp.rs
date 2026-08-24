@@ -336,7 +336,14 @@ mod tests {
         let removed = sweep_stale_temps(root, Duration::from_secs(60)).unwrap();
         let names: Vec<String> = removed
             .iter()
-            .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
+            .map(|p| {
+                // windows read_dir hands back backslash separators; the
+                // repo's display convention is forward slashes.
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
             .collect();
         assert_eq!(
             names,

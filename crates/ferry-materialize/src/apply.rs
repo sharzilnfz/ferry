@@ -1883,8 +1883,12 @@ mod tests {
         split_unix_time(md.modified().unwrap())
     }
 
-    const MT_A: (i64, u32) = (1_700_000_000, 111);
-    const MT_B: (i64, u32) = (1_700_000_500, 222);
+    // NTFS stores FILETIMEs in 100ns units: sub-100ns digits cannot survive
+    // a write+read round trip on windows. Test mtimes stay within the
+    // platform's representable granularity; unix keeps full fidelity.
+    const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
+    const MT_A: (i64, u32) = (1_700_000_000, 111 / NS_GRAN * NS_GRAN);
+    const MT_B: (i64, u32) = (1_700_000_500, 222 / NS_GRAN * NS_GRAN);
 
     // -- acceptance: apply is idempotent -------------------------------------
 
@@ -1940,13 +1944,16 @@ mod tests {
             read_target(&target, &["script.sh"]),
             b"#!/bin/sh\necho hi\n"
         );
-        assert!(live_exec(&md), "exec flag restored");
-        assert_eq!(mtime_of(&md), MT_B);
-        // No temp files left behind.
+        // Exec fidelity only where the platform stores the bit.
+        if cfg!(unix) {
+            assert!(live_exec(&md), "exec flag restored");
+        }
+        assert_eq!(mtime_of(&md), MT_B); // No temp files left behind.
         assert!(std::fs::read_dir(&target).unwrap().count() == 1);
     }
 
     #[test]
+    #[cfg(unix)]
     fn exec_bit_is_authoritative_set_and_cleared() {
         let (w, target) = World::new(3);
 
@@ -2622,10 +2629,12 @@ mod tests {
     fn unix_time_helpers_round_trip_pre1970() {
         for (sec, nsec) in [
             (0i64, 0u32),
-            (1_700_000_000, 999_999_999),
+            // Stay within NS_GRAN: windows SystemTime is FILETIME-backed
+            // (100ns), so finer digits cannot round-trip anywhere.
+            (1_700_000_000, 999_999_999 / NS_GRAN * NS_GRAN),
             (-1, 0),
             (-1, 500_000_000),
-            (-5_000_000_000, 1),
+            (-5_000_000_000, 1 / NS_GRAN * NS_GRAN),
         ] {
             let t = system_time(sec, nsec);
             assert_eq!(split_unix_time(t), (sec, nsec), "({sec},{nsec})");
@@ -2649,7 +2658,9 @@ mod tests {
                 &name,
                 exec,
                 MT_A.0 + i as i64,
-                (MT_A.1 + i as u32) % 1_000_000_000,
+                // Keep generated nsec within the platform's storable
+                // granularity so replans see a stable value.
+                (MT_A.1 + i as u32 * NS_GRAN) % 1_000_000_000,
                 chunked(&w, &bytes),
             ));
             model.push((vec![name], bytes, exec));
@@ -2676,16 +2687,20 @@ mod tests {
                 bytes.as_slice(),
                 "{path:?}"
             );
-            assert_eq!(
-                live_exec(&md_of(
-                    &target,
-                    path.iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>()
-                        .as_slice()
-                )),
-                *exec
-            );
+            // Exec fidelity is only asserted where the platform stores the
+            // bit; non-unix carries exec in manifests but not on disk.
+            if cfg!(unix) {
+                assert_eq!(
+                    live_exec(&md_of(
+                        &target,
+                        path.iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .as_slice()
+                    )),
+                    *exec
+                );
+            }
         }
 
         // Full-tree idempotence at scale.
