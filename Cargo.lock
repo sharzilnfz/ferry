@@ -965,7 +965,6 @@ name = "ferry-cli"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "chacha20poly1305",
  "clap",
  "ferry-crypto",
  "ferry-ignore",
@@ -974,12 +973,10 @@ dependencies = [
  "ferry-store",
  "ferry-sync",
  "ferry-sync-engine",
- "hkdf",
  "qrcode",
  "rand 0.8.7",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
 ]
@@ -997,6 +994,7 @@ dependencies = [
  "qrcode",
  "rand 0.8.7",
  "sha2 0.10.9",
+ "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "x25519-dalek",

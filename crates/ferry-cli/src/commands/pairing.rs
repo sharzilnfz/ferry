@@ -25,22 +25,19 @@
 //! AFTER the response MAC proves both sides saw the same transcript.
 //!
 //! The grant file is sealed under a key derived from the offer's one-time
-//! secret (HKDF-SHA-256), so only an acceptor holding those exact bytes can
-//! open it.
+//! secret (HKDF-SHA-256, behind `ferry-crypto`), so only an acceptor holding
+//! those exact bytes can open it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
-    ChaCha20Poly1305, Nonce,
-};
 use ferry_crypto::folder_key::{unwrap_folder_key, Fmk, WRAPPED_LEN};
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_crypto::pairing::{complete_pairing, respond, PairingOffer, TransportHints};
-use hkdf::Hkdf;
+use ferry_crypto::pairing::{
+    complete_pairing, open_pair_grant, respond, seal_pair_grant, GrantError, PairingOffer,
+    TransportHints,
+};
 use serde_json::json;
-use sha2::Sha256;
 
 use crate::error::{CliError, CliResult, CodeInto};
 use crate::folder::{self, OpenFolder, Settings, SETTINGS_FORMAT_VERSION};
@@ -51,8 +48,6 @@ use self::folder::save_settings;
 pub const OFFER_SUFFIX: &str = "pair-offer.ferry-pair";
 pub const RESPONSE_SUFFIX: &str = "pair-response.ferry-pair";
 pub const GRANT_SUFFIX: &str = "pair-grant.ferry-grant";
-const GRANT_INFO: &[u8] = b"ferry/v1/pair-grant";
-const GRANT_MAGIC: [u8; 4] = *b"FRGR";
 
 /// Where pairing artifacts live for one folder.
 fn artifact(folder_dot: &Path, suffix: &str) -> PathBuf {
@@ -336,79 +331,24 @@ pub fn accept(
 // grant sealing (A -> B handoff)
 // ---------------------------------------------------------------------------
 
-fn grant_key(one_time_secret: &[u8]) -> [u8; 32] {
-    let hk = Hkdf::<Sha256>::new(Some(b"ferry/v1/pair-grant-salt"), one_time_secret);
-    let mut okm = [0u8; 32];
-    hk.expand(GRANT_INFO, &mut okm).expect("32-byte OKM");
-    okm
-}
-
+/// Key derivation and AEAD sealing live behind ferry-crypto (T-03): the CLI
+/// only builds the JSON body and maps errors.
 fn seal_grant(
     offer_bytes: &[u8],
     wrapped_for_peer: &[u8; WRAPPED_LEN],
     poly: u64,
 ) -> CliResult<Vec<u8>> {
-    // Key comes from the one-time secret INSIDE the offer bytes.
-    let secret = &offer_bytes[53..85];
-    let key = grant_key(secret);
     let body = json!({
         "wrapped_for_peer": hex_of(wrapped_for_peer),
         "poly": poly,
     })
     .to_string()
     .into_bytes();
-
-    let cipher = ChaCha20Poly1305::new((&key).into());
-    let nonce_bytes: [u8; 12] = {
-        let mut s = [0u8; 12];
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(&mut s);
-        s
-    };
-    let ct = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce_bytes),
-            Payload {
-                msg: &body,
-                aad: offer_bytes,
-            },
-        )
-        .map_err(|_| CliError::new("crypto", "grant seal failed", "retry"))?;
-
-    let mut out = Vec::with_capacity(4 + 1 + 12 + ct.len());
-    out.extend_from_slice(&GRANT_MAGIC);
-    out.push(1);
-    out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ct);
-    Ok(out)
+    seal_pair_grant(offer_bytes, &body).map_err(grant_error)
 }
 
 fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> CliResult<([u8; 16], u64, [u8; WRAPPED_LEN])> {
-    if raw.len() < 4 + 1 + 12 || raw[..4] != GRANT_MAGIC || raw[4] != 1 {
-        return Err(CliError::new(
-            "bad-grant",
-            "the grant file is malformed",
-            "have the other device re-run `ferry pair`",
-        ));
-    }
-    let secret = &offer_bytes[53..85];
-    let key = grant_key(secret);
-    let cipher = ChaCha20Poly1305::new((&key).into());
-    let body = cipher
-        .decrypt(
-            Nonce::from_slice(&raw[5..17]),
-            Payload {
-                msg: &raw[17..],
-                aad: offer_bytes,
-            },
-        )
-        .map_err(|_| {
-            CliError::new(
-                "bad-grant",
-                "the grant file failed authentication",
-                "it must travel together with THIS exact offer file; redo the pairing",
-            )
-        })?;
+    let body = open_pair_grant(offer_bytes, raw).map_err(grant_error)?;
     let doc: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| CliError::new("bad-grant", "grant body unreadable", "redo the pairing"))?;
     let wrapped_hex = doc["wrapped_for_peer"]
@@ -418,9 +358,41 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> CliResult<([u8; 16], u64, [u8; 
         .as_u64()
         .ok_or_else(|| CliError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
     let wrapped = unhex_80(wrapped_hex)?;
-    // folder_id rides in the offer itself.
-    let folder_id: [u8; 16] = offer_bytes[5..21].try_into().expect("16 bytes");
+    // folder_id rides in the offer itself (offsets pinned by ferry-crypto's
+    // v1 offer layout); bounds-checked, no panic path.
+    let folder_id: [u8; 16] = offer_bytes
+        .get(5..21)
+        .and_then(|s| <&[u8] as TryInto<[u8; 16]>>::try_into(s).ok())
+        .ok_or_else(|| {
+            CliError::new(
+                "bad-grant",
+                "the offer file is truncated",
+                "get a fresh offer file from the sharing device",
+            )
+        })?;
     Ok((folder_id, poly, wrapped))
+}
+
+/// Map ferry-crypto's grant errors onto the CLI's targeted messages.
+fn grant_error(e: GrantError) -> CliError {
+    match e {
+        GrantError::Malformed { .. } => CliError::new(
+            "bad-grant",
+            "the grant file is malformed",
+            "have the other device re-run `ferry pair`",
+        ),
+        GrantError::Auth => CliError::new(
+            "bad-grant",
+            "the grant file failed authentication",
+            "it must travel together with THIS exact offer file; redo the pairing",
+        ),
+        GrantError::OfferTruncated { .. } => CliError::new(
+            "bad-grant",
+            "the offer file is truncated",
+            "get a fresh offer file from the sharing device",
+        ),
+        GrantError::Internal => CliError::new("crypto", "grant seal failed", "retry"),
+    }
 }
 
 fn unhex_80(s: &str) -> CliResult<[u8; WRAPPED_LEN]> {
