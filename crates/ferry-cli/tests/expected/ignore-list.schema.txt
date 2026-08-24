@@ -1,0 +1,10 @@
+$.action:string
+$.applied_presets[]
+$.applied_presets[0]:string
+$.command:string
+$.folder:string
+$.honor_gitignore:bool
+$.layers[]
+$.layers[0].lines[]
+$.layers[0].lines[0]:string
+$.layers[0].name:string

@@ -1,0 +1,144 @@
+//! `--json` schema stability: every command's document is reduced to its
+//! KEY STRUCTURE (sorted path:type pairs, array shapes pinned by element)
+//! and compared against checked-in files under tests/expected/. Values are
+//! deliberately ignored — these snapshots pin NAMES and TYPES, which is the
+//! stability promise docs/cli-json.md makes.
+
+mod common;
+
+use common::Env;
+use ferry_cli::commands;
+use serde_json::Value;
+
+/// Reduce a JSON value to a deterministic schema description.
+fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for k in keys {
+                schema(&map[k], &format!("{path}.{k}"), out);
+            }
+        }
+        Value::Array(items) => {
+            out.push(format!("{path}[]"));
+            // Pin the shape of the FIRST element only (arrays are
+            // homogeneous by contract).
+            if let Some(first) = items.first() {
+                schema(first, &format!("{path}[0]"), out);
+            }
+        }
+        other => {
+            let ty = match other {
+                Value::Null => "null",
+                Value::Bool(_) => "bool",
+                Value::Number(n) => {
+                    if n.is_i64() || n.is_u64() {
+                        "int"
+                    } else {
+                        "float"
+                    }
+                }
+                Value::String(_) => "string",
+                Value::Object(_) => unreachable!(),
+                Value::Array(_) => unreachable!(),
+            };
+            out.push(format!("{path}:{ty}"));
+        }
+    }
+}
+
+fn schema_of(v: &Value) -> String {
+    let mut lines = Vec::new();
+    schema(v, "$", &mut lines);
+    lines.join("\n") + "\n"
+}
+
+/// Compare-or-bless. Set FERRY_UPDATE_EXPECTED=1 to rewrite the file.
+fn assert_matches_expected(name: &str, actual: &str) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
+    let file = dir.join(format!("{name}.schema.txt"));
+    if std::env::var("FERRY_UPDATE_EXPECTED").is_ok() {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, actual).unwrap();
+        eprintln!("blessed {}", file.display());
+        return;
+    }
+    let expected = std::fs::read_to_string(&file).unwrap_or_else(|_| {
+        panic!(
+            "missing expected schema {} — run with FERRY_UPDATE_EXPECTED=1 to bless",
+            file.display()
+        )
+    });
+    assert_eq!(expected, actual, "JSON schema for {name} drifted");
+}
+
+#[test]
+fn init_document_schema_is_stable() {
+    let env = Env::new("schema-init");
+    let proj = env.work().join("proj");
+    let out = commands::init::run(&proj, "init").unwrap();
+    assert_matches_expected("init", &schema_of(&out.json));
+}
+
+#[test]
+fn status_document_schema_is_stable() {
+    let env = Env::new("schema-status");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+    std::fs::write(proj.join("a.txt"), b"x").unwrap();
+    let out = commands::status::run(&proj).unwrap();
+    assert_matches_expected("status", &schema_of(&out.json));
+}
+
+#[test]
+fn conflicts_document_schema_is_stable() {
+    let env = Env::new("schema-conflicts");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+    ferry_sync_engine::append_entries(
+        &ferry_cli::folder::state_dir(&proj),
+        &[ferry_sync_engine::ConflictEntry {
+            ts: "2026-08-24T10:00:00Z".into(),
+            folder_id: "aa".repeat(16),
+            path: "f.txt".into(),
+            kind: "both_changed".into(),
+            winner: ferry_sync_engine::DeviceStamp {
+                device: "bb".repeat(32),
+                mtime_sec: Some(2),
+                mtime_nsec: Some(0),
+            },
+            loser: ferry_sync_engine::DeviceStamp {
+                device: "cc".repeat(32),
+                mtime_sec: Some(1),
+                mtime_nsec: Some(0),
+            },
+            quarantined_as: Some("f.txt.ferry-conflict.cccccccc-20260824-090000".into()),
+        }],
+    )
+    .unwrap();
+    let out = commands::conflicts::run(&proj).unwrap();
+    assert_matches_expected("conflicts", &schema_of(&out.json));
+}
+
+#[test]
+fn ignore_list_document_schema_is_stable() {
+    let env = Env::new("schema-ignore");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+    commands::ignore_cmd::run(&proj, Some("*.log"), None, false).unwrap();
+    commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
+    let out = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
+    assert_matches_expected("ignore-list", &schema_of(&out.json));
+}
+
+#[test]
+fn ignore_mutations_share_one_document_shape() {
+    let env = Env::new("schema-ignore-mutate");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+    let added = commands::ignore_cmd::run(&proj, Some("dist/"), None, false).unwrap();
+    assert_matches_expected("ignore-added", &schema_of(&added.json));
+    let preset = commands::ignore_cmd::run(&proj, None, Some("opencode"), false).unwrap();
+    assert_matches_expected("ignore-preset", &schema_of(&preset.json));
+}

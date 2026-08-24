@@ -1,0 +1,6 @@
+$.action:string
+$.command:string
+$.description:string
+$.folder:string
+$.preset:string
+$.rules_file:null

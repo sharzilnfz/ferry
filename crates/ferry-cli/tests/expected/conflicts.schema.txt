@@ -1,0 +1,14 @@
+$.command:string
+$.entries[]
+$.entries[0].folder_id:string
+$.entries[0].kind:string
+$.entries[0].loser.device:string
+$.entries[0].loser.mtime_nsec:int
+$.entries[0].loser.mtime_sec:int
+$.entries[0].path:string
+$.entries[0].quarantined_as:string
+$.entries[0].ts:string
+$.entries[0].winner.device:string
+$.entries[0].winner.mtime_nsec:int
+$.entries[0].winner.mtime_sec:int
+$.folder:string

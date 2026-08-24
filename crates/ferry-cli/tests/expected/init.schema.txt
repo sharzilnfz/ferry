@@ -1,0 +1,6 @@
+$.command:string
+$.created:bool
+$.device_id:string
+$.folder:string
+$.folder_id:string
+$.ignore_file_created:bool

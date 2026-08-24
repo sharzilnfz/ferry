@@ -1,0 +1,12 @@
+$.command:string
+$.conflicts:int
+$.device_id:string
+$.folder:string
+$.folder_id:string
+$.manifest_id:string
+$.peers[]
+$.pending_changes:null
+$.scanned.bytes_chunked:int
+$.scanned.dirs:int
+$.scanned.files:int
+$.scanned.symlinks:int
