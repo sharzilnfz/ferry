@@ -50,9 +50,8 @@ use ferry_store::index::IndexEntry;
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload, RootManifest};
 use ferry_store::store::Store;
 
+use crate::applier::SessionApplier;
 use crate::engine::{IngestError, SessionError};
-use crate::materialize::Materializer;
-use crate::materialize::{BlobSource, InlineMaterializer};
 use crate::session::{Established, SessionIo};
 
 /// Zero `folder_id` marks "end of announcement list" in offer rounds.
@@ -485,8 +484,8 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
 
         // 6. Materialize durably into the working tree BEFORE round 2.
-        InlineMaterializer::new(self.host.tree_root())
-            .apply(man, &changes, &LocalBlobSource { store: self.store })
+        SessionApplier::new(self.store, self.host.tree_root())
+            .apply(man, &changes)
             .map_err(|e| SessionError::Apply(format!("{e}")))?;
         Ok(())
     }
@@ -745,23 +744,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             manifest: man,
         };
         Ok(())
-    }
-}
-
-/// Store-backed [`BlobSource`] for the inline materializer.
-struct LocalBlobSource<'x> {
-    store: &'x Store,
-}
-
-impl BlobSource for LocalBlobSource<'_> {
-    fn get(
-        &self,
-        kind: BlobKind,
-        id: &BlobId,
-    ) -> Result<Vec<u8>, crate::materialize::MaterializeError> {
-        self.store.get(kind, id).map_err(|e| {
-            crate::materialize::MaterializeError::MissingBlob(format!("{kind:?} {}: {e}", hex(id)))
-        })
     }
 }
 
