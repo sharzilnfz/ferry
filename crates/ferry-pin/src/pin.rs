@@ -105,7 +105,7 @@ fn pid_alive(pid: u32) -> bool {
         // Safety: a query-only handle; never used to signal or terminate,
         // and closed on every path before returning.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if handle == 0 {
+        if handle.is_null() {
             // Access denied mirrors unix EPERM: a process we are not allowed
             // to inspect might be alive, so count it as alive. Any other
             // open failure (invalid pid, reaped process) means gone.
