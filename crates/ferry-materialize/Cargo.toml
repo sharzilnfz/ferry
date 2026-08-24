@@ -17,5 +17,11 @@ thiserror = "2"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# windows (non-unix) only: std cannot open directory handles for time writes
+# there — it lacks FILE_FLAG_BACKUP_SEMANTICS — so dir mtime restoration in
+# apply::set_mtime goes through filetime's SetFileTime wrapper.
+[target.'cfg(not(unix))'.dependencies]
+filetime = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

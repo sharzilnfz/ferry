@@ -19,6 +19,11 @@ hkdf = "0.12"
 sha2 = "0.10"
 zeroize = "1"
 
+# windows (non-unix) only: dir mtime stamping in materialize::set_regular_times
+# needs SetFileTime; std cannot open directory handles there.
+[target.'cfg(not(unix))'.dependencies]
+filetime = "0.2"
+
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
 rand = "0.8"

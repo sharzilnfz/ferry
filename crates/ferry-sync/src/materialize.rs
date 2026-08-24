@@ -343,11 +343,22 @@ fn set_symlink_times(path: &Path, (sec, nsec): (i64, u32)) -> Result<(), Materia
 }
 
 fn set_regular_times(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
-    // Read-only handle suffices: futimens checks OWNERSHIP, not write
-    // access — and directories cannot be opened for writing at all.
-    let f = std::fs::File::open(path).map_err(|e| io(path, e))?;
-    f.set_times(std::fs::FileTimes::new().set_modified(system_time((sec, nsec))?))
-        .map_err(|e| io(path, e))
+    #[cfg(unix)]
+    {
+        // Read-only handle suffices: futimens checks OWNERSHIP, not write
+        // access — so this works on directories too.
+        let f = std::fs::File::open(path).map_err(|e| io(path, e))?;
+        f.set_times(std::fs::FileTimes::new().set_modified(system_time((sec, nsec))?))
+            .map_err(|e| io(path, e))
+    }
+    #[cfg(not(unix))]
+    {
+        // std cannot open directory handles on windows; phase 3 stamps
+        // DIRECTORY mtimes through here, so use SetFileTime via filetime,
+        // which handles files and directories alike.
+        let ft = filetime::FileTime::from_unix_time(sec, nsec);
+        filetime::set_file_mtime(path, ft).map_err(|e| io(path, e))
+    }
 }
 
 /// Walk the target tree collecting `(path, mtime)` for every DIRECTORY so

@@ -1602,29 +1602,30 @@ pub fn set_symlink_times(_path: &Path, _sec: i64, _nsec: u32) -> Result<(), Mate
     Ok(())
 }
 
-/// Set modified time with nanosecond fidelity.
+/// Set modified time with nanosecond fidelity. Must work on directories on
+/// every platform: the touch phase stamps dirs AFTER children exist, and if
+/// that fails the rescanned tree never matches the peer's manifest again —
+/// agreements can then never settle.
 fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
-    let f = open_for_times(path)?;
-    f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
-        .map_err(|e| io_at(path, e))
-}
-
-#[cfg(unix)]
-fn open_for_times(path: &Path) -> Result<std::fs::File, MaterializeError> {
-    // Read-only suffices on unix for futimens with explicit times, and it
-    // works on directories too.
-    std::fs::OpenOptions::new()
-        .read(true)
-        .open(path)
-        .map_err(|e| io_at(path, e))
-}
-
-#[cfg(not(unix))]
-fn open_for_times(path: &Path) -> Result<std::fs::File, MaterializeError> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|e| io_at(path, e))
+    #[cfg(unix)]
+    {
+        // Read-only suffices on unix for futimens with explicit times, and
+        // it works on directories too.
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|e| io_at(path, e))?;
+        f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
+            .map_err(|e| io_at(path, e))
+    }
+    #[cfg(not(unix))]
+    {
+        // std cannot open directory handles on windows at all (setting times
+        // needs FILE_FLAG_BACKUP_SEMANTICS, which std does not expose), so
+        // go through SetFileTime via filetime — files and directories alike.
+        let ft = filetime::FileTime::from_unix_time(sec, nsec);
+        filetime::set_file_mtime(path, ft).map_err(|e| io_at(path, e))
+    }
 }
 
 /// (sec, nsec) with nsec normalized non-negative, matching the manifest's
