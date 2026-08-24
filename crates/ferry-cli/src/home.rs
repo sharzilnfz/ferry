@@ -18,6 +18,9 @@ use crate::error::{CliError, CliResult};
 /// Resolve the device home: `$FERRY_HOME` when set (non-empty), else
 /// `$HOME/.ferry`. Empty-string FERRY_HOME is treated as unset so a stray
 /// `FERRY_HOME= cargo test` behaves like production.
+///
+/// When HOME is unset (native Windows shells have no HOME), fall back to
+/// USERPROFILE so the same `.ferry` layout lands under the user profile.
 pub fn ferry_home() -> CliResult<PathBuf> {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
         let p = PathBuf::from(&v);
@@ -26,6 +29,7 @@ pub fn ferry_home() -> CliResult<PathBuf> {
         }
     }
     let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| {

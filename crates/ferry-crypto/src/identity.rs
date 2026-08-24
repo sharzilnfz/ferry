@@ -144,9 +144,11 @@ impl DeviceIdentity {
 }
 
 /// Default identity root: `~/.ferry/identity`. Falls back to an error when
-/// no home directory can be located.
+/// no home directory can be located. HOME first, then USERPROFILE (native
+/// Windows shells have no HOME).
 pub fn default_identity_root() -> Result<PathBuf, IdentityError> {
     let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| {
