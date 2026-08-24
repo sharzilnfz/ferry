@@ -156,6 +156,7 @@ impl PinStore {
         rec.format_version = PIN_FORMAT_VERSION;
         let body = serde_json::to_string_pretty(&rec).expect("pin record serializes");
         let tmp = self.path.with_extension("json.tmp");
+        self.ensure_dir()?;
         std::fs::write(&tmp, body).map_err(|e| io_at(&tmp, e))?;
         std::fs::rename(&tmp, &self.path).map_err(|e| io_at(&self.path, e))?;
         Ok(())
@@ -171,9 +172,17 @@ impl PinStore {
         rec.released = true;
         let body = serde_json::to_string_pretty(&rec).expect("pin record serializes");
         let tmp = self.path.with_extension("json.tmp");
+        self.ensure_dir()?;
         std::fs::write(&tmp, body).map_err(|e| io_at(&tmp, e))?;
         std::fs::rename(&tmp, &self.path).map_err(|e| io_at(&self.path, e))?;
         Ok(true)
+    }
+
+    fn ensure_dir(&self) -> Result<(), PinError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
+        }
+        Ok(())
     }
 }
 

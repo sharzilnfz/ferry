@@ -25,6 +25,6 @@ pub mod split;
 pub use error::PinError;
 pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
 pub use matcher::PathMatcher;
-pub use pin::{Liveness, PinRecord, PinStore};
+pub use pin::{Liveness, PinRecord, PinStore, PIN_FORMAT_VERSION};
 pub use release::{plan_release, ReleasePeerPlan};
 pub use split::{hold_filter, split_plan, HoldDecision, SplitPlan};
