@@ -247,10 +247,25 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     std::fs::write(tree_a.join("hello.txt"), b"normal mode hello").unwrap();
 
     wait_converged(&pair, Duration::from_secs(90));
-    assert_eq!(
-        std::fs::read(tree_b.join("hello.txt")).unwrap(),
-        b"normal mode hello"
-    );
+    // Agreement ids settle before the materializer's rename lands on B's
+    // disk under loaded-runner scheduling; poll briefly rather than race.
+    let landed_by = Instant::now() + Duration::from_secs(30);
+    loop {
+        match std::fs::read(tree_b.join("hello.txt")) {
+            Ok(bytes) => {
+                assert_eq!(bytes, b"normal mode hello");
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                assert!(
+                    Instant::now() < landed_by,
+                    "hello.txt never landed on b after convergence"
+                );
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => panic!("read failed: {e}"),
+        }
+    }
 
     // Watch the negotiation settle on a direct path (same-host here; the
     // mechanism — hole punch / local addresses — is iroh's job either way).

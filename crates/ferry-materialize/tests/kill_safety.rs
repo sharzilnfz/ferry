@@ -359,7 +359,9 @@ fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> 
                     .unwrap()
                     .to_string_lossy()
                     .into_owned();
-                suffix
+                // windows read_dir yields backslash separators; model keys
+                // use the repo's forward-slash convention.
+                suffix.replace('\\', "/")
             };
             if is_temp_name(&name) {
                 // Temp names must fit the documented pattern — is_temp_name
