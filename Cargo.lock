@@ -1158,7 +1158,6 @@ dependencies = [
  "ferry-platform",
  "ferry-proto",
  "ferry-store",
- "filetime",
  "hkdf",
  "rand 0.8.7",
  "sha2 0.10.9",

@@ -36,12 +36,14 @@
 //!    individual blobs otherwise; manifests/tree nodes always move as
 //!    individual metadata blobs because the puller needs them before it
 //!    can even compute what it wants. See [`exchange`].
-//! 4. **[`materialize::Materializer`] + [`materialize::BlobSource`]** — the
-//!    applier seam. The inline implementation is ugly-but-correct (temp +
-//!    atomic rename, parents-first creation, children-first deletion, exec
-//!    bit, exact mtimes incl. symlink times). The puller applies the diff
-//!    durably BEFORE round 2 observes equality — under v1, round 2 plays
-//!    AGREED's role.
+//! 4. **[`applier::SessionApplier`]** — the applier seam. One thin adapter
+//!    over `ferry-materialize::Applier`: temp + atomic rename,
+//!    parents-first creation, children-first deletion, exec bit, exact
+//!    mtimes (files, symlinks AND directories, restored from the target
+//!    tree), NFC live-name folding, and the untrusted-symlink-target
+//!    policy that refuses hostile targets loudly. The puller applies the
+//!    diff durably BEFORE round 2 observes equality — under v1, round 2
+//!    plays AGREED's role.
 //! 5. **Agreement bookkeeping** ([`state::AgreementStore`] plus
 //!    `ferry_proto::agreement::AgreementLedger`) — after each concluded
 //!    session both sides record the agreed manifest id per peer in THE
@@ -70,9 +72,9 @@
 //! (T-007/T-008/T-009), no Windows path handling beyond cfg-gated unix
 //! extras (T-012).
 
+pub mod applier;
 pub mod engine;
 pub mod exchange;
-pub mod materialize;
 pub mod proto;
 pub mod session;
 pub mod state;
@@ -80,6 +82,7 @@ pub mod transport;
 
 // Re-exports so tests, bins, and future crates reach the vocabulary through
 // one facade.
+pub use applier::SessionApplier;
 pub use engine::{
     pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError, PeerState,
     SessionError, SyncEngine,
@@ -88,7 +91,6 @@ pub use exchange::{ingest_pack_verified, run_v1_session, CurrentState, ExchangeH
 pub use ferry_crypto::identity::DeviceIdentity;
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
-pub use materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
 pub use session::{Established, ExpectPeer};
 pub use state::{device_id_from_tag, AgreementStore};
 pub use transport::{Connection, Listener, TcpTransport, Transport};

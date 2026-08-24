@@ -254,6 +254,14 @@ enum Mutation {
         sec: i64,
         nsec: u32,
     },
+    /// A symlink's target already matches; only the link's OWN recorded
+    /// mtime drifted. Ported from ferry-sync's old inline materializer (deleted in T-05):
+    /// without it, link-mtime-only drift reported as `metadata_modified`
+    /// would be skipped forever and never converge.
+    RestoreSymlinkMtime {
+        sec: i64,
+        nsec: u32,
+    },
 }
 
 impl Mutation {
@@ -413,6 +421,51 @@ impl<'a> Applier<'a> {
         let upsert_paths: Vec<CompPath> = upserts.iter().map(|u| u.path.clone()).collect();
         ensure_no_fold_collisions(&upsert_paths)?;
         self.run(removes, upserts)
+    }
+
+    /// The v1 sync session contract (T-05): apply exactly this change set,
+    /// then restore every directory mtime from the TARGET tree, deepest
+    /// first.
+    ///
+    /// Directory mtimes must come from the target tree itself, and this is
+    /// not cosmetic: manifests carry dir mtimes, while `diff_nodes`
+    /// deliberately omits dir-mtime-only changes. Ancestors of modified
+    /// files can therefore appear NOWHERE in the change set yet still carry
+    /// mtimes that moved in the donor's snapshot; if they were left at
+    /// wall-clock time, each side's next snapshot would produce a different
+    /// root id and sync would never settle.
+    pub fn apply_session_change_set(
+        &mut self,
+        cs: &ChangeSet,
+        target_root_tree_id: &BlobId,
+    ) -> Result<ApplyStats, MaterializeError> {
+        let mut stats = self.apply_change_set(cs)?;
+        let dirs = self.restore_dir_mtimes_from_tree(target_root_tree_id)?;
+        stats.mtimes_set += dirs.mtimes_set;
+        stats.skipped_unchanged += dirs.skipped_unchanged;
+        Ok(stats)
+    }
+
+    /// Stamp every DIRECTORY of the target tree with its recorded mtime,
+    /// deepest first so later parent stamps never clobber child stamps.
+    /// Ported from ferry-sync's old inline materializer phase 3 (deleted in T-05).
+    pub fn restore_dir_mtimes_from_tree(
+        &mut self,
+        root_tree_id: &BlobId,
+    ) -> Result<ApplyStats, MaterializeError> {
+        let mut dirs: Vec<(CompPath, i64, u32)> = Vec::new();
+        collect_dir_mtimes(self.store, root_tree_id, Vec::new(), &mut dirs)?;
+        for (p, _, _) in &dirs {
+            validate_components(p)?;
+        }
+        // Deepest first: children before the parents whose stamps would
+        // otherwise be perturbed.
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.0.len()));
+        let mut stats = ApplyStats::default();
+        for (rel, sec, nsec) in dirs {
+            self.execute_touch(&rel, sec, nsec, &mut stats)?;
+        }
+        Ok(stats)
     }
 
     // -- pipeline -----------------------------------------------------------
@@ -596,6 +649,13 @@ impl<'a> Applier<'a> {
             }
             Mutation::RestoreMtime { sec, nsec } => {
                 set_mtime(&abs, sec, nsec)?;
+                stats.mtimes_set += 1;
+                self.pace();
+            }
+            Mutation::RestoreSymlinkMtime { sec, nsec } => {
+                // utimensat(AT_SYMLINK_NOFOLLOW): touches the link itself,
+                // never its target.
+                set_symlink_times(&abs, sec, nsec)?;
                 stats.mtimes_set += 1;
                 self.pace();
             }
@@ -908,18 +968,37 @@ fn plan_upsert(
             }
             Ok(())
         }
-        Mutation::WriteSymlink { target, .. } => {
-            let unchanged = stat_opt(abs)?.is_some_and(|md| {
+        Mutation::WriteSymlink { target, times } => {
+            let md = stat_opt(abs)?;
+            let unchanged = md.as_ref().is_some_and(|md| {
                 md.file_type().is_symlink()
                     && std::fs::read_link(abs).is_ok_and(|p| p.to_string_lossy() == target.as_str())
             });
             if unchanged {
+                // Target matches, but the link's OWN mtime may have drifted
+                // (link-metadata drift arrives as `metadata_modified`).
+                // Restore the times instead of skipping so such drift
+                // converges instead of oscillating (T-05 port). Only on
+                // unix: elsewhere link times are un-restorable and a
+                // permanent restore loop would never settle.
+                if cfg!(unix) {
+                    if let (Some(md), Some((sec, nsec))) = (md.as_ref(), *times) {
+                        let (lsec, lnsec) =
+                            split_unix_time(md.modified().map_err(|e| io_at(abs, e))?);
+                        if lsec != sec || lnsec != nsec {
+                            up.mutation = Mutation::RestoreSymlinkMtime { sec, nsec };
+                            return Ok(());
+                        }
+                    }
+                }
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
             }
             Ok(())
         }
-        Mutation::RestoreMtime { .. } => unreachable!("planner input"),
+        Mutation::RestoreMtime { .. } | Mutation::RestoreSymlinkMtime { .. } => {
+            unreachable!("planner input")
+        }
         Mutation::WriteFile {
             exec,
             sec,
@@ -1359,6 +1438,28 @@ fn flatten_base_subtree(
 // ---------------------------------------------------------------------------
 // Tree flattening / live walking
 // ---------------------------------------------------------------------------
+
+/// Walk a stored tree collecting `(path, mtime)` for every DIRECTORY so
+/// [`Applier::restore_dir_mtimes_from_tree`] can stamp them. Loads tree
+/// nodes through the store.
+fn collect_dir_mtimes(
+    store: &Store,
+    node_id: &BlobId,
+    prefix: CompPath,
+    out: &mut Vec<(CompPath, i64, u32)>,
+) -> Result<(), MaterializeError> {
+    let bytes = store.get(BlobKind::TreeNode, node_id)?;
+    let node = parse_tree_node(&bytes)?;
+    for e in &node.entries {
+        let mut path = prefix.clone();
+        path.push(e.name.clone());
+        if let EntryPayload::Dir { child_tree_id } = &e.payload {
+            out.push((path.clone(), e.mtime_sec, e.mtime_nsec));
+            collect_dir_mtimes(store, child_tree_id, path, out)?;
+        }
+    }
+    Ok(())
+}
 
 /// Flatten a stored tree into per-path desired states.
 fn flatten_tree(
@@ -2753,6 +2854,99 @@ mod tests {
         // A repeat apply is a full no-op: target AND times now match.
         let again = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
         assert_eq!(again.mutations(), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn identical_symlink_with_drifted_own_mtime_gets_times_restored() {
+        // T-05 port from the deleted inline materializer: an identical link is kept, but
+        // its OWN recorded mtime must be refreshed — otherwise
+        // metadata_modified-only link drift never converges.
+        let (w, target) = World::new(34);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![symlink_entry("lnk", MT_B.0, MT_B.1, "elsewhere")],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+
+        // Sabotage: same target, wrong link mtime.
+        std::fs::remove_file(target.join("lnk")).unwrap();
+        std::os::unix::fs::symlink("elsewhere", target.join("lnk")).unwrap();
+        let drifted = md_of(&target, &["lnk"]).modified().unwrap();
+        assert_ne!(
+            ferry_platform::split_unix(drifted),
+            MT_B,
+            "sabotage must take effect"
+        );
+
+        let stats = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(
+            stats.symlinks_written, 0,
+            "identical link must NOT be recreated"
+        );
+        assert_eq!(stats.mtimes_set, 1, "only the link's own times restored");
+        let (sec, nsec) = ferry_platform::split_unix(md_of(&target, &["lnk"]).modified().unwrap());
+        assert_eq!((sec, nsec), MT_B);
+
+        // And now fully settled: another run is a no-op.
+        let s3 = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(s3.mutations(), 0);
+    }
+
+    #[test]
+    fn session_change_set_restores_ancestor_dir_mtimes_absent_from_the_change_set() {
+        // T-05 port of the deleted inline materializer's phase 3: the change set adds ONLY
+        // a deep file; its ancestor directory appears nowhere yet carries
+        // the donor's moved mtime, which apply_session_change_set must
+        // stamp from the target tree.
+        let (w, target) = World::new(35);
+
+        let leaf_id = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![wfile("deep.txt", &w, b"", false, (7, 7))],
+            },
+        );
+        let target_root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![dir_entry("inner", 111, 222, leaf_id)],
+            },
+        );
+
+        // Hand-built change set: the ancestor dir is deliberately missing,
+        // exactly like a real diff — adding a file inside an EXISTING dir
+        // reports only the leaf; the dir's own mtime move is never
+        // reported. On disk the ancestor already exists (base state).
+        std::fs::create_dir_all(target.join("inner")).unwrap();
+        let cs = ChangeSet {
+            added: vec![Added {
+                path: vec!["inner".into(), "deep.txt".into()],
+                state: EntryState {
+                    kind: EntryKind::File,
+                    exec: false,
+                    mtime_sec: 7,
+                    mtime_nsec: 7,
+                    chunks: vec![],
+                    target: None,
+                },
+            }],
+            ..Default::default()
+        };
+
+        let mut ap = Applier::new(&w.store, &target);
+        ap.apply_session_change_set(&cs, &target_root).unwrap();
+
+        let (sec, nsec) =
+            ferry_platform::split_unix(md_of(&target, &["inner"]).modified().unwrap());
+        assert_eq!(
+            (sec, nsec),
+            (111, 222),
+            "ancestor dir mtime comes from the offered tree"
+        );
+        assert_eq!(read_target(&target, &["inner/deep.txt"]), b"");
     }
 
     #[test]

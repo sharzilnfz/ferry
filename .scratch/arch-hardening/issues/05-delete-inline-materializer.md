@@ -1,6 +1,6 @@
 # T-05: Delete InlineMaterializer — engine applies through ferry-materialize::Applier
 
-Status: ready-for-agent
+Status: done
 Depends on: T-02 (chunker API settles first)
 
 `crates/ferry-sync/src/materialize.rs` (~700 lines) is a second guarded

@@ -40,8 +40,8 @@ use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
+use crate::applier::SessionApplier;
 use crate::exchange::{self, CurrentState, ExchangeHost};
-use crate::materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
 use crate::proto::{self, ItemPayload, ProtoError};
 use crate::session::{self, ConnLink, Established, ExpectPeer};
 use crate::state::{device_id_from_tag, AgreedRecord, AgreementStore};
@@ -648,27 +648,6 @@ fn now_parts() -> (i64, u32) {
     (d.as_secs() as i64, d.subsec_nanos())
 }
 
-struct StoreSource<'a> {
-    store: &'a Store,
-}
-
-impl BlobSource for StoreSource<'_> {
-    fn get(&self, kind: BlobKind, id: &BlobId) -> Result<Vec<u8>, MaterializeError> {
-        self.store.get(kind, id).map_err(|e| {
-            MaterializeError::MissingBlob(format!("{} {}: {e}", kind_debug(kind), hex(id)))
-        })
-    }
-}
-
-fn kind_debug(k: BlobKind) -> &'static str {
-    match k {
-        BlobKind::DataChunk => "chunk",
-        BlobKind::TreeNode => "tree",
-        BlobKind::Manifest => "manifest",
-        BlobKind::Polynomial => "poly",
-    }
-}
-
 /// One sync conversation over an established connection — RETIRED M0
 /// plaintext framing, kept behind [`EngineConfig::legacy_m0_proto`].
 /// Caller holds the per-daemon session lock. `dialer` speaks first (HELLO
@@ -982,8 +961,8 @@ fn run_as_puller(
         }
     }
 
-    InlineMaterializer::new(&ctx.cfg.tree_dir)
-        .apply(&peer_manifest, &changes, &StoreSource { store: &ctx.store })
+    SessionApplier::new(&ctx.store, &ctx.cfg.tree_dir)
+        .apply(&peer_manifest, &changes)
         .map_err(|e| SessionError::Apply(format!("{e}")))?;
 
     ctx.record_agreement(
