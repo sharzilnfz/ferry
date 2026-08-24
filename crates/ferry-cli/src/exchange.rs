@@ -70,6 +70,10 @@ impl FolderSession {
 #[derive(Debug, Clone, Default)]
 pub struct RoundReport {
     pub peer_device_id: Option<String>,
+    /// Root tree id THIS side offered (8-hex prefix).
+    pub my_root: String,
+    /// Root tree id the PEER offered (8-hex prefix).
+    pub their_root: String,
     pub roots_equal_at_offer: bool,
     pub meta_fetched: usize,
     pub chunks_sent: usize,
@@ -124,14 +128,19 @@ pub fn run_round(
 
     // --- hello ------------------------------------------------------------
     let tag = session.hello_tag();
-    if peer_tag.is_none() {
-        if dialer {
-            proto::send_hello(conn, &tag)?;
-            peer_tag = Some(proto::recv_hello(conn)?.device_tag);
-        } else {
-            let h = proto::recv_hello(conn)?.device_tag;
-            proto::send_hello(conn, &tag)?;
-            peer_tag = Some(h);
+    match peer_tag {
+        // The accept loop already consumed the peer's HELLO for routing;
+        // complete the handshake by answering it now.
+        Some(_) => proto::send_hello(conn, &tag)?,
+        None => {
+            if dialer {
+                proto::send_hello(conn, &tag)?;
+                peer_tag = Some(proto::recv_hello(conn)?.device_tag);
+            } else {
+                let h = proto::recv_hello(conn)?.device_tag;
+                proto::send_hello(conn, &tag)?;
+                peer_tag = Some(h);
+            }
         }
     }
     let _ = peer_tag;
@@ -157,6 +166,8 @@ pub fn run_round(
     let their_manifest = parse_manifest(&theirs.manifest_bytes)?;
     let their_manifest_id: BlobId = *blake3::hash(&theirs.manifest_bytes).as_bytes();
     report.peer_device_id = Some(hex(&their_manifest.device_id));
+    report.my_root = hex(&my.manifest.root_tree_id)[..8].to_string();
+    report.their_root = hex(&their_manifest.root_tree_id)[..8].to_string();
 
     if their_manifest.folder_id != session.folder_id {
         return Err(ExchangeError::Other(format!(
@@ -178,6 +189,9 @@ pub fn run_round(
         };
         record_agreement(session, &their_manifest.device_id, agreed_manifest.1)
             .map_err(|e| ExchangeError::Other(e.to_string()))?;
+        // Seal staged metadata NOW: agreement records must survive restarts,
+        // and the base manifest has to be readable in every future session.
+        seal(session);
         report.roots_equal_at_offer = true;
         report.agreed = true;
         return Ok(report);
@@ -212,11 +226,41 @@ pub fn run_round(
 
     // Connection work done; apply our plan locally.
     let now = ferry_sync_engine::timefmt::now_unix();
+    if std::env::var_os("FERRY_DEBUG_PLAN").is_some() {
+        eprintln!(
+            "PLAN[{}]: materialize={} quarantine={} send={} fetch={} conflicts={}",
+            session.tree_root.display(),
+            plan.materialize.len(),
+            plan.quarantine.len(),
+            plan.send.len(),
+            plan.fetch.len(),
+            plan.conflicts.len()
+        );
+        for op in &plan.materialize {
+            eprintln!(
+                "  op {} base={} result={}",
+                op.path.join("/"),
+                op.base.as_ref().map(|_| "some").unwrap_or("none"),
+                op.result.as_ref().map(|_| "some").unwrap_or("none"),
+            );
+        }
+    }
     let stats = execute(&session.store, &session.tree_root, &plan, Some(&session.state_dir), now)?;
+    // Seal everything this round staged (served meta, ingested chunks) so
+    // the next session — possibly a new process — sees a complete store.
+    seal(session);
     report.ops_applied = stats.apply.mutations();
     report.quarantined = stats.quarantined.len();
     report.conflicts_recorded = stats.conflicts.len();
     Ok(report)
+}
+
+/// Flush staging into sealed packs and append an index snapshot. Cheap when
+/// nothing changed (empty staging drains to nothing).
+fn seal(session: &FolderSession) {
+    if let Err(e) = session.store.flush().and_then(|_| session.store.write_index_snapshot()) {
+        eprintln!("warning: could not seal store state: {e}");
+    }
 }
 
 /// A scanned current state for one folder.
@@ -261,7 +305,17 @@ fn request_meta(
             .collect();
         proto::send_req_meta(conn, &missing)?;
         if missing.is_empty() {
-            break; // terminator round; server replies with an empty stream
+            // Terminator round: drain the peer's (empty) reply stream so no
+            // stray ITEMS_DONE is left for the next phase.
+            match proto::recv_item_stream(conn)? {
+                ItemStream::Done => {}
+                ItemStream::Item(other) => {
+                    return Err(ExchangeError::Other(format!(
+                        "unexpected item on satisfied meta frontier: {other:?}"
+                    )))
+                }
+            }
+            break;
         }
         let mut got: HashSet<BlobId> = HashSet::new();
         while got.len() < missing.len() {

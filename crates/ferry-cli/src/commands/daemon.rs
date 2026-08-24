@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ferry_scan::{ScanEngine, StoreHandle};
+use ferry_store::format::hex;
 use ferry_sync::transport::Transport;
 
 use crate::error::{CliError, CliResult};
@@ -179,9 +180,17 @@ fn spawn_accept_loop(
     lst: Box<dyn ferry_sync::transport::Listener>,
     watched: &[Arc<WatchedFolder>],
 ) {
-    let by_tag: std::collections::HashMap<String, Arc<WatchedFolder>> = watched
+    // Incoming HELLO tags name the DIALER's device+folder
+    // (`ferry-<dev8>-<folder8>`); route on the folder half, since both
+    // devices share the folder id but never the device id.
+    let by_folder: std::collections::HashMap<String, Arc<WatchedFolder>> = watched
         .iter()
-        .map(|w| (w.session.hello_tag(), Arc::clone(w)))
+        .map(|w| {
+            (
+                hex(&w.session.folder_id)[..8].to_string(),
+                Arc::clone(w),
+            )
+        })
         .collect();
     std::thread::Builder::new()
         .name("ferry-accept".into())
@@ -191,13 +200,14 @@ fn spawn_accept_loop(
                     // Read the HELLO here to route to the right folder.
                     match ferry_sync::proto::recv_hello(conn.as_mut()) {
                         Ok(h) => {
-                            let w = by_tag.get(&h.device_tag).cloned();
+                            let folder_key = h.device_tag.split('-').nth(2).unwrap_or("");
+                            let w = by_folder.get(folder_key).cloned();
                             let w = match w {
                                 Some(w) => w,
                                 None => {
                                     ferry_sync::proto::send_error(
                                         conn.as_mut(),
-                                        &format!("unknown device/folder tag {}", h.device_tag),
+                                        &format!("no local folder matches tag {}", h.device_tag),
                                     );
                                     continue;
                                 }
@@ -312,8 +322,10 @@ fn remember_peer_addr(session: &FolderSession, peer_hex: &str, addr: SocketAddr)
 
 fn log_round(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
     eprintln!(
-        "[{}] round: equal={} meta+{} sent={} recv={} applied={} conflicts={} agreed={}",
+        "[{}] round: {} vs {} equal={} meta+{} sent={} recv={} applied={} conflicts={} agreed={}",
         display_root(w),
+        r.my_root,
+        r.their_root,
         r.roots_equal_at_offer,
         r.meta_fetched,
         r.chunks_sent,

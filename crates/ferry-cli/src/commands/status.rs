@@ -44,19 +44,22 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         .map_err(|e| crate::error::CliError::new("conflict-log", e.to_string(), "fix or archive .ferry/conflicts.jsonl"))?;
 
     // Pending changes: diff against the most recent agreement (any peer).
-    // Negative counts mean "unknown" (base unreadable); null in JSON means
-    // no agreement exists yet.
-    let pending: Option<i64> = most_recent_base(&opened)?.map(|base_manifest| {
-        ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
-            .map(|cs| {
-                (cs.added.len()
-                    + cs.removed.len()
-                    + cs.content_modified.len()
-                    + cs.type_changed.len()
-                    + cs.metadata_modified.len()) as i64
-            })
-            .unwrap_or(-1)
-    });
+    // Negative means "unknown"; JSON null means no agreement exists yet.
+    let pending: Option<i64> = match most_recent_base(&opened)? {
+        BaseLookup::NoAgreement => None,
+        BaseLookup::Unreadable => Some(-1),
+        BaseLookup::Base(base_manifest) => {
+            Some(ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
+                .map(|cs| {
+                    (cs.added.len()
+                        + cs.removed.len()
+                        + cs.content_modified.len()
+                        + cs.type_changed.len()
+                        + cs.metadata_modified.len()) as i64
+                })
+                .unwrap_or(-1))
+        }
+    };
 
     let json_doc = json!({
         "command": "status",
@@ -153,9 +156,7 @@ fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
     Ok(rows)
 }
 
-fn most_recent_base(
-    opened: &OpenFolder,
-) -> CliResult<Option<ferry_store::manifest::RootManifest>> {
+fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
     let ps = PeerState::new(opened.state_dir());
     let dir = opened.state_dir().join("peers");
     let mut best: Option<(i64, u32)> = None;
@@ -171,13 +172,30 @@ fn most_recent_base(
             }
         }
     }
-    let Some(mid) = best_id else { return Ok(None) };
+    let Some(mid) = best_id else { return Ok(BaseLookup::NoAgreement) };
     match opened.store.get(ferry_store::format::BlobKind::Manifest, &mid) {
-        Ok(bytes) => ferry_store::manifest::parse_manifest(&bytes)
-            .map(Some)
-            .map_err(|e| crate::error::CliError::new("store", e.to_string(), "the agreed manifest blob is damaged")),
-        Err(_) => Ok(None), // base pruned/unreadable: pending becomes null
+        Ok(bytes) => match ferry_store::manifest::parse_manifest(&bytes) {
+            Ok(m) => Ok(BaseLookup::Base(m)),
+            Err(e) => Err(crate::error::CliError::new(
+                "store",
+                e.to_string(),
+                "the agreed manifest blob is damaged",
+            )),
+        },
+        // Record exists but its manifest object is gone: "unknown", never a
+        // fake "no agreement".
+        Err(_) => Ok(BaseLookup::Unreadable),
     }
+}
+
+/// Outcome of looking up the most recent agreement's base manifest.
+enum BaseLookup {
+    /// No peer agreement recorded yet.
+    NoAgreement,
+    /// Agreement exists but its manifest object is unreadable.
+    Unreadable,
+    /// The agreed manifest to diff against.
+    Base(ferry_store::manifest::RootManifest),
 }
 
 /// Best-effort TCP reachability against the address a previous daemon/sync
