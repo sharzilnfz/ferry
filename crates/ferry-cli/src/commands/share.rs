@@ -43,7 +43,10 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         );
         for f in findings.iter().take(20) {
             let loc = f.line.map(|n| format!(":{n}")).unwrap_or_default();
-            msg.push_str(&format!("  SECRET RISK [{}] {}{} — {}\n", f.class, f.path, loc, f.preview));
+            msg.push_str(&format!(
+                "  SECRET RISK [{}] {}{} — {}\n",
+                f.class, f.path, loc, f.preview
+            ));
         }
         if findings.len() > 20 {
             msg.push_str(&format!("  … and {} more\n", findings.len() - 20));
@@ -53,21 +56,28 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
             msg.trim_end().to_string(),
             "review each path: exclude it (`ferry ignore '<pattern>'`) or accept the risk with --i-know",
         );
-        err.detail = Some(json!(findings.iter().map(|f| json!({
-            "path": f.path,
-            "line": f.line,
-            "class": f.class,
-            "preview": f.preview,
-        })).collect::<Vec<_>>()));
+        err.detail = Some(json!(findings
+            .iter()
+            .map(|f| json!({
+                "path": f.path,
+                "line": f.line,
+                "class": f.class,
+                "preview": f.preview,
+            }))
+            .collect::<Vec<_>>()));
         return Err(err);
     }
 
     // Gate passed (or nothing found): emit the payload via the pairing flow.
     let identity = {
         let home = crate::home::ferry_home()?;
-        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(
-            |e| CliError::new("identity-corrupt", e.to_string(), "restore or replace your device.key"),
-        )?
+        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {
+            CliError::new(
+                "identity-corrupt",
+                e.to_string(),
+                "restore or replace your device.key",
+            )
+        })?
     };
     let mut out = super::pairing::initiate(&opened, &identity, timeout_secs)?;
 
@@ -77,9 +87,12 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         obj.insert("warnings_reviewed".into(), json!(!findings.is_empty()));
         obj.insert(
             "warnings".into(),
-            json!(findings.iter().map(|f| json!({
-                "path": f.path, "line": f.line, "class": f.class, "preview": f.preview,
-            })).collect::<Vec<_>>()),
+            json!(findings
+                .iter()
+                .map(|f| json!({
+                    "path": f.path, "line": f.line, "class": f.class, "preview": f.preview,
+                }))
+                .collect::<Vec<_>>()),
         );
     }
 

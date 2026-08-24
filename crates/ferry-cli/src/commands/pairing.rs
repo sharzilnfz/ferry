@@ -71,7 +71,12 @@ fn offer_path_display(p: &Path) -> std::path::Display<'_> {
 
 /// Run the initiator side inside an opened folder. Polls for the responder's
 /// response + completes the FMK wrap when it appears.
-pub fn initiate(opened: &OpenFolder, identity: &DeviceIdentity, timeout_secs: u64) -> CliResult<Output> {    let dot = folder::dot_dir(&opened.root);
+pub fn initiate(
+    opened: &OpenFolder,
+    identity: &DeviceIdentity,
+    timeout_secs: u64,
+) -> CliResult<Output> {
+    let dot = folder::dot_dir(&opened.root);
     std::fs::create_dir_all(&dot).code("io", "check folder permissions")?;
     let fmk = unwrap_own_fmk(opened, identity)?;
 
@@ -94,7 +99,8 @@ pub fn initiate(opened: &OpenFolder, identity: &DeviceIdentity, timeout_secs: u6
         offer_path_display(&offer_path)
     );
 
-    std::fs::write(&offer_path, &offer_bytes).code("io", format!("cannot write {}", offer_path.display()))?;
+    std::fs::write(&offer_path, &offer_bytes)
+        .code("io", format!("cannot write {}", offer_path.display()))?;
 
     // Waiting phase: poll for the response file beside OUR offer.
     let response_path = offer_path.with_file_name(RESPONSE_SUFFIX);
@@ -118,19 +124,32 @@ pub fn initiate(opened: &OpenFolder, identity: &DeviceIdentity, timeout_secs: u6
         }
     };
 
-    let response = ferry_crypto::pairing::PairingResponse::parse(&response_bytes)
-        .code("pair-bad-response", "the response file is damaged; have the other device re-run accept")?;
-    let done = complete_pairing(&offer, &offer_bytes, &response, &fmk, identity)
-        .map_err(|e| CliError::new("pair-verify", e.to_string(), "the response did not match this offer; start over with a fresh `ferry pair`"))?;
+    let response = ferry_crypto::pairing::PairingResponse::parse(&response_bytes).code(
+        "pair-bad-response",
+        "the response file is damaged; have the other device re-run accept",
+    )?;
+    let done = complete_pairing(&offer, &offer_bytes, &response, &fmk, identity).map_err(|e| {
+        CliError::new(
+            "pair-verify",
+            e.to_string(),
+            "the response did not match this offer; start over with a fresh `ferry pair`",
+        )
+    })?;
 
     // Grant access: append the peer's wrap to OUR config head so the folder
     // records every authorized device.
-    append_wrap_entry_for(&opened.root, opened.folder_id, &done.peer_pub, &done.wrapped_for_peer)?;
+    append_wrap_entry_for(
+        &opened.root,
+        opened.folder_id,
+        &done.peer_pub,
+        &done.wrapped_for_peer,
+    )?;
 
     // Sealed handoff for the acceptor: folder key wrap + chunker polynomial.
     let grant = seal_grant(&offer_bytes, &done.wrapped_for_peer, opened.poly)?;
     let grant_path = artifact(&dot, GRANT_SUFFIX);
-    std::fs::write(&grant_path, &grant).code("io", format!("cannot write {}", grant_path.display()))?;
+    std::fs::write(&grant_path, &grant)
+        .code("io", format!("cannot write {}", grant_path.display()))?;
 
     let json_doc = json!({
         "command": "pair",
@@ -152,10 +171,14 @@ pub fn initiate(opened: &OpenFolder, identity: &DeviceIdentity, timeout_secs: u6
 
 /// Read this folder's CONFIG_HEAD entry for our device and unwrap the FMK.
 pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> CliResult<Fmk> {
-    let head_bytes = std::fs::read(folder::dot_dir(&opened.root).join(folder::CONFIG_FILE))
-        .code("config-corrupt", "the folder's key envelope is missing or unreadable")?;
-    let head = ferry_crypto::config_head::parse_config_head(&head_bytes)
-        .code("config-corrupt", "restore from backup or re-pair the folder")?;
+    let head_bytes = std::fs::read(folder::dot_dir(&opened.root).join(folder::CONFIG_FILE)).code(
+        "config-corrupt",
+        "the folder's key envelope is missing or unreadable",
+    )?;
+    let head = ferry_crypto::config_head::parse_config_head(&head_bytes).code(
+        "config-corrupt",
+        "restore from backup or re-pair the folder",
+    )?;
     let entry = head
         .entries
         .iter()
@@ -167,8 +190,12 @@ pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> CliResu
                 "run `ferry init` here or ask the owner to share again",
             )
         })?;
-    Ok(*unwrap_folder_key(&entry.wrapped, &head.folder_id, identity)
-        .code("key-unwrap", "your device.key may have changed; restore it or re-pair")?)
+    Ok(
+        *unwrap_folder_key(&entry.wrapped, &head.folder_id, identity).code(
+            "key-unwrap",
+            "your device.key may have changed; restore it or re-pair",
+        )?,
+    )
 }
 
 /// Append one wrapped-key entry to the folder's CONFIG_HEAD (idempotent per
@@ -187,7 +214,9 @@ fn append_wrap_entry_for(
         return Ok(()); // already authorized
     }
     let mut entries: Vec<_> = head.entries.clone();
-    entries.push(ferry_crypto::config_head::WrappedKeyEntry::new(*recipient, *wrapped));
+    entries.push(ferry_crypto::config_head::WrappedKeyEntry::new(
+        *recipient, *wrapped,
+    ));
     let updated = ferry_crypto::config_head::write_config_head(&folder_id, &entries);
     // Temp + rename so a crash cannot truncate the trust record.
     let tmp = path.with_extension("tmp");
@@ -206,10 +235,17 @@ pub fn accept(
     dir: Option<&Path>,
     timeout_secs: u64,
 ) -> CliResult<Output> {
-    let offer_bytes = std::fs::read(offer_file)
-        .code("not-found", "check the path to the offer file printed by `ferry pair`")?;
-    let offer = PairingOffer::parse(&offer_bytes)
-        .map_err(|e| CliError::new("bad-offer", e.to_string(), "get a fresh offer file from the sharing device"))?;
+    let offer_bytes = std::fs::read(offer_file).code(
+        "not-found",
+        "check the path to the offer file printed by `ferry pair`",
+    )?;
+    let offer = PairingOffer::parse(&offer_bytes).map_err(|e| {
+        CliError::new(
+            "bad-offer",
+            e.to_string(),
+            "get a fresh offer file from the sharing device",
+        )
+    })?;
 
     let target = dir.unwrap_or(Path::new("."));
     if folder::dot_dir(target).is_dir() {
@@ -226,8 +262,13 @@ pub fn accept(
     // Our half of the ritual, written where the initiator looks for it.
     let response = respond(&offer, identity, ferry_sync_engine::timefmt::now_unix().0);
     let response_path = offer_file.with_file_name(RESPONSE_SUFFIX);
-    std::fs::write(&response_path, response.serialize())
-        .code("io", format!("cannot write {} (offer must live on a writable shared location)", response_path.display()))?;
+    std::fs::write(&response_path, response.serialize()).code(
+        "io",
+        format!(
+            "cannot write {} (offer must live on a writable shared location)",
+            response_path.display()
+        ),
+    )?;
     eprintln!("Response written: {}", response_path.display());
     eprintln!("Expected short code: {expected_code} (compare against the other screen)");
 
@@ -249,13 +290,22 @@ pub fn accept(
     };
 
     let (folder_id, poly, wrapped_for_peer) = open_grant(&offer_bytes, &grant_bytes)?;
-    let fmk = *unwrap_folder_key(&wrapped_for_peer, &folder_id, identity)
-        .map_err(|e| CliError::new("key-unwrap", e.to_string(), "the grant did not address this device; re-run the pairing"))?;
+    let fmk = *unwrap_folder_key(&wrapped_for_peer, &folder_id, identity).map_err(|e| {
+        CliError::new(
+            "key-unwrap",
+            e.to_string(),
+            "the grant did not address this device; re-run the pairing",
+        )
+    })?;
 
     // Build the local store around the adopted key material.
     let store = folder::adopt_folder(target, identity, folder_id, &fmk, poly)?;
-    store.flush().map_err(|e| CliError::new("store", e.to_string(), "retry"))?;
-    store.write_index_snapshot().map_err(|e| CliError::new("store", e.to_string(), "retry"))?;
+    store
+        .flush()
+        .map_err(|e| CliError::new("store", e.to_string(), "retry"))?;
+    store
+        .write_index_snapshot()
+        .map_err(|e| CliError::new("store", e.to_string(), "retry"))?;
     folder::write_default_ignore_if_absent(target)?;
     let settings = Settings {
         format_version: SETTINGS_FORMAT_VERSION,
@@ -293,7 +343,11 @@ fn grant_key(one_time_secret: &[u8]) -> [u8; 32] {
     okm
 }
 
-fn seal_grant(offer_bytes: &[u8], wrapped_for_peer: &[u8; WRAPPED_LEN], poly: u64) -> CliResult<Vec<u8>> {
+fn seal_grant(
+    offer_bytes: &[u8],
+    wrapped_for_peer: &[u8; WRAPPED_LEN],
+    poly: u64,
+) -> CliResult<Vec<u8>> {
     // Key comes from the one-time secret INSIDE the offer bytes.
     let secret = &offer_bytes[53..85];
     let key = grant_key(secret);
@@ -312,7 +366,13 @@ fn seal_grant(offer_bytes: &[u8], wrapped_for_peer: &[u8; WRAPPED_LEN], poly: u6
         s
     };
     let ct = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), Payload { msg: &body, aad: offer_bytes })
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: &body,
+                aad: offer_bytes,
+            },
+        )
         .map_err(|_| CliError::new("crypto", "grant seal failed", "retry"))?;
 
     let mut out = Vec::with_capacity(4 + 1 + 12 + ct.len());
@@ -337,7 +397,10 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> CliResult<([u8; 16], u64, [u8; 
     let body = cipher
         .decrypt(
             Nonce::from_slice(&raw[5..17]),
-            Payload { msg: &raw[17..], aad: offer_bytes },
+            Payload {
+                msg: &raw[17..],
+                aad: offer_bytes,
+            },
         )
         .map_err(|_| {
             CliError::new(
@@ -346,10 +409,14 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> CliResult<([u8; 16], u64, [u8; 
                 "it must travel together with THIS exact offer file; redo the pairing",
             )
         })?;
-    let doc: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|_| CliError::new("bad-grant", "grant body unreadable", "redo the pairing"))?;
-    let wrapped_hex = doc["wrapped_for_peer"].as_str().ok_or_else(|| CliError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
-    let poly = doc["poly"].as_u64().ok_or_else(|| CliError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
+    let doc: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| CliError::new("bad-grant", "grant body unreadable", "redo the pairing"))?;
+    let wrapped_hex = doc["wrapped_for_peer"]
+        .as_str()
+        .ok_or_else(|| CliError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
+    let poly = doc["poly"]
+        .as_u64()
+        .ok_or_else(|| CliError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
     let wrapped = unhex_80(wrapped_hex)?;
     // folder_id rides in the offer itself.
     let folder_id: [u8; 16] = offer_bytes[5..21].try_into().expect("16 bytes");
@@ -357,8 +424,13 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> CliResult<([u8; 16], u64, [u8; 
 }
 
 fn unhex_80(s: &str) -> CliResult<[u8; WRAPPED_LEN]> {
-    ferry_store::format::unhex::<WRAPPED_LEN>(s)
-        .ok_or_else(|| CliError::new("bad-grant", "grant key envelope is not 160 hex chars", "redo the pairing"))
+    ferry_store::format::unhex::<WRAPPED_LEN>(s).ok_or_else(|| {
+        CliError::new(
+            "bad-grant",
+            "grant key envelope is not 160 hex chars",
+            "redo the pairing",
+        )
+    })
 }
 
 fn hex_of(b: &[u8]) -> String {
@@ -379,13 +451,22 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
 /// Build the matrix through ferry-crypto's qrcode dependency indirectly?
 /// ferry-cli renders directly from the same crate version workspace-wide.
 fn qrcode_like_matrix(bytes: &[u8]) -> CliResult<String> {
-    let code = qrcode::QrCode::new(bytes)
-        .map_err(|e| CliError::new("qr", e.to_string(), "payload too unusual for a QR; use the offer file"))?;
+    let code = qrcode::QrCode::new(bytes).map_err(|e| {
+        CliError::new(
+            "qr",
+            e.to_string(),
+            "payload too unusual for a QR; use the offer file",
+        )
+    })?;
     let w = code.width();
     let colors = code.to_colors();
     debug_assert_eq!(colors.len(), w * w);
 
-    let dark = |x: usize, y: usize| colors.get(y * w + x).map_or(false, |c| matches!(c, qrcode::Color::Dark));
+    let dark = |x: usize, y: usize| {
+        colors
+            .get(y * w + x)
+            .is_some_and(|c| matches!(c, qrcode::Color::Dark))
+    };
     let quiet = 1;
     let total = w + quiet * 2;
 

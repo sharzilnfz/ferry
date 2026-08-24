@@ -30,6 +30,7 @@ impl Env {
 
     /// Point FERRY_HOME somewhere else (second simulated device). Caller
     /// keeps the original Env alive so the lock is held throughout.
+    #[allow(dead_code)]
     pub fn switch_home_to(&self, dir: &std::path::Path) {
         std::env::set_var("FERRY_HOME", dir);
     }

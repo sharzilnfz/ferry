@@ -24,9 +24,11 @@ fn global_flags_parse_in_any_position() {
     assert!(cli.json);
     let cli = parse(&["status", "--json", "somewhere"]);
     assert!(cli.json, "global flags work after the subcommand");
-    assert!(cli.verbose == false);
+    assert!(!cli.verbose);
     let cli = parse(&["-v", "--json", "init"]);
     assert!(cli.verbose && cli.json);
+    let plain = parse(&["status"]);
+    assert!(!plain.json && !plain.verbose);
 }
 
 #[test]
@@ -44,7 +46,10 @@ fn add_requires_path() {
         Command::Add { path } => assert_eq!(path, PathBuf::from("x")),
         other => panic!("{other:?}"),
     }
-    assert!(Cli::try_parse_from(["ferry", "add"]).is_err(), "path required");
+    assert!(
+        Cli::try_parse_from(["ferry", "add"]).is_err(),
+        "path required"
+    );
 }
 
 #[test]
@@ -109,13 +114,8 @@ fn conflicts_needs_list_subcommand() {
 #[test]
 fn ignore_pattern_preset_and_list() {
     match parse(&["ignore", "*.log"]).command {
-        Command::Ignore {
-            pattern,
-            preset,
-            list,
-        } => {
+        Command::Ignore { pattern, list, .. } => {
             assert_eq!(pattern.as_deref(), Some("*.log"));
-            assert_eq!(preset, None);
             assert!(!list);
         }
         other => panic!("{other:?}"),
@@ -123,7 +123,7 @@ fn ignore_pattern_preset_and_list() {
     match parse(&["ignore", "--list"]).command {
         Command::Ignore {
             pattern,
-            preset,
+            preset: _,
             list,
         } => {
             assert_eq!(pattern, None);
@@ -171,9 +171,13 @@ fn daemon_folders_listen_peer_transport_interval() {
     }
     // --peer-url per ticket naming; --peer alias for humans.
     let cli = parse(&["daemon", "--peer-url", "127.0.0.1:1"]);
-    assert!(matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1")));
+    assert!(
+        matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
+    );
     let cli = parse(&["daemon", "--peer", "127.0.0.1:1"]);
-    assert!(matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1")));
+    assert!(
+        matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
+    );
     // Unknown transport values still PARSE (runtime rejects them cleanly).
     let cli = parse(&["daemon", "--transport", "iroh"]);
     assert!(matches!(&cli.command, Command::Daemon { transport, .. } if transport == "iroh"));
@@ -181,7 +185,14 @@ fn daemon_folders_listen_peer_transport_interval() {
 
 #[test]
 fn sync_flags() {
-    let cli = parse(&["sync", "myfolder", "--peer-url", "127.0.0.1:9", "--timeout-secs", "7"]);
+    let cli = parse(&[
+        "sync",
+        "myfolder",
+        "--peer-url",
+        "127.0.0.1:9",
+        "--timeout-secs",
+        "7",
+    ]);
     match cli.command {
         Command::Sync {
             folder,

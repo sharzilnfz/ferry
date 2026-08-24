@@ -10,8 +10,7 @@ use serde_json::json;
 
 use crate::error::{CliError, CliResult};
 use crate::folder::{
-    self, dot_dir, save_settings, write_default_ignore_if_absent, Settings,
-    SETTINGS_FORMAT_VERSION,
+    self, dot_dir, save_settings, write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
 };
 use crate::home;
 use crate::out::Output;
@@ -68,10 +67,18 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
     // from create_folder is still sitting in staging. Flush so the store is
     // complete on disk even if the process dies right now.
     store.flush().map_err(|e| {
-        CliError::new("store", e.to_string(), "retry; if it persists the disk may be full")
+        CliError::new(
+            "store",
+            e.to_string(),
+            "retry; if it persists the disk may be full",
+        )
     })?;
     store.write_index_snapshot().map_err(|e| {
-        CliError::new("store", e.to_string(), "retry; if it persists check disk space")
+        CliError::new(
+            "store",
+            e.to_string(),
+            "retry; if it persists check disk space",
+        )
     })?;
 
     let device_id = ferry_store::format::hex(identity.public());

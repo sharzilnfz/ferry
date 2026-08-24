@@ -99,15 +99,18 @@ pub fn create_folder(
 ) -> CliResult<(Store, Fmk)> {
     let fmk = generate_fmk();
     // Store::create uses a non-recursive mkdir for `.ferry`; ensure parents.
-    std::fs::create_dir_all(root)
-        .code("io", "check the path and permissions")?;
+    std::fs::create_dir_all(root).code("io", "check the path and permissions")?;
     let store = Store::create(root, fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
-    store.put_polynomial(poly).code("store", "retry; if it persists the disk may be full")?;
+    store
+        .put_polynomial(poly)
+        .code("store", "retry; if it persists the disk may be full")?;
 
-    let wrapped = wrap_folder_key(&fmk, &folder_id, identity.public())
-        .code("crypto", "identity keys are local; retry with a fresh identity if this repeats")?;
+    let wrapped = wrap_folder_key(&fmk, &folder_id, identity.public()).code(
+        "crypto",
+        "identity keys are local; retry with a fresh identity if this repeats",
+    )?;
     let head = write_config_head(
         &folder_id,
         &[WrappedKeyEntry::new(*identity.public(), wrapped)],
@@ -130,11 +133,17 @@ pub fn adopt_folder(
     let store = Store::create(root, *fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
-    store.put_polynomial(poly).code("store", "retry; if it persists the disk may be full")?;
-    let wrapped = wrap_folder_key(fmk, &folder_id, identity.public())
-        .code("crypto", "identity keys are local; retry with a fresh identity if this repeats")?;
-    let head =
-        write_config_head(&folder_id, &[WrappedKeyEntry::new(*identity.public(), wrapped)]);
+    store
+        .put_polynomial(poly)
+        .code("store", "retry; if it persists the disk may be full")?;
+    let wrapped = wrap_folder_key(fmk, &folder_id, identity.public()).code(
+        "crypto",
+        "identity keys are local; retry with a fresh identity if this repeats",
+    )?;
+    let head = write_config_head(
+        &folder_id,
+        &[WrappedKeyEntry::new(*identity.public(), wrapped)],
+    );
     write_config_file(root, &head)?;
     Ok(store)
 }
@@ -184,7 +193,11 @@ pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
     if !dot.is_dir() {
         return Err(CliError::new(
             "not-a-folder",
-            format!("{} is not a Ferry folder (no {} directory)", root.display(), DOT_DIR),
+            format!(
+                "{} is not a Ferry folder (no {} directory)",
+                root.display(),
+                DOT_DIR
+            ),
             "run `ferry init` there first, or pass the folder path explicitly",
         ));
     }
@@ -196,7 +209,10 @@ pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
     )
     .code(
         "settings-corrupt",
-        format!("restore or delete {} and re-run setup", settings_path.display()),
+        format!(
+            "restore or delete {} and re-run setup",
+            settings_path.display()
+        ),
     )?;
     if settings.format_version != SETTINGS_FORMAT_VERSION {
         return Err(CliError::new(
@@ -213,16 +229,23 @@ pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
     let _folder_id = ferry_store::format::unhex::<16>(&settings.folder_id).ok_or_else(|| {
         CliError::new(
             "settings-corrupt",
-            format!("folder_id in {} is not 32 hex chars", settings_path.display()),
+            format!(
+                "folder_id in {} is not 32 hex chars",
+                settings_path.display()
+            ),
             "re-init the folder",
         )
     })?;
 
     // Bootstrap step 1+2: parse CONFIG_HEAD, unwrap the FMK for THIS device.
-    let head_bytes = std::fs::read(dot.join(CONFIG_FILE))
-        .code("not-a-folder", "run `ferry init` there first, or pass the folder path explicitly")?;
-    let head = parse_config_head(&head_bytes)
-        .code("config-corrupt", "the folder's key envelope is damaged; restore from backup or re-pair the folder")?;
+    let head_bytes = std::fs::read(dot.join(CONFIG_FILE)).code(
+        "not-a-folder",
+        "run `ferry init` there first, or pass the folder path explicitly",
+    )?;
+    let head = parse_config_head(&head_bytes).code(
+        "config-corrupt",
+        "the folder's key envelope is damaged; restore from backup or re-pair the folder",
+    )?;
     let identity = {
         let home = crate::home::ferry_home()?;
         ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home))
@@ -249,8 +272,10 @@ pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
                 "ask the owning device to run `ferry pair` / `ferry share` again",
             )
         })?;
-    let fmk = unwrap_folder_key(&entry.wrapped, &head.folder_id, &identity)
-        .code("key-unwrap", "your device.key may have changed; restore it or re-pair the folder")?;
+    let fmk = unwrap_folder_key(&entry.wrapped, &head.folder_id, &identity).code(
+        "key-unwrap",
+        "your device.key may have changed; restore it or re-pair the folder",
+    )?;
 
     // Bootstrap steps 3+: open the store, locate the polynomial blob.
     let store = Arc::new(open_store(root, *fmk)?);

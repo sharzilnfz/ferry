@@ -43,9 +43,18 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
             )
         })?
         .parse()
-        .map_err(|_| CliError::new("bad-address", format!("--peer-url {:?} is not HOST:PORT", args.peer_url.unwrap()), "example: 127.0.0.1:44001"))?;
+        .map_err(|_| {
+            CliError::new(
+                "bad-address",
+                format!("--peer-url {:?} is not HOST:PORT", args.peer_url.unwrap()),
+                "example: 127.0.0.1:44001",
+            )
+        })?;
 
-    let folder_path: PathBuf = args.folder.map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let folder_path: PathBuf = args
+        .folder
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let opened = folder::open_folder(&folder_path)?;
     let transport = ferry_sync::TcpTransport;
     let ignore: Arc<dyn ferry_scan::IgnorePolicy> =

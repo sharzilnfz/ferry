@@ -2,8 +2,8 @@
 //! in `tests/cli_parse.rs`; every command maps onto a plain function that
 //! takes explicit parameters, so tests never shell out.
 
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

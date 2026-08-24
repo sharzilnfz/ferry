@@ -112,7 +112,11 @@ fn validate_pattern(line: &str) -> CliResult<()> {
             format!("{line:?} is not a valid gitignore glob"),
             "check character ranges and escaping; see gitignore docs",
         )),
-        Err(e) => Err(CliError::new("bad-pattern", e.to_string(), "fix the glob syntax")),
+        Err(e) => Err(CliError::new(
+            "bad-pattern",
+            e.to_string(),
+            "fix the glob syntax",
+        )),
     }
 }
 
@@ -124,10 +128,18 @@ fn append_rule_line(root: &Path, line: &str) -> CliResult<()> {
         .append(true)
         .open(&path)
         .map_err(|e| {
-            CliError::new("io", format!("cannot open {}: {e}", path.display()), "check permissions")
+            CliError::new(
+                "io",
+                format!("cannot open {}: {e}", path.display()),
+                "check permissions",
+            )
         })?;
     writeln!(f, "{line}").map_err(|e| {
-        CliError::new("io", format!("cannot write {}: {e}", path.display()), "check disk space")
+        CliError::new(
+            "io",
+            format!("cannot write {}: {e}", path.display()),
+            "check disk space",
+        )
     })
 }
 

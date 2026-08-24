@@ -53,17 +53,23 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     check_transport(args.transport)?;
 
     let listen_addr: Option<SocketAddr> = match args.listen {
-        Some(s) => Some(
-            s.parse()
-                .map_err(|_| CliError::new("bad-address", format!("--listen {s:?} is not HOST:PORT"), "example: 127.0.0.1:44001"))?,
-        ),
+        Some(s) => Some(s.parse().map_err(|_| {
+            CliError::new(
+                "bad-address",
+                format!("--listen {s:?} is not HOST:PORT"),
+                "example: 127.0.0.1:44001",
+            )
+        })?),
         None => None,
     };
     let peer_addr: Option<SocketAddr> = match args.peer_url {
-        Some(s) => Some(
-            s.parse()
-                .map_err(|_| CliError::new("bad-address", format!("--peer-url {s:?} is not HOST:PORT"), "example: 127.0.0.1:44001"))?,
-        ),
+        Some(s) => Some(s.parse().map_err(|_| {
+            CliError::new(
+                "bad-address",
+                format!("--peer-url {s:?} is not HOST:PORT"),
+                "example: 127.0.0.1:44001",
+            )
+        })?),
         None => None,
     };
     if listen_addr.is_none() && peer_addr.is_none() {
@@ -97,7 +103,13 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             Default::default(),
             Arc::clone(&rules) as Arc<dyn ferry_scan::IgnorePolicy>,
         )
-        .map_err(|e| CliError::new("watch", e.to_string(), "check the folder exists and is readable"))?;
+        .map_err(|e| {
+            CliError::new(
+                "watch",
+                e.to_string(),
+                "check the folder exists and is readable",
+            )
+        })?;
         let session = FolderSession {
             state_dir: opened.state_dir(),
             tree_root: opened.root.clone(),
@@ -145,7 +157,12 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     // Dialer loop: drive rounds against the peer every interval.
     let dialer_handles: Vec<_> = watched.iter().map(|w| (Arc::clone(w), peer_addr)).collect();
     if let Some(_peer) = peer_addr {
-        spawn_dial_loop(transport.clone(), dialer_handles, args.interval_secs, args.json)?;
+        spawn_dial_loop(
+            transport.clone(),
+            dialer_handles,
+            args.interval_secs,
+            args.json,
+        )?;
     }
 
     // Park forever; termination is a process signal (std-only v0).
@@ -185,12 +202,7 @@ fn spawn_accept_loop(
     // devices share the folder id but never the device id.
     let by_folder: std::collections::HashMap<String, Arc<WatchedFolder>> = watched
         .iter()
-        .map(|w| {
-            (
-                hex(&w.session.folder_id)[..8].to_string(),
-                Arc::clone(w),
-            )
-        })
+        .map(|w| (hex(&w.session.folder_id)[..8].to_string(), Arc::clone(w)))
         .collect();
     std::thread::Builder::new()
         .name("ferry-accept".into())
@@ -278,28 +290,23 @@ fn spawn_dial_loop(
                         }
                     };
                     match transport.dial(addr) {
-                        Ok(mut conn) => {
-                            match run_round(&mut conn, true, &w.session, &snap, None) {
-                                Ok(report) => {
-                                    if let Some(peer) = &report.peer_device_id {
-                                        remember_peer_addr(&w.session, peer, addr);
-                                    }
-                                    log_round(w, &report);
-                                    if json_mode {
-                                        emit_event_json(w, &report);
-                                    }
+                        Ok(mut conn) => match run_round(&mut conn, true, &w.session, &snap, None) {
+                            Ok(report) => {
+                                if let Some(peer) = &report.peer_device_id {
+                                    remember_peer_addr(&w.session, peer, addr);
                                 }
-                                Err(e) => {
-                                    eprintln!("[{}] round failed: {e}", display_root(w));
+                                log_round(w, &report);
+                                if json_mode {
+                                    emit_event_json(w, &report);
                                 }
                             }
-                        }
+                            Err(e) => {
+                                eprintln!("[{}] round failed: {e}", display_root(w));
+                            }
+                        },
                         Err(e) => {
                             if n <= targets.len() as u64 {
-                                eprintln!(
-                                    "[{}] peer not reachable yet ({e})",
-                                    display_root(w)
-                                );
+                                eprintln!("[{}] peer not reachable yet ({e})", display_root(w));
                             }
                         }
                     }

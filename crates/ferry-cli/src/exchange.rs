@@ -178,7 +178,9 @@ pub fn run_round(
     }
 
     // Store their manifest so agreement records can reference it later.
-    session.store.put_meta(BlobKind::Manifest, &theirs.manifest_bytes)?;
+    session
+        .store
+        .put_meta(BlobKind::Manifest, &theirs.manifest_bytes)?;
 
     if my.manifest.root_tree_id == their_manifest.root_tree_id {
         // Converged: settle agreement deterministically on BOTH sides.
@@ -245,7 +247,13 @@ pub fn run_round(
             );
         }
     }
-    let stats = execute(&session.store, &session.tree_root, &plan, Some(&session.state_dir), now)?;
+    let stats = execute(
+        &session.store,
+        &session.tree_root,
+        &plan,
+        Some(&session.state_dir),
+        now,
+    )?;
     // Seal everything this round staged (served meta, ingested chunks) so
     // the next session — possibly a new process — sees a complete store.
     seal(session);
@@ -258,7 +266,11 @@ pub fn run_round(
 /// Flush staging into sealed packs and append an index snapshot. Cheap when
 /// nothing changed (empty staging drains to nothing).
 fn seal(session: &FolderSession) {
-    if let Err(e) = session.store.flush().and_then(|_| session.store.write_index_snapshot()) {
+    if let Err(e) = session
+        .store
+        .flush()
+        .and_then(|_| session.store.write_index_snapshot())
+    {
         eprintln!("warning: could not seal store state: {e}");
     }
 }
@@ -334,7 +346,9 @@ fn request_meta(
                     fetched += 1;
                 }
                 ItemStream::Item(other) => {
-                    return Err(ExchangeError::Other(format!("expected tree node, got {other:?}")))
+                    return Err(ExchangeError::Other(format!(
+                        "expected tree node, got {other:?}"
+                    )))
                 }
             }
         }
@@ -345,7 +359,9 @@ fn request_meta(
             if let Ok(bytes) = session.store.get(BlobKind::TreeNode, id) {
                 if let Ok(node) = ferry_store::manifest::parse_tree_node(&bytes) {
                     for e in node.entries {
-                        if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } = e.payload {
+                        if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } =
+                            e.payload
+                        {
                             next.push(child_tree_id);
                         }
                     }
@@ -362,7 +378,14 @@ fn serve_meta(conn: &mut dyn Connection, session: &FolderSession) -> Result<(), 
         let req = proto::recv_req_meta(conn)?;
         for (kind, id) in &req {
             let bytes = session.store.get(*kind, id)?;
-            proto::send_item(conn, &ItemPayload::Blob { kind: *kind, id: *id, bytes })?;
+            proto::send_item(
+                conn,
+                &ItemPayload::Blob {
+                    kind: *kind,
+                    id: *id,
+                    bytes,
+                },
+            )?;
         }
         proto::send_items_done(conn)?;
         if req.is_empty() {
@@ -396,7 +419,9 @@ fn request_data(
                 received += 1;
             }
             ItemStream::Item(other) => {
-                return Err(ExchangeError::Other(format!("expected data chunk, got {other:?}")))
+                return Err(ExchangeError::Other(format!(
+                    "expected data chunk, got {other:?}"
+                )))
             }
         }
     }
@@ -469,13 +494,12 @@ fn compute_plan(
 
 /// Parse the last-agreed manifest object for a peer; None when never agreed
 /// or when its bytes are gone from the store (documented degradation).
-fn load_base(
-    session: &FolderSession,
-    ps: &PeerState,
-    peer: &[u8; 32],
-) -> Option<RootManifest> {
+fn load_base(session: &FolderSession, ps: &PeerState, peer: &[u8; 32]) -> Option<RootManifest> {
     let rec = ps.load(peer).ok().flatten()?;
-    let bytes = session.store.get(BlobKind::Manifest, &rec.manifest_id).ok()?;
+    let bytes = session
+        .store
+        .get(BlobKind::Manifest, &rec.manifest_id)
+        .ok()?;
     parse_manifest(&bytes).ok()
 }
 
@@ -492,6 +516,12 @@ fn record_agreement(
         agreed_sec: sec,
         agreed_nsec: nsec,
     })
-    .map_err(|e| CliError::new("agreement-state", e.to_string(), "check .ferry/peers permissions"))?;
+    .map_err(|e| {
+        CliError::new(
+            "agreement-state",
+            e.to_string(),
+            "check .ferry/peers permissions",
+        )
+    })?;
     Ok(())
 }

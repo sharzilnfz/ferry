@@ -1,8 +1,8 @@
 //! `ferry status`: one folder's state of the world.
 //!
 //! Honest v0 notes baked into the output:
-//! - The reported manifest comes from a FRESH full scan (`ferry status`
-  //! re-snapshots so ids are current; big trees cost a scan).
+//! - The reported manifest comes from a FRESH policy-aware scan (`ferry
+//!   status` re-snapshots so ids are current; big trees cost a scan).
 //! - Connectivity is best-effort TCP reachability of the last known peer
 //!   address; without a recorded address it is "unknown".
 
@@ -29,8 +29,13 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let identity = {
         let home = crate::home::ferry_home()?;
-        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home))
-            .map_err(|e| crate::error::CliError::new("identity-corrupt", e.to_string(), "restore or replace your device.key"))
+        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {
+            crate::error::CliError::new(
+                "identity-corrupt",
+                e.to_string(),
+                "restore or replace your device.key",
+            )
+        })
     }?;
     let device_id = hex(identity.public());
 
@@ -40,16 +45,21 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     let manifest_id = hex(&scan.manifest_id);
 
     let peers = list_peers(&opened)?;
-    let conflicts = list_conflicts(&opened.state_dir())
-        .map_err(|e| crate::error::CliError::new("conflict-log", e.to_string(), "fix or archive .ferry/conflicts.jsonl"))?;
+    let conflicts = list_conflicts(&opened.state_dir()).map_err(|e| {
+        crate::error::CliError::new(
+            "conflict-log",
+            e.to_string(),
+            "fix or archive .ferry/conflicts.jsonl",
+        )
+    })?;
 
     // Pending changes: diff against the most recent agreement (any peer).
     // Negative means "unknown"; JSON null means no agreement exists yet.
     let pending: Option<i64> = match most_recent_base(&opened)? {
         BaseLookup::NoAgreement => None,
         BaseLookup::Unreadable => Some(-1),
-        BaseLookup::Base(base_manifest) => {
-            Some(ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
+        BaseLookup::Base(base_manifest) => Some(
+            ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
                 .map(|cs| {
                     (cs.added.len()
                         + cs.removed.len()
@@ -57,8 +67,8 @@ pub fn run(folder: &Path) -> CliResult<Output> {
                         + cs.type_changed.len()
                         + cs.metadata_modified.len()) as i64
                 })
-                .unwrap_or(-1))
-        }
+                .unwrap_or(-1),
+        ),
     };
 
     let json_doc = json!({
@@ -84,7 +94,11 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     });
 
     let mut human = String::new();
-    human.push_str(&format!("Folder     {} ({})\n", display(opened.root.display()), hex(&opened.folder_id)));
+    human.push_str(&format!(
+        "Folder     {} ({})\n",
+        display(opened.root.display()),
+        hex(&opened.folder_id)
+    ));
     human.push_str(&format!("Device     {}\n", device_id));
     human.push_str(&format!(
         "Scan       {} files, {} dirs, {} symlinks\n",
@@ -92,7 +106,9 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     ));
     human.push_str(&format!("Manifest   {manifest_id}\n"));
     match pending {
-        Some(n) if n >= 0 => human.push_str(&format!("Pending    {n} change(s) vs last agreement\n")),
+        Some(n) if n >= 0 => {
+            human.push_str(&format!("Pending    {n} change(s) vs last agreement\n"))
+        }
         Some(_) => human.push_str("Pending    unknown (base manifest unreadable)\n"),
         None => human.push_str("Pending    no agreement yet\n"),
     }
@@ -102,11 +118,17 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     } else {
         human.push_str("Peers:\n");
         for p in &peers {
-            let agreed = p.last_agreed_manifest_id.clone().unwrap_or_else(|| "-".into());
+            let agreed = p
+                .last_agreed_manifest_id
+                .clone()
+                .unwrap_or_else(|| "-".into());
             let at = p.agreed_at.clone().unwrap_or_else(|| "-".into());
             human.push_str(&format!(
                 "  {}  agreed={} at={} link={}\n",
-                p.device_id, &agreed[..24.min(agreed.len())], at, p.connectivity
+                p.device_id,
+                &agreed[..24.min(agreed.len())],
+                at,
+                p.connectivity
             ));
         }
     }
@@ -119,13 +141,16 @@ fn display(d: std::path::Display<'_>) -> String {
 }
 
 /// A fresh policy-aware scan into the folder's store.
-pub fn scan_now(
-    opened: &OpenFolder,
-) -> CliResult<crate::scan::OneShot> {
+pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
     let identity = {
         let home = crate::home::ferry_home()?;
-        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home))
-            .map_err(|e| crate::error::CliError::new("identity-corrupt", e.to_string(), "restore or replace your device.key"))
+        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {
+            crate::error::CliError::new(
+                "identity-corrupt",
+                e.to_string(),
+                "restore or replace your device.key",
+            )
+        })
     }?;
     crate::scan::one_shot(opened, *identity.public())
 }
@@ -142,7 +167,9 @@ fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
     };
     names.sort();
     for path in names {
-        let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else { continue };
+        let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
+            continue;
+        };
         let rec = ps.load(&dev).ok().flatten();
         let dev_hex = hex(&dev);
         let connectivity = probe_peer(opened, &dev_hex);
@@ -163,17 +190,24 @@ fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
     let mut best_id: Option<[u8; 32]> = None;
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for path in rd.flatten().map(|e| e.path()) {
-            let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else { continue };
+            let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
+                continue;
+            };
             if let Ok(Some(rec)) = ps.load(&dev) {
-                if best.map_or(true, |(s, n)| (rec.agreed_sec, rec.agreed_nsec) > (s, n)) {
+                if best.is_none_or(|(s, n)| (rec.agreed_sec, rec.agreed_nsec) > (s, n)) {
                     best = Some((rec.agreed_sec, rec.agreed_nsec));
                     best_id = Some(rec.manifest_id);
                 }
             }
         }
     }
-    let Some(mid) = best_id else { return Ok(BaseLookup::NoAgreement) };
-    match opened.store.get(ferry_store::format::BlobKind::Manifest, &mid) {
+    let Some(mid) = best_id else {
+        return Ok(BaseLookup::NoAgreement);
+    };
+    match opened
+        .store
+        .get(ferry_store::format::BlobKind::Manifest, &mid)
+    {
         Ok(bytes) => match ferry_store::manifest::parse_manifest(&bytes) {
             Ok(m) => Ok(BaseLookup::Base(m)),
             Err(e) => Err(crate::error::CliError::new(
@@ -201,11 +235,16 @@ enum BaseLookup {
 /// Best-effort TCP reachability against the address a previous daemon/sync
 /// run recorded for this peer. No address on file => "unknown".
 fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
-    let addr_path = opened.state_dir().join("peers").join(format!("{peer_hex}.addr"));
+    let addr_path = opened
+        .state_dir()
+        .join("peers")
+        .join(format!("{peer_hex}.addr"));
     let Ok(text) = std::fs::read_to_string(addr_path) else {
         return "unknown";
     };
-    let Ok(addr) = text.trim().parse() else { return "unknown" };
+    let Ok(addr) = text.trim().parse() else {
+        return "unknown";
+    };
     match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
         Ok(_) => "reachable",
         Err(_) => "unreachable",

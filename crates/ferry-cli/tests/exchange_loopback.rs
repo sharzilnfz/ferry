@@ -16,11 +16,8 @@ struct Device {
 impl Device {
     fn new(tag: &str) -> Device {
         let home = tempfile::tempdir().expect("home dir");
-        let tree = std::env::temp_dir().join(format!(
-            "ferry-cli-e2e-{}-{}",
-            tag,
-            std::process::id()
-        ));
+        let tree =
+            std::env::temp_dir().join(format!("ferry-cli-e2e-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&tree);
         std::fs::create_dir_all(&tree).unwrap();
         Device { home, tree }
@@ -69,10 +66,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     let b = Device::new("b");
 
     // --- device A: init + content -----------------------------------------
-    let out = a
-        .command(&["init"])
-        .output()
-        .expect("run init");
+    let out = a.command(&["init"]).output().expect("run init");
     assert!(
         out.status.success(),
         "init failed: {}",
@@ -83,15 +77,30 @@ fn two_devices_pair_and_converge_over_localhost() {
     std::fs::create_dir_all(a.tree.join("src")).unwrap();
     std::fs::write(a.tree.join("src/main.py"), b"print('hi')\n").unwrap();
     // .env stays OUT by default; assert below that B never receives it.
-    std::fs::write(a.tree.join(".env"), "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n").unwrap();
+    std::fs::write(
+        a.tree.join(".env"),
+        "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
+    )
+    .unwrap();
 
     // --- pairing ritual via payload files ----------------------------------
-    let mut pair_a = a.command(&["pair", "--timeout-secs", "60"]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let mut pair_a = a
+        .command(&["pair", "--timeout-secs", "60"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     let offer = a.tree.join(".ferry/pair-offer.ferry-pair");
     assert!(wait_for_file(&offer, 30), "device A never wrote its offer");
 
     let out = b
-        .command(&["pair", "--accept", offer.to_str().unwrap(), "--timeout-secs", "60"])
+        .command(&[
+            "pair",
+            "--accept",
+            offer.to_str().unwrap(),
+            "--timeout-secs",
+            "60",
+        ])
         .output()
         .expect("pair accept");
     assert!(
@@ -112,22 +121,16 @@ fn two_devices_pair_and_converge_over_localhost() {
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(log_dir.join("a.log")).unwrap());
     let mut daemon_a = Daemon(daemon_a_cmd.spawn().expect("daemon A"));
-    let addr = read_listening(daemon_a.0.stdout.take().unwrap(), 15)
-        .expect("daemon A printed LISTENING");
+    let addr =
+        read_listening(daemon_a.0.stdout.take().unwrap(), 15).expect("daemon A printed LISTENING");
 
     let daemon_b_stderr = std::fs::File::create(log_dir.join("b.log")).unwrap();
     let mut daemon_b = Daemon(
-        b.command(&[
-            "daemon",
-            "--peer-url",
-            &addr,
-            "--interval-secs",
-            "1",
-        ])
-        .stdout(Stdio::null())
-        .stderr(daemon_b_stderr)
-        .spawn()
-        .expect("daemon B"),
+        b.command(&["daemon", "--peer-url", &addr, "--interval-secs", "1"])
+            .stdout(Stdio::null())
+            .stderr(daemon_b_stderr)
+            .spawn()
+            .expect("daemon B"),
     );
     let _ = &mut daemon_b;
 
@@ -187,7 +190,8 @@ fn two_devices_pair_and_converge_over_localhost() {
         timeline.push(format!(
             "+{:>5}ms A={} B={}",
             (Instant::now() - deadline).as_millis() + 60_000,
-            a_has, b_has
+            a_has,
+            b_has
         ));
         if !b_has {
             break;
@@ -197,7 +201,13 @@ fn two_devices_pair_and_converge_over_localhost() {
                 std::fs::read_dir(root)
                     .map(|rd| {
                         rd.flatten()
-                            .map(|e| format!("{} {}", e.file_name().to_string_lossy(), e.metadata().map(|m| m.len()).unwrap_or(0)))
+                            .map(|e| {
+                                format!(
+                                    "{} {}",
+                                    e.file_name().to_string_lossy(),
+                                    e.metadata().map(|m| m.len()).unwrap_or(0)
+                                )
+                            })
                             .collect::<Vec<_>>()
                             .join(", ")
                     })
@@ -228,8 +238,7 @@ fn two_devices_pair_and_converge_over_localhost() {
             .output()
             .unwrap();
         assert!(out.status.success());
-        let doc: serde_json::Value =
-            serde_json::from_slice(&out.stdout).expect("valid JSON");
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
         assert_eq!(doc["entries"].as_array().unwrap().len(), 0, "{doc}");
     }
 

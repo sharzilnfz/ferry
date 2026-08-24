@@ -22,7 +22,11 @@ fn setup() -> (Env, std::path::PathBuf, std::path::PathBuf) {
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     std::env::set_var("FERRY_HOME", home.path());
-    let env = Env { _home: home, _work: work, _guard: guard };
+    let env = Env {
+        _home: home,
+        _work: work,
+        _guard: guard,
+    };
     let hp = env._home.path().to_path_buf();
     let wp = env._work.path().to_path_buf();
     (env, hp, wp)
@@ -55,10 +59,7 @@ fn init_creates_store_config_settings_and_ignore_file() {
     )
     .unwrap();
     assert_eq!(head.entries.len(), 1);
-    assert_eq!(
-        ferry_store::format::hex(&head.folder_id),
-        folder_id
-    );
+    assert_eq!(ferry_store::format::hex(&head.folder_id), folder_id);
 }
 
 #[test]
@@ -129,7 +130,8 @@ fn conflicts_list_reads_jsonl_written_behind_it() {
         },
         quarantined_as: Some("notes.txt.ferry-conflict.cccccccc-20260824-090000".into()),
     };
-    ferry_sync_engine::append_entries(&folder::state_dir(&proj), &[entry.clone()]).unwrap();
+    ferry_sync_engine::append_entries(&folder::state_dir(&proj), std::slice::from_ref(&entry))
+        .unwrap();
 
     let out = commands::conflicts::run(&proj).unwrap();
     assert_eq!(out.json["entries"][0]["path"], "notes.txt");
@@ -168,15 +170,15 @@ fn ignore_append_preset_and_layered_listing() {
     // Listing shows all four layers annotated, preset lines included.
     let out = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
     let layers = out.json["layers"].as_array().unwrap();
-    let names: Vec<&str> = layers
-        .iter()
-        .map(|l| l["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, vec![
-        "defaults (built-in)",
-        "file ferry.ignore",
-        "presets (applied)",
-    ]);
+    let names: Vec<&str> = layers.iter().map(|l| l["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "defaults (built-in)",
+            "file ferry.ignore",
+            "presets (applied)",
+        ]
+    );
     let preset_lines = layers[2]["lines"].as_array().unwrap();
     assert!(preset_lines.iter().any(|l| l == "!CLAUDE.md"));
     assert!(preset_lines.iter().any(|l| l == "**/*.log"));

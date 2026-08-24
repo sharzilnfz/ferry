@@ -92,13 +92,11 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::status::run(&f)
         }
-        Command::Conflicts { action } => {
-            match action {
-                ferry_cli::cli::ConflictsAction::List => {
-                    ferry_cli::commands::conflicts::run(&PathBuf::from("."))
-                }
+        Command::Conflicts { action } => match action {
+            ferry_cli::cli::ConflictsAction::List => {
+                ferry_cli::commands::conflicts::run(&PathBuf::from("."))
             }
-        }
+        },
         Command::Ignore {
             pattern,
             preset,

@@ -16,17 +16,16 @@ fn share_refuses_and_redacts_until_i_know() {
     // Opt .env back into sync so the scanner sees an included high-risk file
     // with real-looking credentials inside.
     let secret = "AKIAIOSFODNN7EXAMPLE";
-    std::fs::write(
-        proj.join(".env"),
-        format!("AWS_ACCESS_KEY_ID={secret}\n"),
-    )
-    .unwrap();
+    std::fs::write(proj.join(".env"), format!("AWS_ACCESS_KEY_ID={secret}\n")).unwrap();
     commands::ignore_cmd::run(&proj, Some("!.env"), None, false).unwrap();
 
     // Without --i-know: refused, structured code, redacted preview.
     let err = commands::share::run(&proj, false, 5).unwrap_err();
     assert_eq!(err.code, "secrets-found");
-    assert!(!err.message.contains(secret), "never leak the secret itself");
+    assert!(
+        !err.message.contains(secret),
+        "never leak the secret itself"
+    );
     let detail = err.detail.expect("structured findings");
     let findings = detail.as_array().unwrap();
     assert!(!findings.is_empty());
@@ -40,7 +39,10 @@ fn share_refuses_and_redacts_until_i_know() {
         .expect("aws key flagged");
     let preview = aws["preview"].as_str().unwrap();
     assert!(preview.starts_with("AKIA"), "{preview}");
-    assert!(!preview.contains(secret), "preview must be redacted: {preview}");
+    assert!(
+        !preview.contains(secret),
+        "preview must be redacted: {preview}"
+    );
 
     // No offer file may exist after a refusal.
     assert!(!proj.join(".ferry/pair-offer.ferry-pair").exists());
@@ -49,7 +51,10 @@ fn share_refuses_and_redacts_until_i_know() {
     // file written; the ritual then waits for an acceptor, which this test
     // does not provide — pair-timeout proves the gate opened).
     let err = commands::share::run(&proj, true, 1).unwrap_err();
-    assert_eq!(err.code, "pair-timeout", "--i-know must proceed past the gate");
+    assert_eq!(
+        err.code, "pair-timeout",
+        "--i-know must proceed past the gate"
+    );
     assert!(proj.join(".ferry/pair-offer.ferry-pair").exists());
 }
 
