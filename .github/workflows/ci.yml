@@ -3,8 +3,8 @@ name: ci
 # T-012: cross-platform matrix. The walking skeleton and reconciliation
 # suites (including the adversarial fixture) must pass on all three OSes.
 #
-# Honesty note: this repo has no remote yet; the workflow activates on the
-# first push. Everything it runs was already verified locally on macOS arm64
+# Honesty note: first pushed 2026-08-24; everything it runs was already
+# verified locally on macOS arm64 before that first push.
 # (cargo fmt/clippy/tests, skeleton-e2e.sh, adversarial fixture) except
 # Windows-only behaviors, which are covered by pure-function tests that run
 # identically on every platform (long-path prefix math, reserved-name
