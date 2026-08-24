@@ -194,7 +194,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         BlobKind::TreeNode,
         &serialize_tree_node(&TreeNode::default()),
     )?;
-    let base_root = base.map(|m| m.root_tree_id).unwrap_or(empty_root);
+    let base_root = base.map_or(empty_root, |m| m.root_tree_id);
 
     let local_view = index_change_set(&diff_roots(store, &base_root, &local.root_tree_id)?);
     let remote_view = index_change_set(&diff_roots(store, &base_root, &remote.root_tree_id)?);
@@ -337,8 +337,8 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
                         Side::Local => local.device_id,
                         Side::Remote => remote.device_id,
                     },
-                    winner_mtime_sec: w_state.map(|s| s.mtime_sec).unwrap_or(0),
-                    winner_mtime_nsec: w_state.map(|s| s.mtime_nsec).unwrap_or(0),
+                    winner_mtime_sec: w_state.map_or(0, |s| s.mtime_sec),
+                    winner_mtime_nsec: w_state.map_or(0, |s| s.mtime_nsec),
                     loser_mtime_sec: lost.as_ref().map(|s| s.mtime_sec),
                     loser_mtime_nsec: lost.as_ref().map(|s| s.mtime_nsec),
                     quarantined_as: None,
@@ -436,7 +436,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
     // independently when an ancestor ends up deleted or occupied by
     // something that is not a directory.
     let mut final_state: BTreeMap<String, Option<&EntryState>> = BTreeMap::new();
-    for (key, d, l, r) in decided.iter() {
+    for (key, d, l, r) in &decided {
         let s = match d {
             Decision::Nothing => continue,
             Decision::KeepLocal => l.as_ref(),
@@ -468,7 +468,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
             survivors.push(c.path.clone());
         }
     }
-    for (key, d, l, _) in decided.iter() {
+    for (key, d, l, _) in &decided {
         if matches!(d, Decision::KeepLocal) && l.is_some() {
             // Reconstruct the stored components from the views.
             if let Some((p, _)) = local_view.get(key).or_else(|| remote_view.get(key)) {
@@ -656,7 +656,7 @@ mod tests {
         assert!(plan.conflicts.is_empty() && plan.quarantine.is_empty());
         // B is newer; A applies B's mtime silently.
         assert_eq!(plan.materialize.len(), 1);
-        assert!(plan.materialize[0].result.as_ref().unwrap().mtime_sec == 20);
+        assert_eq!(plan.materialize[0].result.as_ref().unwrap().mtime_sec, 20);
     }
 
     #[test]

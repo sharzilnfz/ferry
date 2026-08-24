@@ -24,8 +24,8 @@
 //!    used by reference-interop tests.
 //! 2. **Protocol** ([`session`], [`exchange`]) — the v1 inventory: mutual
 //!    AUTH handshake (possession proofs, no signatures), version
-//!    negotiation with BYE(1) on major mismatch, FOLDER_OFFER /
-//!    INDEX_ADVERT rounds, REQUEST_ITEMS/PACKS → ITEM_BATCH/PACK_ITEM
+//!    negotiation with BYE(1) on major mismatch, `FOLDER_OFFER` /
+//!    `INDEX_ADVERT` rounds, `REQUEST_ITEMS/PACKS` → `ITEM_BATCH/PACK_ITEM`
 //!    pulls, local last-agreed records, BYE; unknown-message policy per
 //!    the normative skip-if-flagged rule. ([`proto`] holds the retired
 //!    plaintext set behind the dev flag.)

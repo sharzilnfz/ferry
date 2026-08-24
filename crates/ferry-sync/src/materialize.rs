@@ -6,7 +6,7 @@
 //!
 //! - files: write to a temp file in the destination directory, set mode and
 //!   mtime on the temp file, then atomic rename over the final name;
-//! - creations parents-first (create_dir_all), deletions children-first
+//! - creations parents-first (`create_dir_all`), deletions children-first
 //!   (reverse path order — `diff` sorts ascending so reversing walks leaves
 //!   before roots);
 //! - type changes delete-then-create;
@@ -92,6 +92,7 @@ impl InlineMaterializer {
         p
     }
 
+    #[allow(clippy::unused_self)] // trait-shaped API: methods stay uniform even when self is unused
     fn ensure_parent(&self, path: &Path) -> Result<(), MaterializeError> {
         let parent = path
             .parent()
@@ -99,6 +100,7 @@ impl InlineMaterializer {
         std::fs::create_dir_all(parent).map_err(|e| io(parent, e))
     }
 
+    #[allow(clippy::unused_self)] // same uniformity as ensure_parent
     fn remove_any(&self, path: &Path, dir_hint: bool) -> Result<(), MaterializeError> {
         let meta = match std::fs::symlink_metadata(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -284,7 +286,7 @@ fn apply_exec(_path: &Path, _exec: bool) -> Result<(), MaterializeError> {
     Ok(())
 }
 
-/// i64 seconds + u32 nanoseconds -> SystemTime (pre-epoch safe).
+/// i64 seconds + u32 nanoseconds -> `SystemTime` (pre-epoch safe).
 fn system_time((sec, nsec): (i64, u32)) -> Result<std::time::SystemTime, MaterializeError> {
     use std::time::{Duration, UNIX_EPOCH};
     if nsec > 999_999_999 {
@@ -295,7 +297,7 @@ fn system_time((sec, nsec): (i64, u32)) -> Result<std::time::SystemTime, Materia
     } else {
         Ok(UNIX_EPOCH
             - Duration::new((-sec) as u64, 0)
-            - Duration::from_nanos(1_000_000_000u64.saturating_sub(nsec as u64)))
+            - Duration::from_nanos(1_000_000_000u64.saturating_sub(u64::from(nsec))))
     }
 }
 

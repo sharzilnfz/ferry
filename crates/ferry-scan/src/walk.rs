@@ -232,7 +232,7 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    /// List `rel` on disk, build its TreeNode reusing cache where valid,
+    /// List `rel` on disk, build its `TreeNode` reusing cache where valid,
     /// store it, update the cache, prune stale children. Returns the node id.
     fn rebuild_dir(
         &mut self,
@@ -241,7 +241,7 @@ impl<'a> Walker<'a> {
     ) -> Result<BlobId, ScanError> {
         // Inside or at the store directory: structurally excluded. Behave
         // exactly like absence so parents never point at it.
-        if rel.last().map(|c| is_store_component(c)).unwrap_or(false) {
+        if rel.last().is_some_and(|c| is_store_component(c)) {
             return self.splice_absent(rel);
         }
         let disk = self.disk_path(rel);
@@ -505,10 +505,10 @@ fn split_mtime(t: std::time::SystemTime) -> (i64, u32) {
     ferry_platform::split_unix(t)
 }
 fn mtime_sec(meta: &std::fs::Metadata) -> i64 {
-    meta.modified().map(split_mtime).unwrap_or((0, 0)).0
+    meta.modified().map_or((0, 0), split_mtime).0
 }
 fn mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-    meta.modified().map(split_mtime).unwrap_or((0, 0)).1
+    meta.modified().map_or((0, 0), split_mtime).1
 }
 
 #[cfg(test)]
@@ -556,7 +556,7 @@ mod tests {
             fx
         }
 
-        /// Full-scan path: what run_full does — whole-tree pass against an
+        /// Full-scan path: what `run_full` does — whole-tree pass against an
         /// EMPTY cache, then adopt it (the reseed IS the fresh cache).
         fn full_scan(&mut self) -> BlobId {
             let mut fresh = DirCache::new();
@@ -653,7 +653,7 @@ mod tests {
     }
 
     fn p(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]
@@ -740,7 +740,7 @@ mod tests {
         // The metadata-only mutation is an EXEC-BIT flip; non-unix
         // filesystems cannot store or observe it, so there it degrades to
         // zero metadata drift.
-        let expect_meta = if cfg!(unix) { 1 } else { 0 };
+        let expect_meta = usize::from(cfg!(unix));
         assert_eq!(inc_diff.metadata_modified.len(), expect_meta);
         if cfg!(unix) {
             assert_eq!(inc_diff.metadata_modified[0].path, p(&["sub", "a.txt"]));
@@ -833,7 +833,7 @@ mod tests {
         struct SkipSecrets;
         impl IgnorePolicy for SkipSecrets {
             fn ignored(&self, rel: &[String]) -> bool {
-                rel.first().map(|s| s.as_str()) == Some("secrets")
+                rel.first().map(std::string::String::as_str) == Some("secrets")
             }
         }
         let mut fx = Fixture::new("t4");

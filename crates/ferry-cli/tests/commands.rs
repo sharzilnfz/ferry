@@ -1,5 +1,5 @@
 //! Functional tests for init/status/conflicts/ignore through the library
-//! surface. Each test isolates FERRY_HOME so identity state never leaks.
+//! surface. Each test isolates `FERRY_HOME` so identity state never leaks.
 
 use std::path::Path;
 
@@ -18,7 +18,9 @@ struct Env {
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn setup() -> (Env, std::path::PathBuf, std::path::PathBuf) {
-    let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     std::env::set_var("FERRY_HOME", home.path());

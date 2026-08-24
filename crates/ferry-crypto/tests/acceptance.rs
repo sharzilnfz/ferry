@@ -31,6 +31,7 @@ impl Device {
     }
     /// Simulates total loss: drop everything, return a blank device at a new
     /// location (the export file is what survives).
+    #[allow(clippy::unused_self)] // method shape keeps fixture call sites uniform
     fn wipe_and_replace(&self) -> tempfile::TempDir {
         tempfile::tempdir().expect("fresh device after wipe")
     }
@@ -127,7 +128,7 @@ fn a_third_device_cannot_get_the_fmk() {
     let eve_identity = eve_dev.identity();
     let offer_with_wrong_secret = {
         let mut evil = intercepted.clone();
-        for b in evil[53..85].iter_mut() {
+        for b in &mut evil[53..85] {
             *b ^= 0x5a;
         }
         PairingOffer::parse(&evil).unwrap()

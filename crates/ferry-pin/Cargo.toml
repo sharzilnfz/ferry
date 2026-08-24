@@ -7,16 +7,16 @@ license.workspace = true
 [dependencies]
 ferry-store = { path = "../ferry-store" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 # Pin-path glob matching uses the same gitignore engine as ferry-ignore so
 # `--paths` behaves exactly like the rules users already know.
-ignore = "0.4"
+ignore.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # pid liveness (kill(pid, 0)) for stale-pin detection.
-libc = "0.2"
+libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # pid liveness (OpenProcess + GetExitCodeProcess) for stale-pin detection;
@@ -28,5 +28,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
-rand = "0.8"
+tempfile.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

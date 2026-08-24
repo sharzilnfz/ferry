@@ -9,7 +9,7 @@
 //! is symmetric and role-serialized: offers with adverts first (initiator
 //! announces, responder mirrors), then at most one pull stage per side —
 //! initiator pulls first, responder second — each ended by an empty
-//! REQUEST_ITEMS marker answered by a bare empty ITEM_BATCH. A second
+//! `REQUEST_ITEMS` marker answered by a bare empty `ITEM_BATCH`. A second
 //! offer round without adverts makes post-pull equality observable;
 //! equal, nonzero manifest ids record the last-agreed pointer LOCALLY on
 //! each side (no wire message). BYE closes: initiator sends, responder
@@ -55,10 +55,10 @@ use crate::materialize::Materializer;
 use crate::materialize::{BlobSource, InlineMaterializer};
 use crate::session::{Established, SessionIo};
 
-/// Zero folder_id marks "end of announcement list" in offer rounds.
+/// Zero `folder_id` marks "end of announcement list" in offer rounds.
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 
-/// Payload flush threshold for ITEM_BATCH frames (8 MiB, normative limit).
+/// Payload flush threshold for `ITEM_BATCH` frames (8 MiB, normative limit).
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
 /// BFS round guard for remote tree walks.
@@ -92,8 +92,8 @@ pub struct CurrentState {
 
 /// Run one full v1 conversation on an established session: offers → pull
 /// stages → round 2 → local agreement → BYE.
-pub fn run_v1_session<'x, 'e, H: ExchangeHost>(
-    est: &'x mut Established<'e>,
+pub fn run_v1_session<'x, H: ExchangeHost>(
+    est: &'x mut Established<'_>,
     host: &'x H,
     store: &'x Store,
     folder_id: [u8; 16],
@@ -188,7 +188,7 @@ struct Exchange<'x, 'e, H: ExchangeHost> {
     peer_adverts: AdvertMap,
 }
 
-impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
+impl<H: ExchangeHost> Exchange<'_, '_, H> {
     fn status(&self, line: &str) {
         self.host.status(line);
     }
@@ -491,9 +491,9 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         Ok(())
     }
 
-    /// Close MY stage: the empty REQUEST_ITEMS marker. Per the reference
+    /// Close MY stage: the empty `REQUEST_ITEMS` marker. Per the reference
     /// conversation, the server answers NOTHING — it returns to listening
-    /// (only item/pack responses carry ITEM_BATCH terminators). Matching
+    /// (only item/pack responses carry `ITEM_BATCH` terminators). Matching
     /// those bytes is what keeps us interoperable with
     /// `ferry_proto::run_engine`.
     fn close_stage(&mut self) -> Result<(), SessionError> {
@@ -511,9 +511,8 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
     /// THEIR stage: answer requests until the end-of-stage marker arrives.
     fn serve_peer_stage(&mut self) -> Result<(), SessionError> {
         loop {
-            let fb = match self.est.io.recv_frame()? {
-                Some(fb) => fb,
-                None => continue,
+            let Some(fb) = self.est.io.recv_frame()? else {
+                continue;
             };
             match fb.msg_type {
                 codec::MSG_REQUEST_ITEMS => {
@@ -533,7 +532,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         }
     }
 
-    /// Serve REQUEST_ITEMS from the store, batching at the normative caps;
+    /// Serve `REQUEST_ITEMS` from the store, batching at the normative caps;
     /// unserved ids are omitted (the requester detects gaps and retries).
     fn serve_items(&mut self, r: RequestItems) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
@@ -565,7 +564,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         Ok(())
     }
 
-    /// Serve REQUEST_PACKS: whole ciphertext files under their names, and
+    /// Serve `REQUEST_PACKS`: whole ciphertext files under their names, and
     /// only when the bytes hash to the name (never serve damaged packs).
     fn serve_packs(&mut self, r: RequestPacks) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
@@ -621,7 +620,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         }
     }
 
-    /// Read ITEM_BATCH frames until the terminator. Verify-after-decrypt:
+    /// Read `ITEM_BATCH` frames until the terminator. Verify-after-decrypt:
     /// BLAKE3(plaintext) MUST equal the claimed id BEFORE anything touches
     /// the store; rejects are counted and re-requested by the retry loop.
     fn read_item_batches(
@@ -701,8 +700,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
                         if self
                             .peer_adverts
                             .get(&id)
-                            .map(|e| e.pack == item.pack)
-                            .unwrap_or(false)
+                            .is_some_and(|e| e.pack == item.pack)
                             && self.store.get(BlobKind::DataChunk, &id).is_ok()
                         {
                             satisfied.insert(id);
@@ -815,7 +813,7 @@ pub fn ingest_pack_verified(
     Ok(())
 }
 
-/// Chunk one folder's index rows into INDEX_ADVERT frames at the
+/// Chunk one folder's index rows into `INDEX_ADVERT` frames at the
 /// normative cap; at least one advert always goes out, even when empty.
 fn send_adverts_of(io: &mut SessionIo, entries: Vec<IndexEntry>) -> Result<(), SessionError> {
     if entries.is_empty() {

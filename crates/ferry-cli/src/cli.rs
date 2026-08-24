@@ -59,7 +59,7 @@ pub enum Command {
     /// `ferry pair` prints a short code + QR and writes an offer file;
     /// `ferry pair --accept <file>` (run on the other device) completes the
     /// exchange. The payload FILE stands in for QR-camera transport across
-    /// machines: move it however you move secrets (AirDrop, scp, USB).
+    /// machines: move it however you move secrets (`AirDrop`, scp, USB).
     Pair {
         /// Accept mode: path to the offer file written by the other device.
         #[arg(long, value_name = "PAYLOAD_FILE")]

@@ -55,7 +55,7 @@ fn env(name: &str) -> (Env, Arc<Store>) {
 fn fast_cfg() -> ScanConfig {
     ScanConfig {
         quiet_window: Duration::from_millis(150),
-        audit_interval: Duration::from_secs(3600),
+        audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(100),
     }
 }

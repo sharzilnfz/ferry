@@ -1,4 +1,4 @@
-//! Where Ferry keeps per-device state, and the FERRY_HOME contract.
+//! Where Ferry keeps per-device state, and the `FERRY_HOME` contract.
 //!
 //! `FERRY_HOME` (env var) overrides the default `~/.ferry` for ALL
 //! per-device state. This is what lets two simulated devices coexist on
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use crate::error::{CliError, CliResult};
 
 /// Resolve the device home: `$FERRY_HOME` when set (non-empty), else
-/// `$HOME/.ferry`. Empty-string FERRY_HOME is treated as unset so a stray
+/// `$HOME/.ferry`. Empty-string `FERRY_HOME` is treated as unset so a stray
 /// `FERRY_HOME= cargo test` behaves like production.
 ///
 /// When HOME is unset (native Windows shells have no HOME), fall back to

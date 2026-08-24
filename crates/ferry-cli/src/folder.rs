@@ -12,7 +12,7 @@
 //!     conflicts.jsonl     # ferry-sync-engine structured conflict report
 //! ```
 //!
-//! Opening a folder follows the spec bootstrap sequence: parse CONFIG_HEAD,
+//! Opening a folder follows the spec bootstrap sequence: parse `CONFIG_HEAD`,
 //! unwrap the FMK with this device's identity, open the store, locate the
 //! polynomial blob through the index.
 
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CliError, CliResult, CodeInto};
 
-/// Name of the CONFIG_HEAD file inside `.ferry/` (spec-fixed).
+/// Name of the `CONFIG_HEAD` file inside `.ferry/` (spec-fixed).
 pub const CONFIG_FILE: &str = "config";
 /// CLI-owned settings file inside `.ferry/`.
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -88,7 +88,7 @@ pub fn load_rules(folder: &Path, settings: &Settings) -> CliResult<ferry_ignore:
 /// Create a brand-new synced folder at `root`. Fails when `.ferry` already
 /// exists — never silently re-initialize trust material.
 ///
-/// Writes: `.ferry/{packs,index,tmp}` via the store, the CONFIG_HEAD with
+/// Writes: `.ferry/{packs,index,tmp}` via the store, the `CONFIG_HEAD` with
 /// the FMK wrapped to this device, and the encrypted polynomial record.
 #[allow(clippy::too_many_arguments)]
 pub fn create_folder(
@@ -121,7 +121,7 @@ pub fn create_folder(
 
 /// Adopt an EXISTING folder key material into a fresh local store (the
 /// `pair --accept` path): like [`create_folder`] but with a caller-supplied
-/// FMK and only our own wrap written to CONFIG_HEAD.
+/// FMK and only our own wrap written to `CONFIG_HEAD`.
 pub fn adopt_folder(
     root: &Path,
     identity: &DeviceIdentity,
@@ -186,7 +186,7 @@ impl OpenFolder {
     }
 }
 
-/// Open an initialized folder: settings → CONFIG_HEAD → unwrap FMK → store
+/// Open an initialized folder: settings → `CONFIG_HEAD` → unwrap FMK → store
 /// → polynomial.
 pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
     let dot = dot_dir(root);
@@ -332,7 +332,7 @@ pub fn find_polynomial(store: &Store) -> CliResult<u64> {
 }
 
 /// `ferry init`'s default `ferry.ignore`: comments only. The compiled
-/// defaults live in code (ferry-ignore DEFAULT_RULES); the file documents
+/// defaults live in code (ferry-ignore `DEFAULT_RULES`); the file documents
 /// how to override them.
 pub const DEFAULT_FERRY_IGNORE: &str = "\
 # ferry.ignore — what Ferry syncs in this folder (gitignore syntax).

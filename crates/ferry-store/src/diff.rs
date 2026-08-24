@@ -248,8 +248,8 @@ fn diff_nodes(
 ) -> Result<(), DiffError> {
     // Entries are sorted by name bytes, so a merge walk pairs them in one
     // pass with no allocations.
-    let a: &[TreeEntry] = older.map(|n| n.entries.as_slice()).unwrap_or(&[]);
-    let b: &[TreeEntry] = newer.map(|n| n.entries.as_slice()).unwrap_or(&[]);
+    let a: &[TreeEntry] = older.map_or(&[], |n| n.entries.as_slice());
+    let b: &[TreeEntry] = newer.map_or(&[], |n| n.entries.as_slice());
     let (mut i, mut j) = (0usize, 0usize);
     while i < a.len() || j < b.len() {
         let ord = match (i < a.len(), j < b.len()) {

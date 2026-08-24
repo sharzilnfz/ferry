@@ -1,15 +1,15 @@
-//! The route table: opaque `SocketAddr` route keys → EndpointId (+ hints).
+//! The route table: opaque `SocketAddr` route keys → `EndpointId` (+ hints).
 //!
 //! Why this exists: the M0 [`ferry_sync::Transport`] trait addresses peers
 //! by `SocketAddr`. ADR-0003 addresses peers by public key. Rather than
 //! widen the trait (engine signatures would ripple for no behavioral gain),
 //! a route key is an *opaque handle* the transport resolves to an
-//! EndpointId before any packet is sent. Two sources feed resolution:
+//! `EndpointId` before any packet is sent. Two sources feed resolution:
 //!
 //! - **explicit routes** registered via [`IrohTransport::with_route`]
 //!   (`RouteScope::Explicit`); the daemon CLI builds these from `--peer`.
 //! - **the process-local directory** ([`RouteScope::Directory`]):
-//!   `listen()` registers the bound alias with the listener's own EndpointId
+//!   `listen()` registers the bound alias with the listener's own `EndpointId`
 //!   and real socket addresses, so in-process engine pairs (every existing
 //!   integration test) interop with zero wiring, like loopback TCP did.
 //!

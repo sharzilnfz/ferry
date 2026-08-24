@@ -137,8 +137,7 @@ impl ExchangeHost for TestHost {
         if let Some(dot) = &self.ledger_dot {
             let (sec, nsec) = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| (d.as_secs() as i64, d.subsec_nanos()))
-                .unwrap_or((0, 0));
+                .map_or((0, 0), |d| (d.as_secs() as i64, d.subsec_nanos()));
             ferry_proto::agreement::AgreementLedger::new(dot)
                 .record(
                     &DEFAULT_FOLDER_ID,
@@ -390,9 +389,9 @@ fn reference_initiator_ferry_sync_responder_interop() {
     );
 }
 
-/// A Read+Write wrapper around DuplexHalf that corrupts the Nth outbound
-/// record: record 1 = HELLO, record 2 = AUTH_INIT, record 3 = first
-/// post-auth frame (sealed FOLDER_OFFER). Flipping a ciphertext byte there
+/// A Read+Write wrapper around `DuplexHalf` that corrupts the Nth outbound
+/// record: record 1 = HELLO, record 2 = `AUTH_INIT`, record 3 = first
+/// post-auth frame (sealed `FOLDER_OFFER`). Flipping a ciphertext byte there
 /// must break AEAD authentication on the REFERENCE receiver.
 struct TamperNthWrite {
     inner: DuplexHalf,
@@ -486,11 +485,11 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
     assert!(
         matches!(
             res,
-            Err(ProtoError::Auth(_))
-                | Err(ProtoError::ByeReceived {
+            Err(ProtoError::Auth(_)
+                | ProtoError::ByeReceived {
                     reason: ferry_proto::error::ByeReason::AuthFailed
-                })
-                | Err(ProtoError::Io(_))
+                }
+                | ProtoError::Io(_))
         ),
         "reference rejected the tampered frame: {res:?}"
     );
@@ -498,7 +497,7 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
 
 /// Normative unknown-message rule, v1.0 ↔ v1.0: unknown types are NEVER
 /// skipped (no higher minor advertised); the session dies cleanly with
-/// UnknownMessage.
+/// `UnknownMessage`.
 #[test]
 fn unknown_message_type_is_a_clean_protocol_violation() {
     let id_a = ident("unk-a");
@@ -536,9 +535,8 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
     // then hits the policy check.
     est.io.send_frame(0x7F, vec![1, 2, 3]).unwrap();
 
-    let got = match hb.join().unwrap() {
-        Err(e) => e,
-        Ok(()) => panic!("receiver accepted an unknown message type"),
+    let Err(got) = hb.join().unwrap() else {
+        panic!("receiver accepted an unknown message type")
     };
     assert!(
         matches!(got, ProtoError::UnknownMessage { msg_type: 0x7F }),

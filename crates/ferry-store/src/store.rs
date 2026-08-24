@@ -446,7 +446,7 @@ impl Store {
         let mut files: Vec<PathBuf> = std::fs::read_dir(&index_dir)?
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().map(|x| x == "ferryindex").unwrap_or(false))
+            .filter(|p| p.extension().is_some_and(|x| x == "ferryindex"))
             .collect();
         files.sort();
         for f in files {
@@ -646,8 +646,8 @@ impl Store {
         Ok((count, skipped))
     }
 
-    /// Store the folder's chunker polynomial as blob_kind 0x04 inside a
-    /// PACK_META (protected like a key, per the folder layout section).
+    /// Store the folder's chunker polynomial as `blob_kind` 0x04 inside a
+    /// `PACK_META` (protected like a key, per the folder layout section).
     pub fn put_polynomial(&self, poly: u64) -> Result<BlobId, StoreError> {
         self.put_meta(BlobKind::Polynomial, &poly.to_le_bytes())
     }

@@ -53,8 +53,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
 
     let folder_path: PathBuf = args
         .folder
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let opened = folder::open_folder(&folder_path)?;
     let transport = ferry_sync::TcpTransport;
     let ignore: Arc<dyn ferry_scan::IgnorePolicy> =
@@ -163,9 +162,8 @@ impl RoundTotals {
 }
 
 fn current_device_id() -> [u8; 32] {
-    let home = match crate::home::ferry_home() {
-        Ok(h) => h,
-        Err(_) => return [0u8; 32],
+    let Ok(home) = crate::home::ferry_home() else {
+        return [0u8; 32];
     };
     match ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)) {
         Ok(id) => *id.public(),

@@ -6,6 +6,7 @@
 //! - Connectivity is best-effort TCP reachability of the last known peer
 //!   address; without a recorded address it is "unknown".
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -60,15 +61,16 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         BaseLookup::NoAgreement => None,
         BaseLookup::Unreadable => Some(-1),
         BaseLookup::Base(base_manifest) => Some(
-            ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
-                .map(|cs| {
+            ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest).map_or(
+                -1,
+                |cs| {
                     (cs.added.len()
                         + cs.removed.len()
                         + cs.content_modified.len()
                         + cs.type_changed.len()
                         + cs.metadata_modified.len()) as i64
-                })
-                .unwrap_or(-1),
+                },
+            ),
         ),
     };
 
@@ -147,35 +149,40 @@ pub fn run(folder: &Path) -> CliResult<Output> {
     });
 
     let mut human = String::new();
-    human.push_str(&format!(
-        "Folder     {} ({})\n",
+    let _ = writeln!(
+        human,
+        "Folder     {} ({})",
         display(opened.root.display()),
         hex(&opened.folder_id)
-    ));
-    human.push_str(&format!("Device     {}\n", device_id));
-    human.push_str(&format!(
-        "Scan       {} files, {} dirs, {} symlinks\n",
+    );
+    let _ = writeln!(human, "Device     {device_id}");
+    let _ = writeln!(
+        human,
+        "Scan       {} files, {} dirs, {} symlinks",
         scan.stats.files, scan.stats.dirs, scan.stats.symlinks
-    ));
-    human.push_str(&format!("Manifest   {manifest_id}\n"));
+    );
+    let _ = writeln!(human, "Manifest   {manifest_id}");
     match pending {
         Some(n) if n >= 0 => {
-            human.push_str(&format!("Pending    {n} change(s) vs last agreement\n"))
+            let _ = writeln!(human, "Pending    {n} change(s) vs last agreement");
         }
         Some(_) => human.push_str("Pending    unknown (base manifest unreadable)\n"),
         None => human.push_str("Pending    no agreement yet\n"),
     }
-    human.push_str(&format!("Conflicts  {}\n", conflicts.len()));
+    let _ = writeln!(human, "Conflicts  {}", conflicts.len());
     match pin_state {
         "none" => human.push_str("Pin        none\n"),
-        s => human.push_str(&format!("Pin        {} ({})\n", s, pin_paths.join(", "))),
+        s => {
+            let _ = writeln!(human, "Pin        {} ({})", s, pin_paths.join(", "));
+        }
     }
     if held_total == 0 {
         human.push_str("Held       nothing\n");
     } else {
-        human.push_str(&format!(
-            "Held       {held_total} path(s) — `ferry pin release` reconciles them\n"
-        ));
+        let _ = writeln!(
+            human,
+            "Held       {held_total} path(s) — `ferry pin release` reconciles them"
+        );
     }
     if peers.is_empty() {
         human.push_str("Peers      none yet — run `ferry pair`\n");
@@ -187,13 +194,14 @@ pub fn run(folder: &Path) -> CliResult<Output> {
                 .clone()
                 .unwrap_or_else(|| "-".into());
             let at = p.agreed_at.clone().unwrap_or_else(|| "-".into());
-            human.push_str(&format!(
-                "  {}  agreed={} at={} link={}\n",
+            let _ = writeln!(
+                human,
+                "  {}  agreed={} at={} link={}",
                 p.device_id,
                 &agreed[..24.min(agreed.len())],
                 at,
                 p.connectivity
-            ));
+            );
         }
     }
 

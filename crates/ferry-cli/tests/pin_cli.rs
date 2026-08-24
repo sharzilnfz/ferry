@@ -1,6 +1,6 @@
 //! Functional lifecycle tests for `ferry pin`: start/stop/release/status
 //! through the library surface, including JSON shapes, error codes, stale
-//! pins, and glob scoping. Isolated FERRY_HOME per test (see common/mod.rs).
+//! pins, and glob scoping. Isolated `FERRY_HOME` per test (see common/mod.rs).
 
 mod common;
 

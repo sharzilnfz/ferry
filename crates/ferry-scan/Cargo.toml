@@ -7,11 +7,14 @@ license.workspace = true
 [dependencies]
 ferry-store = { path = "../ferry-store" }
 notify = "8"
-blake3 = "1.5"
-thiserror = "2"
-unicode-normalization = "0.1"
-ferry-platform = { version = "0.1.0", path = "../ferry-platform" }
+blake3.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+ferry-platform.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
-rand = "0.8"
+tempfile.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

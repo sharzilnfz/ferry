@@ -196,11 +196,11 @@ fn replayed_hello_cannot_complete_authentication() {
 
 /// Build a live post-auth `Session` over a duplex half using the REAL key
 /// schedule (fabricated DH terms), so sealed frames authenticate normally.
-fn policy_session<'a>(
-    io: &'a mut DuplexHalf,
+fn policy_session(
+    io: &mut DuplexHalf,
     peer_max: ProtocolVersion,
     peer_flags: u64,
-) -> Session<'a, DuplexHalf> {
+) -> Session<'_, DuplexHalf> {
     // tx/rx None = plaintext frames: isolates the TYPE policy from sealing.
     Session {
         io,

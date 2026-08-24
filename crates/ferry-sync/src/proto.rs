@@ -300,7 +300,7 @@ pub enum ItemStream {
     Done,
 }
 
-/// Puller-side stream read: accepts ITEM frames and the ITEMS_DONE
+/// Puller-side stream read: accepts ITEM frames and the `ITEMS_DONE`
 /// terminator; anything else (ERROR included) is a protocol error.
 pub fn recv_item_stream(conn: &mut dyn Connection) -> Result<ItemStream, ProtoError> {
     let frame = conn.recv_frame()?;
@@ -419,7 +419,7 @@ mod tests {
                 assert_eq!(name, [3; 32]);
                 assert_eq!(bytes.len(), 100);
             }
-            other => panic!("{other:?}"),
+            other @ ItemPayload::Blob { .. } => panic!("{other:?}"),
         }
         match recv_item(&mut p).unwrap() {
             ItemPayload::Blob { kind, id, bytes } => {
@@ -427,7 +427,7 @@ mod tests {
                 assert_eq!(id, [1; 32]);
                 assert_eq!(bytes, vec![5]);
             }
-            other => panic!("{other:?}"),
+            other @ ItemPayload::Pack { .. } => panic!("{other:?}"),
         }
         recv_items_done(&mut p).unwrap();
 

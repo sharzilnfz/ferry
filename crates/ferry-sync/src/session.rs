@@ -18,7 +18,7 @@
 //! - [`DirectionCipher`] — ChaCha20-Poly1305 per direction, nonce
 //!   `"FPN1" || u64 BE seq`, AAD = u32 BE body length. One failed open
 //!   consumes the counter slot; any tag failure kills the session.
-//! - [`establish`] — HELLO / HELLO_ACK / AUTH_INIT / AUTH_CONFIRM with
+//! - [`establish`] — HELLO / `HELLO_ACK` / `AUTH_INIT` / `AUTH_CONFIRM` with
 //!   device-key mutual auth (possession proofs, no signatures) and version
 //!   negotiation. Peer identity policy: strict pin or trust-on-first-use
 //!   ([`ExpectPeer`]); TOFU is a LOCAL policy only — on the wire both modes
@@ -250,7 +250,7 @@ fn traffic_keys(prk: &[u8; KEY_LEN], th_final: &[u8; 32]) -> (DirectionCipher, D
     (DirectionCipher::new(i2r), DirectionCipher::new(r2i))
 }
 
-/// Seal this side's possession proof: its OWN device_id under its
+/// Seal this side's possession proof: its OWN `device_id` under its
 /// direction's auth key, AAD = hello transcript hash, fixed zero nonce.
 fn seal_auth(
     key: &[u8; KEY_LEN],
@@ -356,7 +356,7 @@ pub struct SessionIo<'a> {
     peer_flags: u64,
 }
 
-impl<'a> SessionIo<'a> {
+impl SessionIo<'_> {
     /// Send one message. Sealed iff the handshake negotiated sealing.
     pub fn send_frame(&mut self, msg_type: u8, payload: Vec<u8>) -> Result<(), ProtoError> {
         let body = FrameBody::new(msg_type, self.version, payload).encode();
@@ -469,7 +469,7 @@ fn random32() -> [u8; 32] {
     b
 }
 
-/// Drive HELLO → HELLO_ACK → AUTH_INIT → AUTH_CONFIRM. Always authenticates
+/// Drive HELLO → `HELLO_ACK` → `AUTH_INIT` → `AUTH_CONFIRM`. Always authenticates
 /// both devices, even when `encryption` is false (dev-only plaintext mode):
 /// possession proofs are not optional. On any handshake failure the peer
 /// receives a best-effort plaintext BYE with the coarse reason before the
@@ -1093,7 +1093,7 @@ mod tests {
         });
     }
 
-    impl<'a> SessionIo<'a> {
+    impl SessionIo<'_> {
         /// Test hook: seal without sending.
         fn seal_for_test(&mut self, len: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
             self.tx.as_mut().unwrap().seal(len, body)

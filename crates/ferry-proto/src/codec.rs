@@ -128,7 +128,7 @@ fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
 // --- Hello / HelloAck ------------------------------------------------------
 
 /// Handshake opener. The static public key doubles as the sender's
-/// device_id; the ephemeral key and nonce are fresh per connection and feed
+/// `device_id`; the ephemeral key and nonce are fresh per connection and feed
 /// the transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hello {
@@ -227,7 +227,7 @@ impl HelloAck {
 // --- AUTH_INIT / AUTH_CONFIRM ----------------------------------------------
 
 /// One sealed auth message: ChaCha20-Poly1305 ciphertext (48 bytes) over the
-/// sender's device_id, keyed through the handshake secret, AAD = transcript
+/// sender's `device_id`, keyed through the handshake secret, AAD = transcript
 /// hash. Producing a valid tag requires the sender's static secret term.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthProof {
@@ -338,10 +338,10 @@ impl IndexAdvert {
 // --- REQUEST_ITEMS / REQUEST_PACKS ------------------------------------------
 
 /// Ask the peer for specific blobs by kind + id within one folder. Served
-/// items arrive in ITEM_BATCH frames; unservable ids are silently omitted
+/// items arrive in `ITEM_BATCH` frames; unservable ids are silently omitted
 /// (the requester detects gaps after the terminator). An EMPTY items list
 /// is the end-of-pull-stage marker: the server replies with a bare empty
-/// ITEM_BATCH and returns to listening.
+/// `ITEM_BATCH` and returns to listening.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestItems {
     pub folder_id: [u8; 16],
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn frame_body_round_trips_and_rejects_foreign_magic() {
         let body = FrameBody::new(MSG_HELLO, ProtocolVersion::V1_0, vec![1, 2, 3]);
-        roundtrip(body, |b| b.encode(), FrameBody::parse);
+        roundtrip(body, super::FrameBody::encode, FrameBody::parse);
 
         let mut evil = FrameBody::new(MSG_BYE, ProtocolVersion::V1_0, vec![]).encode();
         evil[0] ^= 0xFF;
@@ -589,7 +589,7 @@ mod tests {
         long.push(0);
         assert!(Hello::parse(&long).is_err());
         // Full round trip last (consumes h).
-        roundtrip(h, |x| x.encode(), Hello::parse);
+        roundtrip(h, super::Hello::encode, Hello::parse);
 
         let ack = HelloAck {
             version: ProtocolVersion::new(1, 9),
@@ -605,7 +605,7 @@ mod tests {
         for cut in 0..ack_bytes.len() {
             assert!(HelloAck::parse(&ack_bytes[..cut]).is_err(), "cut {cut}");
         }
-        roundtrip(ack, |a| a.encode(), HelloAck::parse);
+        roundtrip(ack, super::HelloAck::encode, HelloAck::parse);
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod tests {
             FolderOffer::parse(&evil),
             Err(ProtoError::ProtocolViolation("offer reserved nonzero"))
         ));
-        roundtrip(offer, |o| o.encode(), FolderOffer::parse);
+        roundtrip(offer, super::FolderOffer::encode, FolderOffer::parse);
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
             ByeReason::ResourceLimit,
             ByeReason::Internal,
         ] {
-            roundtrip(Bye { reason: r }, |b| b.encode(), Bye::parse);
+            roundtrip(Bye { reason: r }, super::Bye::encode, Bye::parse);
         }
         assert!(Bye::parse(&[99]).is_err());
     }

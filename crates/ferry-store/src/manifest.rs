@@ -339,13 +339,13 @@ impl From<FormatError> for ManifestError {
     }
 }
 
-/// Payload carried by one tree entry, per its entry_type byte.
+/// Payload carried by one tree entry, per its `entry_type` byte.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryPayload {
     File {
         /// Logical plaintext size; MUST equal the sum of chunk lengths.
         size: u64,
-        /// Ordered chunk sequence: (chunk_id, chunk_plain_len).
+        /// Ordered chunk sequence: (`chunk_id`, `chunk_plain_len`).
         chunks: Vec<(BlobId, u64)>,
     },
     Dir {
@@ -374,7 +374,7 @@ pub struct TreeEntry {
     pub exec: bool,
     /// Unix epoch seconds, signed; negative with positive nsec = pre-1970.
     pub mtime_sec: i64,
-    /// 0..=999_999_999, always normalized non-negative.
+    /// `0..=999_999_999`, always normalized non-negative.
     pub mtime_nsec: u32,
     pub payload: EntryPayload,
 }
@@ -529,7 +529,7 @@ pub fn validate_entries(entries: &[TreeEntry]) -> Result<(), ManifestError> {
 
 fn flags_byte(e: &TreeEntry) -> Result<u8, ManifestError> {
     match &e.payload {
-        EntryPayload::File { .. } => Ok(if e.exec { 0x01 } else { 0x00 }),
+        EntryPayload::File { .. } => Ok(u8::from(e.exec)),
         _ => {
             if e.exec {
                 return Err(ManifestError::ExecFlagOnNonFile);

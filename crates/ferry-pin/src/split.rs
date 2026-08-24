@@ -191,7 +191,7 @@ pub fn split_plan(
         .send
         .iter()
         .filter(|(id, _)| !withheld(id))
-        .cloned()
+        .copied()
         .collect();
 
     let apply = ActionPlan {
@@ -371,7 +371,13 @@ mod tests {
     }
 
     fn matcher(patterns: &[&str]) -> PathMatcher {
-        PathMatcher::new(&patterns.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
+        PathMatcher::new(
+            &patterns
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -495,7 +501,7 @@ mod tests {
 
     /// Minimal stand-ins; send-attribution and full round-trips live in the
     /// scenario integration where real stores build real manifests. The
-    /// store/manifest pair IS real (an empty tree) because split_plan's
+    /// store/manifest pair IS real (an empty tree) because `split_plan`'s
     /// send-attribution walks the local tree.
     fn store_with_empty_tree() -> (Store, RootManifest) {
         let dir = tempfile::tempdir().unwrap();

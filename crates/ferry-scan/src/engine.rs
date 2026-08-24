@@ -204,15 +204,15 @@ impl Parts {
                 // then audit, then poll, then plain events.
                 match s {
                     WatchSignal::Overflow { .. } | WatchSignal::RootReturned => {
-                        trigger = Trigger::OverflowRecovery
+                        trigger = Trigger::OverflowRecovery;
                     }
                     WatchSignal::AuditDue => {
                         if trigger == Trigger::Events {
-                            trigger = Trigger::Audit
+                            trigger = Trigger::Audit;
                         }
                     }
                     WatchSignal::PolledChanged(_) if trigger == Trigger::Events => {
-                        trigger = Trigger::Poll
+                        trigger = Trigger::Poll;
                     }
                     _ => {}
                 }
@@ -221,7 +221,7 @@ impl Parts {
                     Action::RescanSubtrees(dirs) => dirty.extend(dirs),
                     Action::FullRescan { reason } => {
                         if full_reason.is_none() {
-                            full_reason = Some(reason)
+                            full_reason = Some(reason);
                         }
                     }
                     Action::StartPolling { .. } => {}
@@ -266,7 +266,7 @@ impl Parts {
     /// file is read and hashed fresh. One walking codepath means a full scan
     /// and an incremental pass can never disagree about what belongs in the
     /// manifest (e.g. the structurally excluded store directory, which
-    /// ferry-store's own snapshot_dir does not filter). The cache reseeds
+    /// ferry-store's own `snapshot_dir` does not filter). The cache reseeds
     /// from the fresh walk afterwards, so pre-existing cache drift cannot
     /// survive an audit.
     fn run_full(&self, trigger: Trigger, reason: &str) -> Result<ScanRun, ScanError> {
@@ -614,12 +614,11 @@ impl ScanEngine {
                         if now >= deadline {
                             break;
                         }
-                        match parts.queue.wait_arrival(deadline - now) {
-                            true => {
-                                batch.extend(parts.queue.drain());
-                                deadline = Instant::now() + quiet;
-                            }
-                            false => break 'debounce,
+                        if parts.queue.wait_arrival(deadline - now) {
+                            batch.extend(parts.queue.drain());
+                            deadline = Instant::now() + quiet;
+                        } else {
+                            break 'debounce;
                         }
                     }
                     if stop.load(Ordering::Relaxed) {
@@ -784,9 +783,7 @@ fn classify_watch_error(e: &NotifyError) -> ErrClass {
         MaxFilesWatch => ErrClass::Unwatchable(Vec::new()),
         Io(ioe) => match ioe.raw_os_error() {
             // ENOSPC (inotify watches/space), EMFILE/ENFILE (fd exhaustion).
-            Some(28) | Some(24) | Some(23) => {
-                ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default())
-            }
+            Some(28 | 24 | 23) => ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default()),
             _ => ErrClass::Loss,
         },
         _ => ErrClass::Loss,
@@ -921,17 +918,11 @@ fn live_exec_bit(meta: &std::fs::Metadata) -> bool {
 }
 
 fn meta_mtime_sec(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .map(ferry_platform::split_unix)
-        .unwrap_or((0, 0))
-        .0
+    meta.modified().map_or((0, 0), ferry_platform::split_unix).0
 }
 
 fn meta_mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-    meta.modified()
-        .map(ferry_platform::split_unix)
-        .unwrap_or((0, 0))
-        .1
+    meta.modified().map_or((0, 0), ferry_platform::split_unix).1
 }
 
 #[cfg(test)]
@@ -940,7 +931,7 @@ mod tests {
     use crate::testutil::*;
 
     fn rel(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     fn seeded_cache(dir: &std::path::Path) -> (tempfile::TempDir, Store, DirCache) {

@@ -51,7 +51,7 @@ mod tests {
         struct SkipNodeModules;
         impl IgnorePolicy for SkipNodeModules {
             fn ignored(&self, rel: &[String]) -> bool {
-                rel.first().map(|s| s.as_str()) == Some("node_modules")
+                rel.first().map(std::string::String::as_str) == Some("node_modules")
             }
         }
         assert!(SkipNodeModules.ignored(&["node_modules".to_string()]));

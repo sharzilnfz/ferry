@@ -97,7 +97,7 @@ impl Device {
             device_id,
             poly,
             parent: [0; 32],
-            clock: 1_787_000_000 + tag as i64,
+            clock: 1_787_000_000 + i64::from(tag),
         }
     }
 

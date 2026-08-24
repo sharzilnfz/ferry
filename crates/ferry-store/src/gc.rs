@@ -239,6 +239,7 @@ mod tests {
 }
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -297,7 +298,7 @@ pub fn collect_garbage(
     let mut packs: Vec<PathBuf> = std::fs::read_dir(store.packs_dir())?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().map(|x| x == "pack").unwrap_or(false))
+        .filter(|p| p.extension().is_some_and(|x| x == "pack"))
         .collect();
     packs.sort();
 
@@ -305,12 +306,9 @@ pub fn collect_garbage(
     for path in packs {
         report.scanned += 1;
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let claimed = match crate::format::unhex::<32>(&stem) {
-            Some(id) => id,
-            None => {
-                report.skipped_corrupt.push(stem);
-                continue;
-            }
+        let Some(claimed) = crate::format::unhex::<32>(&stem) else {
+            report.skipped_corrupt.push(stem);
+            continue;
         };
         let bytes = std::fs::read(&path)?;
         let _ = &bytes;
@@ -441,7 +439,7 @@ fn save_ledger(path: &std::path::Path, ledger: &Ledger) -> Result<(), GcError> {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
             .as_nanos();
-        text.push_str(&format!("{} {}\n", hex(id), nanos));
+        let _ = writeln!(text, "{} {}", hex(id), nanos);
     }
     let parent = path.parent().ok_or(GcError::NoLedgerParent)?;
     crate::index::write_named_atomically(

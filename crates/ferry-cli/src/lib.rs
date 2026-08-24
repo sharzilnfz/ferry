@@ -10,7 +10,7 @@ pub mod home;
 pub mod out;
 pub mod scan;
 
-/// Resolve the device identity under the resolved FERRY_HOME, creating it on
+/// Resolve the device identity under the resolved `FERRY_HOME`, creating it on
 /// first use. Shared by several commands.
 pub fn ensure_identity() -> error::CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = home::ferry_home()?;

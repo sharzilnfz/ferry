@@ -84,7 +84,7 @@ pub struct RecoveryExport<'a> {
     pub device_secret: &'a [u8; 32],
 }
 
-impl<'a> RecoveryExport<'a> {
+impl RecoveryExport<'_> {
     /// Serialize + encrypt under `passphrase`. Fresh random salt/nonce from
     /// OS randomness on every call; two exports of identical state differ in
     /// ciphertext (no codebook to mine).

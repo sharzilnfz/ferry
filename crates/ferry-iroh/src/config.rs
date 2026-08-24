@@ -46,7 +46,7 @@ pub struct IrohConfig {
     /// of the two must be set.
     pub secret: Option<[u8; 32]>,
     /// Device identity whose X25519 secret deterministically derives the
-    /// EndpointId. Ignored when [`IrohConfig::secret`] is set directly.
+    /// `EndpointId`. Ignored when [`IrohConfig::secret`] is set directly.
     pub device_identity: Option<DeviceIdentity>,
     pub relays: RelaySetting,
     pub mdns: Option<MdnsSetting>,
@@ -96,7 +96,7 @@ impl IrohConfig {
 pub struct IrohConfigBuilder(IrohConfig);
 
 impl IrohConfigBuilder {
-    /// Derive the stable EndpointId from this device identity.
+    /// Derive the stable `EndpointId` from this device identity.
     pub fn device_identity(mut self, id: &DeviceIdentity) -> Self {
         self.0.device_identity = Some(id.clone());
         self

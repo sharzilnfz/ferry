@@ -14,8 +14,11 @@ ferry-sync = { path = "../ferry-sync" }
 ferry-iroh = { path = "../ferry-iroh" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
-rand = "0.8"
+rand.workspace = true
 
 [[bin]]
 name = "ferry-sync"
 path = "src/main.rs"
+
+[lints]
+workspace = true

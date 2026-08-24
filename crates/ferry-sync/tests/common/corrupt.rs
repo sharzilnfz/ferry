@@ -4,7 +4,7 @@
 //! still converges.
 //!
 //! T-014 mechanical switch: under protocol v1 the dialer receives exactly
-//! two pre-auth frames (HELLO_ACK, AUTH_CONFIRM) before every body region
+//! two pre-auth frames (`HELLO_ACK`, `AUTH_CONFIRM`) before every body region
 //! travels SEALED, so "the first ITEM payload" is no longer identifiable
 //! from outside the crypto. The equivalent corruption target is the first
 //! frame after those two — the peer's first sealed message. Flipping a
@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Number of pre-auth frames the DIALING side receives before all frames
-/// are sealed (HELLO_ACK + AUTH_CONFIRM).
+/// are sealed (`HELLO_ACK` + `AUTH_CONFIRM`).
 const PREAUTH_INBOUND_FRAMES: usize = 2;
 
 pub struct CorruptingTransport {
@@ -42,7 +42,7 @@ impl ferry_sync::Transport for CorruptingTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn ferry_sync::Connection>> {
         Ok(Box::new(CorruptingConn {
             inner: self.inner.dial(addr)?,
-            armed: &self.armed as *const AtomicBool as usize,
+            armed: &raw const self.armed as usize,
             seen: 0,
         }))
     }

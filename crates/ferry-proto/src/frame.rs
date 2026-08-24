@@ -23,7 +23,7 @@ use crate::error::ProtoError;
 
 /// Hard ceiling on one frame's body. A conforming sender never exceeds it;
 /// a receiver seeing more treats it as a resource-limit violation rather
-/// than allocating (the DoS guard). Sized to carry a worst-case spec pack
+/// than allocating (the `DoS` guard). Sized to carry a worst-case spec pack
 /// (16 MiB target + 8 MiB max-chunk overshoot + footer/tag overhead) in one
 /// [`PackItem`](crate::codec::PackItem).
 pub const MAX_FRAME_BODY: usize = 64 * 1024 * 1024;

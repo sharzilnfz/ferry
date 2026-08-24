@@ -156,7 +156,7 @@ pub fn wrap_folder_key(
 }
 
 /// Unwrap with this device's identity secret. Any tampering, wrong key, or
-/// wrong folder_id surfaces as [`FolderKeyError::Auth`] — authentication
+/// wrong `folder_id` surfaces as [`FolderKeyError::Auth`] — authentication
 /// failure, never silent garbage.
 pub fn unwrap_folder_key(
     wrapped: &[u8; WRAPPED_LEN],

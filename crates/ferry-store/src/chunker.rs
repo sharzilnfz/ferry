@@ -11,9 +11,9 @@ use thiserror::Error;
 pub const WINDOW_SIZE: usize = 64;
 /// No natural cut may fire before this many bytes.
 pub const MIN_SIZE: usize = 524_288;
-/// Average target is 2^AVG_BITS bytes.
+/// Average target is `2^AVG_BITS` bytes.
 pub const AVG_BITS: u32 = 20;
-/// Cut when the fingerprint's low AVG_BITS bits are all zero.
+/// Cut when the fingerprint's low `AVG_BITS` bits are all zero.
 pub const SPLIT_MASK: u64 = (1 << AVG_BITS) - 1; // 1_048_575
 /// Hard upper bound for one chunk.
 pub const MAX_SIZE: usize = 8_388_608;
@@ -32,7 +32,7 @@ fn poly_degree(v: u64) -> Option<u32> {
     if v == 0 {
         None
     } else {
-        Some(63 - v.leading_zeros())
+        Some(v.ilog2())
     }
 }
 
@@ -74,7 +74,7 @@ fn poly_degree128(v: u128) -> u32 {
     if v == 0 {
         0
     } else {
-        127 - v.leading_zeros()
+        v.ilog2()
     }
 }
 
@@ -162,9 +162,9 @@ pub fn generate_polynomial(rng: &mut impl Rng) -> u64 {
 /// Why a byte ended a chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cut {
-    /// Fingerprint low bits were zero past MIN_SIZE.
+    /// Fingerprint low bits were zero past `MIN_SIZE`.
     Natural,
-    /// Hard clamp at MAX_SIZE.
+    /// Hard clamp at `MAX_SIZE`.
     Max,
 }
 
@@ -268,13 +268,13 @@ impl Chunker {
             self.win[self.wpos] = b;
             self.wpos = (self.wpos + 1) % WINDOW_SIZE;
             self.filled += 1;
-            self.fp = gf_mod((self.fp << 8) | b as u64, self.poly);
+            self.fp = gf_mod((self.fp << 8) | u64::from(b), self.poly);
         } else {
             let out = self.win[self.wpos];
             self.win[self.wpos] = b;
             self.wpos = (self.wpos + 1) % WINDOW_SIZE;
             self.fp ^= self.out_table[out as usize];
-            self.fp = gf_mod((self.fp << 8) | b as u64, self.poly);
+            self.fp = gf_mod((self.fp << 8) | u64::from(b), self.poly);
         }
     }
 }
@@ -366,15 +366,16 @@ mod tests {
             assert!(poly_degree(r).unwrap_or(0) < POLY_DEGREE || r == 0);
             // Independent wide reduction: same long division in u128, which
             // cannot overflow for these operand sizes.
-            let mut wide = v as u128;
-            let pw = p as u128;
+            let mut wide = u128::from(v);
+            let pw = u128::from(p);
             while poly_degree128(wide) >= POLY_DEGREE {
                 wide ^= pw << (poly_degree128(wide) - POLY_DEGREE);
             }
-            assert_eq!(r as u128, wide, "gf_mod({v:#x})");
+            assert_eq!(u128::from(r), wide, "gf_mod({v:#x})");
         }
     }
 
+    #[allow(clippy::many_single_char_names)] // a/b/c/r mirror the algebra in the comments
     #[test]
     fn gf_mulmod_matches_gf_mul_then_mod() {
         let p = test_poly(11);
@@ -420,7 +421,7 @@ mod tests {
     fn rabin_test_agrees_with_trial_division_on_all_small_prime_degrees() {
         // Generic Rabin test for prime degree d vs exhaustive trial division.
         fn rabin_generic(p: u64, d: u32) -> bool {
-            if poly_degree(p).map(|dd| dd != d).unwrap_or(true) {
+            if poly_degree(p) != Some(d) {
                 return false;
             }
             // x^(2^d) ≡ x (mod p)

@@ -661,7 +661,7 @@ pub fn seal_pack_bytes(
     for s in 0..n_segments {
         let start = s * SEGMENT_PLAIN_LEN;
         let end = std::cmp::min(start + SEGMENT_PLAIN_LEN, body.len());
-        let last_flag = if s + 1 == n_segments { 1 } else { 0 };
+        let last_flag = u8::from(s + 1 == n_segments);
         let nonce = body_nonce(s as u32, last_flag);
         let ct = cipher.seal(&key, &nonce, &aad_body, &body[start..end])?;
         debug_assert_eq!(ct.len(), end - start + TAG_LEN);
@@ -781,7 +781,7 @@ pub fn read_footer(
 /// Normative read procedure (`docs/store-format.md`, "Reading a blob").
 ///
 /// 1. Verify BLAKE3(file) == `expected_pack_id`; reject WITHOUT decrypting.
-/// 2. Parse header and salt; read trailing footer_len; decrypt footer under
+/// 2. Parse header and salt; read trailing `footer_len`; decrypt footer under
 ///    the reserved counter; validate the body-region identity.
 /// 3. Confirm `(kind, id)` appears; if `index_loc` disagrees with the
 ///    footer, trust neither and stop.
@@ -833,7 +833,7 @@ pub fn read_blob(
                 want: ctx.footer_start as u64,
             });
         }
-        let last_flag = if s + 1 == n_segments { 1 } else { 0 };
+        let last_flag = u8::from(s + 1 == n_segments);
         let nonce = body_nonce(s as u32, last_flag);
         let pt = cipher.open(&ctx.key, &nonce, &aad, &pack_bytes[ct_off..ct_end])?;
         debug_assert_eq!(pt.len() as u64, plain_here);
@@ -980,9 +980,10 @@ impl StagingPools {
         rng: &mut impl Rng,
     ) -> Vec<StagingPack> {
         let container = container_for(kind);
-        let pool = match kind.is_meta() {
-            false => &mut self.data,
-            true => &mut self.meta,
+        let pool = if kind.is_meta() {
+            &mut self.meta
+        } else {
+            &mut self.data
         };
         let mut sealed = Vec::new();
         loop {
@@ -1022,18 +1023,20 @@ impl StagingPools {
 
     /// Currently open packs for a kind (never more than W after an offer).
     pub fn open_count(&self, kind: BlobKind) -> usize {
-        match kind.is_meta() {
-            false => self.data.len(),
-            true => self.meta.len(),
+        if kind.is_meta() {
+            self.meta.len()
+        } else {
+            self.data.len()
         }
     }
 
     /// Look for a blob in the not-yet-sealed staging packs. Used by reads so
     /// a writer sees its own puts before any flush.
     pub fn staged_bytes(&self, kind: BlobKind, id: &BlobId) -> Option<Vec<u8>> {
-        let pool = match kind.is_meta() {
-            false => &self.data,
-            true => &self.meta,
+        let pool = if kind.is_meta() {
+            &self.meta
+        } else {
+            &self.data
         };
         pool.iter().find_map(|sp| {
             sp.entries

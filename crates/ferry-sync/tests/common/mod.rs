@@ -8,6 +8,7 @@
 
 pub mod corrupt;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -222,9 +223,9 @@ impl TreeBuilder {
             let dir_depth = self.rng.gen_range(0..=2);
             let mut rel = String::new();
             for _ in 0..dir_depth {
-                rel.push_str(&format!("d{}/", self.rng.gen_range(1..=3)));
+                let _ = write!(rel, "d{}/", self.rng.gen_range(1..=3));
             }
-            rel.push_str(&format!("file-{i:03}.bin"));
+            let _ = write!(rel, "file-{i:03}.bin");
             self.write_random(&rel, 8192);
             out.push(rel);
         }

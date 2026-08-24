@@ -420,9 +420,9 @@ fn write_bytes_with_meta(
     })
 }
 
-/// (sec, nsec) → SystemTime, matching the manifest's pre-1970 convention.
+/// (sec, nsec) → `SystemTime`, matching the manifest's pre-1970 convention.
 fn system_time(sec: i64, nsec: u32) -> SystemTime {
-    let total = sec as i128 * 1_000_000_000 + nsec as i128;
+    let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
     if total >= 0 {
         SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
     } else {

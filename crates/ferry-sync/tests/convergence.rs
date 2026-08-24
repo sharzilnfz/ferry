@@ -8,7 +8,7 @@
 //! stores and trees, nothing shared but TCP. `scripts/skeleton-e2e.sh` is
 //! the process-level twin of this file.
 //!
-//! N defaults to 30 seconds; override with FERRY_SYNC_TEST_TIMEOUT_SECS.
+//! N defaults to 30 seconds; override with `FERRY_SYNC_TEST_TIMEOUT_SECS`.
 
 mod common;
 

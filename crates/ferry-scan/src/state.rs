@@ -96,7 +96,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn key(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     /// Seed the cache the way the engine does after a full scan: one
@@ -105,7 +105,7 @@ mod tests {
         let mut cache = DirCache::new();
         let mut closed = BTreeSet::new();
         closed.insert(Vec::new());
-        let mut stats = Default::default();
+        let mut stats = crate::walk::PassStats::default();
         let out = Walker::run(
             store,
             poly_of(3),

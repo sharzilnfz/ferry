@@ -140,7 +140,7 @@ pub struct SnapshotIdentity {
 /// Everything one successful snapshot produced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotOutput {
-    /// The root manifest object (already stored as a PACK_META blob).
+    /// The root manifest object (already stored as a `PACK_META` blob).
     pub manifest: RootManifest,
     /// BLAKE3 of the serialized manifest == its blob address.
     pub manifest_id: BlobId,
@@ -439,7 +439,7 @@ pub(crate) mod testutil {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    /// Windows SystemTime is FILETIME-backed (100ns units): finer digits
+    /// Windows `SystemTime` is FILETIME-backed (100ns units): finer digits
     /// cannot survive a write+read round trip there. Test mtimes quantize to
     /// the platform's clock granularity; unix keeps full fidelity.
     pub(crate) const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };

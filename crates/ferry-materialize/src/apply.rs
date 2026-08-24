@@ -630,7 +630,7 @@ impl<'a> Applier<'a> {
                     &fresh_entropy(),
                 ));
                 let result = make_symlink(&target, &tmp_path)
-                    .and_then(|_| std::fs::rename(&tmp_path, &abs).map_err(|e| io_at(&abs, e)));
+                    .and_then(|()| std::fs::rename(&tmp_path, &abs).map_err(|e| io_at(&abs, e)));
                 if result.is_err() {
                     let _ = std::fs::remove_file(&tmp_path);
                 }
@@ -697,9 +697,8 @@ impl<'a> Applier<'a> {
                 p => resolved.push(p),
             }
         }
-        let is_dir = std::fs::symlink_metadata(&resolved)
-            .map(|m| m.is_dir() && !m.is_symlink())
-            .unwrap_or(false);
+        let is_dir =
+            std::fs::symlink_metadata(&resolved).is_ok_and(|m| m.is_dir() && !m.is_symlink());
         if is_dir {
             Err(MaterializeError::WindowsDirLinkRefused {
                 path: join_path(rel),
@@ -807,6 +806,7 @@ impl<'a> Applier<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::unused_self)] // kept as a method for call-site symmetry with the other apply steps
     fn write_temp_then_rename(
         &self,
         tmp_path: &Path,
@@ -909,14 +909,10 @@ fn plan_upsert(
             Ok(())
         }
         Mutation::WriteSymlink { target, .. } => {
-            let unchanged = stat_opt(abs)?
-                .map(|md| {
-                    md.file_type().is_symlink()
-                        && std::fs::read_link(abs)
-                            .map(|p| p.to_string_lossy() == target.as_str())
-                            .unwrap_or(false)
-                })
-                .unwrap_or(false);
+            let unchanged = stat_opt(abs)?.is_some_and(|md| {
+                md.file_type().is_symlink()
+                    && std::fs::read_link(abs).is_ok_and(|p| p.to_string_lossy() == target.as_str())
+            });
             if unchanged {
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
@@ -1097,15 +1093,12 @@ fn check_live_matches(
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
     let abs = abs_under(target, rel);
-    let md = match stat_opt(&abs)? {
-        Some(m) => m,
-        None => {
-            out.push(Divergence {
-                path: rel.clone(),
-                reason: DivergeReason::ExpectedPresent,
-            });
-            return Ok(());
-        }
+    let Some(md) = stat_opt(&abs)? else {
+        out.push(Divergence {
+            path: rel.clone(),
+            reason: DivergeReason::ExpectedPresent,
+        });
+        return Ok(());
     };
     let found_kind = classify_md(&md);
     if found_kind != exp.kind {
@@ -1441,14 +1434,14 @@ fn walk_live(root: &Path) -> Result<Vec<CompPath>, MaterializeError> {
 /// filesystem will happily hold `anne` + U+0301 while every manifest says
 /// `ann\u{e9}` — files written by macOS-origin archives and zip tools are
 /// the classic case. A bare join then misses on those hosts: guards report
-/// phantom ExpectedPresent divergence, subtree verification invents
-/// ExpectedAbsent entries, and atomic renames would create a SECOND file
+/// phantom `ExpectedPresent` divergence, subtree verification invents
+/// `ExpectedAbsent` entries, and atomic renames would create a SECOND file
 /// beside the original.
 ///
 /// Each component therefore resolves in two steps: prefer the exact stored
 /// name; on a miss, fold the live directory once (NFC both sides) and adopt
 /// the live spelling. Genuine absences keep the stored form so creations
-/// land as NFC. Existence checks use symlink_metadata (no link-following).
+/// land as NFC. Existence checks use `symlink_metadata` (no link-following).
 fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
     let mut cur = root.to_path_buf();
     for comp in rel {
@@ -1469,7 +1462,7 @@ fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
 /// applier about where a stored path lives on disk. The sync engine's
 /// quarantine pre-verify reads the loser's live file BEFORE any guarded
 /// apply runs; a bare join there missed NFD-on-disk spellings on
-/// byte-preserving Linux filesystems and reported phantom ExpectedPresent
+/// byte-preserving Linux filesystems and reported phantom `ExpectedPresent`
 /// divergences the applier would never have produced.
 pub fn resolve_live(root: &Path, rel: &[String]) -> PathBuf {
     abs_under(root, rel)
@@ -1582,7 +1575,7 @@ pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), Materia
         })?;
     let ts = libc::timespec {
         tv_sec: sec as libc::time_t,
-        tv_nsec: nsec as libc::c_long,
+        tv_nsec: libc::c_long::from(nsec),
     };
     let times = [ts, ts];
     // SAFETY: path is NUL-terminated; times points at two initialized
@@ -1653,7 +1646,7 @@ pub(crate) fn split_unix_time(t: SystemTime) -> (i64, u32) {
 
 /// Inverse of [`split_unix_time`].
 pub(crate) fn system_time(sec: i64, nsec: u32) -> SystemTime {
-    let total = sec as i128 * 1_000_000_000 + nsec as i128;
+    let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
     if total >= 0 {
         SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
     } else {
@@ -1777,7 +1770,7 @@ pub(crate) fn ensure_no_fold_collisions(paths: &[CompPath]) -> Result<(), Materi
         per_parent
             .entry(parent)
             .or_default()
-            .push(name.first().map(String::as_str).unwrap_or(""));
+            .push(name.first().map_or("", String::as_str));
     }
     let mut parents: Vec<&[String]> = per_parent.keys().copied().collect();
     parents.sort(); // deterministic error order
@@ -1959,7 +1952,7 @@ mod tests {
             assert!(live_exec(&md), "exec flag restored");
         }
         assert_eq!(mtime_of(&md), MT_B); // No temp files left behind.
-        assert!(std::fs::read_dir(&target).unwrap().count() == 1);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
     }
 
     #[test]
@@ -1992,7 +1985,7 @@ mod tests {
         );
         let stats = Applier::new(&w.store, &target).apply_tree(&v2).unwrap();
         assert_eq!(stats.files_written, 2);
-        assert!(stats.creations == ["off.bin", "on.bin"]);
+        assert_eq!(stats.creations, ["off.bin", "on.bin"]);
         assert!(!live_exec(&md_of(&target, &["on.bin"])));
         assert!(live_exec(&md_of(&target, &["off.bin"])));
     }
@@ -2667,7 +2660,7 @@ mod tests {
             entries.push(file_entry(
                 &name,
                 exec,
-                MT_A.0 + i as i64,
+                MT_A.0 + i64::from(i),
                 // Keep generated nsec within the platform's storable
                 // granularity so replans see a stable value.
                 (MT_A.1 + i as u32 * NS_GRAN) % 1_000_000_000,

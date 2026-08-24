@@ -725,15 +725,16 @@ mod tests {
 
     #[test]
     fn perf_ten_thousand_patterns_answer_in_milliseconds() {
+        use std::fmt::Write as _;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         // 10k mixed-shape patterns: literals, suffix globs, doublestars.
         let mut text = String::with_capacity(1 << 17);
         for i in 0..2500 {
-            text.push_str(&format!("/pkg/mod{i}/\n"));
-            text.push_str(&format!("**/gen{i}.cache\n"));
-            text.push_str(&format!("*.tmp{i}\n"));
-            text.push_str(&format!("assets/sprite{i}.bin\n"));
+            let _ = writeln!(text, "/pkg/mod{i}/");
+            let _ = writeln!(text, "**/gen{i}.cache");
+            let _ = writeln!(text, "*.tmp{i}");
+            let _ = writeln!(text, "assets/sprite{i}.bin");
         }
         std::fs::write(root.join("ferry.ignore"), text).unwrap();
         let built = std::time::Instant::now();

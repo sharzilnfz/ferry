@@ -1,7 +1,7 @@
 //! Windows long-path handling via `\\?\` extended-length prefixes.
 //!
 //! Background (research/landscape.md, Microsoft docs): classic Win32 paths
-//! cap at MAX_PATH = 260 chars. The registry `LongPathsEnabled` value and a
+//! cap at `MAX_PATH` = 260 chars. The registry `LongPathsEnabled` value and a
 //! `longPathAware` application manifest lift the cap, but a sync tool can
 //! control neither on an arbitrary host — trees routinely exceed 260 chars
 //! under nested project directories. The mechanical fix that works
@@ -44,10 +44,7 @@ pub fn is_extended_length(p: &Path) -> bool {
 ///ming past the cap is the common case).
 pub fn needs_extended_length(p: &Path) -> bool {
     match windows_shape(p) {
-        Some(_) => p
-            .to_str()
-            .map(|s| s.chars().count() >= MAX_PATH)
-            .unwrap_or(false),
+        Some(_) => p.to_str().is_some_and(|s| s.chars().count() >= MAX_PATH),
         None => false,
     }
 }
@@ -78,13 +75,12 @@ fn windows_shape(p: &Path) -> Option<bool> {
 /// On POSIX hosts this is always the identity function (POSIX absolute paths
 /// start with `/`, which is not a Windows shape).
 pub fn extend_path(p: &Path) -> std::path::PathBuf {
-    let s = match p.to_str() {
-        Some(s) => s,
-        None => return p.to_path_buf(), // non-UTF-8: leave for IO error reporting
+    // Non-UTF-8: leave for IO error reporting.
+    let Some(s) = p.to_str() else {
+        return p.to_path_buf();
     };
-    let unc = match windows_shape(p) {
-        Some(unc) => unc,
-        None => return p.to_path_buf(),
+    let Some(unc) = windows_shape(p) else {
+        return p.to_path_buf();
     };
     if s.chars().count() < MAX_PATH {
         return p.to_path_buf();

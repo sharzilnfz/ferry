@@ -5,18 +5,21 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-blake3 = "1.5"
-rand = "0.8"
-hkdf = "0.12"
-sha2 = "0.10"
-thiserror = "2"
-unicode-normalization = "0.1"
-ferry-platform = { version = "0.1.0", path = "../ferry-platform" }
+blake3.workspace = true
+rand.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+ferry-platform.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 # windows (non-unix) test helper only: set_dir_mtime needs SetFileTime on a
 # directory handle, which std cannot open there (no FILE_FLAG_BACKUP_SEMANTICS).
 [target.'cfg(not(unix))'.dev-dependencies]
-filetime = "0.2"
+filetime.workspace = true
+
+[lints]
+workspace = true

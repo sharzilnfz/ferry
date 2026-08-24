@@ -9,21 +9,21 @@
 //!
 //! ## How addressing works (and the one honest wart)
 //!
-//! The real dial target is always an **EndpointId** — an ed25519 public key
+//! The real dial target is always an **`EndpointId`** — an ed25519 public key
 //! derived from the device's X25519 identity key ([`identity`]). But the M0
 //! trait's currency is `SocketAddr`, and widening that would have touched
 //! engine signatures for zero behavioral gain. So `SocketAddr` values act as
-//! opaque *route keys*: a route maps route-key → EndpointId (+ optional
+//! opaque *route keys*: a route maps route-key → `EndpointId` (+ optional
 //! address hints). Routes come from two sources:
 //!
 //! 1. [`IrohTransport::with_route`] / the CLI (`--peer <hex id>`): explicit,
-//!    cross-process. The listener prints its EndpointId; the connector dials
+//!    cross-process. The listener prints its `EndpointId`; the connector dials
 //!    by that public key.
 //! 2. The process-local [`directory`], populated automatically by
 //!    `listen()` with the endpoint's own id and bound addresses: two engines
 //!    in one process (the whole integration suite) interop with no wiring.
 //!
-//! Dialing resolves the route to an EndpointId, then lets iroh find the path
+//! Dialing resolves the route to an `EndpointId`, then lets iroh find the path
 //! (relay, hole punch, or mDNS-discovered LAN address). The wire-level peer
 //! authentication is iroh's TLS-with-public-key: connecting to a key only
 //! ever talks to the holder of that key.
@@ -34,7 +34,7 @@
 //! - LAN discovery ([`MdnsSetting`]) — mDNS/swarm lookup on/off + service name
 //! - `force_relay` — strips all IP transports so even same-host peers must
 //!   traverse the relay; this is the local stand-in for "two NATs" in tests.
-//! - device identity → stable EndpointId derivation ([`identity`])
+//! - device identity → stable `EndpointId` derivation ([`identity`])
 //!
 //! Versions are pinned exactly in Cargo.toml (SPEC risk: iroh API churn);
 //! every iroh type stays inside this crate.

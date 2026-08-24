@@ -51,7 +51,7 @@ fn new_store(dir: &Path) -> Arc<Store> {
 }
 
 /// Build the shared source tree: a 3 MiB multi-chunk file plus a deep
-/// unicode-named directory structure. Returns (root, expected_file_bytes)
+/// unicode-named directory structure. Returns (root, `expected_file_bytes`)
 /// keyed by relative path for later comparison.
 fn build_source_tree(base: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
     use unicode_normalization::UnicodeNormalization;
@@ -209,14 +209,14 @@ fn passthrough(inner: DuplexHalf) -> Tamper {
 
 /// Wraps one duplex half's OUTBOUND writes. Rules:
 /// - `flip_in_first_batch`: XOR one byte near the end of the first outbound
-///   record whose plaintext body carries the ITEM_BATCH type byte
+///   record whose plaintext body carries the `ITEM_BATCH` type byte
 ///   (meaningful only with session encryption OFF).
 /// - `truncate_nth_write`: deliver only part of the Nth outbound write,
 ///   discard everything after, then shut the pipe (peer sees EOF).
 struct Tamper {
     inner: DuplexHalf,
     flipped: bool,
-    /// Corrupt the first outbound ITEM_BATCH record (plaintext sessions).
+    /// Corrupt the first outbound `ITEM_BATCH` record (plaintext sessions).
     flip_in_first_batch: bool,
     /// Corrupt the first large outbound record whatever it is (fatal under
     /// sealing).
@@ -302,7 +302,7 @@ fn materialize_tree(store: &Store, tree_id: &BlobId, dir: &Path) {
         let p = dir.join(&e.name);
         match &e.payload {
             ferry_store::manifest::EntryPayload::Dir { child_tree_id } => {
-                materialize_tree(store, child_tree_id, &p)
+                materialize_tree(store, child_tree_id, &p);
             }
             ferry_store::manifest::EntryPayload::File { chunks, .. } => {
                 let tmp = dir.join(format!(".tmp-{}", e.name));

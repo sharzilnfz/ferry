@@ -1,7 +1,7 @@
 //! One exchange round between two Ferry folders over the existing M0
 //! transport seam (`ferry_sync::transport`) speaking the existing M0
-//! message inventory (`ferry_sync::proto`: HELLO/OFFER/REQ_META/REQ_DATA/
-//! ITEM/ITEMS_DONE). T-009/T-014 replace the TCP implementation and the
+//! message inventory (`ferry_sync::proto`: `HELLO/OFFER/REQ_META/REQ_DATA`/
+//! `ITEM/ITEMS_DONE`). T-009/T-014 replace the TCP implementation and the
 //! wire under these same seams; the flow here is v0-honest and documented.
 //!
 //! # Round script (strictly alternating; dialer always speaks first)
@@ -46,7 +46,7 @@ use crate::error::{CliError, CliResult};
 
 /// Everything one folder needs to run a round.
 pub struct FolderSession {
-    /// The `.ferry` directory (state_dir for agreements + conflicts.jsonl).
+    /// The `.ferry` directory (`state_dir` for agreements + conflicts.jsonl).
     pub state_dir: PathBuf,
     pub tree_root: PathBuf,
     pub store: Arc<Store>,
@@ -274,8 +274,8 @@ pub fn run_round(
             eprintln!(
                 "  op {} base={} result={}",
                 op.path.join("/"),
-                op.base.as_ref().map(|_| "some").unwrap_or("none"),
-                op.result.as_ref().map(|_| "some").unwrap_or("none"),
+                op.base.as_ref().map_or("none", |_| "some"),
+                op.result.as_ref().map_or("none", |_| "some"),
             );
         }
     }

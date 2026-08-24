@@ -9,6 +9,7 @@
 //! is never an implicit side effect.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use ferry_pin::{plan_release, HeldEntry, HeldLedger, PathMatcher, PinRecord, PinStore};
@@ -108,10 +109,11 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
         String::from("No pin     nothing was pinned here\n")
     };
     if held.total_paths > 0 {
-        human.push_str(&format!(
-            "Held       {} path(s) still ledgered — run `ferry pin release` to reconcile\n",
+        let _ = writeln!(
+            human,
+            "Held       {} path(s) still ledgered — run `ferry pin release` to reconcile",
             held.total_paths
-        ));
+        );
     }
     Ok(Output::new(json_doc, human))
 }
@@ -190,17 +192,19 @@ pub fn release(folder: &Path) -> CliResult<Output> {
     } else {
         let mut h = String::new();
         for p in &peers {
-            h.push_str(&format!(
-                "Released   peer {}… held={} quarantined={} conflict(s)={}\n",
+            let _ = writeln!(
+                h,
+                "Released   peer {}… held={} quarantined={} conflict(s)={}",
                 p["device_id"].as_str().unwrap().get(..8).unwrap_or(""),
                 p["held_entries"],
                 p["quarantined"],
                 p["conflicts_recorded"],
-            ));
+            );
         }
-        h.push_str(&format!(
-            "Total      {total_quarantined} loser copy/copies, {total_conflicts} conflict entr(y/ies) in conflicts.jsonl\n"
-        ));
+        let _ = writeln!(
+            h,
+            "Total      {total_quarantined} loser copy/copies, {total_conflicts} conflict entr(y/ies) in conflicts.jsonl"
+        );
         h
     };
 
@@ -256,7 +260,7 @@ pub fn status(folder: &Path) -> CliResult<Output> {
         "pid": pid,
         "started_at": started_at,
         "paths": paths,
-        "holding": record.as_ref().is_some_and(|r| r.holding()),
+        "holding": record.as_ref().is_some_and(ferry_pin::PinRecord::holding),
         "held_changes": held.total_paths,
         "held_by_peer": held_by_peer,
     });
@@ -268,8 +272,9 @@ pub fn status(folder: &Path) -> CliResult<Output> {
         s => format!("Pin        {s}\n"),
     };
     if !json_doc["paths"].as_array().unwrap().is_empty() {
-        human.push_str(&format!(
-            "Scope      {}\n",
+        let _ = writeln!(
+            human,
+            "Scope      {}",
             json_doc["paths"]
                 .as_array()
                 .unwrap()
@@ -277,16 +282,16 @@ pub fn status(folder: &Path) -> CliResult<Output> {
                 .map(|v| v.as_str().unwrap())
                 .collect::<Vec<_>>()
                 .join(", ")
-        ));
+        );
     }
     if held.total_paths == 0 {
         human.push_str("Held       nothing\n");
     } else {
-        human.push_str(&format!("Held       {} path(s):\n", held.total_paths));
+        let _ = writeln!(human, "Held       {} path(s):", held.total_paths);
         for (peer, list) in &held.by_peer_list {
-            human.push_str(&format!("  {}…\n", &peer[..8.min(peer.len())]));
+            let _ = writeln!(human, "  {}…", &peer[..8.min(peer.len())]);
             for p in list {
-                human.push_str(&format!("    {p}\n"));
+                let _ = writeln!(human, "    {p}");
             }
         }
         human.push_str("           `ferry pin release` reconciles these explicitly.\n");

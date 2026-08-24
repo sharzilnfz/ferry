@@ -87,10 +87,10 @@ struct Inner {
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
     /// Set by a self-dial (the M0 engine's shutdown probe): the next
-    /// accept() returns a clean-EOF connection instead of waiting, exactly
+    /// `accept()` returns a clean-EOF connection instead of waiting, exactly
     /// like dialing your own TCP listener unblocks its accept.
     wake: AtomicBool,
-    /// Relay URLs from config. Attached to dialed EndpointAddrs so
+    /// Relay URLs from config. Attached to dialed `EndpointAddrs` so
     /// key-only dialing can resolve through OUR relay (deployment rule:
     /// peers we sync with are clients of the same self-hosted relay).
     relay_urls: Vec<iroh::RelayUrl>,
@@ -305,7 +305,7 @@ fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
         match bound {
             SocketAddr::V4(_) => out.push(SocketAddr::from(([127, 0, 0, 1], bound.port()))),
             SocketAddr::V6(_) => {
-                out.push(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], bound.port())))
+                out.push(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], bound.port())));
             }
         }
     }
@@ -400,7 +400,7 @@ impl Transport for IrohTransport {
             return Err(DialFailure::NoRoute(addr).into_io());
         };
         self.dial_endpoint(route.endpoint_id, route.ip_hints)
-            .map_err(|f| f.into_io())
+            .map_err(DialFailure::into_io)
     }
 
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn DynListener>> {

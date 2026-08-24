@@ -8,23 +8,26 @@ license.workspace = true
 ferry-store = { path = "../ferry-store" }
 ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
-blake3 = "1.5"
-rand = "0.8"
-thiserror = "2"
-ferry-platform = { path = "../ferry-platform" }
+blake3.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
-x25519-dalek = "2"
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-zeroize = "1"
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
 
 # windows (non-unix) only: dir mtime stamping in materialize::set_regular_times
 # needs SetFileTime; std cannot open directory handles there.
 [target.'cfg(not(unix))'.dependencies]
-filetime = "0.2"
+filetime.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
-rand = "0.8"
-tempfile = "3"
+rand.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

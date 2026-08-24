@@ -300,7 +300,7 @@ struct Ctx {
     /// This daemon's long-term device identity: X25519 keypair derived
     /// deterministically from the tag (stable across restarts; T-007 owns
     /// the real provisioning ritual). Its PUBLIC key is the manifest
-    /// device_id, the handshake stat_pub, and the ledger's peer key.
+    /// `device_id`, the handshake `stat_pub`, and the ledger's peer key.
     identity: DeviceIdentity,
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
@@ -380,7 +380,7 @@ impl Ctx {
     }
 
     /// Record the last-agreed pointer against a peer device: THE canonical
-    /// 77-byte ledger record (ferry_proto::agreement, byte-exact per
+    /// 77-byte ledger record (`ferry_proto::agreement`, byte-exact per
     /// `docs/store-format.md` §"Last-agreed manifest pointer", the format
     /// T-010's engine reads), plus the M0 convenience record that keeps
     /// the full manifest bytes for offline baseline recovery. Also moves
@@ -500,9 +500,8 @@ impl Ctx {
     }
 
     fn dial_and_run(&self) {
-        let addr = match self.cfg.connect_to {
-            Some(a) => a,
-            None => return,
+        let Some(addr) = self.cfg.connect_to else {
+            return;
         };
         match self.transport.dial(addr) {
             Ok(mut conn) => match dispatch_session(conn.as_mut(), self, true) {
@@ -907,22 +906,20 @@ fn build_pack_map(ctx: &Ctx) -> Result<PackMap, SessionError> {
             Some(v) => v,
             None => continue,
         };
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => continue,
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
         };
         if ferry_store::pack::pack_name_of(&bytes) != claimed {
-            ctx.status(&format!("WARN skipping damaged pack {}", name_str));
+            ctx.status(&format!("WARN skipping damaged pack {name_str}"));
             continue;
         }
-        let (_, entries) = match ferry_store::pack::read_footer(
+        let Ok((_, entries)) = ferry_store::pack::read_footer(
             &bytes,
             &claimed,
             &[0u8; ferry_store::crypto::KEY_LEN],
             &PassthroughCipher,
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let shared = Arc::new(bytes);
         for e in entries {
@@ -1051,8 +1048,7 @@ fn fetch_meta_tree(
                     }
                     proto::ItemStream::Item(other) => {
                         return Err(SessionError::Other(format!(
-                            "expected tree node item, got kind {:?}",
-                            other
+                            "expected tree node item, got kind {other:?}"
                         )))
                     }
                 }

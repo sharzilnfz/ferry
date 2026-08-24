@@ -5,6 +5,7 @@
 //! `ferry pair` does — v0 has one payload ritual for both commands, so the
 //! accepting side always runs `pair --accept`.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde_json::json;
@@ -43,13 +44,14 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         );
         for f in findings.iter().take(20) {
             let loc = f.line.map(|n| format!(":{n}")).unwrap_or_default();
-            msg.push_str(&format!(
-                "  SECRET RISK [{}] {}{} — {}\n",
+            let _ = writeln!(
+                msg,
+                "  SECRET RISK [{}] {}{} — {}",
                 f.class, f.path, loc, f.preview
-            ));
+            );
         }
         if findings.len() > 20 {
-            msg.push_str(&format!("  … and {} more\n", findings.len() - 20));
+            let _ = writeln!(msg, "  … and {} more", findings.len() - 20);
         }
         let mut err = CliError::new(
             "secrets-found",

@@ -3,7 +3,7 @@
 //!
 //! # What the daemon honestly does today (v0)
 //!
-//! - Watches each folder with ferry-scan's ScanEngine (native events +
+//! - Watches each folder with ferry-scan's `ScanEngine` (native events +
 //!   poll fallback + audits) driving snapshots into the encrypted store.
 //! - Exchanges with EXACTLY ONE peer address (`--peer-url`), over plain
 //!   localhost/LAN TCP using the M0 message inventory. No discovery, no
@@ -100,7 +100,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         let engine = ScanEngine::watch_with(
             opened.root.clone(),
             handle,
-            Default::default(),
+            ferry_scan::ScanConfig::default(),
             Arc::clone(&rules) as Arc<dyn ferry_scan::IgnorePolicy>,
         )
         .map_err(|e| {
@@ -167,7 +167,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
 
     // Park forever; termination is a process signal (std-only v0).
     loop {
-        std::thread::sleep(Duration::from_secs(3600));
+        std::thread::sleep(Duration::from_hours(1));
     }
 }
 
@@ -183,9 +183,8 @@ fn check_transport(kind: &str) -> CliResult<()> {
 }
 
 fn current_device_id() -> [u8; 32] {
-    let home = match crate::home::ferry_home() {
-        Ok(h) => h,
-        Err(_) => return [0u8; 32], // open_folder would have failed already
+    let Ok(home) = crate::home::ferry_home() else {
+        return [0u8; 32]; // open_folder would have failed already
     };
     match ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)) {
         Ok(id) => *id.public(),
@@ -213,16 +212,12 @@ fn spawn_accept_loop(
                     match ferry_sync::proto::recv_hello(conn.as_mut()) {
                         Ok(h) => {
                             let folder_key = h.device_tag.split('-').nth(2).unwrap_or("");
-                            let w = by_folder.get(folder_key).cloned();
-                            let w = match w {
-                                Some(w) => w,
-                                None => {
-                                    ferry_sync::proto::send_error(
-                                        conn.as_mut(),
-                                        &format!("no local folder matches tag {}", h.device_tag),
-                                    );
-                                    continue;
-                                }
+                            let Some(w) = by_folder.get(folder_key).cloned() else {
+                                ferry_sync::proto::send_error(
+                                    conn.as_mut(),
+                                    &format!("no local folder matches tag {}", h.device_tag),
+                                );
+                                continue;
                             };
                             let _guard = w.lock.lock().unwrap();
                             serve_session(&w, conn.as_mut(), h.device_tag);

@@ -103,7 +103,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
 
     let scan_cfg = ScanConfig {
         quiet_window: Duration::from_millis(10),
-        audit_interval: Duration::from_secs(3600),
+        audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(50),
     };
     let engine = ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();

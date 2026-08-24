@@ -169,7 +169,7 @@ pub fn initiate(
     Ok(Output::new(json_doc, human))
 }
 
-/// Read this folder's CONFIG_HEAD entry for our device and unwrap the FMK.
+/// Read this folder's `CONFIG_HEAD` entry for our device and unwrap the FMK.
 pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> CliResult<Fmk> {
     let head_bytes = std::fs::read(folder::dot_dir(&opened.root).join(folder::CONFIG_FILE)).code(
         "config-corrupt",
@@ -198,7 +198,7 @@ pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> CliResu
     )
 }
 
-/// Append one wrapped-key entry to the folder's CONFIG_HEAD (idempotent per
+/// Append one wrapped-key entry to the folder's `CONFIG_HEAD` (idempotent per
 /// recipient device).
 fn append_wrap_entry_for(
     root: &Path,

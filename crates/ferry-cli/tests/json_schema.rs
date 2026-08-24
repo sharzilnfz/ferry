@@ -54,7 +54,7 @@ fn schema_of(v: &Value) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Compare-or-bless. Set FERRY_UPDATE_EXPECTED=1 to rewrite the file.
+/// Compare-or-bless. Set `FERRY_UPDATE_EXPECTED=1` to rewrite the file.
 fn assert_matches_expected(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));

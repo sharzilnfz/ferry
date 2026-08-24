@@ -11,7 +11,7 @@
 //!   Syncthing's five-year `casefs` saga is the cautionary tale
 //!   (`research/landscape.md`, "Cross-platform pitfalls").
 //! - [`winpath`]: Windows long-path handling via `\\?\` extended-length
-//!   prefixes. Lifting MAX_PATH properly needs BOTH a registry value and an
+//!   prefixes. Lifting `MAX_PATH` properly needs BOTH a registry value and an
 //!   application manifest (Microsoft docs), neither of which a sync tool
 //!   controls on the host — so paths are prefixed mechanically instead,
 //!   regardless of host opt-in.

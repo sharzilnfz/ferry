@@ -153,7 +153,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     // Deletions only carry meaning against a recorded agreement: before the
     // first settle, "present on one side" wins by design (safe default). So
     // wait for the agreement pointer before mutating anything.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -171,7 +171,7 @@ fn two_devices_pair_and_converge_over_localhost() {
 
     std::fs::write(a.tree.join("late.txt"), b"written after start\n").unwrap();
     let late_b = b.tree.join("late.txt");
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         if std::fs::read(&late_b).ok().as_deref() == Some(b"written after start\n".as_slice()) {
             break;
@@ -183,13 +183,13 @@ fn two_devices_pair_and_converge_over_localhost() {
     // --- deletion propagates too --------------------------------------------
     std::fs::remove_file(a.tree.join("hello.txt")).unwrap();
     let mut timeline: Vec<String> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         let a_has = hello_a_path.exists();
         let b_has = hello_b.exists();
         timeline.push(format!(
             "+{:>5}ms A={} B={}",
-            (Instant::now() - deadline).as_millis() + 60_000,
+            deadline.elapsed().as_millis() + 60_000,
             a_has,
             b_has
         ));
@@ -198,20 +198,21 @@ fn two_devices_pair_and_converge_over_localhost() {
         }
         if Instant::now() >= deadline {
             let list = |root: &std::path::Path| {
-                std::fs::read_dir(root)
-                    .map(|rd| {
+                std::fs::read_dir(root).map_or_else(
+                    |e| format!("err {e}"),
+                    |rd| {
                         rd.flatten()
                             .map(|e| {
                                 format!(
                                     "{} {}",
                                     e.file_name().to_string_lossy(),
-                                    e.metadata().map(|m| m.len()).unwrap_or(0)
+                                    e.metadata().map_or(0, |m| m.len())
                                 )
                             })
                             .collect::<Vec<_>>()
                             .join(", ")
-                    })
-                    .unwrap_or_else(|e| format!("err {e}"))
+                    },
+                )
             };
             panic!(
                 "deletion never reached B\nTIMELINE:\n{}\n=== A TREE: {}\n=== B TREE: {}\n=== A LOG:\n{}\n=== B LOG:\n{}",

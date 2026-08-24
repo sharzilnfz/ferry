@@ -24,13 +24,13 @@
 //! ```
 //!
 //! Each side seals exactly ONE message under its auth key — an [`AuthProof`]
-//! carrying its own device_id. A peer without the claimed static secret
+//! carrying its own `device_id`. A peer without the claimed static secret
 //! cannot produce a valid Poly1305 tag, so the tag IS the proof-of-
 //! possession; no separate signature-analogue round trip exists. This beats
 //! sealing challenges to the peer's public key because ONE schedule serves
 //! auth and traffic, the transcript hash binds every handshake byte into the
 //! proof, and replay dies automatically: fresh ephemerals and nonces make
-//! every connection's transcript unique, so a replayed AUTH_INIT fails its
+//! every connection's transcript unique, so a replayed `AUTH_INIT` fails its
 //! tag against the new salt.
 //!
 //! Post-auth frames are sealed with ChaCha20-Poly1305 under per-direction
@@ -125,8 +125,8 @@ impl SessionKey {
 
 /// Stage 2: per-direction traffic keys after both AUTH messages.
 ///
-/// `final_transcript` covers Hello || HelloAck || AuthInit_ct ||
-/// AuthConfirm_ct, chaining the proof bytes into session-key derivation so
+/// `final_transcript` covers Hello || `HelloAck` || `AuthInit_ct` ||
+/// `AuthConfirm_ct`, chaining the proof bytes into session-key derivation so
 /// any tampering upstream changes every downstream key.
 pub(crate) fn traffic_keys(
     prk: &[u8; KEY_LEN],
@@ -397,12 +397,11 @@ mod tests {
         let (k, _) = traffic_keys(&prk, &[5u8; 32]);
         let rendered = format!("{:?}\n{:?}", k, SessionCipher::new(SessionKey(k.0.clone())));
         // The key bytes are 0x.. deterministic; search for their hex pattern.
-        let hexy: String =
-            k.0.as_ref()
-                .iter()
-                .take(4)
-                .map(|b| format!("{b:02x}"))
-                .collect();
+        let mut hexy = String::new();
+        for b in &k.0.as_ref()[..4] {
+            use std::fmt::Write as _;
+            let _ = write!(hexy, "{b:02x}");
+        }
         assert!(!rendered.contains(&hexy));
         assert!(!rendered.contains("secret"));
     }

@@ -22,8 +22,8 @@
 //! 4. A second offer round lets both sides observe post-pull equality;
 //!    equal root manifest ids record the last-agreed pointer locally.
 //!
-//! An empty REQUEST_ITEMS is the end-of-pull marker: the server answers
-//! with a single empty ITEM_BATCH terminator and returns to listening.
+//! An empty `REQUEST_ITEMS` is the end-of-pull marker: the server answers
+//! with a single empty `ITEM_BATCH` terminator and returns to listening.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ use crate::stream::ByteStream;
 use crate::version::negotiate;
 use crate::version::ProtocolVersion;
 
-/// Zero folder_id marks "end of announcement list" in offer rounds.
+/// Zero `folder_id` marks "end of announcement list" in offer rounds.
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 
 /// Which side of the conversation this engine is. The Initiator sends the
@@ -616,7 +616,7 @@ struct PeerFolder {
 
 type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
-/// Payload flush threshold for ITEM_BATCH frames (8 MiB).
+/// Payload flush threshold for `ITEM_BATCH` frames (8 MiB).
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 /// BFS round guard for remote tree walks.
 const MAX_BFS_ROUNDS: usize = 64;
@@ -717,7 +717,7 @@ fn pull_needed(mine: Option<BlobId>, theirs: Option<BlobId>) -> bool {
 }
 
 /// One pull stage: fetch every listed folder, then send the empty
-/// REQUEST_ITEMS end-of-stage marker.
+/// `REQUEST_ITEMS` end-of-stage marker.
 fn run_stage<S: ByteStream>(
     sess: &mut Session<'_, S>,
     cfg: &EngineConfig,
@@ -765,9 +765,8 @@ fn serve_stage<S: ByteStream>(
     cfg: &EngineConfig,
 ) -> Result<(), ProtoError> {
     loop {
-        let fb = match sess.recv_frame()? {
-            Some(fb) => fb,
-            None => continue,
+        let Some(fb) = sess.recv_frame()? else {
+            continue;
         };
         match fb.msg_type {
             codec::MSG_REQUEST_ITEMS => {
@@ -846,7 +845,7 @@ fn serve_packs<S: ByteStream>(
 // --- offer / advert exchange -------------------------------------------------
 
 /// Announce + mirror offers. With `with_adverts` each offer is followed by
-/// the announcer's index-advert sequence for that folder. A ZERO folder_id
+/// the announcer's index-advert sequence for that folder. A ZERO `folder_id`
 /// offer ends an announcement list. Round 2 (`with_adverts = false`)
 /// re-announces post-pull state so equality is observable on both sides.
 #[allow(clippy::type_complexity)]
@@ -1151,7 +1150,7 @@ fn fetch_blobs<S: ByteStream>(
     }
 }
 
-/// Read ITEM_BATCH frames until the terminator; verify EVERY item against
+/// Read `ITEM_BATCH` frames until the terminator; verify EVERY item against
 /// its claimed id AFTER decryption and store only verified bytes. Returns
 /// the ids accepted into the store.
 fn read_item_batches<S: ByteStream>(
@@ -1236,10 +1235,7 @@ fn fetch_via_packs<S: ByteStream>(
                     if satisfied.contains(id) {
                         continue;
                     }
-                    if adverts
-                        .get(id)
-                        .map(|e| e.pack == item.pack)
-                        .unwrap_or(false)
+                    if adverts.get(id).is_some_and(|e| e.pack == item.pack)
                         && store.get(BlobKind::DataChunk, id).is_ok()
                     {
                         satisfied.insert(*id);

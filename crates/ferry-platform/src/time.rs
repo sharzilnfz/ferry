@@ -26,7 +26,7 @@ pub fn split_unix(t: SystemTime) -> (i64, u32) {
 
 /// Inverse of [`split_unix`].
 pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
-    let total = sec as i128 * 1_000_000_000 + nsec as i128;
+    let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
     if total >= 0 {
         SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
     } else {

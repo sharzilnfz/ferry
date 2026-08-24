@@ -1,7 +1,7 @@
 //! The transport seam: any byte stream with `read_exact`/`write_all`
 //! semantics.
 //!
-//! v0 speaks over std TcpStream (which implements [`Read`] + [`Write`],
+//! v0 speaks over std `TcpStream` (which implements [`Read`] + [`Write`],
 //! including through `&TcpStream` for split halves). The in-memory duplex
 //! pair exists for loopback harnesses and corruption-injection tests; it
 //! preserves WRITE RECORDS, which real streams do not, so tests can tamper

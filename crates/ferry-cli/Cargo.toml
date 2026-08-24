@@ -19,20 +19,23 @@ ferry-sync-engine = { path = "../ferry-sync-engine" }
 # `ferry pin` drives start/stop/release/status on top of its ledgers.
 ferry-pin = { path = "../ferry-pin" }
 clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-blake3 = "1.5"
-rand = "0.8"
-thiserror = "2"
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+rand.workspace = true
+thiserror.workspace = true
 # Pair-grant sealing only (offer/accept file channel); the store cipher
 # comes from ferry-crypto::pack_cipher.
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-qrcode = "0.14"
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+qrcode.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "ferry"

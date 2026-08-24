@@ -23,7 +23,7 @@
 //! - nickang.com — whitelists CLAUDE.md/settings/memory/skills/plugin config;
 //!   excludes session logs, telemetry, caches as "machine-specific junk".
 //!
-//! OpenCode mirrors the same shape (AGENTS.md, config, skill/command dirs
+//! `OpenCode` mirrors the same shape (AGENTS.md, config, skill/command dirs
 //! in; session logs and caches out).
 //!
 //! Presets sit ABOVE root `ferry.ignore` and BELOW user overrides in the

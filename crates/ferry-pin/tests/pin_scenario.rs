@@ -149,7 +149,7 @@ fn quarantine_names(root: &Path) -> Vec<String> {
 }
 
 /// Metadata-first exchange step: move the snapshot's manifest object and its
-/// whole tree closure into the peer's store (what REQ_META serves).
+/// whole tree closure into the peer's store (what `REQ_META` serves).
 fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &s.manifest_id).is_err() {
         let b = from.get(BlobKind::Manifest, &s.manifest_id).unwrap();
@@ -174,7 +174,7 @@ fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
 }
 
 /// Data-phase step: pull every chunk the plan fetches from the peer's store
-/// (what REQ_DATA serves). The fetch runs BEFORE the hold decision and stays
+/// (what `REQ_DATA` serves). The fetch runs BEFORE the hold decision and stays
 /// full across the split by design, so held versions' bytes are already in
 /// A's store when release runs offline.
 fn transfer_chunks(from: &Store, to: &Store, ids: &[(BlobId, u64)]) {

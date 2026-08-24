@@ -21,7 +21,7 @@
 //! Platform notes:
 //! - The deep branch (>260 chars total) is created through
 //!   `ferry_platform::extend_path`, so Windows runners can build it
-//!   regardless of the host's LongPathsEnabled registry state.
+//!   regardless of the host's `LongPathsEnabled` registry state.
 //! - Symlinks are probe-gated (`symlink_creation_works`): hosts that forbid
 //!   creating them skip the chain rather than fail setup; the pure policy
 //!   tests cover the refused cases everywhere.
@@ -113,7 +113,7 @@ fn symlink_creation_works(root: &Path) -> bool {
         let probe = root.join(".ferry-symlink-probe");
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink("target", &probe).is_ok_and(|_| {
+            std::os::unix::fs::symlink("target", &probe).is_ok_and(|()| {
                 let _ = std::fs::remove_file(&probe);
                 true
             })
@@ -227,7 +227,7 @@ fn build_fixture(root: &Path) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push(e.path());
             }
         }
@@ -343,7 +343,7 @@ impl Dev {
             folder_id: [7; 16],
             device_id: self.dev,
             parent_manifest_id: self.parent,
-            created_sec: NOW.0 + self.parent[0] as i64,
+            created_sec: NOW.0 + i64::from(self.parent[0]),
             created_nsec: 0,
         };
         let out = snapshot_dir(&self.store, poly(42), &self.tree, &idn).unwrap();

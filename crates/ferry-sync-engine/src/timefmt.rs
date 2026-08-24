@@ -76,12 +76,12 @@ mod tests {
             let yy = if mo <= 2 { y - 1 } else { y };
             let era = yy.div_euclid(400);
             let yoe = yy - era * 400;
-            let mp = if mo > 2 { mo - 3 } else { mo + 9 } as i64;
-            let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+            let mp = i64::from(if mo > 2 { mo - 3 } else { mo + 9 });
+            let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
             let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
             let days = era * 146_097 + doe - 719_468;
             assert_eq!(
-                days * 86_400 + h as i64 * 3600 + mi as i64 * 60 + s as i64,
+                days * 86_400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s),
                 secs
             );
         }

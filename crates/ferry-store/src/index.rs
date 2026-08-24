@@ -303,7 +303,7 @@ fn entry_key(e: &IndexEntry) -> (u8, &[u8]) {
 }
 
 /// Table plaintext: `u32 count` then entries SORTED ascending by
-/// (blob_kind, id bytes): `u8 kind, 32B id, 32B pack_id, u64 off, u64 len`.
+/// (`blob_kind`, id bytes): `u8 kind, 32B id, 32B pack_id, u64 off, u64 len`.
 ///
 /// Sorting happens here so callers cannot emit a non-conforming table. Rows
 /// are deduplicated by (kind, id): one blob, one location per table —
@@ -501,7 +501,7 @@ pub fn rebuild_entries(
 ) -> Result<(Vec<IndexEntry>, Vec<String>), IndexError> {
     let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(packs_dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().map(|x| x == "pack").unwrap_or(false))
+        .filter(|p| p.extension().is_some_and(|x| x == "pack"))
         .collect();
     names.sort();
 
