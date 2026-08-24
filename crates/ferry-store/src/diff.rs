@@ -1080,7 +1080,7 @@ mod tests {
                 self.register_dirs(&d);
                 self.dirs.insert(d.clone());
                 std::fs::create_dir_all(disk_path(tree, &d)).unwrap();
-                set_dir_mtime(&disk_path(tree, &d), (1_700_000_000, 1));
+                set_dir_mtime(&disk_path(tree, &d), (1_700_000_000, q(1)));
                 return;
             }
             let mut p = base;
@@ -1093,7 +1093,7 @@ mod tests {
             let exec = rng.gen_bool(0.3);
             let mt = (
                 1_700_000_000 + rng.gen::<i64>().rem_euclid(1000),
-                rng.gen::<u32>() % 1_000_000_000,
+                q(rng.gen::<u32>() % 1_000_000_000),
             );
             write_file(&disk_path(tree, &p), &bytes, exec, mt);
             self.files.insert(p, (bytes, exec, mt));
@@ -1113,7 +1113,7 @@ mod tests {
                         (0..rng.gen::<usize>() % 4000).map(|_| rng.gen()).collect();
                     let mt = (
                         1_700_000_500 + rng.gen::<i64>().rem_euclid(1000),
-                        rng.gen::<u32>() % 1_000_000_000,
+                        q(rng.gen::<u32>() % 1_000_000_000),
                     );
                     let exec = self.files[&path].1;
                     write_file(&disk_path(tree, &path), &bytes, exec, mt);
@@ -1128,9 +1128,11 @@ mod tests {
                     self.files.get_mut(&path).unwrap().1 = !e;
                 }
                 2 => {
-                    // Bump mtime only: MetadataModified.
+                    // Bump mtime only: MetadataModified. The bump stays a
+                    // multiple of NS_GRAN so it survives windows' 100ns
+                    // FILETIME truncation and still reads back as changed.
                     let (b, e, m) = self.files[&path].clone();
-                    let mt = (m.0 + 5, m.1 ^ 777);
+                    let mt = (m.0 + 5, (m.1 + 300) % 1_000_000_000);
                     write_file(&disk_path(tree, &path), &b, e, mt);
                     self.files.get_mut(&path).unwrap().2 = mt;
                 }

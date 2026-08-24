@@ -15,3 +15,8 @@ ferry-platform = { version = "0.1.0", path = "../ferry-platform" }
 
 [dev-dependencies]
 tempfile = "3"
+
+# windows (non-unix) test helper only: set_dir_mtime needs SetFileTime on a
+# directory handle, which std cannot open there (no FILE_FLAG_BACKUP_SEMANTICS).
+[target.'cfg(not(unix))'.dev-dependencies]
+filetime = "0.2"

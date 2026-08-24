@@ -438,6 +438,15 @@ pub(crate) mod testutil {
     use crate::crypto::{PassthroughCipher, KEY_LEN};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+
+    /// Windows SystemTime is FILETIME-backed (100ns units): finer digits
+    /// cannot survive a write+read round trip there. Test mtimes quantize to
+    /// the platform's clock granularity; unix keeps full fidelity.
+    pub(crate) const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
+    pub(crate) fn q(nsec: u32) -> u32 {
+        nsec / NS_GRAN * NS_GRAN
+    }
+
     // Rng (gen) is used only by prng below, whose sole caller is diff.rs's
     // snapshot_mutate_resnapshot_diff_shows_exactly_the_mutations — itself
     // #[cfg(unix)] (symlink + exec-bit mutations). Ungated, both would be
@@ -511,16 +520,10 @@ pub(crate) mod testutil {
         }
         #[cfg(windows)]
         {
-            // Directories need FILE_FLAG_BACKUP_SEMANTICS to open.
-            use std::os::windows::fs::OpenOptionsExt;
-            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-            let f = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-                .open(path)
-                .unwrap();
-            f.set_times(FileTimes::new().set_modified(ferry_platform::join_unix(mt.0, mt.1)))
-                .unwrap();
+            // std cannot open directory handles for time writes here
+            // (SetFileTime needs FILE_FLAG_BACKUP_SEMANTICS); filetime's
+            // wrapper handles files and directories alike.
+            filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
         }
         #[cfg(not(any(unix, windows)))]
         let _ = (path, mt);
@@ -551,7 +554,7 @@ mod tests {
             &root.join("notes.md"),
             b"hello ferry",
             false,
-            (1_700_000_000, 123_456_789),
+            (1_700_000_000, q(123_456_789)),
         );
         write_file(
             &root.join("run.sh"),
@@ -564,7 +567,7 @@ mod tests {
             &root.join("docs/a.txt"),
             b"doc bytes",
             false,
-            (1_700_000_002, 999_999_999),
+            (1_700_000_002, q(999_999_999)),
         );
         make_symlink("docs", &root.join("jump"));
 
@@ -612,7 +615,7 @@ mod tests {
 
         let notes = root.entries.iter().find(|e| e.name == "notes.md").unwrap();
         assert_eq!(notes.mtime_sec, 1_700_000_000);
-        assert_eq!(notes.mtime_nsec, 123_456_789);
+        assert_eq!(notes.mtime_nsec, q(123_456_789));
 
         let jump = root.entries.iter().find(|e| e.name == "jump").unwrap();
         assert_eq!(

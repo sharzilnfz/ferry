@@ -1139,6 +1139,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ferry-platform",
+ "filetime",
  "hkdf",
  "rand 0.8.7",
  "sha2 0.10.9",
