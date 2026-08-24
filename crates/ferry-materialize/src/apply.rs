@@ -1926,23 +1926,15 @@ mod tests {
 
         let mut ap = Applier::new(&w.store, &target);
         let s2 = ap.apply_tree(&root).unwrap();
-        if cfg!(unix) {
-            assert_eq!(
-                s2.mutations(),
-                0,
-                "second identical apply must perform zero writes; stats {s2:?}"
-            );
-            assert_eq!(s2.skipped_unchanged, 4, "all four entries skipped");
-        } else {
-            // Documented deviation: a link's OWN mtime cannot be restored on
-            // windows (no std API without following the link), so the link
-            // alone is recreated each pass while every other entry skips.
-            assert_eq!(
-                s2.symlinks_written, 1,
-                "only the link may rewrite; stats {s2:?}"
-            );
-            assert_eq!(s2.skipped_unchanged, 3, "the other three entries skip");
-        }
+        // Holds on windows too: the link skips on target match alone; the
+        // un-restorable link mtime only matters when a guard/expected pass
+        // explicitly inspects it.
+        assert_eq!(
+            s2.mutations(),
+            0,
+            "second identical apply must perform zero writes; stats {s2:?}"
+        );
+        assert_eq!(s2.skipped_unchanged, 4, "all four entries skipped");
     }
 
     #[test]
