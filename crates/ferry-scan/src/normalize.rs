@@ -132,9 +132,13 @@ mod tests {
         let tc = snap(&store, &c, 3);
 
         assert!(!equivalent_modulo_mtime(&store, &ta, &tb).unwrap());
-        assert!(
-            !equivalent_modulo_mtime(&store, &ta, &tc).unwrap(),
-            "exec bit is content-adjacent metadata, not noise"
-        );
+        // The exec-bit half only exists where the bit is storable; non-unix
+        // scans legitimately record c and a as identical.
+        if cfg!(unix) {
+            assert!(
+                !equivalent_modulo_mtime(&store, &ta, &tc).unwrap(),
+                "exec bit is content-adjacent metadata, not noise"
+            );
+        }
     }
 }

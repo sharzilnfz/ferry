@@ -737,8 +737,14 @@ mod tests {
         );
         assert_eq!(inc_diff.content_modified.len(), 1, "{inc_diff:?}");
         assert_eq!(inc_diff.content_modified[0].path, p(&["mod.txt"]));
-        assert_eq!(inc_diff.metadata_modified.len(), 1);
-        assert_eq!(inc_diff.metadata_modified[0].path, p(&["sub", "a.txt"]));
+        // The metadata-only mutation is an EXEC-BIT flip; non-unix
+        // filesystems cannot store or observe it, so there it degrades to
+        // zero metadata drift.
+        let expect_meta = if cfg!(unix) { 1 } else { 0 };
+        assert_eq!(inc_diff.metadata_modified.len(), expect_meta);
+        if cfg!(unix) {
+            assert_eq!(inc_diff.metadata_modified[0].path, p(&["sub", "a.txt"]));
+        }
     }
 
     #[test]
@@ -986,6 +992,9 @@ mod tests {
         // absent from the manifest, with from-scratch parity preserved.
         let mut fx = Fixture::new("t12policy");
         write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
+        // aux.txt is a reserved device name; windows refuses to create it at
+        // the filesystem layer before the scanner could ever refuse it.
+        #[cfg(unix)]
         write_file(&fx.root.join("aux.txt"), b"reserved", false, (2, 0));
         #[cfg(unix)]
         {
@@ -995,6 +1004,7 @@ mod tests {
         let first = fx.full_scan_with_ledger();
 
         use ferry_store::snapshot::RefusalReason;
+        #[cfg(unix)]
         assert!(first
             .iter()
             .any(|r| r.reason == RefusalReason::ReservedName));
