@@ -437,7 +437,13 @@ pub(crate) mod testutil {
     use super::*;
     use crate::crypto::{PassthroughCipher, KEY_LEN};
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::SeedableRng;
+    // Rng (gen) is used only by prng below, whose sole caller is diff.rs's
+    // snapshot_mutate_resnapshot_diff_shows_exactly_the_mutations — itself
+    // #[cfg(unix)] (symlink + exec-bit mutations). Ungated, both would be
+    // dead code on windows under -D warnings.
+    #[cfg(unix)]
+    use rand::Rng;
     use std::fs::FileTimes;
 
     pub(crate) fn fmk() -> [u8; KEY_LEN] {
@@ -464,6 +470,7 @@ pub(crate) mod testutil {
         }
     }
 
+    #[cfg(unix)]
     pub(crate) fn prng(seed: u64, len: usize) -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(seed);
         (0..len).map(|_| rng.gen()).collect()
