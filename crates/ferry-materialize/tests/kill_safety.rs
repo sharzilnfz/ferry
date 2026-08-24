@@ -520,54 +520,73 @@ fn kill9_mid_apply_leaves_old_or_new_state_never_torn() {
 
     println!("kill iterations: {KILL_ITERATIONS}");
     let mut offsets_hit: Vec<u64> = Vec::new();
-    for i in 0..KILL_ITERATIONS {
+    let mut i: usize = 0;
+    let mut redraws: usize = 0;
+    while i < KILL_ITERATIONS {
         let seed = SEED_BASE + i as u64;
         let mut rng = StdRng::seed_from_u64(seed);
-        let offset_ms: u64 = rng.gen_range(15..=900);
+        let mut offset_ms: u64 = rng.gen_range(15..=900);
 
-        let target = w._dir.path().join("target");
-        seed_target(&target, &old_m);
+        // One counted iteration = one kill that landed MID-APPLY. Pace is
+        // per-mutation, so the child's total runtime is workload-bound: on
+        // a fast or quiet host a large offset can outlive the whole apply
+        // and the child exits 0 before SIGKILL lands (observed on Linux
+        // CI). That proves nothing about torn safety, so shrink the offset
+        // and redo this iteration; only kills that actually interrupted
+        // are counted and verified below.
+        let target = loop {
+            let t = w._dir.path().join("target");
+            seed_target(&t, &old_m);
 
-        let mut child = Command::new(apply_once_path())
-            .arg("--store")
-            .arg(&w.store_folder)
-            .arg("--target")
-            .arg(&target)
-            .arg("--tree")
-            .arg(hex(&tree))
-            .arg("--fmk-hex")
-            .arg(hex(&FMK))
-            .arg("--delay-ms")
-            .arg("12")
-            .spawn()
-            .expect("spawn apply_once");
+            let mut child = Command::new(apply_once_path())
+                .arg("--store")
+                .arg(&w.store_folder)
+                .arg("--target")
+                .arg(&t)
+                .arg("--tree")
+                .arg(hex(&tree))
+                .arg("--fmk-hex")
+                .arg(hex(&FMK))
+                .arg("--delay-ms")
+                .arg("12")
+                .spawn()
+                .expect("spawn apply_once");
 
-        std::thread::sleep(Duration::from_millis(offset_ms));
-        let pid = child.id() as i32;
-        let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
-        assert_eq!(rc, 0, "kill failed");
+            std::thread::sleep(Duration::from_millis(offset_ms));
+            let pid = child.id() as i32;
+            let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+            assert_eq!(rc, 0, "kill failed");
 
-        let status = child.wait().expect("wait failed");
-        assert!(!status.success(), "SIGKILLed child should not exit cleanly");
+            let status = child.wait().expect("wait failed");
+            if status.success() {
+                redraws += 1;
+                assert!(
+                    redraws <= KILL_ITERATIONS * 2,
+                    "kills keep landing post-completion; lower the max offset or raise --delay-ms"
+                );
+                let _ = std::fs::remove_dir_all(&t);
+                offset_ms = (offset_ms / 2).max(15);
+                continue;
+            }
+            break t;
+        };
         offsets_hit.push(offset_ms);
 
         verify_consistent(&target, &old_m, &new_m, w.poly).unwrap_or_else(|e| {
             panic!("iteration {i} (seed {seed}, offset {offset_ms}ms): inconsistent tree: {e}")
         });
 
-        // Temps, if any survived, are pattern-checked by verify_consistent's
-        // walk (is_temp_name accepts them silently there); additionally
-        // assert none of them ever carries a non-temp-looking sibling of a
-        // destination (nothing outside the universe was created).
-
         // Clean up this iteration's tree before the next.
         let _ = std::fs::remove_dir_all(&target);
+        i += 1;
     }
 
     // Report coverage: offsets should span the window rather than cluster.
     let min = *offsets_hit.iter().min().unwrap();
     let max = *offsets_hit.iter().max().unwrap();
-    println!("offsets hit: min {min}ms max {max}ms across {KILL_ITERATIONS} runs");
+    println!(
+        "offsets hit: min {min}ms max {max}ms across {KILL_ITERATIONS} runs ({redraws} redraws)"
+    );
     println!("all offsets: {offsets_hit:?}");
     assert!(
         max > min + 200,

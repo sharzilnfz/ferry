@@ -397,6 +397,11 @@ fn write_bytes_with_meta(
     nsec: u32,
 ) -> Result<(), EngineError> {
     use std::io::Write;
+    // The exec bit is a unix permission concept; on other platforms it is
+    // carried in manifests but not enforced by the filesystem (same
+    // convention as apply.rs's non-unix arm).
+    #[cfg(not(unix))]
+    let _ = exec;
     {
         let mut f = std::fs::File::create(tmp).map_err(|e| io_at(tmp, e))?;
         #[cfg(unix)]
