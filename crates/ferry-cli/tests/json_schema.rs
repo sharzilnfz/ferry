@@ -70,6 +70,10 @@ fn assert_matches_expected(name: &str, actual: &str) {
             file.display()
         )
     });
+    // Normalize checkout line endings: git may hand these fixtures back with
+    // CRLF on windows runners (autocrlf), while generated schemas always use
+    // LF. The schema bytes are what this test guards, not the newline style.
+    let expected = expected.replace("\r\n", "\n");
     assert_eq!(expected, actual, "JSON schema for {name} drifted");
 }
 
