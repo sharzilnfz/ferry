@@ -137,8 +137,10 @@ impl FerryIgnore {
     }
 
     /// Decide with an explicit directory/file interpretation of the final
-    /// component (no disk stat). Table tests and power users use this; the
-    /// [`ferry_scan::IgnorePolicy`] impl resolves ambiguity itself.
+    /// component (no disk stat). This is the real decision surface of the
+    /// crate; the [`ferry_scan::IgnorePolicy`] impl is a one-line delegation
+    /// with the caller-supplied kind, and the secret scan calls this
+    /// directly with kinds it already knows from its own stat.
     ///
     /// Implements git's composite model:
     /// - within a layer set, last non-neutral verdict wins (deeper files
@@ -252,14 +254,6 @@ impl FerryIgnore {
         }
         builder.build().ok()
     }
-
-    fn disk_path(&self, rel: &[String]) -> PathBuf {
-        let mut p = self.root.clone();
-        for c in rel {
-            p.push(c);
-        }
-        p
-    }
 }
 
 /// Normalize one candidate line to NFC and feed it to the builder. Returns
@@ -297,24 +291,10 @@ fn read_rule_file(path: &Path) -> Option<Result<String, std::io::Error>> {
 }
 
 impl ferry_scan::IgnorePolicy for FerryIgnore {
-    /// Walker/event-filter seam. The final component's dir/file nature is not
-    /// part of the trait signature, so dir-only patterns are resolved by
-    /// double evaluation: only when the two interpretations disagree do we
-    /// spend one `symlink_metadata`. Vanished paths resolve as files
-    /// (either answer is fine — the walker skips absent entries anyway).
-    fn ignored(&self, rel: &[String]) -> bool {
-        if rel.is_empty() || rel.last().is_some_and(|n| is_quarantine_name(n)) {
-            return false;
-        }
-        let as_file = self.decided(rel, false);
-        let as_dir = self.decided(rel, true);
-        if as_file == as_dir {
-            return as_file;
-        }
-        match std::fs::symlink_metadata(self.disk_path(rel)) {
-            Ok(meta) if meta.is_dir() => as_dir,
-            _ => as_file,
-        }
+    /// Walker/event-filter seam. The seam carries the entry kind (T-12), so
+    /// this is pure delegation: no double evaluation, no fallback stat.
+    fn ignored(&self, rel: &[String], kind: ferry_scan::EntryKind) -> bool {
+        self.decided(rel, kind == ferry_scan::EntryKind::Dir)
     }
 }
 
@@ -695,32 +675,71 @@ mod tests {
     }
 
     #[test]
-    fn trait_ignored_resolves_dir_only_patterns_against_disk() {
-        let (_t, root) = tree(&[("ferry.ignore", "build/\nmaybe/\n")]);
-        std::fs::create_dir_all(root.join("build")).unwrap();
-        std::fs::write(root.join("maybe"), b"a file, despite the pattern").unwrap();
+    fn seam_decisions_parameterized_over_entry_kind_need_no_disk() {
+        // Every queried path is ABSENT from the fixture tree: the verdicts
+        // below come purely from compiled rules and the supplied kind.
+        let (_t, root) = tree(&[
+            ("ferry.ignore", "build/\ncache\n*.log\n!important.log\n"),
+            // Patterns inside sub/ferry.ignore are relative to sub/.
+            ("sub/ferry.ignore", "!build/\n"),
+        ]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
 
-        use ferry_scan::IgnorePolicy as _;
-        // Real dir: dir-only pattern bites.
-        assert!(f.ignored(&rel("build")));
-        // Real FILE with the same shape of name: survives.
-        assert!(!f.ignored(&rel("maybe")));
-        // Children of an ignored dir are unreachable.
-        assert!(f.ignored(&rel("build/inner.txt")));
+        let cases: &[(&str, bool, bool)] = &[
+            // (path, ignored-as-FILE, ignored-as-DIR)
+            // Dir-only pattern: diverges by kind.
+            ("build", false, true),
+            ("deep/build", false, true),
+            // Unanchored bare name matches files and dirs alike.
+            ("cache", true, true),
+            ("deep/cache/x.bin", true, true),
+            // Extension rules judge the name regardless of kind; the
+            // later negation wins within the layer chain.
+            ("noise.log", true, true),
+            ("important.log", false, false),
+            ("deep/important.log", false, false),
+            // Sticky exclusion: an excluded ANCESTOR keeps descendants
+            // ignored regardless of the final component's kind.
+            ("build/inner.txt", true, true),
+            ("build/sub/deep.txt", true, true),
+            // Deeper overlay negates the root dir-only pattern inside sub/.
+            ("sub/build", false, false),
+            // ...and only there.
+            ("other/build", false, true),
+            // Ordinary file untouched.
+            ("keep.txt", false, false),
+        ];
+        for (path, want_file, want_dir) in cases {
+            assert_eq!(f.decided(&rel(path), false), *want_file, "{path} as file");
+            assert_eq!(f.decided(&rel(path), true), *want_dir, "{path} as dir");
+        }
     }
 
     #[test]
-    fn trait_ignored_keeps_quarantine_files_even_on_disk() {
-        let (_t, root) = tree(&[("ferry.ignore", "*.ferry-conflict.*\n")]);
-        std::fs::write(
-            root.join("doc.txt.ferry-conflict.devA-1727000000"),
-            b"conflicted copy",
-        )
-        .unwrap();
+    fn trait_impl_delegates_to_decided_with_the_callers_kind() {
+        let (_t, root) = tree(&[("ferry.ignore", "build/\n")]);
+        std::fs::create_dir_all(root.join("build")).unwrap();
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-        use ferry_scan::IgnorePolicy as _;
-        assert!(!f.ignored(&rel("doc.txt.ferry-conflict.devA-1727000000")));
+        use ferry_scan::{EntryKind, IgnorePolicy as _};
+        for (path, kind, want) in [
+            ("build", EntryKind::File, false),
+            ("build", EntryKind::Dir, true),
+            // Children of an excluded dir are unreachable at either kind;
+            // intermediate components are judged as dirs.
+            ("build/inner.txt", EntryKind::File, true),
+        ] {
+            assert_eq!(f.ignored(&rel(path), kind), want, "{path:?} {kind:?}");
+        }
+    }
+
+    #[test]
+    fn trait_ignored_keeps_quarantine_names_at_every_kind() {
+        let (_t, root) = tree(&[("ferry.ignore", "*.ferry-conflict.*\n")]);
+        let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
+        use ferry_scan::{EntryKind, IgnorePolicy as _};
+        let q = rel("doc.txt.ferry-conflict.devA-1727000000");
+        assert!(!f.ignored(&q, EntryKind::File));
+        assert!(!f.ignored(&q, EntryKind::Dir));
     }
 
     #[test]

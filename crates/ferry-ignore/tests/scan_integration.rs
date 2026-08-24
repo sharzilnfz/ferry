@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use ferry_ignore::secrets::WarningClass;
 use ferry_ignore::{FerryIgnore, IgnoreConfig};
-use ferry_scan::{IgnorePolicy, ScanConfig, ScanEngine, StoreHandle, WatchSignal};
+use ferry_scan::{EntryKind, IgnorePolicy, ScanConfig, ScanEngine, StoreHandle, WatchSignal};
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::manifest::{parse_tree_node, EntryPayload};
 use ferry_store::store::Store;
@@ -188,7 +188,10 @@ fn policy_filters_poll_sweeps_like_walker_events() {
     write_file(&root.join("cache/blob.bin"), b"cached junk v1");
 
     let policy = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-    assert!(policy.ignored(&rel("cache")));
-    assert!(policy.ignored(&rel("cache/blob.bin")));
-    assert!(!policy.ignored(&rel("keep.txt")));
+    // Kinds are explicit at the seam now: cache/ is a real directory,
+    // blob.bin a file — the same verdicts the old disk-resolving adapter
+    // produced.
+    assert!(policy.ignored(&rel("cache"), EntryKind::Dir));
+    assert!(policy.ignored(&rel("cache/blob.bin"), EntryKind::File));
+    assert!(!policy.ignored(&rel("keep.txt"), EntryKind::File));
 }

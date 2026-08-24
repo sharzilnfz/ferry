@@ -16,8 +16,6 @@ use std::sync::LazyLock;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-use ferry_scan::IgnorePolicy;
-
 use crate::policy::FerryIgnore;
 
 /// What kind of risk a warning describes: either the PATH itself is
@@ -193,8 +191,10 @@ fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Wa
         rel.push(component.clone());
         if meta.is_dir() {
             // Prune exactly like the scanner: ignored dirs are never synced,
-            // so their contents can never leak at share time either.
-            if !rules.ignored(rel) {
+            // so their contents can never leak at share time either. The
+            // kind is already known from the stat above, so this consults
+            // `decided` directly (T-12: no re-resolution at the seam).
+            if !rules.decided(rel, true) {
                 walk(rules, &child_abs, rel, out);
             }
         } else if meta.is_file() {
@@ -212,7 +212,7 @@ fn scan_file_if_risky(
     meta: &std::fs::Metadata,
     out: &mut Vec<Warning>,
 ) {
-    if rules.ignored(rel) {
+    if rules.decided(rel, false) {
         return; // would NOT sync → nothing leaves → no warning
     }
     let Some(path_class) = rel.last().and_then(|n| classify_path(n)) else {
