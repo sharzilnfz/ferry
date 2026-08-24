@@ -35,7 +35,7 @@ use notify::{Error as NotifyError, Event, RecommendedWatcher, RecursiveMode, Wat
 
 use crate::config::ScanConfig;
 use crate::error::ScanError;
-use crate::ignore::IgnorePolicy;
+use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{Action, PolicyState, RelPath, Trigger, WatchSignal};
 use crate::state::DirCache;
 use crate::walk::{close_under_ancestors, PassStats, Walker};
@@ -751,18 +751,26 @@ fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
     Some(rel)
 }
 
+/// True when a watcher-event path lies under an excluded path. Ancestor
+/// components are necessarily directories, so each prefix is judged as a
+/// dir with no disk access (T-12). Watcher events do not carry the final
+/// component's kind; the full path counts as excluded only when BOTH
+/// interpretations exclude it. A dir-only pattern (`build/`) therefore
+/// cannot silently swallow events for a FILE named `build` that the rules
+/// would keep — at worst the extra event marks a parent dirty and the pass
+/// re-prunes with exact kinds.
 fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
     for c in rel {
         if crate::walk::is_store_component(c) {
             return true;
         }
     }
-    for i in 1..=rel.len() {
-        if ignore.ignored(&rel[..i]) {
+    for i in 1..rel.len() {
+        if ignore.ignored(&rel[..i], EntryKind::Dir) {
             return true;
         }
     }
-    false
+    ignore.ignored(rel, EntryKind::Dir) && ignore.ignored(rel, EntryKind::File)
 }
 
 enum ErrClass {
@@ -825,7 +833,14 @@ fn stat_sweep(
             }
             let mut full = dir_rel.clone();
             full.push(e.name.clone());
-            if ignore.ignored(&full) {
+            // The cache payload records the kind we last saw; judge with it
+            // (T-12: no stat inside the policy). A kind flip on disk still
+            // surfaces: the sweep's forward pass stats every real child.
+            let kind = match &e.payload {
+                EntryPayload::Dir { .. } => EntryKind::Dir,
+                _ => EntryKind::File,
+            };
+            if ignore.ignored(&full, kind) {
                 continue;
             }
             let mut p = disk_root.to_path_buf();
@@ -867,22 +882,30 @@ fn sweep_dir(
         let Some(component) = name.to_str().map(|s| s.nfc().collect::<String>()) else {
             continue;
         };
-        let store_skip = crate::walk::is_store_component(&component);
-        let mut child_rel = rel.clone();
-        child_rel.push(component.clone());
-        if ignore.ignored(&child_rel) || store_skip {
+        if crate::walk::is_store_component(&component) {
             continue;
         }
+        let mut child_rel = rel.clone();
+        child_rel.push(component.clone());
         let child_disk = disk.join(&name);
+        // Stat BEFORE the ignore consult so the verdict carries the real
+        // kind (T-12); this stat already happened for every surviving
+        // entry, so it is a reorder, not an addition.
         let Ok(meta) = std::fs::symlink_metadata(&child_disk) else {
             out.push(rel.clone());
             continue;
         };
         let ft = meta.file_type();
+        let kind = if ft.is_dir() {
+            EntryKind::Dir
+        } else {
+            EntryKind::File
+        };
+        if ignore.ignored(&child_rel, kind) {
+            continue;
+        }
         if ft.is_dir() {
-            if !crate::walk::is_store_component(&component) {
-                sweep_dir(disk_root, &child_rel, cache, ignore, out);
-            }
+            sweep_dir(disk_root, &child_rel, cache, ignore, out);
         } else if ft.is_file() {
             let exec = live_exec_bit(&meta);
             let name_str = child_rel.last().expect("non-empty").as_str();
@@ -1025,7 +1048,7 @@ mod tests {
     fn stat_sweep_respects_ignore_policy() {
         struct SkipAll;
         impl crate::ignore::IgnorePolicy for SkipAll {
-            fn ignored(&self, _rel: &[String]) -> bool {
+            fn ignored(&self, _rel: &[String], _kind: EntryKind) -> bool {
                 true
             }
         }

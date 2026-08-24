@@ -1,6 +1,6 @@
 # T-12: Ignore seam carries entry kind — kill the stat-in-hot-path adapter
 
-Status: ready-for-agent
+Status: done
 
 ferry-scan's `IgnorePolicy::ignored(rel: &[String])` dropped `is_dir`, so the
 adapter in ferry-ignore/policy.rs:299 double-evaluates both interpretations

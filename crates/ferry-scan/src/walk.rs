@@ -49,7 +49,7 @@ use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
 use crate::error::ScanError;
-use crate::ignore::IgnorePolicy;
+use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
 
@@ -292,7 +292,28 @@ impl<'a> Walker<'a> {
             }
             let mut child_rel = rel.clone();
             child_rel.push(component.clone());
-            if self.ignore.ignored(&child_rel) {
+            let child_disk = disk.join(&name);
+
+            // Stat BEFORE the ignore consult so the seam carries the entry's
+            // real kind (T-12): dir-only patterns bite real dirs with zero
+            // double evaluation and no extra disk access. The stat was
+            // already needed for every surviving entry, so this reorders,
+            // never adds.
+            let meta = match std::fs::symlink_metadata(&child_disk) {
+                Ok(m) => m,
+                // Vanished mid-pass: skip; next event or audit repairs.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(Self::io_err(&child_disk)(e)),
+            };
+            let ft = meta.file_type();
+            // Symlinks count as files, matching gitignore semantics and the
+            // manifest's link entries.
+            let kind = if ft.is_dir() {
+                EntryKind::Dir
+            } else {
+                EntryKind::File
+            };
+            if self.ignore.ignored(&child_rel, kind) {
                 continue;
             }
             // Reserved Windows device names can never materialize on a
@@ -304,15 +325,6 @@ impl<'a> Walker<'a> {
                 });
                 continue;
             }
-            let child_disk = disk.join(&name);
-
-            let meta = match std::fs::symlink_metadata(&child_disk) {
-                Ok(m) => m,
-                // Vanished mid-pass: skip; next event or audit repairs.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(Self::io_err(&child_disk)(e)),
-            };
-            let ft = meta.file_type();
 
             let entry = if ft.is_symlink() {
                 let target = std::fs::read_link(&child_disk).map_err(Self::io_err(&child_disk))?;
@@ -650,7 +662,7 @@ mod tests {
 
     struct NoIgnoresIgnored;
     impl crate::ignore::IgnorePolicy for NoIgnoresIgnored {
-        fn ignored(&self, _rel: &[String]) -> bool {
+        fn ignored(&self, _rel: &[String], _kind: EntryKind) -> bool {
             false
         }
     }
@@ -835,7 +847,7 @@ mod tests {
         use crate::ignore::IgnorePolicy;
         struct SkipSecrets;
         impl IgnorePolicy for SkipSecrets {
-            fn ignored(&self, rel: &[String]) -> bool {
+            fn ignored(&self, rel: &[String], _kind: EntryKind) -> bool {
                 rel.first().map(std::string::String::as_str) == Some("secrets")
             }
         }
