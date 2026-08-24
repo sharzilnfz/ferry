@@ -5,7 +5,6 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use common::{timeout_from_env, CorruptingTransport, EngineFixture, TreeBuilder};
@@ -20,8 +19,10 @@ fn corrupted_transfer_is_rejected_and_retry_still_converges() {
     }
 
     // Rebuild B so it dials through the corrupting hook: the first ITEM
-    // frame B receives is flipped in flight.
-    let hook = CorruptingTransport::new(Arc::new(ferry_sync::TcpTransport));
+    // frame B receives is flipped in flight. The hook wraps whatever
+    // transport the suite selected (FERRY_SYNC_E2E_TRANSPORT), so integrity
+    // semantics are proven per-transport.
+    let hook = CorruptingTransport::new(common::default_transport());
     let b = fx.replace_b(hook.clone());
 
     let deadline = std::time::Instant::now() + timeout_from_env();

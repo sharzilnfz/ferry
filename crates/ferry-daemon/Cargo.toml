@@ -1,0 +1,21 @@
+[package]
+name = "ferry-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Lives apart from ferry-sync because it wires BOTH transports together:
+# ferry-iroh depends on ferry-sync for the Transport trait, so a single
+# crate containing the lib, the iroh impl, AND the binary would be a
+# normal-dependency cycle (illegal). The shipped artifact keeps the
+# historical name `ferry-sync`.
+[dependencies]
+ferry-sync = { path = "../ferry-sync" }
+ferry-iroh = { path = "../ferry-iroh" }
+ferry-crypto = { path = "../ferry-crypto" }
+ferry-store = { path = "../ferry-store" }
+rand = "0.8"
+
+[[bin]]
+name = "ferry-sync"
+path = "src/main.rs"

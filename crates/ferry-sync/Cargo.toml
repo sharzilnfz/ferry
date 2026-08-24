@@ -13,9 +13,7 @@ ferry-platform = { path = "../ferry-platform" }
 ferry-materialize = { path = "../ferry-materialize" }
 
 [dev-dependencies]
+ferry-iroh = { path = "../ferry-iroh" }
+ferry-crypto = { path = "../ferry-crypto" }
 rand = "0.8"
 tempfile = "3"
-
-[[bin]]
-name = "ferry-sync"
-path = "src/bin/ferry_sync.rs"
