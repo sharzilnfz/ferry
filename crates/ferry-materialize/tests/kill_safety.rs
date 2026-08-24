@@ -409,7 +409,14 @@ fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> 
             let exec = live_exec(&entry.metadata().map_err(|e| e.to_string())?);
             let matches = |m: &Model| match m.files.get(&rel) {
                 None => false,
-                Some(spec) => chunk_ids(poly, &spec.bytes) == ids && spec.exec == exec,
+                Some(spec) => {
+                    // Non-unix filesystems cannot store the exec bit
+                    // (documented convention: carried in manifests, not
+                    // enforced on disk), so it cannot discriminate states
+                    // there.
+                    let exec_ok = !cfg!(unix) || spec.exec == exec;
+                    chunk_ids(poly, &spec.bytes) == ids && exec_ok
+                }
             };
             if !matches(old_m) && !matches(new_m) {
                 let want_old = old_m.files.get(&rel);
