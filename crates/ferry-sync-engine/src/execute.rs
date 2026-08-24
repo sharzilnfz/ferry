@@ -93,6 +93,17 @@ pub fn execute(
     let mut dest_abs: Vec<PathBuf> = Vec::with_capacity(plan.quarantine.len());
     let mut buffers: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
     for (idx, op) in plan.quarantine.iter().enumerate() {
+        // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw spellings of the
+        // stored path and the bare-join lookup the pre-verify uses.
+        let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        eprintln!(
+            "[NFD-DBG] quarantine op[{idx}]: stored_comps={}",
+            op.path
+                .iter()
+                .map(|c| hx(c.as_bytes()))
+                .collect::<Vec<_>>()
+                .join("/")
+        );
         let name = op.path.last().expect("stored paths are non-empty").clone();
         let parent = &op.path[..op.path.len() - 1];
         let candidate =
@@ -101,6 +112,13 @@ pub fn execute(
             .map_err(|e| io_at(root.join(&candidate), e))?;
         if let LoserContent::LiveLocal { expected_chunks } = &op.content {
             let live_abs = abs_under(root, &op.path);
+            eprintln!(
+                "[NFD-DBG] preverify op[{idx}]: bare_join={} stat={:?}",
+                hx(live_abs.as_os_str().as_encoded_bytes()),
+                std::fs::symlink_metadata(&live_abs)
+                    .map(|m| format!("ok len={}", m.len()))
+                    .map_err(|e| format!("{:?}", e.kind()))
+            );
             buffers.insert(
                 idx,
                 read_live_verified(&live_abs, &op.path, expected_chunks)?,
@@ -222,9 +240,29 @@ fn read_live_verified(
     rel: &[String],
     expected_chunks: &[(BlobId, u64)],
 ) -> Result<Vec<u8>, EngineError> {
-    let mut f = std::fs::File::open(abs).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => diverged(rel, DivergeReason::ExpectedPresent),
-        _ => io_at(abs, e),
+    let mut f = std::fs::File::open(abs).map_err(|e| {
+        // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw path bytes and the
+        // parent's live listing at open failure.
+        let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        eprintln!(
+            "[NFD-DBG] read_live_verified OPEN FAIL: path={} err={:?}",
+            hx(abs.as_os_str().as_encoded_bytes()),
+            e.kind()
+        );
+        if let Some(parent) = abs.parent() {
+            if let Ok(rd) = std::fs::read_dir(parent) {
+                for entry in rd.flatten() {
+                    eprintln!(
+                        "[NFD-DBG] read_live_verified live_entry={}",
+                        hx(entry.file_name().as_encoded_bytes())
+                    );
+                }
+            }
+        }
+        match e.kind() {
+            std::io::ErrorKind::NotFound => diverged(rel, DivergeReason::ExpectedPresent),
+            _ => io_at(abs, e),
+        }
     })?;
     let declared_total: u64 = expected_chunks.iter().map(|c| c.1).sum();
     let mut out = Vec::with_capacity(declared_total as usize);
@@ -269,6 +307,17 @@ fn write_loser_copy(
     abs_dest: &Path,
     live_bytes: Option<&[u8]>,
 ) -> Result<(), EngineError> {
+    // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw before/after paths of
+    // every quarantine write.
+    eprintln!(
+        "[NFD-DBG] loser_copy: dest={}",
+        abs_dest
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect::<String>()
+    );
     if let Some(parent) = abs_dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
     }

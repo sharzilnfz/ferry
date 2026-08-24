@@ -961,6 +961,38 @@ fn plan_upsert(
     }
 }
 
+// THROWAWAY DIAGNOSTIC (branch debug/nfd-divergence): raw-byte spellings at
+// every ExpectedPresent emission site. Unconditional on purpose; removed once
+// the ubuntu-only divergence is root-caused.
+fn dbg_expected_present(site: &str, target: &Path, rel: &[String]) {
+    let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let want: Vec<String> = rel.iter().map(|c| hx(c.as_bytes())).collect();
+    let mut joined = target.to_path_buf();
+    for c in rel {
+        joined.push(c);
+    }
+    eprintln!(
+        "[NFD-DBG] {site}: want_comps={}; join_stat={:?}",
+        want.join("/"),
+        std::fs::symlink_metadata(&joined)
+            .map(|m| format!("ok len={}", m.len()))
+            .map_err(|e| format!("{:?}", e.kind()))
+    );
+    if let Some(parent) = joined.parent() {
+        match std::fs::read_dir(parent) {
+            Ok(rd) => {
+                for e in rd.flatten() {
+                    eprintln!(
+                        "[NFD-DBG] {site}: live_entry={}",
+                        hx(e.file_name().as_encoded_bytes())
+                    );
+                }
+            }
+            Err(e) => eprintln!("[NFD-DBG] {site}: parent_readdir_err={e}"),
+        }
+    }
+}
+
 fn stat_opt(abs: &Path) -> Result<Option<std::fs::Metadata>, MaterializeError> {
     match std::fs::symlink_metadata(abs) {
         Ok(md) => Ok(Some(md)),
@@ -1023,6 +1055,7 @@ fn guard_removal(
     let exp = ExpectedState::from(&exp_entry);
     let abs = abs_under(target, &rm.path);
     let Some(md) = stat_opt(&abs)? else {
+        dbg_expected_present("guard_removal", target, &rm.path);
         out.push(Divergence {
             path: rm.path.clone(),
             reason: DivergeReason::ExpectedPresent,
@@ -1070,6 +1103,7 @@ fn guard_upsert(
             Ok(())
         }
         (Some(_), None) => {
+            dbg_expected_present("guard_upsert", target, &up.path);
             out.push(Divergence {
                 path: up.path.clone(),
                 reason: DivergeReason::ExpectedPresent,
@@ -1095,6 +1129,7 @@ fn check_live_matches(
     let md = match stat_opt(&abs)? {
         Some(m) => m,
         None => {
+            dbg_expected_present("check_live_matches", target, rel);
             out.push(Divergence {
                 path: rel.clone(),
                 reason: DivergeReason::ExpectedPresent,
@@ -1233,6 +1268,11 @@ fn verify_subtree_matches_base(
         .collect::<Vec<_>>();
     missing.sort();
     for k in missing {
+        dbg_expected_present(
+            "verify_subtree_missing",
+            target,
+            &k.split('/').map(str::to_string).collect::<Vec<_>>(),
+        );
         out.push(Divergence {
             path: k.split('/').map(str::to_string).collect(),
             reason: DivergeReason::ExpectedPresent,

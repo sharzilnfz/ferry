@@ -26,11 +26,14 @@ use std::process::Command;
 #[cfg(unix)]
 use std::time::Duration;
 
-// Kill-loop-only: the SIGKILL harness below is unix-only (libc::kill).
-#[cfg(unix)]
+// Kill-loop-only: the SIGKILL harness below is unix-only (libc::kill) and
+// is the sole user of Duration, Rng (gen_range), KILL_ITERATIONS and
+// SEED_BASE. setup_world seeds the folder polynomial on every platform, so
+// StdRng/SeedableRng must stay available unconditionally.
 use rand::rngs::StdRng;
 #[cfg(unix)]
-use rand::{Rng, SeedableRng};
+use rand::Rng;
+use rand::SeedableRng;
 
 use ferry_materialize::temp::is_temp_name;
 use ferry_store::chunker::{chunk, generate_polynomial};
