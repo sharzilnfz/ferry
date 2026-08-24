@@ -91,9 +91,21 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         let opened = folder::open_folder(p)?;
         let rules = Arc::new(folder::load_rules(&opened.root, &opened.settings)?);
         let device_id = current_device_id();
+        // T-02: validate once at folder-open; invalid polynomial records are
+        // a typed CLI error, not a panic mid-scan.
+        let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
+            CliError::new(
+                "poly-invalid",
+                e.to_string(),
+                format!(
+                    "the polynomial record for {} is corrupt; restore the store from a known-good backup",
+                    opened.root.display()
+                ),
+            )
+        })?;
         let handle = StoreHandle {
             store: opened.store.clone(),
-            poly: opened.poly,
+            poly,
             folder_id: opened.folder_id,
             device_id,
         };

@@ -13,6 +13,8 @@ use ferry_scan::{IgnorePolicy, ScanConfig, ScanEngine, StoreHandle};
 use ferry_store::format::BlobId;
 use ferry_store::manifest::{serialize_manifest, RootManifest};
 
+use ferry_store::chunker::ValidatedPoly;
+
 use crate::error::{CliError, CliResult};
 use crate::folder::OpenFolder;
 
@@ -48,6 +50,16 @@ pub fn one_shot_raw(
     device_id: [u8; 32],
     ignore: Arc<dyn IgnorePolicy>,
 ) -> CliResult<OneShot> {
+    // Validate the folder's polynomial once at open/scan time (T-02): a
+    // corrupt or hand-edited polynomial record must be a typed CLI error,
+    // never a chunker panic mid-scan.
+    let poly = ValidatedPoly::try_from(poly).map_err(|e| {
+        CliError::new(
+            "poly-invalid",
+            e.to_string(),
+            "the folder's polynomial record is corrupt; restore this store from a known-good backup",
+        )
+    })?;
     let handle = StoreHandle {
         store: store.clone(),
         poly,

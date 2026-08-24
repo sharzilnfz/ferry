@@ -220,7 +220,10 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         tag: d.tag.clone(),
         store_dir: d.store_dir.clone(),
         tree_dir: d.tree_dir.clone(),
-        poly: d.poly,
+        // T-02: validate the user-supplied --poly HERE, at config load. A
+        // typo used to surface as a chunker .expect() panic mid-scan.
+        poly: ferry_store::chunker::ValidatedPoly::new(d.poly)
+            .map_err(|e| format!("--poly: {e}"))?,
         folder_id: d.folder_id,
         poll_interval: Duration::from_millis(d.poll_ms),
         opportunistic_every: d.opportunistic_every,

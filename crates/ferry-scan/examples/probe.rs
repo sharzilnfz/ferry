@@ -18,7 +18,9 @@ fn main() {
     let store = Store::create(&store_root, [1u8; 32], Box::new(PassthroughCipher)).unwrap();
     let handle = StoreHandle {
         store: store.into(),
-        poly: ferry_store::chunker::generate_polynomial(&mut rand::rngs::StdRng::seed_from_u64(42)),
+        poly: ferry_store::chunker::ValidatedPoly::generate(
+            &mut rand::rngs::StdRng::seed_from_u64(42),
+        ),
         folder_id: [5; 16],
         device_id: [6; 32],
     };

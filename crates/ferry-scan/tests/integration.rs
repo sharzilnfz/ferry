@@ -22,10 +22,10 @@ fn fmk() -> [u8; 32] {
     core::array::from_fn(|i| i as u8)
 }
 
-fn poly() -> u64 {
+fn poly() -> ferry_store::chunker::ValidatedPoly {
     // A fixed-seed polynomial keeps this test independent of global RNG
     // state; irreducibility correctness is ferry-store's own concern.
-    ferry_store::chunker::generate_polynomial(&mut rand::rngs::StdRng::seed_from_u64(42))
+    ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(42))
 }
 
 fn handle_for(store: &Arc<Store>) -> StoreHandle {

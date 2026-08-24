@@ -27,6 +27,50 @@ const SLIDE_OUT_X: u32 = 504;
 #[error("polynomial {0:#x} is not monic irreducible of degree 53")]
 pub struct PolynomialError(pub u64);
 
+/// A polynomial that has passed [`is_irreducible`], validated exactly once
+/// at folder-open/config-load time. Scan/snapshot APIs take this type so
+/// downstream code cannot hold an invalid poly and panic mid-scan on it.
+///
+/// Construct from raw storage/CLI input with [`ValidatedPoly::new`] (or
+/// `TryFrom<u64>`); generate fresh ones with [`ValidatedPoly::generate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValidatedPoly(u64);
+
+impl ValidatedPoly {
+    /// Validate once; every later use is infallible by construction.
+    pub fn new(p: u64) -> Result<Self, PolynomialError> {
+        if !is_irreducible(p) {
+            return Err(PolynomialError(p));
+        }
+        Ok(ValidatedPoly(p))
+    }
+
+    /// Draw a fresh valid polynomial from an RNG (see
+    /// [`generate_polynomial`]).
+    pub fn generate(rng: &mut impl Rng) -> Self {
+        ValidatedPoly(generate_polynomial(rng))
+    }
+
+    /// The raw bitfield, for wire/storage serialization.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for ValidatedPoly {
+    type Error = PolynomialError;
+
+    fn try_from(p: u64) -> Result<Self, Self::Error> {
+        ValidatedPoly::new(p)
+    }
+}
+
+impl From<ValidatedPoly> for u64 {
+    fn from(p: ValidatedPoly) -> u64 {
+        p.0
+    }
+}
+
 /// Degree of a nonzero GF(2)[x] polynomial stored in a u64 bitfield.
 fn poly_degree(v: u64) -> Option<u32> {
     if v == 0 {
@@ -280,8 +324,14 @@ impl Chunker {
 }
 
 /// Chunk boundaries of `data`: (offset, length) pairs tiling the input.
-pub fn chunk_offsets(poly: u64, data: &[u8]) -> Vec<(usize, usize)> {
-    let mut c = Chunker::new(poly).expect("chunk_offsets called with invalid polynomial");
+///
+/// Returns a [`PolynomialError`] instead of panicking when `poly` is not
+/// monic irreducible of degree 53 — the daemon accepts `--poly HEX16` from
+/// the CLI, so a typo must surface as a typed error, not a mid-scan panic.
+/// Prefer threading a validated [`ValidatedPoly`] through your APIs and
+/// calling `.get()` here.
+pub fn chunk_offsets(poly: u64, data: &[u8]) -> Result<Vec<(usize, usize)>, PolynomialError> {
+    let mut c = Chunker::new(poly)?;
     let mut out = Vec::new();
     let mut start = 0usize;
     for &b in data {
@@ -293,15 +343,15 @@ pub fn chunk_offsets(poly: u64, data: &[u8]) -> Vec<(usize, usize)> {
     if c.pending_len() > 0 {
         out.push((start, c.pending_len()));
     }
-    out
+    Ok(out)
 }
 
 /// Slice view of [`chunk_offsets`].
-pub fn chunk(poly: u64, data: &[u8]) -> Vec<&[u8]> {
-    chunk_offsets(poly, data)
+pub fn chunk(poly: u64, data: &[u8]) -> Result<Vec<&[u8]>, PolynomialError> {
+    Ok(chunk_offsets(poly, data)?
         .into_iter()
         .map(|(off, len)| &data[off..off + len])
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -524,6 +574,21 @@ mod tests {
         assert!(Chunker::new(0x1234).is_err()); // not degree 53
     }
 
+    /// T-02 acceptance: the free functions must return the typed error for a
+    /// user-supplied reducible polynomial instead of `.expect()`-panicking
+    /// mid-scan (the daemon accepts `--poly HEX16` from the CLI).
+    #[test]
+    fn free_functions_return_typed_error_on_reducible_polynomial() {
+        // Reducible (divisible by x): monic degree 53 but zero constant term.
+        let bad = 1u64 << 53;
+        let err = chunk_offsets(bad, b"hello ferry").unwrap_err();
+        assert_eq!(err.0, bad, "the error names the offending polynomial");
+        assert!(matches!(chunk(bad, &[1, 2, 3]), Err(PolynomialError(p)) if p == bad));
+        // A valid poly still chunks fine through the same entry points.
+        let good = test_poly(41);
+        assert!(chunk_offsets(good, b"hello ferry").is_ok());
+    }
+
     // --- Cut decision and clamping order ---
 
     #[test]
@@ -566,9 +631,9 @@ mod tests {
 
     #[test]
     fn empty_input_yields_zero_chunks() {
-        let offs = chunk_offsets(test_poly(21), &[]);
+        let offs = chunk_offsets(test_poly(21), &[]).unwrap();
         assert!(offs.is_empty());
-        assert!(chunk(test_poly(21), &[]).is_empty());
+        assert!(chunk(test_poly(21), &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -576,7 +641,7 @@ mod tests {
         let p = test_poly(22);
         for size in [1usize, 2, 63, 64, 65, 4096, MIN_SIZE - 1] {
             let data = prng_bytes(size as u64, size);
-            let ch = chunk(p, &data);
+            let ch = chunk(p, &data).unwrap();
             assert_eq!(ch.len(), 1, "size {size}");
             assert_eq!(ch[0], &data[..]);
         }
@@ -586,7 +651,7 @@ mod tests {
     fn exactly_min_is_one_chunk() {
         let p = test_poly(23);
         let data = prng_bytes(99, MIN_SIZE);
-        let ch = chunk(p, &data);
+        let ch = chunk(p, &data).unwrap();
         assert_eq!(ch.len(), 1);
         assert_eq!(ch[0].len(), MIN_SIZE);
     }
@@ -597,7 +662,7 @@ mod tests {
         // full, so every natural cut lands at exactly MIN_SIZE.
         let p = test_poly(24);
         let data = vec![0u8; MIN_SIZE * 4 + 12345];
-        let ch = chunk(p, &data);
+        let ch = chunk(p, &data).unwrap();
         assert_eq!(ch.len(), 5);
         for c in &ch[..4] {
             assert_eq!(c.len(), MIN_SIZE);
@@ -633,7 +698,7 @@ mod tests {
         ];
         for (i, size) in sizes.iter().enumerate() {
             let data = prng_bytes(1000 + i as u64, *size);
-            let parts = chunk(p, &data);
+            let parts = chunk(p, &data).unwrap();
             // Reassembly is byte-identical.
             let rejoined: Vec<u8> = parts.concat();
             assert_eq!(rejoined, data, "round trip failed at size {size}");
@@ -670,7 +735,7 @@ mod tests {
         let data = prng_bytes(27, MIN_SIZE * 2 + 4096);
 
         // Bulk.
-        let bulk = chunk_offsets(p, &data);
+        let bulk = chunk_offsets(p, &data).unwrap();
 
         // Streaming byte by byte through a fresh chunker.
         let mut c = Chunker::new(p).unwrap();
@@ -694,8 +759,8 @@ mod tests {
     fn chunking_is_deterministic_per_polynomial() {
         let p = test_poly(28);
         let data = prng_bytes(29, MIN_SIZE * 3 + 11);
-        let a = chunk_offsets(p, &data);
-        let b = chunk_offsets(p, &data);
+        let a = chunk_offsets(p, &data).unwrap();
+        let b = chunk_offsets(p, &data).unwrap();
         assert_eq!(a, b);
     }
 
@@ -706,8 +771,8 @@ mod tests {
         assert_ne!(pa, pb);
         let data = prng_bytes(33, MIN_SIZE * 4);
         assert_ne!(
-            chunk_offsets(pa, &data),
-            chunk_offsets(pb, &data),
+            chunk_offsets(pa, &data).unwrap(),
+            chunk_offsets(pb, &data).unwrap(),
             "two unrelated degree-53 polynomials agreeing on 4 MiB of cuts \
              would indicate broken fingerprinting"
         );
@@ -727,8 +792,8 @@ mod tests {
         let c: Vec<u8> = (0..4 * 1024 * 1024).map(|_| rng.gen()).collect();
 
         let total = 12 * 1024 * 1024;
-        let a = chunk_offsets(poly, &[p1.as_slice(), c.as_slice()].concat());
-        let b = chunk_offsets(poly, &[p2.as_slice(), c.as_slice()].concat());
+        let a = chunk_offsets(poly, &[p1.as_slice(), c.as_slice()].concat()).unwrap();
+        let b = chunk_offsets(poly, &[p2.as_slice(), c.as_slice()].concat()).unwrap();
 
         // Boundaries expressed as distance-from-end are prefix-independent.
         let ends_a: std::collections::HashSet<usize> = a.iter().map(|(o, _)| total - o).collect();

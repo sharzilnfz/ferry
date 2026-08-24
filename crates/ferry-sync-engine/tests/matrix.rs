@@ -64,13 +64,13 @@ struct Dev {
     tree: PathBuf,
     state: PathBuf,
     dev: [u8; 32],
-    poly: u64,
+    poly: ferry_store::chunker::ValidatedPoly,
     parent: [u8; 32],
     clock: i64,
 }
 
 impl Dev {
-    fn new(tag: i64, dev: [u8; 32], poly: u64) -> Dev {
+    fn new(tag: i64, dev: [u8; 32], poly: ferry_store::chunker::ValidatedPoly) -> Dev {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let store_root = root.join("store");
@@ -110,8 +110,8 @@ fn fmk() -> [u8; 32] {
     core::array::from_fn(|i| (i * 13 + 1) as u8)
 }
 
-fn poly(seed: u64) -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut rand::rngs::StdRng::seed_from_u64(seed))
+fn poly(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(seed))
 }
 
 fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {

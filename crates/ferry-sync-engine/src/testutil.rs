@@ -4,7 +4,6 @@
 
 #![cfg(test)]
 
-use ferry_store::chunker::generate_polynomial;
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
@@ -16,8 +15,8 @@ pub fn fmk() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| (i * 11 + 5) as u8)
 }
 
-pub fn poly_of(seed: u64) -> u64 {
-    generate_polynomial(&mut StdRng::seed_from_u64(seed))
+pub fn poly_of(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
 }
 
 pub fn identity(device_id: [u8; 32], at: (i64, u32), parent: [u8; 32]) -> SnapshotIdentity {
@@ -74,14 +73,14 @@ pub struct Device {
     pub tree: PathBuf,
     pub state_dir: PathBuf,
     pub device_id: [u8; 32],
-    pub poly: u64,
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub parent: [u8; 32],
     pub clock: i64,
 }
 
 impl Device {
     /// A device rooted in its own temp dir: `store/`, `tree/`, `state/`.
-    pub fn new(tag: u8, device_id: [u8; 32], poly: u64) -> Device {
+    pub fn new(tag: u8, device_id: [u8; 32], poly: ferry_store::chunker::ValidatedPoly) -> Device {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let store_root = root.join("store");

@@ -64,8 +64,9 @@ pub struct EngineConfig {
     /// The synced working tree (created if missing).
     pub tree_dir: PathBuf,
     /// Folder chunker polynomial — MUST match the peer's or CDC boundaries
-    /// diverge. Generate once with `ferry-sync genpoly`.
-    pub poly: u64,
+    /// diverge. Generate once with `ferry-sync genpoly`. Validated at
+    /// config-load; an invalid value is a config error, never a mid-scan panic.
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub poll_interval: Duration,
     pub opportunistic_every: u32,
@@ -93,7 +94,9 @@ impl EngineConfig {
             tag: "test-node".into(),
             store_dir: PathBuf::from(".ferry-sync-test-store"),
             tree_dir: PathBuf::from(".ferry-sync-test-tree"),
-            poly: ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(poly_seed)),
+            poly: ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(
+                poly_seed,
+            )),
             folder_id: crate::DEFAULT_FOLDER_ID,
             poll_interval: Duration::from_millis(50),
             opportunistic_every: 3,
