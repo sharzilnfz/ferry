@@ -1,6 +1,6 @@
 # T-17: Windows correctness — colon/prefix path components rejected + exec-bit CI fix
 
-Status: ready-for-agent
+Status: done
 
 Two Windows defects; both testable from any host (pure validation logic) or
 gated correctly:
@@ -32,3 +32,24 @@ Acceptance: new colon/prefix rejection tests green on macOS (this host);
 existing store/materialize suites green; reasoning recorded here that the
 windows job goes green — verified on next CI run after merge (note it, do not
 block local acceptance on it).
+
+## Resolution (T-17, wave2/t17)
+
+Both validators now refuse colon-bearing and prefixed/absolute components:
+`c.contains(':')` plus a stable stand-in for nightly-only `Path::prefix`
+(first parsed component must be `Component::Normal`, which catches `C:x`,
+`C:\x`, `/abs`, `\x` wherever Windows path parsing applies). Pure string
+logic, so tests run on every host. Previously-rejected inputs keep their
+error kinds (`BadComponent` in materialize's `validate_components`,
+`InvalidName` in store's `validate_name`). UNC names (`\\s\share`) are
+host-dependent at the store layer (on unix `\` is an ordinary byte) but are
+caught unconditionally by materialize's backslash rule.
+
+Windows job goes green because: (a) the failing snapshot test no longer
+asserts `run.exec` off-unix (NTFS cannot store it; entry presence + payload
+still verified), matching convention 3fe146f/caf4f95; (b) the new rejections
+are OS-independent asserts that pass identically on windows-2022. To be
+confirmed on next CI run post-merge.
+
+Local gates: fmt clean; clippy --workspace --all-targets -D warnings clean;
+cargo test --workspace 497 passed / 0 failed (baseline 496 + 1).

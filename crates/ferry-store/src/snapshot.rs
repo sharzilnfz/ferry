@@ -611,7 +611,16 @@ mod tests {
         );
 
         let run = root.entries.iter().find(|e| e.name == "run.sh").unwrap();
-        assert!(run.exec, "exec bit maps to flags bit 0");
+        // Non-unix filesystems cannot store the exec bit (carried in
+        // manifests, not enforced on disk — convention from 3fe146f), so
+        // only unix can verify the flag mapping; elsewhere presence and
+        // payload are what the snapshot can honestly promise.
+        if cfg!(unix) {
+            assert!(run.exec, "exec bit maps to flags bit 0");
+        }
+        let EntryPayload::File { .. } = &run.payload else {
+            panic!("run.sh must be a file");
+        };
 
         let notes = root.entries.iter().find(|e| e.name == "notes.md").unwrap();
         assert_eq!(notes.mtime_sec, 1_700_000_000);

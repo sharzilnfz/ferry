@@ -142,6 +142,34 @@ mod tests {
     }
 
     #[test]
+    fn colon_or_prefixed_names_rejected() {
+        // Pure string logic: these must fail on every host. On Windows,
+        // PathBuf::push with a prefixed component replaces the whole base,
+        // so "C:evil" would escape the synced root via abs_under.
+        // ("\\server\share" style UNC paths are additionally caught by the
+        // backslash rule in materialize's validate_components; here they are
+        // ordinary bytes on unix, where '\' is not a separator.)
+        for bad in ["C:x", "C:\\x", "a:b", "C:", "/abs"].map(str::to_string) {
+            let e = TreeEntry {
+                name: bad.clone(),
+                exec: false,
+                mtime_sec: 0,
+                mtime_nsec: 0,
+                payload: EntryPayload::File {
+                    size: 0,
+                    chunks: vec![],
+                },
+            };
+            assert!(validate_name(&bad).is_err(), "name {bad:?} must be refused");
+            assert!(validate_entry(&e).is_err(), "entry {bad:?} must be refused");
+            assert!(
+                matches!(validate_name(&bad), Err(ManifestError::InvalidName(_))),
+                "name {bad:?} must be refused as InvalidName"
+            );
+        }
+    }
+
+    #[test]
     fn names_are_nfc_normalized_on_write_and_validated_on_read() {
         // Decomposed: e + combining acute.
         let decomposed = "cafe\u{301}";
@@ -462,9 +490,24 @@ fn expect_valid(e: &TreeEntry) {
 }
 
 /// Name rules from "Conventions": single component, no '/', no NUL, never
-/// "." or "..", NFC normalization.
+/// "." or "..", NFC normalization. Colon-bearing or path-prefixed components
+/// ("C:x", "C:\\x", "\\x") are refused on every host: on Windows,
+/// `PathBuf::push` with a prefixed component replaces the whole base, so a
+/// remote entry could escape the synced root (T-17).
 pub fn validate_name(name: &str) -> Result<(), ManifestError> {
-    if name.contains('/') || name.contains('\0') || name == "." || name == ".." {
+    if name.contains('/')
+        || name.contains('\0')
+        || name == "."
+        || name == ".."
+        || name.contains(':')
+        // Stable stand-in for the nightly-only Path::prefix: any leading
+        // Prefix/RootDir/CurDir component means the name is not a plain
+        // single component.
+        || !matches!(
+            std::path::Path::new(name).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
         return Err(ManifestError::InvalidName(name.to_string()));
     }
     let nfc: String = name.nfc().collect();
