@@ -23,8 +23,10 @@
 //! removed by an explicit command or overwritten by a new `start`.
 //!
 //! pid liveness is `kill(pid, 0)` on unix (EPERM counts as alive: the
-//! process exists under another owner). pid 0 means "unknown" and is
-//! treated as alive so tests and non-unix platforms degrade to active.
+//! process exists under another owner) and OpenProcess+GetExitCodeProcess
+//! on windows (open failure with ACCESS_DENIED counts as alive for the
+//! same reason; exit code 259 STILL_ACTIVE means alive). pid 0 means
+//! "unknown" and is treated as alive so tests degrade to active.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -92,7 +94,36 @@ fn pid_alive(pid: u32) -> bool {
         let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
         rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const STILL_ACTIVE: u32 = 259;
+
+        // Safety: a query-only handle; never used to signal or terminate,
+        // and closed on every path before returning.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle == 0 {
+            // Access denied mirrors unix EPERM: a process we are not allowed
+            // to inspect might be alive, so count it as alive. Any other
+            // open failure (invalid pid, reaped process) means gone.
+            return std::io::Error::last_os_error().raw_os_error()
+                == Some(ERROR_ACCESS_DENIED as i32);
+        }
+        let mut exit_code: u32 = 0;
+        let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+        unsafe { CloseHandle(handle) };
+        if queried == 0 {
+            return false; // vanished between open and query
+        }
+        // Known caveat: a process that exited WITH code 259 reads as alive.
+        // Same class of imprecision as unix EPERM-means-alive; acceptable
+        // for stale-pin surfacing (a wrong 'alive' heals on release).
+        exit_code == STILL_ACTIVE
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         true
