@@ -26,6 +26,8 @@
 //! with a single empty `ITEM_BATCH` terminator and returns to listening.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write as _;
+use std::path::Path;
 use std::sync::Arc;
 
 use rand::rngs::OsRng;
@@ -242,6 +244,7 @@ fn abort<S: ByteStream>(
             ProtoError::FrameTooLarge { .. } | ProtoError::CounterExhausted => {
                 ByeReason::ResourceLimit
             }
+            ProtoError::ResourceLimit { .. } => ByeReason::ResourceLimit,
             _ => ByeReason::Internal,
         };
         let _ = sess.send_frame_best_effort(codec::MSG_BYE, Bye { reason }.encode());
@@ -620,6 +623,30 @@ type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 /// BFS round guard for remote tree walks.
 const MAX_BFS_ROUNDS: usize = 64;
+
+// Session-wide RECEIVE budgets (T-016). Individual frames are capped by the
+// codec; these bound SEQUENCE-level loops so a hostile or corrupted peer can
+// neither pin memory nor run a receive loop forever. Each is a pure
+// receive-side guard — senders are untouched, so the wire format is
+// unchanged and both sides enforce symmetric limits.
+
+/// Total advert rows accepted for ONE folder across every `more=1` frame of
+/// its announcement. Legit stores advertise one row per indexed blob,
+/// chunked into [`IndexAdvert::MAX_ROWS`] (2048)-row frames; 262 144 rows
+/// (~128 full frames) sits far above any real folder today while bounding
+/// the receive map to tens of MB worst case.
+pub(crate) const MAX_ADVERT_ROWS_TOTAL: usize = 262_144;
+
+/// `ITEM_BATCH` frames read per `REQUEST_ITEMS` round. A conforming server
+/// answers with at most `ceil(MAX_REQUEST_ITEMS / MAX_BATCH_ITEMS)` = 1 data
+/// frame plus the terminator; 1 024 leaves >500× headroom while bounding any
+/// single round to ~512 Ki received items.
+const MAX_BATCHES_PER_ROUND: usize = 1_024;
+
+/// Frames read per `REQUEST_PACKS` round. A conforming server sends at most
+/// `MAX_REQUEST_PACKS` (128) `PACK_ITEM` frames plus one terminator batch;
+/// 1 024 leaves ~8× headroom for future multi-frame pack encodings.
+const MAX_PACK_FRAMES_PER_ROUND: usize = 1_024;
 
 fn now_secs_nsecs() -> (i64, u32) {
     let now = std::time::SystemTime::now()
@@ -1057,12 +1084,26 @@ fn nonzero_manifest(id: BlobId) -> Option<BlobId> {
     }
 }
 
-/// Read one folder's advert sequence (until a more=0 frame).
-fn recv_advert_map<S: ByteStream>(sess: &mut Session<'_, S>) -> Result<AdvertMap, ProtoError> {
+/// Read one folder's advert sequence (until a more=0 frame), bounded by
+/// [`MAX_ADVERT_ROWS_TOTAL`] so a peer streaming endless more=1 frames fails
+/// with a typed resource limit instead of growing the map forever.
+pub(crate) fn recv_advert_map<S: ByteStream>(
+    sess: &mut Session<'_, S>,
+) -> Result<AdvertMap, ProtoError> {
     let mut map = AdvertMap::new();
+    let mut rows = 0usize;
     loop {
         let fb = sess.expect_frame(codec::MSG_INDEX_ADVERT)?;
         let adv = IndexAdvert::parse(&fb.payload)?;
+        // Count RAW rows, not distinct ids: duplicates collapse in the map,
+        // but the receive cost (parse + insert) was paid regardless.
+        rows += adv.entries.len();
+        if rows > MAX_ADVERT_ROWS_TOTAL {
+            return Err(ProtoError::ResourceLimit {
+                what: "advert rows for one folder",
+                limit: MAX_ADVERT_ROWS_TOTAL,
+            });
+        }
         for e in adv.entries {
             map.insert(e.id, e);
         }
@@ -1159,7 +1200,15 @@ fn read_item_batches<S: ByteStream>(
     rejections: &mut usize,
 ) -> Result<BTreeSet<BlobId>, ProtoError> {
     let mut got = BTreeSet::new();
+    let mut batches = 0usize;
     loop {
+        batches += 1;
+        if batches > MAX_BATCHES_PER_ROUND {
+            return Err(ProtoError::ResourceLimit {
+                what: "item batches in one request round",
+                limit: MAX_BATCHES_PER_ROUND,
+            });
+        }
         let fb = sess.expect_frame(codec::MSG_ITEM_BATCH)?;
         let batch = ItemBatch::parse(&fb.payload)?;
         if batch.items.is_empty() {
@@ -1219,7 +1268,15 @@ fn fetch_via_packs<S: ByteStream>(
             }
             .encode()?,
         )?;
+        let mut frames = 0usize;
         loop {
+            frames += 1;
+            if frames > MAX_PACK_FRAMES_PER_ROUND {
+                return Err(ProtoError::ResourceLimit {
+                    what: "frames in one pack request round",
+                    limit: MAX_PACK_FRAMES_PER_ROUND,
+                });
+            }
             let fb = sess.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
             if fb.msg_type == codec::MSG_PACK_ITEM {
                 let item = PackItem::parse(&fb.payload)?;
@@ -1255,19 +1312,71 @@ fn fetch_via_packs<S: ByteStream>(
 
 /// Write a received pack into the store under its verified name (temp +
 /// rename), then fold its locations into the index via rebuild.
-fn ingest_pack(store: &Arc<Store>, bytes: &[u8]) -> Result<BlobId, ProtoError> {
+///
+/// Durability discipline mirrors ferry-materialize's `write_temp_then_rename`
+/// (T-005): the temp name carries pid + fresh entropy so two processes
+/// pulling the same pack — CLI sync while the daemon runs is a supported
+/// topology — never share one temp file; bytes are written with
+/// `File::create` + `write_all` + `sync_all` BEFORE the rename, so a crash
+/// never leaves torn pack bytes under a valid BLAKE3 name; the rename is
+/// atomic; and the packs dir is fsynced where the platform allows. Any
+/// handled failure removes our temp file. Crash residue in `tmp/` is
+/// reclaimed by ticket 20's startup sweeper, not here.
+pub(crate) fn ingest_pack(store: &Arc<Store>, bytes: &[u8]) -> Result<BlobId, ProtoError> {
     let name = *blake3::hash(bytes).as_bytes();
     let packs_dir = store.store_dir().join("packs");
     let dest = packs_dir.join(format!("{}.pack", hex(&name)));
     if !dest.exists() {
+        // Same filesystem as `packs` (both under store_dir): atomic rename.
         let tmp_dir = store.store_dir().join("tmp");
         std::fs::create_dir_all(&tmp_dir).map_err(ProtoError::Io)?;
-        let tmp = tmp_dir.join(format!("pull-{}", hex(&name)));
-        std::fs::write(&tmp, bytes).map_err(ProtoError::Io)?;
-        std::fs::rename(&tmp, &dest).map_err(ProtoError::Io)?;
+        let tmp = tmp_dir.join(format!(
+            "pull-{}-{}.{}.tmp",
+            hex(&name),
+            std::process::id(),
+            fresh_entropy_hex()
+        ));
+        let written = (|| -> std::io::Result<()> {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()
+        })();
+        match written.and_then(|()| std::fs::rename(&tmp, &dest)) {
+            Ok(()) => fsync_dir(&packs_dir).map_err(ProtoError::Io)?,
+            Err(e) => {
+                // Never leave our temp behind on a handled failure.
+                let _ = std::fs::remove_file(&tmp);
+                return Err(ProtoError::Io(e));
+            }
+        }
         store.rebuild_index().map_err(store_err)?;
     }
     Ok(name)
+}
+
+/// Fresh entropy tail for one temp-file name (8 lowercase hex chars),
+/// mirroring ferry-materialize's `fresh_entropy`.
+fn fresh_entropy_hex() -> String {
+    use rand::RngCore;
+    use std::fmt::Write as _;
+    let mut b = [0u8; 4];
+    OsRng.fill_bytes(&mut b);
+    b.iter().fold(String::new(), |mut out, x| {
+        let _ = write!(out, "{x:02x}");
+        out
+    })
+}
+
+/// Flush a directory entry to disk where the platform allows opening
+/// directories for reading (POSIX); elsewhere the rename alone is accepted.
+#[cfg(unix)]
+fn fsync_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn fsync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Full pull of one folder's content from the peer.

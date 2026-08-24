@@ -1,6 +1,6 @@
 # T-16: Protocol hardening — session-wide receive budgets + crash-safe pack ingest
 
-Status: ready-for-agent
+Status: done
 
 Two audit findings in crates/ferry-proto/src/engine.rs:
 
