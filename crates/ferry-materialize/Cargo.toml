@@ -6,12 +6,15 @@ license.workspace = true
 
 [dependencies]
 ferry-store = { path = "../ferry-store" }
+ferry-platform = { path = "../ferry-platform" }
 blake3 = "1.5"
 rand = "0.8"
 thiserror = "2"
 
+# unix only: symlink mtime restoration via utimensat(AT_SYMLINK_NOFOLLOW);
+# std cannot set times on a link itself (see apply::set_symlink_times).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
-
-[target.'cfg(unix)'.dev-dependencies]
-libc = "0.2"

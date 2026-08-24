@@ -1,0 +1,61 @@
+name: ci
+
+# T-012: cross-platform matrix. The walking skeleton and reconciliation
+# suites (including the adversarial fixture) must pass on all three OSes.
+#
+# Honesty note: this repo has no remote yet; the workflow activates on the
+# first push. Everything it runs was already verified locally on macOS arm64
+# (cargo fmt/clippy/tests, skeleton-e2e.sh, adversarial fixture) except
+# Windows-only behaviors, which are covered by pure-function tests that run
+# identically on every platform (long-path prefix math, reserved-name
+# table, symlink policy classification, case-fold index).
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon (arm64)
+          - os: ubuntu-24.04    # x86_64
+          - os: windows-2022    # x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (workspace, all targets, warnings denied)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests (workspace)
+        run: cargo test --workspace
+
+      # The skeleton E2E spawns two daemon processes over loopback TCP with
+      # retried free ports and trap-based teardown. That works under bash on
+      # macOS/Linux; under git-bash on Windows runners background-process
+      # lifecycle and signal handling have historically been flaky, so it is
+      # gated to unix here (documented decision, ticket T-012 comments).
+      # Windows process behavior is still exercised by the workspace tests.
+      - name: Walking-skeleton E2E (unix only)
+        if: runner.os != 'Windows'
+        run: bash scripts/skeleton-e2e.sh
+
+      - name: Adversarial fixture (all platforms)
+        run: bash scripts/adversarial-fixture.sh

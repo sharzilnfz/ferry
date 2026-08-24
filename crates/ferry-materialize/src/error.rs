@@ -124,6 +124,34 @@ pub enum MaterializeError {
     #[error("live tree diverged from the expected base state; nothing was modified:\n{}",
         paths.iter().map(|p| format!("  - {p}")).collect::<Vec<_>>().join("\n"))]
     Diverged { paths: Vec<Divergence> },
+    #[error(
+        "refusing stored name {path}: {component:?} is a reserved Windows device name \
+         (CON, PRN, AUX, NUL, COM1-9, LPT1-9 with any extension); rename the entry on the \
+         source device, e.g. add a prefix like `data-`"
+    )]
+    ReservedName { path: String, component: String },
+    #[error("{path}: symlink target {target:?} — {reason}")]
+    SymlinkRefused {
+        path: String,
+        target: String,
+        reason: ferry_platform::LinkRefusal,
+    },
+    #[error(
+        "{path}: directory symlinks/junctions are disabled on Windows because creating \
+         them requires developer mode or admin rights; set FERRY_ALLOW_WINDOWS_DIR_LINKS=1 \
+         to opt in (documented developer-mode flag)"
+    )]
+    WindowsDirLinkRefused { path: String },
+    #[error(
+        "manifest contains case-conflicting siblings under {parent}: {first:?} and \
+         {second:?} cannot coexist on this filesystem; rename one of them (ferry never \
+         picks silently)"
+    )]
+    CaseCollision {
+        parent: String,
+        first: String,
+        second: String,
+    },
 }
 
 /// Wrap an io error with the path it happened at.

@@ -20,8 +20,10 @@
 //!   design;
 //! - symlink targets are content; link mtimes are restored via
 //!   `utimensat(AT_SYMLINK_NOFOLLOW)` because std cannot open a link itself
-//!   without following it. cfg(unix): non-unix builds refuse symlinks
-//!   loudly instead of silently mis-syncing them (T-012 owns Windows).
+//!   without following it. Since T-012 the implementation lives in
+//!   ferry-materialize (`set_symlink_times`) and is shared from there;
+//!   non-unix builds refuse symlinks loudly instead of silently
+//!   mis-syncing them.
 //!
 //! Empty files have zero chunks and materialize as empty files; nothing is
 //! fetched from the store for them (the store refuses empty blobs).
@@ -328,34 +330,16 @@ fn upsert_symlink(_path: &Path, _target: &str, _mtime: (i64, u32)) -> Result<(),
     ))
 }
 
-/// std cannot touch a symlink's own times (any open follows the link), so
-/// drop to utimensat with AT_SYMLINK_NOFOLLOW. unix-only; see module docs.
+/// std cannot touch a symlink's own times (any open follows the link).
+/// Implementation shared with ferry-materialize since T-012.
 #[cfg(unix)]
 fn set_symlink_times(path: &Path, (sec, nsec): (i64, u32)) -> Result<(), MaterializeError> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let c = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| MaterializeError::Unsupported("path contains NUL"))?;
-    let ts = libc::timespec {
-        tv_sec: sec as libc::time_t,
-        tv_nsec: nsec as libc::c_long,
-    };
-    let times = [ts, ts];
-    // SAFETY: path is NUL-terminated; times points at two initialized
-    // timespecs. Effect limited to updating timestamps of the link itself.
-    let rc = unsafe {
-        libc::utimensat(
-            libc::AT_FDCWD,
-            c.as_ptr(),
-            times.as_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if rc != 0 {
-        return Err(io(path, std::io::Error::last_os_error()));
-    }
-    Ok(())
+    ferry_materialize::set_symlink_times(path, sec, nsec).map_err(|e| match e {
+        ferry_materialize::MaterializeError::Io { path, source } => {
+            MaterializeError::Io { path, source }
+        }
+        _ => MaterializeError::Unsupported("symlink mtime restoration failed"),
+    })
 }
 
 fn set_regular_times(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {

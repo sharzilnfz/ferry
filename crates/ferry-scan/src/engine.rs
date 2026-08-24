@@ -21,8 +21,6 @@
 //! visible and emits [`ScanEvent::Failed`] instead.
 
 use std::collections::{BTreeSet, VecDeque};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
@@ -865,7 +863,7 @@ fn sweep_dir(
         return;
     };
     let mut names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
-    names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
     for name in names {
         let Some(component) = name.to_str().map(|s| s.nfc().collect::<String>()) else {
             continue;
@@ -887,7 +885,7 @@ fn sweep_dir(
                 sweep_dir(disk_root, &child_rel, cache, ignore, out);
             }
         } else if ft.is_file() {
-            let exec = meta.permissions().mode() & 0o111 != 0;
+            let exec = live_exec_bit(&meta);
             let name_str = child_rel.last().expect("non-empty").as_str();
             let matches = cache.child_entry(rel, name_str).is_some_and(|prev| {
                 matches!(&prev.payload, EntryPayload::File { size, .. } if
@@ -907,26 +905,33 @@ fn sweep_dir(
     }
 }
 
-#[cfg(unix)]
+/// Poll-sweep mtime/exec probes, cross-platform (T-012): `modified()` plus
+/// the shared exec-bit rule; hosts without POSIX mode bits read exec false.
+fn live_exec_bit(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
 fn meta_mtime_sec(meta: &std::fs::Metadata) -> i64 {
-    use std::os::unix::fs::MetadataExt;
-    meta.mtime()
+    meta.modified()
+        .map(ferry_platform::split_unix)
+        .unwrap_or((0, 0))
+        .0
 }
 
-#[cfg(unix)]
 fn meta_mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-    use std::os::unix::fs::MetadataExt;
-    u32::try_from(meta.mtime_nsec()).unwrap_or(0)
-}
-
-#[cfg(not(unix))]
-fn meta_mtime_sec(_m: &std::fs::Metadata) -> i64 {
-    0
-}
-
-#[cfg(not(unix))]
-fn meta_mtime_nsec(_m: &std::fs::Metadata) -> u32 {
-    0
+    meta.modified()
+        .map(ferry_platform::split_unix)
+        .unwrap_or((0, 0))
+        .1
 }
 
 #[cfg(test)]

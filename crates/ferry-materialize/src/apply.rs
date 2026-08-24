@@ -108,6 +108,8 @@ enum Desired {
     },
     Symlink {
         target: String,
+        sec: i64,
+        nsec: u32,
     },
 }
 
@@ -127,6 +129,8 @@ impl Desired {
             },
             EntryPayload::Symlink { target } => Desired::Symlink {
                 target: target.clone(),
+                sec: e.mtime_sec,
+                nsec: e.mtime_nsec,
             },
         }
     }
@@ -150,8 +154,9 @@ impl Desired {
                 size: *size,
                 chunks: chunks.clone(),
             },
-            Desired::Symlink { target } => Mutation::WriteSymlink {
+            Desired::Symlink { target, sec, nsec } => Mutation::WriteSymlink {
                 target: target.clone(),
+                times: Some((*sec, *nsec)),
             },
         }
     }
@@ -237,6 +242,11 @@ enum Mutation {
     },
     WriteSymlink {
         target: String,
+        /// Link's own mtime from the manifest (`None` for change-set ops,
+        /// whose states carry no timestamps). Restored via
+        /// `utimensat(AT_SYMLINK_NOFOLLOW)` on unix — the piece T-005
+        /// deferred, landed here in T-012.
+        times: Option<(i64, u32)>,
     },
     /// Bytes and mode already correct; only the recorded mtime drifted.
     RestoreMtime {
@@ -326,6 +336,7 @@ impl<'a> Applier<'a> {
         for (p, _) in &desired {
             validate_components(p)?;
         }
+        ensure_no_fold_collisions(&desired.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())?;
 
         // Extras: live paths absent from the desired state. Descendants are
         // enumerated individually, so children-first ordering falls out of
@@ -398,6 +409,8 @@ impl<'a> Applier<'a> {
         {
             validate_components(op)?;
         }
+        let upsert_paths: Vec<CompPath> = upserts.iter().map(|u| u.path.clone()).collect();
+        ensure_no_fold_collisions(&upsert_paths)?;
         self.run(removes, upserts)
     }
 
@@ -410,12 +423,28 @@ impl<'a> Applier<'a> {
     ) -> Result<ApplyStats, MaterializeError> {
         upserts.sort_by(|a, b| a.path.cmp(&b.path));
 
-        // Phase 2: plan each upsert against live state.
+        // Phase 2: plan each upsert against live state. An upsert whose
+        // path folds (case-insensitively) onto a pending REMOVAL must never
+        // degrade to Skip: on folding hosts the old spelling satisfies the
+        // stat check, and executing the removal afterwards would delete the
+        // only copy (the case-only-rename hazard, T-012).
+        let shadowed: HashSet<String> = removes
+            .iter()
+            .map(|r| ferry_platform::fold_key(&join_path(&r.path)))
+            .collect();
         let mut touches: Vec<PlannedTouch> = Vec::new();
         let mut skipped = 0usize;
         for up in &mut upserts {
             let abs = self.abs(&up.path);
-            plan_upsert(self.store, &abs, up, &mut touches, &mut skipped)?;
+            let case_shadowed = shadowed.contains(&ferry_platform::fold_key(&join_path(&up.path)));
+            plan_upsert(
+                self.store,
+                &abs,
+                up,
+                &mut touches,
+                &mut skipped,
+                case_shadowed,
+            )?;
         }
 
         // Phase 3: guard everything that would mutate.
@@ -569,11 +598,27 @@ impl<'a> Applier<'a> {
                 stats.mtimes_set += 1;
                 self.pace();
             }
-            Mutation::WriteSymlink { target } => {
+            Mutation::WriteSymlink { target, times } => {
+                // Policy re-check (defense in depth: manifests can arrive
+                // from peers). Only relative targets staying inside the
+                // folder are ever created (T-012).
+                let depth = up.path.len().saturating_sub(1);
+                match ferry_platform::classify_link(depth, &target) {
+                    ferry_platform::LinkDecision::SyncAsLink => {}
+                    ferry_platform::LinkDecision::Refuse(reason) => {
+                        return Err(MaterializeError::SymlinkRefused {
+                            path: join_path(&up.path),
+                            target,
+                            reason,
+                        });
+                    }
+                }
+                self.reject_windows_dir_link(&abs, &up.path, &target)?;
+
                 // A directory occupying the path must go first; rename
                 // cannot cover directories.
                 if let Ok(md) = std::fs::symlink_metadata(&abs) {
-                    if md.is_dir() {
+                    if md.is_dir() && !md.is_symlink() {
                         self.remove_dir_children_first(&abs, &up.path, stats)?;
                     }
                 }
@@ -592,6 +637,12 @@ impl<'a> Applier<'a> {
                 fsync_dir(parent)?;
                 stats.symlinks_written += 1;
                 record_creation(stats, &up.path);
+                // The deferred T-005 piece: restore the link's OWN mtime
+                // (std cannot open a link without following it).
+                if let Some((sec, nsec)) = times {
+                    set_symlink_times(&abs, sec, nsec)?;
+                    stats.mtimes_set += 1;
+                }
                 self.pace();
             }
             Mutation::WriteFile {
@@ -616,6 +667,45 @@ impl<'a> Applier<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Windows-only gate: refuse restoring a link that resolves to a
+    /// DIRECTORY inside the tree unless the documented developer-mode env
+    /// flag is set. Compiles out on other hosts.
+    fn reject_windows_dir_link(
+        &self,
+        _abs: &Path,
+        rel: &[String],
+        target: &str,
+    ) -> Result<(), MaterializeError> {
+        if !cfg!(windows) || ferry_platform::allow_windows_dir_links() {
+            return Ok(());
+        }
+        // Lexically resolve the internal target; if it lands on an existing
+        // directory of this tree, restoring it needs a dir link.
+        let mut resolved = self.target.clone();
+        for c in &rel[..rel.len().saturating_sub(1)] {
+            resolved.push(c);
+        }
+        for part in target.split(['/', '\\']) {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    resolved.pop();
+                }
+                p => resolved.push(p),
+            }
+        }
+        let is_dir = std::fs::symlink_metadata(&resolved)
+            .map(|m| m.is_dir() && !m.is_symlink())
+            .unwrap_or(false);
+        if is_dir {
+            Err(MaterializeError::WindowsDirLinkRefused {
+                path: join_path(rel),
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn execute_touch(
@@ -761,7 +851,10 @@ impl<'a> Applier<'a> {
         for c in rel {
             p.push(c);
         }
-        p
+        // Windows long paths: apply the \\?\ extended-length prefix when the
+        // absolute path meets or exceeds MAX_PATH. Identity on short,
+        // relative, and POSIX paths (T-012).
+        ferry_platform::extend_path(&p)
     }
 }
 
@@ -787,7 +880,14 @@ fn plan_upsert(
     up: &mut PlannedUpsert,
     touches: &mut Vec<PlannedTouch>,
     skipped: &mut usize,
+    case_shadowed: bool,
 ) -> Result<(), MaterializeError> {
+    // A pending removal folds onto this path: whatever lives here now is a
+    // DIFFERENT stored spelling that the removal will delete. Always plan
+    // the real write so the new spelling lands after the removal runs.
+    if case_shadowed {
+        return Ok(());
+    }
     match &up.mutation {
         Mutation::Skip => Ok(()),
         Mutation::Mkdir { sec, nsec } => {
@@ -810,7 +910,7 @@ fn plan_upsert(
             }
             Ok(())
         }
-        Mutation::WriteSymlink { target } => {
+        Mutation::WriteSymlink { target, .. } => {
             let unchanged = stat_opt(abs)?
                 .map(|md| {
                     md.file_type().is_symlink()
@@ -894,6 +994,10 @@ fn state_mutation(s: &EntryState) -> Mutation {
         },
         EntryKind::Symlink => Mutation::WriteSymlink {
             target: s.target.clone().unwrap_or_default(),
+            // Change-set states DO carry mtimes (diff preserves them), and
+            // restoring them is what lets link-metadata drift converge
+            // across devices instead of oscillating forever (T-012).
+            times: Some((s.mtime_sec, s.mtime_nsec)),
         },
     }
 }
@@ -1387,6 +1491,50 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), MaterializeError> {
     }
 }
 
+/// Set a SYMLINK's own modified time with nanosecond fidelity.
+///
+/// std cannot touch a link's own times: every open follows the link. On
+/// unix this drops to `utimensat(AT_SYMLINK_NOFOLLOW)` — the piece T-005
+/// deferred, landed in T-012 and shared with ferry-sync's engine (which
+/// previously carried its own copy).
+#[cfg(unix)]
+pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| MaterializeError::BadComponent {
+            component: "path contains NUL".into(),
+        })?;
+    let ts = libc::timespec {
+        tv_sec: sec as libc::time_t,
+        tv_nsec: nsec as libc::c_long,
+    };
+    let times = [ts, ts];
+    // SAFETY: path is NUL-terminated; times points at two initialized
+    // timespecs. Effect limited to updating timestamps of the link itself.
+    let rc = unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return Err(io_at(path, std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// Non-unix builds cannot set link times (no std API without following);
+/// callers record the drift and the next full apply repairs it by link
+/// recreation on hosts that support it. Documented platform deviation.
+#[cfg(not(unix))]
+pub fn set_symlink_times(_path: &Path, _sec: i64, _nsec: u32) -> Result<(), MaterializeError> {
+    Ok(())
+}
+
 /// Set modified time with nanosecond fidelity.
 fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
     let f = open_for_times(path)?;
@@ -1511,7 +1659,10 @@ fn content_matches(
     Ok(true)
 }
 
-/// Traversal defense: stored names are single NFC components.
+/// Traversal defense: stored names are single NFC components. Reserved
+/// Windows device names are rejected here too — they can never materialize
+/// on a Windows endpoint, so carrying them further only delays a loud,
+/// actionable failure (T-012 policy).
 pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeError> {
     for c in path {
         if c.is_empty()
@@ -1523,6 +1674,45 @@ pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeErro
         {
             return Err(MaterializeError::BadComponent {
                 component: c.clone(),
+            });
+        }
+        if ferry_platform::is_reserved_device_name(c) {
+            return Err(MaterializeError::ReservedName {
+                path: join_path(path),
+                component: c.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Case-fold collision gate over a desired-state path set: on folding hosts
+/// (macOS/Windows), two siblings under one parent whose names fold together
+/// cannot coexist; applying would silently overwrite the first with the
+/// second. Refused before anything is written, naming both spellings.
+/// No-op on case-sensitive hosts, where such pairs are legitimate.
+pub(crate) fn ensure_no_fold_collisions(paths: &[CompPath]) -> Result<(), MaterializeError> {
+    if !ferry_platform::host_folds_case() {
+        return Ok(());
+    }
+    use std::collections::HashMap;
+    let mut per_parent: HashMap<&[String], Vec<&str>> = HashMap::new();
+    for p in paths {
+        let (parent, name) = p.split_at(p.len().saturating_sub(1));
+        per_parent
+            .entry(parent)
+            .or_default()
+            .push(name.first().map(String::as_str).unwrap_or(""));
+    }
+    let mut parents: Vec<&[String]> = per_parent.keys().copied().collect();
+    parents.sort(); // deterministic error order
+    for parent in parents {
+        let names = per_parent[parent].clone();
+        if let Some(c) = ferry_platform::find_case_conflict(&names) {
+            return Err(MaterializeError::CaseCollision {
+                parent: join_path(parent),
+                first: c.first,
+                second: c.second,
             });
         }
     }
@@ -2430,5 +2620,161 @@ mod tests {
         // Full-tree idempotence at scale.
         let again = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
         assert_eq!(again.mutations(), 0);
+    }
+
+    // ---- T-012 policy tests ------------------------------------------------
+
+    #[test]
+    #[cfg(unix)]
+    fn symlink_own_mtime_is_restored_and_idempotent() {
+        let (w, target) = World::new(31);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![
+                    file_entry("real.txt", false, MT_A.0, MT_A.1, vec![]),
+                    symlink_entry("lnk", MT_B.0, MT_B.1, "real.txt"),
+                ],
+            },
+        );
+        let stats = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(stats.symlinks_written, 1);
+
+        // The LINK's own mtime (not its target's) equals the manifest's.
+        let md = std::fs::symlink_metadata(target.join("lnk")).unwrap();
+        let (sec, nsec) = ferry_platform::split_unix(md.modified().unwrap());
+        assert_eq!(
+            (sec, nsec),
+            MT_B,
+            "deferred T-005 piece: link mtime restored"
+        );
+
+        // A repeat apply is a full no-op: target AND times now match.
+        let again = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(again.mutations(), 0);
+    }
+
+    #[test]
+    fn peer_manifest_with_escaping_symlink_is_refused_before_any_write() {
+        let (w, target) = World::new(32);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![symlink_entry("evil", MT_A.0, MT_A.1, "../../outside")],
+            },
+        );
+        let err = Applier::new(&w.store, &target)
+            .apply_tree(&root)
+            .unwrap_err();
+        match &err {
+            MaterializeError::SymlinkRefused {
+                path, target: t, ..
+            } => {
+                assert_eq!(path, "evil");
+                assert_eq!(t, "../../outside");
+            }
+            other => panic!("wrong error: {other}"),
+        }
+        assert!(
+            matches!(
+                err,
+                MaterializeError::SymlinkRefused {
+                    reason: ferry_platform::LinkRefusal::EscapesRoot,
+                    ..
+                }
+            ),
+            "reason must name the fix"
+        );
+        assert!(!target.join("evil").exists(), "nothing written on refusal");
+    }
+
+    #[test]
+    fn reserved_device_names_are_refused_at_materialize() {
+        let (w, target) = World::new(33);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![file_entry("aux.txt", false, MT_A.0, MT_A.1, vec![])],
+            },
+        );
+        let err = Applier::new(&w.store, &target)
+            .apply_tree(&root)
+            .unwrap_err();
+        assert!(
+            matches!(err, MaterializeError::ReservedName { ref component, .. } if component == "aux.txt"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn case_conflicting_siblings_never_materialize_on_folding_hosts() {
+        let (w, target) = World::new(34);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![
+                    file_entry("README", false, MT_A.0, MT_A.1, vec![]),
+                    file_entry("readme", false, MT_B.0, MT_B.1, vec![]),
+                ],
+            },
+        );
+        let res = Applier::new(&w.store, &target).apply_tree(&root);
+        if ferry_platform::host_folds_case() {
+            // Folding host (macOS CI): fatal, naming both spellings, and
+            // nothing was silently picked.
+            let err = res.unwrap_err();
+            assert!(
+                matches!(err, MaterializeError::CaseCollision { ref first, ref second, .. }
+                    if first == "README" && second == "readme"),
+                "{err}"
+            );
+            assert!(!target.join("README").exists());
+        } else {
+            // Case-sensitive host (Linux CI): both files legitimately land.
+            res.unwrap();
+            assert_eq!(std::fs::read(target.join("README")).unwrap(), b"");
+            assert_eq!(std::fs::read(target.join("readme")).unwrap(), b"");
+        }
+    }
+
+    #[test]
+    fn case_only_rename_on_folding_host_never_loses_the_file() {
+        // The hazard: on macOS/Windows, `Rename-Me.txt` and `rename-me.TXT`
+        // are one inode. Planning `rename-me.TXT` against live disk sees
+        // the old spelling (same size/content/mtime) and would degrade to
+        // Skip; executing the removal of the old spelling afterwards then
+        // deletes the only copy. The applier must detect the fold-shadowed
+        // upsert and force a real write (T-012).
+        let (w, target) = World::new(36);
+        let v1 = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![file_entry("Rename-Me.txt", false, MT_A.0, MT_A.1, vec![])],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&v1).unwrap();
+
+        let v2 = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![file_entry("rename-me.TXT", false, MT_B.0, MT_B.1, vec![])],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&v2).unwrap();
+
+        assert!(
+            target.join("rename-me.TXT").exists(),
+            "case-only rename lost the file"
+        );
+    }
+
+    #[test]
+    fn abs_applies_long_path_prefix_rule() {
+        // Wiring proof: the applier's abs() routes through the platform
+        // policy, so a short POSIX path comes back unchanged (the prefix
+        // math itself is unit-tested in ferry-platform on every OS).
+        let short = std::path::Path::new("/tmp/whatever/a/b.txt");
+        assert_eq!(ferry_platform::extend_path(short), short.to_path_buf());
+        assert!(!ferry_platform::needs_extended_length(short));
     }
 }

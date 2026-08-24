@@ -314,11 +314,20 @@ name = "ferry-materialize"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-platform",
  "ferry-store",
  "libc",
  "rand",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "ferry-platform"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -344,6 +353,7 @@ name = "ferry-scan"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-platform",
  "ferry-store",
  "notify",
  "rand",
@@ -357,6 +367,7 @@ name = "ferry-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-platform",
  "hkdf",
  "rand",
  "sha2",
@@ -370,8 +381,9 @@ name = "ferry-sync"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-materialize",
+ "ferry-platform",
  "ferry-store",
- "libc",
  "rand",
  "tempfile",
  "thiserror",
@@ -383,12 +395,14 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ferry-materialize",
+ "ferry-platform",
  "ferry-store",
  "rand",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "unicode-normalization",
 ]
 
 [[package]]

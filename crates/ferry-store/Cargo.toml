@@ -11,6 +11,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 thiserror = "2"
 unicode-normalization = "0.1"
+ferry-platform = { version = "0.1.0", path = "../ferry-platform" }
 
 [dev-dependencies]
 tempfile = "3"
