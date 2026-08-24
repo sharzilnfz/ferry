@@ -166,6 +166,7 @@ fn self_cfg(base: &Path, slot: &str, tag: String, poly: u64) -> EngineConfig {
     cfg.tag = tag;
     cfg.store_dir = base.join(slot).join("store");
     cfg.tree_dir = base.join(slot).join("tree");
+    cfg.quiet = std::env::var("FERRY_QUIET").map(|v| v != "0").unwrap_or(true);
     cfg
 }
 

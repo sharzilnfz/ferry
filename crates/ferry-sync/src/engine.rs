@@ -1,30 +1,28 @@
 //! The skeleton engine: poll → snapshot → compare → exchange → materialize
 //! → record agreement.
 //!
-//! Session shape (see [`crate::proto`]): two HELLOs, two OFFERs, then a
-//! deterministic donor/puller split ([`pick_donor`]). The puller walks the
-//! offered tree requesting missing TREE NODES as individual blobs, diffs the
-//! offered manifest against its own, then requests the missing DATA CHUNKS
-//! **by id**; the donor resolves each id to its owning PACK and streams
-//! **whole packs by ciphertext name** (`BLAKE3(ciphertext) == name` is
-//! verified on receipt before anything touches disk state), falling back to
-//! individual blobs only for unmapped chunks. The puller ingests,
-//! materializes durably, THEN confirms with AGREED; both sides record the
-//! winning manifest as their last-agreed pointer.
+//! Sessions speak protocol v1 by default ([`crate::exchange`]): offers with
+//! adverts, role-serialized pull stages verified end to end, a second
+//! offer round that observes equality, local last-agreed records in the
+//! canonical ledger format, BYE. The puller materializes durably BEFORE
+//! round 2, mirroring M0's "materialize, THEN confirm" order. The retired
+//! plaintext session shape stays available behind
+//! [`EngineConfig::legacy_m0_proto`] for wire-level debugging.
 //!
-//! Why whole packs: `docs/store-format.md`'s wire note fixes packs as the
-//! transfer unit precisely because name-verified ciphertext gives end-to-end
-//! integrity for free, and exercising that unit early forces T-008 to deal
-//! with resume-at-pack-granularity instead of inventing it later. Meta stays
-//! individual because the puller needs tree nodes BEFORE it can compute what
-//! data it wants.
+//! State model under v1: each daemon holds a CURRENT manifest pointer that
+//! either names its own latest snapshot or an ADOPTED peer manifest. A
+//! poll tick only mints a new manifest when the scanned tree's root differs
+//! from the current pointer's root — adopt-and-hold keeps both sides'
+//! announced ids stable and comparable across sessions, which is what lets
+//! lineage (creation time, then device id) decide adoption without clocks
+//! racing.
 //!
-//! Concurrency: at most one session runs per daemon (a mutex serializes the
-//! dialer and every accepted handler). Only the connect-role daemon dials;
-//! the listen-role daemon serves and relies on the peer's opportunistic
-//! dials (~1s) to discover its changes. Simultaneous edits on both sides
-//! resolve by last-writer-wins and may LOSE the loser's changes — explicit
-//! M0 scope, T-010 owns conflicts.
+//! Concurrency: at most one session runs per daemon (a mutex serializes
+//! the dialer and every accepted handler). Only the connect-role daemon
+//! dials; the listen-role daemon serves and relies on the peer's
+//! opportunistic dials (~1s) to discover its changes. Simultaneous edits
+//! resolve by lineage last-writer-wins and may LOSE the loser's changes —
+//! explicit M0 scope, T-010 owns conflicts.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -33,6 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ferry_crypto::identity::DeviceIdentity;
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
@@ -41,8 +40,12 @@ use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
+use crate::exchange::{self, CurrentState, ExchangeHost};
+use crate::materialize::{
+    BlobSource, InlineMaterializer, MaterializeError, Materializer,
+};
 use crate::proto::{self, ItemPayload, ProtoError};
+use crate::session::{self, ConnLink, Established, ExpectPeer};
 use crate::state::{device_id_from_tag, AgreedRecord, AgreementStore};
 use crate::transport::{Connection, Transport};
 use ferry_store::store::Store;
@@ -73,12 +76,20 @@ pub struct EngineConfig {
     /// Connect role: dial this peer address. Exactly one of bind/connect
     /// should be set per daemon; the connector drives sessions.
     pub connect_to: Option<SocketAddr>,
+    /// Strictly expect this peer device id at the handshake (ADR-0003).
+    /// `None` = trust-on-first-use: accept whichever identity proves
+    /// possession of its claimed key. Wire behavior is identical either
+    /// way; this is LOCAL acceptance policy only.
+    pub expected_peer_id: Option<BlobId>,
+    /// DEV ONLY: speak the retired M0 plaintext framing instead of protocol
+    /// v1. Defaults OFF; production engines must never set it.
+    pub legacy_m0_proto: bool,
     /// Silence stdout status lines (tests).
     pub quiet: bool,
 }
 
 impl EngineConfig {
-    /// Sensible test defaults: fixed folder id, fast polling.
+    /// Sensible test defaults: fixed folder id, fast polling, protocol v1.
     pub fn default_for_test(poly_seed: u64) -> Self {
         EngineConfig {
             tag: "test-node".into(),
@@ -90,6 +101,8 @@ impl EngineConfig {
             opportunistic_every: 3,
             bind_addr: None,
             connect_to: None,
+            expected_peer_id: None,
+            legacy_m0_proto: false,
             quiet: true,
         }
     }
@@ -99,7 +112,9 @@ impl EngineConfig {
 pub struct EngineStats {
     pub sessions_ok: u64,
     pub sessions_failed: u64,
-    /// Items refused by verification (hash/name mismatch on receipt).
+    /// Transfers refused by verification: AEAD tag failures on sealed
+    /// frames, blob hash mismatches after decrypt, and pack-name
+    /// mismatches before insertion.
     pub rejected_items: u64,
 }
 
@@ -137,6 +152,9 @@ pub enum IngestError {
 pub enum SessionError {
     #[error("proto: {0}")]
     Proto(#[from] ProtoError),
+    /// Protocol v1 wire failure (handshake, framing, seal/open, flow).
+    #[error("v1 wire: {0}")]
+    Wire(#[from] ferry_proto::error::ProtoError),
     #[error("ingest: {0}")]
     Ingest(#[from] IngestError),
     #[error("apply failed: {0}")]
@@ -281,11 +299,21 @@ pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
 
 struct Ctx {
     cfg: EngineConfig,
+    /// This daemon's long-term device identity: X25519 keypair derived
+    /// deterministically from the tag (stable across restarts; T-007 owns
+    /// the real provisioning ritual). Its PUBLIC key is the manifest
+    /// device_id, the handshake stat_pub, and the ledger's peer key.
+    identity: DeviceIdentity,
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
     agreements: AgreementStore,
     session_lock: Mutex<()>,
+    /// Latest scan result — always refreshed each tick (legacy sessions
+    /// read this).
     latest: Mutex<Option<Arc<SnapshotData>>>,
+    /// The CURRENT folder pointer: our latest snapshot OR an adopted peer
+    /// manifest. v1 announcements and parent chains flow from here.
+    current: Mutex<Option<Arc<SnapshotData>>>,
     baseline: Mutex<Option<RootManifest>>,
     last_own_manifest_id: Mutex<BlobId>,
     shared: Arc<SharedState>,
@@ -336,37 +364,79 @@ impl Ctx {
         }
     }
 
+    /// The CURRENT folder pointer (own latest or adopted), waiting out the
+    /// same pre-first-tick window as [`Ctx::my_offer`].
+    fn current_snapshot(&self) -> Result<Arc<SnapshotData>, SessionError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(snap) = self.current.lock().unwrap().clone() {
+                return Ok(snap);
+            }
+            if Instant::now() > deadline {
+                return Err(SessionError::Other("no local folder state available".into()));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Record the last-agreed pointer against a peer device: THE canonical
+    /// 77-byte ledger record (ferry_proto::agreement, byte-exact per
+    /// `docs/store-format.md` §"Last-agreed manifest pointer", the format
+    /// T-010's engine reads), plus the M0 convenience record that keeps
+    /// the full manifest bytes for offline baseline recovery. Also moves
+    /// the in-memory baseline so divergence gating sees agreement.
     fn record_agreement(
         &self,
-        peer_tag: &str,
+        peer: BlobId,
         manifest_bytes: &[u8],
         manifest_id: BlobId,
     ) -> Result<(), SessionError> {
         let (sec, nsec) = now_parts();
+        // Canonical, spec-shaped ledger under <store>/.ferry/agreement/.
+        ferry_proto::agreement::AgreementLedger::new(self.store.store_dir())
+            .record(
+                &self.cfg.folder_id,
+                &ferry_proto::agreement::AgreementRecord {
+                    peer,
+                    manifest_id,
+                    agreed_sec: sec,
+                    agreed_nsec: nsec,
+                },
+            )
+            .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
+        // M0-local convenience copy (per-peer dir + manifest.bin).
         let rec = AgreedRecord {
-            peer_device_id: device_id_from_tag(peer_tag),
+            peer_device_id: peer,
             manifest_id,
             agreed_sec: sec,
             agreed_nsec: nsec,
             flags: 0,
         };
-        self.agreements.record(peer_tag, rec, manifest_bytes)?;
+        self.agreements.record(&hex(&peer), rec, manifest_bytes)?;
         *self.baseline.lock().unwrap() = Some(parse_manifest(manifest_bytes)?);
         *self.shared.agreed.lock().unwrap() = Some(manifest_id);
         self.status(&format!(
-            "STATE agreed={} recorded vs {peer_tag}",
-            hex(&manifest_id)
+            "STATE agreed={} recorded vs {}",
+            hex(&manifest_id),
+            hex_short(&peer)
         ));
         Ok(())
     }
 
-    /// One poll iteration: resnapshot, publish state, maybe dial.
+    /// One poll iteration: resnapshot, publish state (adopt-and-hold),
+    /// maybe dial.
+    ///
+    /// Hold rule: when the scanned tree's root equals the current
+    /// pointer's root, the scan minted nothing worth announcing — keep the
+    /// current manifest id (possibly an ADOPTED peer manifest) so both
+    /// sides' round-2 ids stay comparable. A differing root means real
+    /// local change: mint a child of the current lineage.
     fn tick(&self, n: u64) -> Result<(), SessionError> {
         let parent = *self.last_own_manifest_id.lock().unwrap();
         let (sec, nsec) = now_parts();
         let identity = SnapshotIdentity {
             folder_id: self.cfg.folder_id,
-            device_id: device_id_from_tag(&self.cfg.tag),
+            device_id: *self.identity.device_id(),
             parent_manifest_id: parent,
             created_sec: sec,
             created_nsec: nsec,
@@ -380,8 +450,20 @@ impl Ctx {
             manifest_bytes,
         });
 
+        // Always publish the raw scan for the legacy session path.
         *self.latest.lock().unwrap() = Some(data.clone());
-        *self.last_own_manifest_id.lock().unwrap() = out.manifest_id;
+
+        let held_same_root = match self.current.lock().unwrap().as_ref() {
+            Some(cur) => cur.manifest.root_tree_id == out.root_tree_id,
+            None => false,
+        };
+        if !held_same_root {
+            // Real local change (or fresh device): mint a child of the
+            // current lineage.
+            *self.current.lock().unwrap() = Some(Arc::clone(&data));
+            *self.last_own_manifest_id.lock().unwrap() = out.manifest_id;
+        }
+        drop(data); // held case: scan blobs dedupe in the store
         *self.shared.root.lock().unwrap() = Some(out.root_tree_id);
 
         let base_root = self
@@ -402,7 +484,9 @@ impl Ctx {
         ));
 
         // Connector drives sessions; listener relies on opportunistic dials
-        // from the peer to discover ITS changes.
+        // from the peer to discover ITS changes. Divergence from the agreed
+        // baseline still gates dialing (the M0 bone), with the same
+        // opportunistic backstop.
         if self.cfg.connect_to.is_some()
             && (base_root != Some(out.root_tree_id)
                 || n.is_multiple_of(u64::from(self.cfg.opportunistic_every)))
@@ -421,16 +505,139 @@ impl Ctx {
             None => return,
         };
         match self.transport.dial(addr) {
-            Ok(mut conn) => match run_session(conn.as_mut(), self, true) {
+            Ok(mut conn) => match dispatch_session(conn.as_mut(), self, true) {
                 Ok(()) => self.bump_ok(),
                 Err(e) => {
-                    proto::send_error(conn.as_mut(), &format!("{e}"));
-                    self.bump_failed();
+                    // v1 sessions already said a best-effort BYE; only the
+                    // legacy path knows the ERROR frame.
+                    if self.cfg.legacy_m0_proto {
+                        proto::send_error(conn.as_mut(), &format!("{e}"));
+                    }
+                    self.note_session_failure(&e);
                     self.status(&format!("SESSION failed (dial): {e}"));
                 }
             },
             Err(e) => self.status(&format!("SESSION dial error: {e}")),
         }
+    }
+
+    /// Failed-session bookkeeping: every failure counts once; verification
+    /// refusals that surface AS session errors (a tampered sealed frame
+    /// dies at its tag before any item-level check can run) also count as
+    /// rejected transfers so integrity accounting stays complete.
+    fn note_session_failure(&self, e: &SessionError) {
+        if matches!(e, SessionError::Wire(ferry_proto::error::ProtoError::Auth(_))) {
+            self.bump_rejected();
+        }
+        self.bump_failed();
+    }
+}
+
+/// Pick the session shape: protocol v1 (default, encrypted) or the
+/// retired M0 plaintext framing behind the dev flag.
+fn dispatch_session(
+    conn: &mut dyn Connection,
+    ctx: &Ctx,
+    dialer: bool,
+) -> Result<(), SessionError> {
+    if ctx.cfg.legacy_m0_proto {
+        run_session_legacy(conn, ctx, dialer)
+    } else {
+        run_session_v1(conn, ctx, dialer)
+    }
+}
+
+/// Re-request budget for corrupt/missing items within one session.
+const MAX_ITEM_RETRIES: u32 = 3;
+
+/// One protocol v1 session over an established transport connection:
+/// authenticated, sealed handshake first, then the offer/pull/agree/BYE
+/// conversation. Caller holds the per-daemon session lock.
+fn run_session_v1(
+    conn: &mut dyn Connection,
+    ctx: &Ctx,
+    dialer: bool,
+) -> Result<(), SessionError> {
+    let role = if dialer {
+        ferry_proto::Role::Initiator
+    } else {
+        ferry_proto::Role::Responder
+    };
+    let expect = match ctx.cfg.expected_peer_id {
+        Some(pin) => ExpectPeer::Pin(pin),
+        None => ExpectPeer::TrustOnFirstUse,
+    };
+
+    let mut link = ConnLink(conn);
+    let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
+    ctx.status(&format!(
+        "SESSION v1 peer={} encrypted=yes version={} role={}",
+        hex_short(&est.peer),
+        est.agreed_version,
+        if dialer { "initiator" } else { "responder" }
+    ));
+
+    let snap = ctx.current_snapshot()?;
+    let host = EngineHost { ctx };
+    exchange::run_v1_session(
+        &mut est,
+        &host,
+        &ctx.store,
+        ctx.cfg.folder_id,
+        CurrentState {
+            id: snap.manifest_id,
+            bytes: snap.manifest_bytes.clone(),
+            manifest: snap.manifest.clone(),
+        },
+        MAX_ITEM_RETRIES,
+        dialer,
+    )
+}
+
+/// The engine's [`ExchangeHost`]: routes driver callbacks into snapshot
+/// pointers, stats, status lines, baselines, and agreement ledgers.
+struct EngineHost<'x> {
+    ctx: &'x Ctx,
+}
+
+impl ExchangeHost for EngineHost<'_> {
+    fn status(&self, line: &str) {
+        self.ctx.status(line);
+    }
+
+    fn bump_rejected(&self) {
+        self.ctx.bump_rejected();
+    }
+
+    fn tree_root(&self) -> &std::path::Path {
+        &self.ctx.cfg.tree_dir
+    }
+
+    fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError> {
+        let id = *blake3::hash(bytes).as_bytes();
+        let data = Arc::new(SnapshotData {
+            manifest_id: id,
+            manifest: manifest.clone(),
+            manifest_bytes: bytes.to_vec(),
+        });
+        *self.ctx.latest.lock().unwrap() = Some(Arc::clone(&data));
+        *self.ctx.current.lock().unwrap() = Some(data);
+        *self.ctx.last_own_manifest_id.lock().unwrap() = id;
+        *self.ctx.shared.root.lock().unwrap() = Some(manifest.root_tree_id);
+        self.ctx.status(&format!(
+            "STATE root={} adopted",
+            hex(&manifest.root_tree_id)
+        ));
+        Ok(())
+    }
+
+    fn agree(
+        &self,
+        peer: BlobId,
+        bytes: &[u8],
+        manifest_id: BlobId,
+    ) -> Result<(), SessionError> {
+        self.ctx.record_agreement(peer, bytes, manifest_id)
     }
 }
 
@@ -466,10 +673,15 @@ fn kind_debug(k: BlobKind) -> &'static str {
     }
 }
 
-/// One sync conversation over an established connection. Caller holds the
-/// per-daemon session lock. `dialer` speaks first (HELLO order only; every
-/// subsequent decision is symmetric).
-fn run_session(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<(), SessionError> {
+/// One sync conversation over an established connection — RETIRED M0
+/// plaintext framing, kept behind [`EngineConfig::legacy_m0_proto`].
+/// Caller holds the per-daemon session lock. `dialer` speaks first (HELLO
+/// order only; every subsequent decision is symmetric).
+fn run_session_legacy(
+    conn: &mut dyn Connection,
+    ctx: &Ctx,
+    dialer: bool,
+) -> Result<(), SessionError> {
     let my = ctx.my_offer()?;
 
     let peer_tag = if dialer {
@@ -547,10 +759,10 @@ fn decide_and_transfer(
                         hex(&got)
                     )));
                 }
-                ctx.record_agreement(&peer_tag, &winner_bytes, winner_id)?;
+                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
             }
             Donor::Second => {
-                ctx.record_agreement(&peer_tag, &winner_bytes, winner_id)?;
+                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
                 proto::send_agreed(conn, winner_id)?;
             }
         }
@@ -625,7 +837,11 @@ fn serve_as_donor(
                         hex(&my.manifest_id)
                     )));
                 }
-                ctx.record_agreement(peer_tag, &my.manifest_bytes, my.manifest_id)?;
+                ctx.record_agreement(
+                    device_id_from_tag(peer_tag),
+                    &my.manifest_bytes,
+                    my.manifest_id,
+                )?;
                 ctx.status(&format!(
                     "SESSION complete: peer agreed on {}",
                     hex_short(&id)
@@ -677,25 +893,8 @@ fn serve_data_request(
     Ok(())
 }
 
-/// Verify a pack's name against its ciphertext, then write it into the
-/// store's packs directory atomically. The single ingest path shared by
-/// sessions and tests.
-fn ingest_pack_verified(
-    store: &Store,
-    claimed_name: &PackId,
-    bytes: &[u8],
-) -> Result<(), IngestError> {
-    let found = ferry_store::pack::pack_name_of(bytes);
-    if found != *claimed_name {
-        return Err(IngestError::NameMismatch {
-            claimed: hex(claimed_name),
-            found: hex(&found),
-        });
-    }
-    let dot = store.store_dir();
-    ferry_store::pack::write_pack_atomically(&dot.join("tmp"), &dot.join("packs"), bytes)?;
-    Ok(())
-}
+// Pack ingest lives in ONE place now: `exchange::ingest_pack_verified`
+// (re-exported from the crate root), shared by both protocol paths.
 
 /// Scan the on-disk packs and map every DATA CHUNK id to its owning pack
 /// (with the pack's bytes cached for streaming). Packs failing their own
@@ -793,7 +992,11 @@ fn run_as_puller(
         .apply(&peer_manifest, &changes, &StoreSource { store: &ctx.store })
         .map_err(|e| SessionError::Apply(format!("{e}")))?;
 
-    ctx.record_agreement(&peer_tag, &theirs.manifest_bytes, peer_manifest_id)?;
+    ctx.record_agreement(
+        device_id_from_tag(&peer_tag),
+        &theirs.manifest_bytes,
+        peer_manifest_id,
+    )?;
     proto::send_agreed(conn, peer_manifest_id)?;
     ctx.status(&format!(
         "SESSION complete: agreed on {}",
@@ -885,14 +1088,16 @@ fn fetch_meta_tree(
 /// disk (caller must refresh the index).
 fn ingest_item(ctx: &Ctx, item: &ItemPayload) -> Result<bool, IngestError> {
     match item {
-        ItemPayload::Pack { name, bytes } => match ingest_pack_verified(&ctx.store, name, bytes) {
-            Ok(()) => Ok(true),
-            Err(e @ IngestError::NameMismatch { .. }) => {
-                ctx.bump_rejected();
-                Err(e)
+        ItemPayload::Pack { name, bytes } => {
+            match exchange::ingest_pack_verified(&ctx.store, name, bytes) {
+                Ok(()) => Ok(true),
+                Err(e @ IngestError::NameMismatch { .. }) => {
+                    ctx.bump_rejected();
+                    Err(e)
+                }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
-        },
+        }
         ItemPayload::Blob { kind, id, bytes } => {
             let found = *blake3::hash(bytes).as_bytes();
             if found != *id {
@@ -909,6 +1114,11 @@ fn ingest_item(ctx: &Ctx, item: &ItemPayload) -> Result<bool, IngestError> {
 }
 
 fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
+    collect_chunk_ids_public(changes)
+}
+
+/// Shared with the v1 exchange driver (`exchange::pull_content`).
+pub(crate) fn collect_chunk_ids_public(changes: &ChangeSet) -> Vec<BlobId> {
     let mut seen: HashSet<BlobId> = HashSet::new();
     let mut out = Vec::new();
     for state in changes
@@ -967,7 +1177,7 @@ impl SyncEngine {
     ) -> Result<(), IngestError> {
         let store =
             open_or_create_store(&cfg.store_dir).map_err(|e| IngestError::Other(format!("{e}")))?;
-        ingest_pack_verified(&store, claimed_name, bytes)
+        crate::exchange::ingest_pack_verified(&store, claimed_name, bytes)
     }
 
     /// Spawn poll (+ accept) threads. Dropping the returned handle shuts
@@ -984,11 +1194,13 @@ impl SyncEngine {
         let agreements = AgreementStore::new(self.store.store_dir());
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
+            identity: device_identity_for_tag(&self.cfg.tag),
             store: Arc::clone(&self.store),
             transport: Arc::clone(&self.transport),
             agreements,
             session_lock: Mutex::new(()),
             latest: Mutex::new(None),
+            current: Mutex::new(None),
             baseline: Mutex::new(None),
             last_own_manifest_id: Mutex::new([0u8; 32]),
             shared: Arc::clone(&shared),
@@ -1040,6 +1252,25 @@ fn open_or_create_store(store_dir: &std::path::Path) -> Result<Store, EngineErro
     }
 }
 
+/// Deterministic per-tag device identity for the skeleton: a real X25519
+/// keypair derived from BLAKE3("ferry/v0/device-key:" || tag). Stable
+/// across restarts so peers can pin each other; T-007 replaces the
+/// derivation with real key material, not the protocol around it.
+pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
+    use blake3::Hasher;
+    use rand::SeedableRng;
+    let mut h = Hasher::new();
+    h.update(b"ferry/v0/device-key:");
+    h.update(tag.as_bytes());
+    let digest = h.finalize();
+    let mut seed = [0u8; 32];
+    // One extra widening round so the seed is not the raw hash output.
+    let mut rng = StdRng::from_seed(*digest.as_bytes());
+    use rand::RngCore;
+    rng.fill_bytes(&mut seed);
+    DeviceIdentity::from_secret_bytes(&seed)
+}
+
 /// v0 folder master key: zeros under the pass-through cipher. T-007 replaces
 /// this with real key material; nothing else changes.
 const FMK: [u8; ferry_store::crypto::KEY_LEN] = [0u8; ferry_store::crypto::KEY_LEN];
@@ -1066,11 +1297,13 @@ fn accept_loop(
                         if shared.shutdown.load(Ordering::SeqCst) {
                             return;
                         }
-                        match run_session(conn.as_mut(), &ctx, false) {
+                        match dispatch_session(conn.as_mut(), &ctx, false) {
                             Ok(()) => ctx.bump_ok(),
                             Err(e) => {
-                                proto::send_error(conn.as_mut(), &format!("{e}"));
-                                ctx.bump_failed();
+                                if ctx.cfg.legacy_m0_proto {
+                                    proto::send_error(conn.as_mut(), &format!("{e}"));
+                                }
+                                ctx.note_session_failure(&e);
                                 ctx.status(&format!("SESSION failed (accept): {e}"));
                             }
                         }

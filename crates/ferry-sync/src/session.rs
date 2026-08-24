@@ -392,6 +392,16 @@ impl<'a> SessionIo<'a> {
         }
     }
 
+    /// Like [`expect_frame`] but accepting any of `msg_types` (e.g. a
+    /// PACK_ITEM-or-terminator response sequence).
+    pub fn expect_frame_any(&mut self, msg_types: &[u8]) -> Result<FrameBody, ProtoError> {
+        match self.recv_frame()? {
+            Some(fb) if msg_types.contains(&fb.msg_type) => Ok(fb),
+            Some(_) => Err(ProtoError::ProtocolViolation("unexpected message in this state")),
+            None => unreachable!("recv_frame loops until a known type or error"),
+        }
+    }
+
     /// Receive BYE; Normal closes cleanly, anything else surfaces typed.
     pub fn recv_bye(&mut self) -> Result<(), ProtoError> {
         let fb = self.expect_frame(codec::MSG_BYE)?;
