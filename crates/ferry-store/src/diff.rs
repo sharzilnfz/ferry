@@ -738,7 +738,11 @@ mod tests {
     /// to contain EXACTLY those mutations — untouched sibling subtrees must
     /// appear nowhere.
     #[test]
+    #[cfg(unix)]
     fn snapshot_mutate_resnapshot_diff_shows_exactly_the_mutations() {
+        // Symlink swap and exec-bit flip are load-bearing mutations whose
+        // expected buckets are asserted verbatim below; Windows runners lack
+        // symlink privilege, so this exercises unix hosts only.
         use crate::chunker::MIN_SIZE;
 
         let (dir, store) = fresh_store();
