@@ -98,10 +98,20 @@ wait_converged() { # a_log b_log deadline_s -> sets CONVERGED=1/0, AGREED
 }
 
 verify_trees() { # tree_a tree_b log_lines total_files_min
-    local ta="$1" tb="$2" lines="$3" minfiles="$4" rel="logs/app.log"
+    local ta="$1" tb="$2" lines="$3" minfiles="$4" rel="logs/app.log" tries=0
     [ -f "$tb/$rel" ] || fail "[${MODE}] log missing on node B"
-    GOT_LINES="$(wc -l < "$tb/$rel" | tr -d ' ')"
-    [ "$GOT_LINES" -eq "$lines" ] || fail "[${MODE}] torn log tail: expected $lines lines, got $GOT_LINES"
+    # The writer finished before convergence polling started, but node A's
+    # final appends can still be one quiet-window/exchange behind when the
+    # two manifests FIRST agree (both sides matching on a partial tail is a
+    # legitimate transient). Give the tail a bounded window (~30s) to land
+    # instead of demanding exactness from a single sample; flaked on CI.
+    while [ "$tries" -lt 150 ]; do
+        GOT_LINES="$(wc -l < "$tb/$rel" | tr -d ' ')"
+        [ "$GOT_LINES" -eq "$lines" ] && break
+        sleep 0.2
+        tries=$((tries + 1))
+    done
+    [ "$GOT_LINES" -eq "$lines" ] || fail "[${MODE}] torn log tail never settled within 30s: expected $lines lines, got $GOT_LINES"
     cmp "$ta/$rel" "$tb/$rel" || fail "[${MODE}] log bytes differ between nodes"
     cmp "$ta/scripts/run.sh" "$tb/scripts/run.sh" || fail "[${MODE}] exec script differs"
     LAST_EXPECTED="$(printf 'e2e log line %03d payload-%04x' "$lines" "$((lines * 7919 % 65536))")"

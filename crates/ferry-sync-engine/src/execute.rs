@@ -363,8 +363,20 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), EngineError> {
     }
     #[cfg(windows)]
     {
-        // Needs developer mode/admin on Windows; failure surfaces loudly.
-        std::os::windows::fs::symlink(target, at).map_err(|e| io_at(at, e))
+        // std has no generic `symlink`: pick the file vs dir flavor from
+        // the target's own metadata (targets are relative, in-tree paths
+        // per ferry-platform's links policy). Needs developer mode/admin
+        // on Windows; failure surfaces loudly.
+        let resolved = at
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(target);
+        if resolved.is_dir() {
+            std::os::windows::fs::symlink_dir(target, at)
+        } else {
+            std::os::windows::fs::symlink_file(target, at)
+        }
+        .map_err(|e| io_at(at, e))
     }
     #[cfg(not(any(unix, windows)))]
     {

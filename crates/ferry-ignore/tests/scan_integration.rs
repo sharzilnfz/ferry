@@ -134,6 +134,15 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     want.sort();
     assert_eq!(paths, want, "manifest must contain exactly the allowed set");
 
+    // From here the test drives signals BY HAND, so stop the live watcher
+    // and worker threads first: a real FS event from the writes below can
+    // otherwise win the race, publish first, and leave the injected pass
+    // with nothing to do (exact-return-value assertions then flake on
+    // loaded Linux CI). scan_once executes inline either way; stopping
+    // only removes the competing debounced worker. Live-event convergence
+    // under real watchers is covered by ferry-scan's integration tests.
+    engine.stop();
+
     // Watcher-event filtering: an event UNDER an ignored subtree must not
     // dirty anything. Inject through the same pipeline real events take.
     write_file(&root.join("scratch/junk.bin"), b"churn");
@@ -155,8 +164,6 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         published.manifest.parent_manifest_id, current.manifest_id,
         "manifest lineage chains"
     );
-
-    engine.stop();
 
     // Share time: the effective rules INCLUDE .env (opted in), so the secret
     // scan must flag it loudly — path-level plus credential hits.
