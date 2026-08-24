@@ -62,6 +62,7 @@
 pub mod engine;
 pub mod materialize;
 pub mod proto;
+pub mod session;
 pub mod state;
 pub mod transport;
 
