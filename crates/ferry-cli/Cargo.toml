@@ -1,0 +1,36 @@
+[package]
+name = "ferry-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-store = { path = "../ferry-store" }
+ferry-crypto = { path = "../ferry-crypto" }
+ferry-scan = { path = "../ferry-scan" }
+ferry-ignore = { path = "../ferry-ignore" }
+# The M0 crate supplies two reusable seams this CLI drives directly:
+# `proto` (HELLO/OFFER/REQ_META/REQ_DATA/ITEM message codecs) and
+# `transport` (the Transport/Listener/Connection trait + TcpTransport).
+# T-009/T-014 swap the implementation under these same seams.
+ferry-sync = { path = "../ferry-sync" }
+ferry-sync-engine = { path = "../ferry-sync-engine" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1.5"
+rand = "0.8"
+thiserror = "2"
+# Pair-grant sealing only (offer/accept file channel); the store cipher
+# comes from ferry-crypto::pack_cipher.
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+qrcode = "0.14"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "ferry"
+path = "src/main.rs"

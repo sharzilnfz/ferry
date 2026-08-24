@@ -1,0 +1,136 @@
+//! `ferry` — entry point. Dispatch, render, exit codes.
+//!
+//! Contract: stdout carries exactly one human document OR (with --json) one
+//! JSON document; progress and diagnostics go to stderr. Errors print a
+//! structured document to stderr and exit nonzero.
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::Parser;
+use ferry_cli::cli::{Cli, Command};
+use ferry_cli::error::CliError;
+use ferry_cli::out;
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match dispatch(&cli) {
+        Ok(output) => {
+            let code = output.exit_code;
+            if cli.json {
+                println!("{}", output.json);
+            } else {
+                print!("{}", output.human);
+                let _ = std::io::stdout().flush();
+            }
+            ExitCode::from(code)
+        }
+        Err(e) => {
+            report_error(&e, cli.json);
+            ExitCode::from(e.exit_code())
+        }
+    }
+}
+
+fn report_error(e: &CliError, json_mode: bool) {
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    if json_mode {
+        let mut doc = serde_json::json!({
+            "error": e.message,
+            "code": e.code,
+            "hint": e.hint,
+        });
+        if let (Some(obj), Some(detail)) = (doc.as_object_mut(), &e.detail) {
+            for (k, v) in detail.as_object().into_iter().flatten() {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        let _ = writeln!(lock, "{doc}");
+    } else {
+        let _ = writeln!(lock, "{}", out::error_text(e.code, &e.message, &e.hint));
+    }
+}
+
+fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
+    match &cli.command {
+        Command::Init { path } => {
+            let p: PathBuf = path.clone().unwrap_or_else(|| PathBuf::from("."));
+            ferry_cli::commands::init::run(&p, "init")
+        }
+        Command::Add { path } => ferry_cli::commands::init::run(path, "add"),
+        Command::Pair {
+            accept,
+            dir,
+            timeout_secs,
+        } => match accept {
+            None => {
+                let opened = ferry_cli::folder::open_folder(&PathBuf::from("."))?;
+                let identity = ferry_cli::ensure_identity()?;
+                ferry_cli::commands::pairing::initiate(&opened, &identity, *timeout_secs)
+            }
+            Some(offer_file) => {
+                let identity = ferry_cli::ensure_identity()?;
+                ferry_cli::commands::pairing::accept(
+                    &identity,
+                    offer_file,
+                    dir.as_deref(),
+                    *timeout_secs,
+                )
+            }
+        },
+        Command::Share {
+            folder,
+            i_know,
+            timeout_secs,
+        } => {
+            let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+            ferry_cli::commands::share::run(&f, *i_know, *timeout_secs)
+        }
+        Command::Status { folder } => {
+            let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+            ferry_cli::commands::status::run(&f)
+        }
+        Command::Conflicts { action } => match action {
+            ferry_cli::cli::ConflictsAction::List => {
+                ferry_cli::commands::conflicts::run(&PathBuf::from("."))
+            }
+        },
+        Command::Ignore {
+            pattern,
+            preset,
+            list,
+        } => ferry_cli::commands::ignore_cmd::run(
+            &PathBuf::from("."),
+            pattern.as_deref(),
+            preset.as_deref(),
+            *list,
+        ),
+        Command::Daemon {
+            folders,
+            listen,
+            peer_url,
+            transport,
+            interval_secs,
+        } => ferry_cli::commands::daemon::run(ferry_cli::commands::daemon::DaemonArgs {
+            folders,
+            listen: listen.as_deref(),
+            peer_url: peer_url.as_deref(),
+            transport,
+            interval_secs: *interval_secs,
+            json: cli.json,
+        }),
+        Command::Sync {
+            folder,
+            peer_url,
+            timeout_secs,
+            transport,
+        } => ferry_cli::commands::sync::run(ferry_cli::commands::sync::SyncArgs {
+            folder: folder.as_deref(),
+            peer_url: peer_url.as_deref(),
+            timeout_secs: *timeout_secs,
+            transport,
+        }),
+    }
+}
