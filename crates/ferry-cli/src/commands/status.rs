@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ferry_pin::{HeldLedger, PinStore};
 use ferry_store::format::hex;
 use ferry_sync_engine::{list_conflicts, PeerState};
 use serde_json::json;
@@ -71,6 +72,51 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         ),
     };
 
+    // Session pinning (T-015): surface the pin state and the full held set
+    // so held changes are visible, never silently parked.
+    let (pin_state, pin_paths, pin_holding) =
+        match PinStore::new(opened.state_dir()).load().map_err(|e| {
+            crate::error::CliError::new(
+                "pin-state-corrupt",
+                e.to_string(),
+                "inspect .ferry/pin-state.json",
+            )
+        })? {
+            None => ("none", Vec::<String>::new(), false),
+            Some(rec) => (
+                if rec.released {
+                    "released"
+                } else if rec.holding() {
+                    "active"
+                } else {
+                    "stale"
+                },
+                rec.paths.clone(),
+                rec.holding(),
+            ),
+        };
+    let held_ledger = HeldLedger::new(opened.state_dir());
+    let mut held_by_peer = serde_json::Map::new();
+    let mut held_total = 0usize;
+    for peer in held_ledger.peers().map_err(|e| {
+        crate::error::CliError::new(
+            "held-ledger-corrupt",
+            e.to_string(),
+            "run `ferry pin status` for detail",
+        )
+    })? {
+        let entries = held_ledger.load_peer(&peer).map_err(|e| {
+            crate::error::CliError::new(
+                "held-ledger-corrupt",
+                e.to_string(),
+                "run `ferry pin release` to recover what remains readable",
+            )
+        })?;
+        let paths = ferry_pin::distinct_paths(&entries);
+        held_total += paths.len();
+        held_by_peer.insert(peer, json!(paths));
+    }
+
     let json_doc = json!({
         "command": "status",
         "folder": opened.root.display().to_string(),
@@ -84,6 +130,13 @@ pub fn run(folder: &Path) -> CliResult<Output> {
             "bytes_chunked": scan.stats.bytes_chunked,
         },
         "pending_changes": pending,
+        "pin": {
+            "state": pin_state,
+            "holding": pin_holding,
+            "paths": pin_paths,
+        },
+        "held_changes": held_total,
+        "held_by_peer": held_by_peer,
         "peers": peers.iter().map(|p| json!({
             "device_id": p.device_id,
             "last_agreed_manifest_id": p.last_agreed_manifest_id,
@@ -113,6 +166,17 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         None => human.push_str("Pending    no agreement yet\n"),
     }
     human.push_str(&format!("Conflicts  {}\n", conflicts.len()));
+    match pin_state {
+        "none" => human.push_str("Pin        none\n"),
+        s => human.push_str(&format!("Pin        {} ({})\n", s, pin_paths.join(", "))),
+    }
+    if held_total == 0 {
+        human.push_str("Held       nothing\n");
+    } else {
+        human.push_str(&format!(
+            "Held       {held_total} path(s) — `ferry pin release` reconciles them\n"
+        ));
+    }
     if peers.is_empty() {
         human.push_str("Peers      none yet — run `ferry pair`\n");
     } else {

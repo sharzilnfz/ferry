@@ -969,6 +969,7 @@ dependencies = [
  "clap",
  "ferry-crypto",
  "ferry-ignore",
+ "ferry-pin",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",
@@ -1055,6 +1056,21 @@ dependencies = [
  "ferry-store",
  "libc",
  "rand 0.8.7",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ferry-pin"
+version = "0.1.0"
+dependencies = [
+ "ferry-store",
+ "ferry-sync-engine",
+ "ignore",
+ "libc",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
 ]

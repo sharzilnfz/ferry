@@ -1,0 +1,6 @@
+$.action:string
+$.command:string
+$.folder:string
+$.held_by_peer.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:int
+$.held_changes:int
+$.was_pinned:bool

@@ -15,6 +15,9 @@ ferry-ignore = { path = "../ferry-ignore" }
 # T-009/T-014 swap the implementation under these same seams.
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
+# Session pinning: the exchange loop consults the hold filter pre-apply and
+# `ferry pin` drives start/stop/release/status on top of its ledgers.
+ferry-pin = { path = "../ferry-pin" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

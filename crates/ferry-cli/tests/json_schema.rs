@@ -142,3 +142,62 @@ fn ignore_mutations_share_one_document_shape() {
     let preset = commands::ignore_cmd::run(&proj, None, Some("opencode"), false).unwrap();
     assert_matches_expected("ignore-preset", &schema_of(&preset.json));
 }
+
+#[test]
+fn pin_documents_are_stable_across_the_lifecycle() {
+    let env = Env::new("schema-pin");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
+
+    let started = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    assert_matches_expected("pin-start", &schema_of(&started.json));
+
+    // While pinned with held changes absent, status still pins the shape.
+    let status = commands::pin::status(&proj).unwrap();
+    assert_eq!(status.json["state"], "active");
+
+    // Simulate a held change arriving (the exchange loop writes these);
+    // its manifest must REALLY be in the store or release refuses loudly.
+    let opened = ferry_cli::folder::open_folder(&proj).unwrap();
+    let scan = ferry_cli::commands::status::scan_now(&opened).unwrap();
+    let mid = opened
+        .store
+        .put_meta(
+            ferry_store::format::BlobKind::Manifest,
+            &scan.manifest_bytes,
+        )
+        .unwrap();
+    // Staged metadata is only readable after sealing (same rule the
+    // exchange loop follows before anything references it).
+    opened.store.flush().unwrap();
+    opened.store.write_index_snapshot().unwrap();
+    let state_dir = ferry_cli::folder::state_dir(&proj);
+    let ledger = ferry_pin::HeldLedger::new(&state_dir);
+    ledger
+        .append(
+            &"b".repeat(32),
+            &[ferry_pin::HeldEntry {
+                held_sec: 1_787_574_000,
+                held_nsec: 0,
+                path: "src/a.rs".into(),
+                device_id: "b".repeat(32),
+                remote_manifest_id: ferry_store::format::hex(&mid),
+                chunks: Vec::new(),
+                decision: "remote_apply".into(),
+                conflict_winner: None,
+            }],
+        )
+        .unwrap();
+
+    let status_held = commands::pin::status(&proj).unwrap();
+    assert_matches_expected("pin-status", &schema_of(&status_held.json));
+    assert_eq!(status_held.json["held_changes"], 1);
+
+    let stopped = commands::pin::stop(&proj).unwrap();
+    assert_matches_expected("pin-stop", &schema_of(&stopped.json));
+
+    let released = commands::pin::release(&proj).unwrap();
+    assert_matches_expected("pin-release", &schema_of(&released.json));
+}

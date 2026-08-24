@@ -92,6 +92,24 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::status::run(&f)
         }
+        Command::Pin { action } => match action {
+            ferry_cli::cli::PinAction::Start { paths, folder } => {
+                let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+                ferry_cli::commands::pin::start(&f, paths)
+            }
+            ferry_cli::cli::PinAction::Stop { folder } => {
+                let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+                ferry_cli::commands::pin::stop(&f)
+            }
+            ferry_cli::cli::PinAction::Release { folder } => {
+                let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+                ferry_cli::commands::pin::release(&f)
+            }
+            ferry_cli::cli::PinAction::Status { folder } => {
+                let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+                ferry_cli::commands::pin::status(&f)
+            }
+        },
         Command::Conflicts { action } => match action {
             ferry_cli::cli::ConflictsAction::List => {
                 ferry_cli::commands::conflicts::run(&PathBuf::from("."))

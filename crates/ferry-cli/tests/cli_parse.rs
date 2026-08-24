@@ -216,6 +216,50 @@ fn version_flag_is_wired() {
 }
 
 #[test]
+fn pin_has_four_actions_and_repeatable_paths() {
+    // Bare start: no globs = whole folder.
+    match parse(&["pin", "start"]).command {
+        Command::Pin {
+            action:
+                ferry_cli::cli::PinAction::Start {
+                    paths,
+                    folder: None,
+                },
+        } => assert!(paths.is_empty(), "no --paths means whole-folder"),
+        other => panic!("{other:?}"),
+    }
+    // Repeatable --paths plus positional folder.
+    match parse(&[
+        "pin", "start", "--paths", "src/**", "--paths", "docs/*", "sub",
+    ])
+    .command
+    {
+        Command::Pin {
+            action:
+                ferry_cli::cli::PinAction::Start {
+                    paths,
+                    folder: Some(folder),
+                },
+        } => {
+            assert_eq!(paths, vec!["src/**".to_string(), "docs/*".to_string()]);
+            assert_eq!(folder, PathBuf::from("sub"));
+        }
+        other => panic!("{other:?}"),
+    }
+    // The other three actions exist and take a folder.
+    for args in [
+        vec!["pin", "stop"],
+        vec!["pin", "release"],
+        vec!["pin", "status", "elsewhere"],
+    ] {
+        let cli = parse(&args);
+        assert!(matches!(&cli.command, Command::Pin { .. }), "{args:?}");
+    }
+    // Unknown action refused.
+    assert!(Cli::try_parse_from(["ferry", "pin", "rebase"]).is_err());
+}
+
+#[test]
 fn help_mentions_the_five_minute_path() {
     let err = Cli::try_parse_from(["ferry", "--help"]).unwrap_err();
     assert!(err.to_string().contains("Five-minute path"));

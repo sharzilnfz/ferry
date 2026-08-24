@@ -114,6 +114,13 @@ the same shape above. Previews are always redacted.
   "pending_changes": int | null,
                              // vs most recent agreement; null = no agreement yet;
                              // -1 = agreement exists but its manifest is unreadable
+  "pin": {
+    "state": "none" | "active" | "stale" | "released",
+    "holding": bool,           // true only while an ACTIVE pin actually holds
+    "paths": [string]
+  },
+  "held_changes": int,         // distinct held paths across all peers
+  "held_by_peer": { "<peer device_id>": [string, ...] },
   "peers": [
     {
       "device_id": string,
@@ -213,7 +220,8 @@ Error codes: `unknown-preset`, `bad-pattern`.
   "chunks_received": int,
   "ops_applied": int,
   "quarantined": int,
-  "conflicts_recorded": int
+  "conflicts_recorded": int,
+  "held": int
 }
 ```
 
@@ -238,6 +246,7 @@ objects, one per completed exchange round:
   "ops_applied": int,
   "quarantined": int,
   "conflicts_recorded": int,
+  "held": int,
   "agreed": bool
 }
 ```
@@ -247,6 +256,113 @@ binding (`--listen`) for scripts, plus per-round summaries on stderr.
 
 Error codes: `transport-unavailable` (any `--transport` value other than
 `tcp`; iroh QUIC lands with T-009/T-014), `bind`, `bad-address`.
+
+## `ferry pin start|stop|release|status`
+
+While pinned, the exchange loop holds competing remote edits to the pinned
+paths instead of applying them (session pinning, T-015). Held decisions are
+ledgered one line each under `.ferry/held/<peer>.jsonl`:
+
+```json
+{
+  "held_sec": int, "held_nsec": int,
+  "path": string,                        // '/'-joined stored path
+  "device_id": string,                   // 64 hex peer whose change this is
+  "remote_manifest_id": string,          // 64 hex manifest that carried it
+  "chunks": [ { "id": string, "len": int } ],
+  "decision": "remote_apply" | "remote_delete" | "conflict",
+  "conflict_winner": null | "local" | "remote"
+}
+```
+
+`ferry pin start [--paths <glob>...] [folder]` (no `--paths` pins the whole
+folder, equivalent to `*`):
+
+```json
+{
+  "command": "pin",
+  "action": "start",
+  "folder": string,
+  "device_id": string,
+  "pid": int,
+  "paths": [string],
+  "started_at": string,                  // RFC 3339 UTC
+  "base_peers_recorded": int             // last-agreed bases frozen at start
+}
+```
+
+`ferry pin stop [folder]` — ends the session WITHOUT reconciling; ledgers
+stay on disk and `release` still recovers them later:
+
+```json
+{
+  "command": "pin",
+  "action": "stop",
+  "folder": string,
+  "was_pinned": bool,
+  "held_changes": int,
+  "held_by_peer": { "<peer device_id>": int }
+}
+```
+
+`ferry pin release [folder]` — replays every ledger through the ordinary
+three-way engine (base = last agreement captured at pin start; a peer never
+agreed reconciles against an empty ancestor). Winners stay live, losers are
+quarantined `path.ferry-conflict.<device>-<ts>`, conflicts.jsonl gains one
+entry per conflict. Ledgers clear only after their plan executed, so a
+failed release is always retryable and nothing is discarded implicitly:
+
+```json
+{
+  "command": "pin",
+  "action": "release",
+  "folder": string,
+  "peers": [
+    {
+      "device_id": string,
+      "remote_manifest_id": string,
+      "held_entries": int,
+      "held_paths": [string],
+      "ops_applied": int,
+      "quarantined": int,
+      "conflicts_recorded": int
+    }
+  ],
+  "quarantined": int,
+  "conflicts_recorded": int,
+  "ops_applied": int,
+  "pin_ended": bool,
+  "conflicts_total": int                 // entries now in conflicts.jsonl
+}
+```
+
+`ferry pin status [folder]`:
+
+```json
+{
+  "command": "pin",
+  "action": "status",
+  "folder": string,
+  "state": "none" | "active" | "stale" | "released",
+  "device_id": string | null,
+  "pid": int | null,
+  "started_at": string | null,
+  "paths": [string],
+  "holding": bool,
+  "held_changes": int,
+  "held_by_peer": { "<peer device_id>": [string, ...] }
+}
+```
+
+A STALE pin means its recorded writer process no longer runs (crash or
+reboot). Nothing is held while stale — incoming edits apply — but the
+marker stays on disk until an explicit `start` replaces it or `stop`
+discards it. It surfaces in `status`, never silently expires.
+
+Error codes: `pin-active` (start while another session holds), 
+`bad-pattern`, `pin-state-corrupt`, `held-ledger-corrupt`,
+`held-manifest-missing`, `structural-split`, `pin-release-reconcile`,
+`store`.
 
 ## Per-folder settings file
 
