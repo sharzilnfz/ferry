@@ -38,12 +38,20 @@ pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
 mod tests {
     use super::*;
 
+    // Windows SystemTime is FILETIME-backed (100ns units), so finer digits
+    // cannot survive a join→split round trip there. Quantize expectations to
+    // the platform's clock granularity; unix keeps full fidelity.
+    const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
+    fn q(nsec: u32) -> u32 {
+        nsec / NS_GRAN * NS_GRAN
+    }
+
     #[test]
     fn round_trips_post_epoch() {
         for (sec, nsec) in [
             (0i64, 0u32),
-            (1_700_000_000, 123_456_789),
-            (86_400, 999_999_999),
+            (1_700_000_000, q(123_456_789)),
+            (86_400, q(999_999_999)),
         ] {
             assert_eq!(split_unix(join_unix(sec, nsec)), (sec, nsec));
         }
@@ -51,7 +59,12 @@ mod tests {
 
     #[test]
     fn round_trips_pre_epoch_timespec_style() {
-        for (sec, nsec) in [(-1i64, 0u32), (-1, 999_999_999), (-50_000, 5), (-9_999, 1)] {
+        for (sec, nsec) in [
+            (-1i64, 0u32),
+            (-1, q(999_999_999)),
+            (-50_000, q(5)),
+            (-9_999, q(1)),
+        ] {
             assert_eq!(
                 split_unix(join_unix(sec, nsec)),
                 (sec, nsec),
