@@ -148,13 +148,13 @@ mod tests {
     }
 }
 
-/// Shared scenario fixtures live in a tiny internal test-support module so
-/// both unit tests here and the acceptance integration reuse one rig.
+/// Shared fixture for this file's unit tests: one tiny two-device rig.
+/// (The acceptance integration test in tests/ carries its own fuller
+/// harness because cfg(test) items are not visible across crate lines.)
 #[cfg(test)]
 pub(crate) mod ferry_pin_testutil {
     use ferry_store::chunker::generate_polynomial;
     use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
-    use ferry_store::format::BlobKind;
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     use ferry_store::store::Store;
     use rand::rngs::StdRng;
@@ -167,9 +167,10 @@ pub(crate) mod ferry_pin_testutil {
     pub const B_DEV: [u8; 32] = [0xB2; 32];
 
     pub struct Rig {
-        pub dir: tempfile::TempDir,
+        /// Holds the temp root alive for every path/store in the rig.
+        #[allow(dead_code)]
+        dir: tempfile::TempDir,
         pub a: DeviceParts,
-        pub b: DeviceParts,
         pub b_dev: [u8; 32],
         pub a_state: PathBuf,
         pub local_manifest: ferry_store::manifest::RootManifest,
@@ -177,6 +178,8 @@ pub(crate) mod ferry_pin_testutil {
 
     pub struct DeviceParts {
         pub store: Store,
+        /// Kept for rig readability; the unit tests only exercise stores.
+        #[allow(dead_code)]
         pub tree: PathBuf,
     }
 
@@ -189,8 +192,8 @@ pub(crate) mod ferry_pin_testutil {
     }
 
     impl Rig {
-        /// One seeded file f.txt on each side, identical, snapshotted on A
-        /// (whose manifest becomes the release-time local input).
+        /// Two seeded devices with identical f.txt, both snapshotted; A's
+        /// manifest is the release-time local input.
         pub fn rig_one_file() -> Rig {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().to_path_buf();
@@ -202,13 +205,12 @@ pub(crate) mod ferry_pin_testutil {
                 // the parent must exist first.
                 std::fs::create_dir_all(&store_root).unwrap();
                 let store = Store::create(&store_root, fmk(), Box::new(PassthroughCipher)).unwrap();
-                DeviceParts { store, tree }
+                (tree, store)
             };
-            let a = mk(1);
-            let b = mk(2);
-            for t in [&a.tree, &b.tree] {
-                std::fs::write(t.join("f.txt"), b"same").unwrap();
-            }
+            let (a_tree, a_store) = mk(1);
+            let (b_tree, b_store) = mk(2);
+            std::fs::write(a_tree.join("f.txt"), b"same").unwrap();
+            std::fs::write(b_tree.join("f.txt"), b"same").unwrap();
             let idn = |dev| SnapshotIdentity {
                 folder_id: [7; 16],
                 device_id: dev,
@@ -216,23 +218,18 @@ pub(crate) mod ferry_pin_testutil {
                 created_sec: 1_787_000_000,
                 created_nsec: 0,
             };
-            let sa = snapshot_dir(&a.store, poly_of(3), &a.tree, &idn(A_DEV)).unwrap();
-            let _sb = snapshot_dir(&b.store, poly_of(3), &b.tree, &idn(B_DEV)).unwrap();
+            let sa = snapshot_dir(&a_store, poly_of(3), &a_tree, &idn(A_DEV)).unwrap();
+            snapshot_dir(&b_store, poly_of(3), &b_tree, &idn(B_DEV)).unwrap();
             Rig {
                 dir,
-                a,
-                b,
+                a: DeviceParts {
+                    store: a_store,
+                    tree: a_tree,
+                },
                 b_dev: B_DEV,
                 a_state: root.join("state-a"),
                 local_manifest: sa.manifest,
             }
-        }
-
-        /// Fetch a manifest object into A's store by raw bytes (test helper
-        /// for building bogus ids).
-        pub fn put_manifest_bytes(store: &Store, bytes: &[u8]) -> String {
-            let id = store.put_meta(BlobKind::Manifest, bytes).unwrap();
-            ferry_store::format::hex(&id)
         }
     }
 

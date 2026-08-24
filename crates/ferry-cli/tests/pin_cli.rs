@@ -6,7 +6,7 @@ mod common;
 
 use common::Env;
 use ferry_cli::commands;
-use ferry_pin::{HeldChunk, HeldEntry, HeldLedger};
+use ferry_pin::{HeldEntry, HeldLedger};
 use ferry_store::format::BlobKind;
 use std::collections::BTreeMap;
 
