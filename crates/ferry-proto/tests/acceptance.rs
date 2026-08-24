@@ -313,14 +313,23 @@ fn materialize_tree(store: &Store, tree_id: &BlobId, dir: &Path) {
                             .unwrap();
                     }
                 }
+                #[cfg(unix)]
                 if e.exec {
                     use std::os::unix::fs::PermissionsExt;
                     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
                 }
+                #[cfg(not(unix))]
+                let _ = e.exec;
                 std::fs::rename(&tmp, &p).unwrap();
             }
             ferry_store::manifest::EntryPayload::Symlink { target } => {
+                // Test helper: assertions compare file contents only, so on
+                // hosts without symlink privilege we skip link entries
+                // rather than fail materialization.
+                #[cfg(unix)]
                 std::os::unix::fs::symlink(target, &p).unwrap();
+                #[cfg(not(unix))]
+                let _ = target;
             }
         }
     }
