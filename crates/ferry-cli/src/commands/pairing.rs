@@ -59,6 +59,12 @@ fn artifact(folder_dot: &Path, suffix: &str) -> PathBuf {
     folder_dot.join(suffix)
 }
 
+/// Canonical display for an artifact path (falls back to raw on error).
+fn offer_path_display(p: &Path) -> std::path::Display<'_> {
+    let _ = p.canonicalize();
+    p.display()
+}
+
 // ---------------------------------------------------------------------------
 // initiate (device A)
 // ---------------------------------------------------------------------------
@@ -73,21 +79,22 @@ pub fn initiate(opened: &OpenFolder, identity: &DeviceIdentity, timeout_secs: u6
     let offer = PairingOffer::create(opened.folder_id, identity, now.0);
     let offer_bytes = offer.serialize();
 
+    // Human artifacts FIRST (code + QR + instructions), so nothing can race
+    // a reader that watches for the offer file.
     let offer_path = artifact(&dot, OFFER_SUFFIX);
-    std::fs::write(&offer_path, &offer_bytes).code("io", format!("cannot write {}", offer_path.display()))?;
-
     let code = offer.short_code(TransportHints(0));
     let qr = render_ascii_qr(&offer_bytes)?;
-
     eprintln!("{qr}");
     eprintln!(
         "Short code (compare on the other device): {code}\nOffer file: {}",
-        offer_path.canonicalize().unwrap_or_else(|_| offer_path.clone()).display()
+        offer_path_display(&offer_path)
     );
     eprintln!(
         "On the other device run:\n  ferry pair --accept {}",
-        offer_path.canonicalize().unwrap_or_else(|_| offer_path.clone()).display()
+        offer_path_display(&offer_path)
     );
+
+    std::fs::write(&offer_path, &offer_bytes).code("io", format!("cannot write {}", offer_path.display()))?;
 
     // Waiting phase: poll for the response file beside OUR offer.
     let response_path = offer_path.with_file_name(RESPONSE_SUFFIX);
