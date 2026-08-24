@@ -1,5 +1,8 @@
 # idea2: secure full-file sync for developers and their agents
 
+[![ci](https://github.com/sharzilnfz/ferry/actions/workflows/ci.yml/badge.svg)](https://github.com/sharzilnfz/ferry/actions/workflows/ci.yml)
+
+
 Working name: **Ferry** (placeholder; rename during grilling if a better name lands).
 
 ## One-line pitch
