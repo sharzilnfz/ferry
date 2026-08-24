@@ -1004,10 +1004,16 @@ mod tests {
         let first = fx.full_scan_with_ledger();
 
         use ferry_store::snapshot::RefusalReason;
-        #[cfg(unix)]
-        assert!(first
-            .iter()
-            .any(|r| r.reason == RefusalReason::ReservedName));
+        // Unix must loudly refuse reserved names. Windows cannot create any
+        // refusable artifact in this fixture (the filesystem itself rejects
+        // reserved device names; symlinks need privileges), so its ledger is
+        // legitimately empty.
+        assert_eq!(
+            first
+                .iter()
+                .any(|r| r.reason == RefusalReason::ReservedName),
+            cfg!(unix)
+        );
         #[cfg(unix)]
         assert!(first
             .iter()
