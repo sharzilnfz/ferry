@@ -1730,7 +1730,10 @@ fn content_matches(
 /// Traversal defense: stored names are single NFC components. Reserved
 /// Windows device names are rejected here too — they can never materialize
 /// on a Windows endpoint, so carrying them further only delays a loud,
-/// actionable failure (T-012 policy).
+/// actionable failure (T-012 policy). Colon-bearing or prefixed components
+/// ("C:x", "C:\\x", absolute paths) are refused on every host: on Windows,
+/// `PathBuf::push` with such a component replaces the whole base, so a
+/// remote manifest could escape the synced root via `abs_under` (T-17).
 pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeError> {
     for c in path {
         if c.is_empty()
@@ -1739,6 +1742,14 @@ pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeErro
             || c.contains('/')
             || c.contains('\\')
             || c.contains('\0')
+            || c.contains(':')
+            // Stable stand-in for the nightly-only Path::prefix: any
+            // leading Prefix/RootDir/CurDir component means this is not a
+            // plain single component (drive-relative "C:x" included).
+            || !matches!(
+                std::path::Path::new(c).components().next(),
+                Some(std::path::Component::Normal(_))
+            )
         {
             return Err(MaterializeError::BadComponent {
                 component: c.clone(),
@@ -2488,7 +2499,7 @@ mod tests {
     fn traversal_defense_rejects_bad_stored_components() {
         let (w, target) = World::new(13);
 
-        for bad in ["..", ".", "a/b", "a\\b", ""] {
+        for bad in ["..", ".", "a/b", "a\\b", "", "C:x", "C:\\x", "a:b", "/abs"] {
             let cs = ChangeSet {
                 added: vec![Added {
                     path: vec![bad.to_string()],
