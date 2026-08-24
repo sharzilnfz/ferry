@@ -50,7 +50,7 @@ pub fn id_short(id: &[u8; 32]) -> String {
     for b in &id[..4] {
         s.push_str(&format!("{b:02x}"));
     }
-    s.push_str("…");
+    s.push('\u{2026}');
     s
 }
 

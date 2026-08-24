@@ -147,13 +147,13 @@ fn self_dial_wakes_listener_with_clean_eof_probe() {
 
     let server = std::thread::spawn(move || {
         let mut probe = lst.accept().expect("probe wakes accept");
-        let err = probe.recv_frame().err().expect("probe read errors");
+        let err = probe.recv_frame().unwrap_err();
         assert_eq!(err.kind(), ErrorKind::UnexpectedEof, "{err}");
     });
 
     let mut probe_dialer = a.dial(own).expect("self-dial returns a probe connection");
     assert_eq!(
-        probe_dialer.recv_frame().err().expect("clean EOF").kind(),
+        probe_dialer.recv_frame().unwrap_err().kind(),
         ErrorKind::UnexpectedEof
     );
     server.join().unwrap();

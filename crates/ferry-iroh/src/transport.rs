@@ -117,7 +117,7 @@ impl std::fmt::Debug for IrohTransport {
         f.debug_struct("IrohTransport")
             .field(
                 "endpoint",
-                &crate::identity::id_short(&self.inner.my_id.as_bytes()),
+                &crate::identity::id_short(self.inner.my_id.as_bytes()),
             )
             .finish_non_exhaustive()
     }
@@ -488,7 +488,7 @@ impl DynListener for IrohListener {
                 }
             })?;
             let obs = self.inner.observe(conn.remote_id());
-            spawn_path_sampler(&self.inner.rt.handle(), &conn, obs);
+            spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
 
             // A genuine inbound from ourselves is unexpected (iroh refuses
             // self-connects), but if it ever appears treat it like a probe.

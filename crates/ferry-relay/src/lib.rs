@@ -155,9 +155,11 @@ impl LocalRelay {
         &self.ledger
     }
 
-    /// Graceful shutdown.
+    /// Graceful shutdown. The server handle is taken out from behind the
+    /// lock BEFORE awaiting, so no guard is held across the await point.
     pub async fn shutdown(self) {
-        if let Some(server) = self.server.lock().unwrap().take() {
+        let taken = self.server.lock().unwrap().take();
+        if let Some(server) = taken {
             let _ = server.shutdown().await;
         }
     }
