@@ -1,6 +1,6 @@
 # T-08: Quarantine landing must be create-exclusive
 
-Status: ready-for-agent
+Status: done
 
 `unique_conflict_dest` (crates/ferry-sync-engine/src/naming.rs:55-78) probes
 with symlink_metadata, but the rename happens much later in
