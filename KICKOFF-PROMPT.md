@@ -2,9 +2,10 @@
 
 Copy everything below the line into a NEW conversation opened in this
 directory (`idea2/`). Permissions are already granted project-wide via
-`opencode.json` (allow-all, with guards only against `git push`, `rm -rf /*`,
-and `rm -rf ~*`), so no approval prompts should appear; approve once if your
-client still asks on first tool use.
+`opencode.json` (allow-all, with guards only against `rm -rf /*` and
+`rm -rf ~*`; `git push` is allowed — origin is
+https://github.com/sharzilnfz/ferry), so no approval prompts should appear;
+approve once if your client still asks on first tool use.
 
 ---
 
