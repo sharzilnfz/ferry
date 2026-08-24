@@ -20,6 +20,7 @@ pub mod apply;
 pub mod error;
 pub mod temp;
 
+pub use apply::resolve_live;
 pub use apply::set_symlink_times;
 pub use apply::{Applier, ApplyStats, Overwrite};
 pub use error::{DivergeReason, Divergence, MaterializeError};

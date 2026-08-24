@@ -93,17 +93,6 @@ pub fn execute(
     let mut dest_abs: Vec<PathBuf> = Vec::with_capacity(plan.quarantine.len());
     let mut buffers: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
     for (idx, op) in plan.quarantine.iter().enumerate() {
-        // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw spellings of the
-        // stored path and the bare-join lookup the pre-verify uses.
-        let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-        eprintln!(
-            "[NFD-DBG] quarantine op[{idx}]: stored_comps={}",
-            op.path
-                .iter()
-                .map(|c| hx(c.as_bytes()))
-                .collect::<Vec<_>>()
-                .join("/")
-        );
         let name = op.path.last().expect("stored paths are non-empty").clone();
         let parent = &op.path[..op.path.len() - 1];
         let candidate =
@@ -111,14 +100,10 @@ pub fn execute(
         let abs = crate::naming::unique_conflict_dest(root, parent, &candidate)
             .map_err(|e| io_at(root.join(&candidate), e))?;
         if let LoserContent::LiveLocal { expected_chunks } = &op.content {
-            let live_abs = abs_under(root, &op.path);
-            eprintln!(
-                "[NFD-DBG] preverify op[{idx}]: bare_join={} stat={:?}",
-                hx(live_abs.as_os_str().as_encoded_bytes()),
-                std::fs::symlink_metadata(&live_abs)
-                    .map(|m| format!("ok len={}", m.len()))
-                    .map_err(|e| format!("{:?}", e.kind()))
-            );
+            // Stored names are NFC; the live file may hold NFD bytes on
+            // byte-preserving hosts. Resolve through the applier's own
+            // folding so pre-verify reads what a guarded apply would touch.
+            let live_abs = ferry_materialize::resolve_live(root, &op.path);
             buffers.insert(
                 idx,
                 read_live_verified(&live_abs, &op.path, expected_chunks)?,
@@ -223,14 +208,6 @@ fn rel_under(root: &Path, abs: &Path) -> Vec<String> {
         .collect()
 }
 
-fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
-    let mut p = root.to_path_buf();
-    for c in rel {
-        p.push(c);
-    }
-    p
-}
-
 /// Read the live file and require every declared chunk region to hash to its
 /// id, with no trailing bytes beyond the declared content. Any drift
 /// surfaces as the applier's own divergence error type so callers see one
@@ -240,29 +217,9 @@ fn read_live_verified(
     rel: &[String],
     expected_chunks: &[(BlobId, u64)],
 ) -> Result<Vec<u8>, EngineError> {
-    let mut f = std::fs::File::open(abs).map_err(|e| {
-        // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw path bytes and the
-        // parent's live listing at open failure.
-        let hx = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-        eprintln!(
-            "[NFD-DBG] read_live_verified OPEN FAIL: path={} err={:?}",
-            hx(abs.as_os_str().as_encoded_bytes()),
-            e.kind()
-        );
-        if let Some(parent) = abs.parent() {
-            if let Ok(rd) = std::fs::read_dir(parent) {
-                for entry in rd.flatten() {
-                    eprintln!(
-                        "[NFD-DBG] read_live_verified live_entry={}",
-                        hx(entry.file_name().as_encoded_bytes())
-                    );
-                }
-            }
-        }
-        match e.kind() {
-            std::io::ErrorKind::NotFound => diverged(rel, DivergeReason::ExpectedPresent),
-            _ => io_at(abs, e),
-        }
+    let mut f = std::fs::File::open(abs).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => diverged(rel, DivergeReason::ExpectedPresent),
+        _ => io_at(abs, e),
     })?;
     let declared_total: u64 = expected_chunks.iter().map(|c| c.1).sum();
     let mut out = Vec::with_capacity(declared_total as usize);
@@ -307,17 +264,6 @@ fn write_loser_copy(
     abs_dest: &Path,
     live_bytes: Option<&[u8]>,
 ) -> Result<(), EngineError> {
-    // THROWAWAY DIAGNOSTIC (debug/nfd-divergence): raw before/after paths of
-    // every quarantine write.
-    eprintln!(
-        "[NFD-DBG] loser_copy: dest={}",
-        abs_dest
-            .as_os_str()
-            .as_encoded_bytes()
-            .iter()
-            .map(|x| format!("{x:02x}"))
-            .collect::<String>()
-    );
     if let Some(parent) = abs_dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_at(parent, e))?;
     }
@@ -340,7 +286,7 @@ fn write_loser_copy(
     match &op.content {
         LoserContent::LiveLocalSymlink { expected_target } => {
             // The live link must still point where the manifest says.
-            let actual = std::fs::read_link(abs_under(root, &op.path))
+            let actual = std::fs::read_link(ferry_materialize::resolve_live(root, &op.path))
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if &actual != expected_target {
@@ -653,6 +599,72 @@ mod tests {
             "the Expect chain refuses to act on diverged state"
         );
         assert!(list_conflicts(&rig.b.state_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn nfd_disk_spelling_resolves_for_stored_nfc_paths() {
+        // T-012 regression (failed only on byte-preserving Linux CI): scan
+        // stores NFC names while the filesystem keeps the decomposed bytes
+        // on disk. Quarantine pre-verify must read the loser's live file
+        // through the same NFC folding the applier applies, not a bare
+        // join, or execute reports a phantom ExpectedPresent before any
+        // guarded apply runs.
+        let mut a = Device::new(6, DEV_A, poly_of(13));
+        let mut b = Device::new(7, DEV_B, poly_of(13));
+        // Decomposed spelling ON DISK; every manifest will carry NFC.
+        let nfd = "rapport-anne\u{301}e.md";
+        write_file(&a.tree.join(nfd), b"base", false, (100, 0));
+        write_file(&b.tree.join(nfd), b"base", false, (100, 0));
+        let s0 = a.snapshot();
+        let _s0b = b.snapshot();
+
+        write_file(&a.tree.join(nfd), b"winner from A", false, (200, 0));
+        write_file(&b.tree.join(nfd), b"loser on B", false, (150, 0));
+        let sa = a.snapshot();
+        let sb = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
+        transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
+
+        let mut plan = reconcile(ReconcileInput {
+            store: &b.store,
+            local: &sb.manifest,
+            remote: &sa.manifest,
+            base: Some(&s0.manifest),
+        })
+        .unwrap();
+        for (id, _) in &plan.fetch {
+            transfer(
+                &a.store,
+                &b.store,
+                &[(ferry_store::format::BlobKind::DataChunk, *id)],
+            );
+        }
+        plan.guard_expected = Some(sb.manifest.clone());
+
+        let stats = execute(
+            &b.store,
+            &b.tree,
+            &plan,
+            Some(&b.state_dir),
+            (1_787_574_896, 0),
+        )
+        .unwrap();
+
+        assert_eq!(stats.quarantined.len(), 1);
+        assert!(
+            stats.quarantined[0].starts_with("rapport-ann\u{e9}e.md.ferry-conflict."),
+            "NFC-composed quarantine name: {}",
+            stats.quarantined[0]
+        );
+        assert_eq!(
+            std::fs::read(b.tree.join(nfd)).unwrap(),
+            b"winner from A",
+            "winner lands on the decomposed spelling the filesystem holds"
+        );
+        assert_eq!(
+            std::fs::read(b.tree.join(&stats.quarantined[0])).unwrap(),
+            b"loser on B"
+        );
     }
 
     #[test]
