@@ -23,9 +23,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(unix)]
 use std::time::Duration;
 
+// Kill-loop-only: the SIGKILL harness below is unix-only (libc::kill).
+#[cfg(unix)]
 use rand::rngs::StdRng;
+#[cfg(unix)]
 use rand::{Rng, SeedableRng};
 
 use ferry_materialize::temp::is_temp_name;
@@ -36,7 +40,9 @@ use ferry_store::manifest::{dir_entry, file_entry, serialize_tree_node, symlink_
 use ferry_store::store::Store;
 
 const FMK: [u8; 32] = [42u8; 32];
+#[cfg(unix)]
 const KILL_ITERATIONS: usize = 25;
+#[cfg(unix)]
 const SEED_BASE: u64 = 0x5EED_0001;
 
 // ---------------------------------------------------------------------------

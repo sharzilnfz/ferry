@@ -29,6 +29,7 @@ use ferry_store::format::hex;
 use ferry_store::manifest::{parse_tree_node, EntryPayload, RootManifest, TreeEntry, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{io_at, DivergeReason, Divergence, MaterializeError};
 use crate::temp::{fresh_entropy, is_temp_name, temp_name_for, TempStyle};
@@ -847,10 +848,7 @@ impl<'a> Applier<'a> {
     // -- helpers ------------------------------------------------------------
 
     fn abs(&self, rel: &[String]) -> PathBuf {
-        let mut p = self.target.clone();
-        for c in rel {
-            p.push(c);
-        }
+        let p = abs_under(&self.target, rel);
         // Windows long paths: apply the \\?\ extended-length prefix when the
         // absolute path meets or exceeds MAX_PATH. Identity on short,
         // relative, and POSIX paths (T-012).
@@ -1198,8 +1196,13 @@ fn verify_subtree_matches_base(
                     })
                 }
             };
+            // Keys are NFC (manifest spelling); disk names may hold any
+            // equivalent normalization on byte-preserving hosts. Leaf
+            // re-checks go through abs_under, which folds back to the LIVE
+            // spelling, so NFC keys stay honest here.
+            let key = comp.nfc().collect::<String>();
             let mut rel = components_below(target, &dir);
-            rel.push(comp);
+            rel.push(key);
             live_keys.insert(join_path(&rel));
             if ft.is_dir() {
                 stack.push(p);
@@ -1423,12 +1426,53 @@ fn walk_live(root: &Path) -> Result<Vec<CompPath>, MaterializeError> {
     Ok(out)
 }
 
+/// Resolve stored (NFC) components to the LIVE spelling under `root`.
+///
+/// Stored names are NFC by construction: ferry-scan normalizes readdir
+/// output before it reaches a manifest. But only folding hosts (macOS/
+/// Windows) enforce that spelling on disk; a byte-preserving Linux
+/// filesystem will happily hold `anne` + U+0301 while every manifest says
+/// `ann\u{e9}` — files written by macOS-origin archives and zip tools are
+/// the classic case. A bare join then misses on those hosts: guards report
+/// phantom ExpectedPresent divergence, subtree verification invents
+/// ExpectedAbsent entries, and atomic renames would create a SECOND file
+/// beside the original.
+///
+/// Each component therefore resolves in two steps: prefer the exact stored
+/// name; on a miss, fold the live directory once (NFC both sides) and adopt
+/// the live spelling. Genuine absences keep the stored form so creations
+/// land as NFC. Existence checks use symlink_metadata (no link-following).
 fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
-    let mut p = root.to_path_buf();
-    for c in rel {
-        p.push(c);
+    let mut cur = root.to_path_buf();
+    for comp in rel {
+        let direct = cur.join(comp);
+        if std::fs::symlink_metadata(&direct).is_ok() {
+            cur = direct;
+            continue;
+        }
+        match live_nfc_match(&cur, comp) {
+            Some(live) => cur = cur.join(live),
+            None => cur = direct,
+        }
     }
-    p
+    cur
+}
+
+/// One readdir, NFC-compared against `want`. Deterministic on pathological
+/// trees holding several spellings of one name: smallest raw name wins.
+fn live_nfc_match(dir: &Path, want: &str) -> Option<String> {
+    let want_nfc: String = want.nfc().collect();
+    let mut best: Option<String> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let nfc: String = name.nfc().collect();
+        if nfc == want_nfc && best.as_ref().is_none_or(|b| name < *b) {
+            best = Some(name);
+        }
+    }
+    best
 }
 
 fn components_below(root: &Path, dir: &Path) -> Vec<String> {
@@ -2146,7 +2190,10 @@ mod tests {
     // -- acceptance: guarded divergence --------------------------------------
 
     #[test]
+    #[cfg(unix)]
     fn guarded_mode_tamper_lists_exact_divergences_and_leaves_files_untouched() {
+        // Symlink-retarget divergence needs real links; Windows runners lack
+        // symlink privilege, so this exercises unix hosts only.
         let (w, target) = World::new(10);
 
         // Base state on disk.
@@ -2779,6 +2826,27 @@ mod tests {
             target.join("rename-me.TXT").exists(),
             "case-only rename lost the file"
         );
+    }
+
+    #[test]
+    fn nfd_disk_spelling_resolves_to_manifest_name() {
+        // Byte-preserving hosts (Linux) can hold decomposed spellings on
+        // disk while every manifest carries NFC — files written by
+        // macOS-origin archives and zip tools are the classic case. The
+        // resolver must find them (guards) and hand back the LIVE spelling
+        // (writes), so renames never duplicate the file under a second
+        // normalization. On folding hosts (macOS/Windows) the direct join
+        // already succeeds and this passes trivially.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rapport-anne\u{301}e.md"), b"x").unwrap();
+        let p = abs_under(dir.path(), &["rapport-ann\u{e9}e.md".to_string()]);
+        assert!(
+            std::fs::symlink_metadata(&p).is_ok(),
+            "NFC manifest name must resolve onto the NFD disk file"
+        );
+        // Byte-preserving hosts additionally get the LIVE spelling back
+        // (so renames replace in place); folding hosts may return the
+        // stored form — the OS folds either way.
     }
 
     #[test]

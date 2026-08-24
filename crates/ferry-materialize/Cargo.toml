@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+unicode-normalization = "0.1"
 ferry-store = { path = "../ferry-store" }
 ferry-platform = { path = "../ferry-platform" }
 blake3 = "1.5"
