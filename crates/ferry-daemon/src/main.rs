@@ -242,7 +242,10 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         TransportKind::Iroh => {
             // Stable endpoint identity derived from THIS store's device
             // identity (ferry-crypto): restart-safe public addressing.
-            let identity_root = d.store_dir.join(".ferry").join("identity");
+            // NOTE: lives in a SIBLING of the store's `.ferry/` — that
+            // directory belongs to the store layout, and creating it early
+            // would flip Store::create into Store::open on first run.
+            let identity_root = d.store_dir.join(".device-identity");
             let device = crypto_identity::load_or_create(&identity_root)
                 .map_err(|e| format!("device identity: {e}"))?;
 
