@@ -21,14 +21,13 @@ ferry-pin = { path = "../ferry-pin" }
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
+# Content hashing for manifest/blob ids in the exchange loop only — not key
+# handling; T-03 kept it local rather than widening ferry-crypto's API.
 blake3.workspace = true
 rand.workspace = true
 thiserror.workspace = true
-# Pair-grant sealing only (offer/accept file channel); the store cipher
-# comes from ferry-crypto::pack_cipher.
-chacha20poly1305.workspace = true
-hkdf.workspace = true
-sha2.workspace = true
+# Terminal QR rendering only (ASCII art over the matrix). All pairing and
+# key-handling crypto lives behind ferry-crypto (T-03).
 qrcode.workspace = true
 
 [dev-dependencies]

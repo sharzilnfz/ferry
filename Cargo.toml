@@ -23,6 +23,10 @@ hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"
 zeroize = "1"
+# Declared directly by ferry-crypto for constant-time MAC comparison (T-03).
+# Pinned to the version already resolved transitively via the AEAD stack;
+# bumping is forbidden (T-01).
+subtle = "2.6.1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 unicode-normalization = "0.1"
 ignore = "0.4"

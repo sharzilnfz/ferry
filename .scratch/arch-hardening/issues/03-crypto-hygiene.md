@@ -1,6 +1,6 @@
 # T-03: Crypto hygiene — honest constant-time compare + one key-derivation home
 
-Status: ready-for-agent
+Status: done
 
 1. **Constant-time MAC compare** (`crates/ferry-crypto/src/pairing.rs:292-
 296`): `PairingResponse::verify` docstring claims constant-time comparison
