@@ -969,6 +969,7 @@ dependencies = [
  "clap",
  "ferry-crypto",
  "ferry-ignore",
+ "ferry-pin",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",

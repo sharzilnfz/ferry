@@ -6,6 +6,7 @@ pub mod daemon;
 pub mod ignore_cmd;
 pub mod init;
 pub mod pairing;
+pub mod pin;
 pub mod share;
 pub mod status;
 pub mod sync;

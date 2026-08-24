@@ -3,9 +3,13 @@ $.conflicts:int
 $.device_id:string
 $.folder:string
 $.folder_id:string
+$.held_changes:int
 $.manifest_id:string
 $.peers[]
 $.pending_changes:null
+$.pin.holding:bool
+$.pin.paths[]
+$.pin.state:string
 $.scanned.bytes_chunked:int
 $.scanned.dirs:int
 $.scanned.files:int

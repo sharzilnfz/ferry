@@ -29,10 +29,12 @@
 //! - **Blobs move individually** in v0 (no pack-granular transfer yet);
 //!   every chunk is verified `BLAKE3(bytes) == id` before touching disk.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ferry_pin::{hold_filter, HeldLedger, HoldDecision};
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::manifest::{parse_manifest, RootManifest};
 use ferry_store::store::Store;
@@ -81,6 +83,8 @@ pub struct RoundReport {
     pub ops_applied: usize,
     pub quarantined: usize,
     pub conflicts_recorded: usize,
+    /// Decisions the session pin held back this round (T-015).
+    pub held: usize,
     /// True when this round ended with agreement recorded (equal roots).
     pub agreed: bool,
 }
@@ -99,6 +103,8 @@ pub enum ExchangeError {
     Execute(#[from] ferry_sync_engine::execute::EngineError),
     #[error("manifest: {0}")]
     Manifest(#[from] ferry_store::manifest::ManifestError),
+    #[error("pin: {0}")]
+    Pin(#[from] ferry_pin::PinError),
     #[error("{0}")]
     Other(String),
 }
@@ -226,8 +232,34 @@ pub fn run_round(
         report.chunks_received += request_data(conn, session, &wanted)?;
     }
 
-    // Connection work done; apply our plan locally.
+    // Connection work done; consult the pin (session pinning, T-015)
+    // BEFORE applying: an active pin splits the plan into an apply-now
+    // half and a held half whose decisions are ledgered under
+    // `.ferry/held/<peer>.jsonl`. The fetch already ran in full above, so
+    // held versions' bytes are in the store and release works offline.
     let now = ferry_sync_engine::timefmt::now_unix();
+    let peer_hex = hex(&their_manifest.device_id);
+    let plan_to_run = match hold_filter(
+        &session.state_dir,
+        &session.store,
+        &plan,
+        &my.manifest,
+        &peer_hex,
+        &hex(&their_manifest_id),
+        now,
+    )? {
+        HoldDecision::Pass => Cow::Borrowed(&plan),
+        HoldDecision::Hold(split) => {
+            report.held = split.held.len();
+            HeldLedger::new(&session.state_dir).append(&peer_hex, &split.held)?;
+            eprintln!(
+                "pin: held {} change(s) from peer {} (release with `ferry pin release`)",
+                split.held.len(),
+                &peer_hex[..8.min(peer_hex.len())]
+            );
+            Cow::Owned(split.apply)
+        }
+    };
     if std::env::var_os("FERRY_DEBUG_PLAN").is_some() {
         eprintln!(
             "PLAN[{}]: materialize={} quarantine={} send={} fetch={} conflicts={}",
@@ -250,7 +282,7 @@ pub fn run_round(
     let stats = execute(
         &session.store,
         &session.tree_root,
-        &plan,
+        &plan_to_run,
         Some(&session.state_dir),
         now,
     )?;

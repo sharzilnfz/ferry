@@ -119,6 +119,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         "ops_applied": totals.applied,
         "quarantined": totals.quarantined,
         "conflicts_recorded": totals.conflicts,
+        "held": totals.held,
     });
 
     let human = if converged {
@@ -147,6 +148,7 @@ struct RoundTotals {
     applied: u64,
     quarantined: u64,
     conflicts: u64,
+    held: u64,
 }
 
 impl RoundTotals {
@@ -156,6 +158,7 @@ impl RoundTotals {
         self.applied += r.ops_applied as u64;
         self.quarantined += r.quarantined as u64;
         self.conflicts += r.conflicts_recorded as u64;
+        self.held += r.held as u64;
     }
 }
 

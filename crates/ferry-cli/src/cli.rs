@@ -87,6 +87,16 @@ pub enum Command {
         /// Folder to inspect (default: current directory).
         folder: Option<PathBuf>,
     },
+    /// Session pinning: declare this device the active writer for a while.
+    ///
+    /// While pinned, competing remote edits to the pinned paths are HELD
+    /// and surfaced instead of racing your tree; `ferry pin release`
+    /// reconciles them through the ordinary three-way engine (ADR-0004:
+    /// winners live, losers quarantined, nothing merged, nothing lost).
+    Pin {
+        #[command(subcommand)]
+        action: PinAction,
+    },
     /// Work with the structured conflict report.
     Conflicts {
         #[command(subcommand)]
@@ -143,4 +153,36 @@ pub enum Command {
 pub enum ConflictsAction {
     /// List recorded conflicts, oldest first.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PinAction {
+    /// Begin a pinned session for this folder (per-folder, one at a time).
+    Start {
+        /// gitignore-style globs scoping the hold (e.g. `src/**`). Repeat
+        /// the flag for several patterns; omit to pin the whole folder
+        /// (equivalent to `--paths '*'`).
+        #[arg(long = "paths", value_name = "GLOB")]
+        paths: Vec<String>,
+        /// Folder to pin (default: current directory).
+        folder: Option<PathBuf>,
+    },
+    /// End the session without reconciling. Held changes stay ledgered on
+    /// disk; `ferry pin release` still recovers them later.
+    Stop {
+        /// Folder to unpin (default: current directory).
+        folder: Option<PathBuf>,
+    },
+    /// Reconcile every held change through the three-way engine: winner
+    /// live, loser quarantined `path.ferry-conflict.<device>-<ts>`, entry
+    /// in conflicts.jsonl. Never merges, never discards.
+    Release {
+        /// Folder to release (default: current directory).
+        folder: Option<PathBuf>,
+    },
+    /// Show the pin state and the full held set.
+    Status {
+        /// Folder to inspect (default: current directory).
+        folder: Option<PathBuf>,
+    },
 }

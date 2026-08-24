@@ -1,0 +1,17 @@
+$.action:string
+$.command:string
+$.conflicts_recorded:int
+$.conflicts_total:int
+$.folder:string
+$.ops_applied:int
+$.peers[]
+$.peers[0].conflicts_recorded:int
+$.peers[0].device_id:string
+$.peers[0].held_entries:int
+$.peers[0].held_paths[]
+$.peers[0].held_paths[0]:string
+$.peers[0].ops_applied:int
+$.peers[0].quarantined:int
+$.peers[0].remote_manifest_id:string
+$.pin_ended:bool
+$.quarantined:int

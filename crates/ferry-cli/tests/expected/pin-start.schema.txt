@@ -1,0 +1,9 @@
+$.action:string
+$.base_peers_recorded:int
+$.command:string
+$.device_id:string
+$.folder:string
+$.paths[]
+$.paths[0]:string
+$.pid:int
+$.started_at:string

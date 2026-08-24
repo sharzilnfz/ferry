@@ -329,7 +329,7 @@ fn remember_peer_addr(session: &FolderSession, peer_hex: &str, addr: SocketAddr)
 
 fn log_round(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
     eprintln!(
-        "[{}] round: {} vs {} equal={} meta+{} sent={} recv={} applied={} conflicts={} agreed={}",
+        "[{}] round: {} vs {} equal={} meta+{} sent={} recv={} applied={} conflicts={} held={} agreed={}",
         display_root(w),
         r.my_root,
         r.their_root,
@@ -339,6 +339,7 @@ fn log_round(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
         r.chunks_received,
         r.ops_applied,
         r.conflicts_recorded,
+        r.held,
         r.agreed
     );
 }
@@ -357,6 +358,7 @@ fn emit_event_json(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
         "ops_applied": r.ops_applied,
         "quarantined": r.quarantined,
         "conflicts_recorded": r.conflicts_recorded,
+        "held": r.held,
         "agreed": r.agreed,
     });
     let _ = writeln!(std::io::stdout(), "{event}");

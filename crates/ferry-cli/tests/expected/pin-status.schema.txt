@@ -1,0 +1,13 @@
+$.action:string
+$.command:string
+$.device_id:string
+$.folder:string
+$.held_by_peer.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb[]
+$.held_by_peer.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb[0]:string
+$.held_changes:int
+$.holding:bool
+$.paths[]
+$.paths[0]:string
+$.pid:int
+$.started_at:string
+$.state:string
