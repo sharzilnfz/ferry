@@ -939,7 +939,12 @@ fn plan_upsert(
             if !md.is_file() {
                 return Ok(()); // occupied otherwise: atomic replacement
             }
-            if md.len() != size || live_exec(&md) != exec {
+            // Non-unix cannot store the exec bit (documented convention:
+            // carried in manifests, not enforced on disk), so exec drift
+            // must not force rewrites there — such entries would otherwise
+            // be rewritten forever and never converge.
+            let exec_drifts = cfg!(unix) && live_exec(&md) != exec;
+            if md.len() != size || exec_drifts {
                 return Ok(()); // cheap facts differ: full rewrite
             }
             // Size and exec agree; bytes may still differ (equal-length
@@ -1142,7 +1147,9 @@ fn check_live_matches(
                 });
                 return Ok(());
             }
-            if live_exec(&md) != exp.exec {
+            // Same non-unix convention: exec is not stored on disk, so it
+            // cannot count as pre-verify divergence there.
+            if cfg!(unix) && live_exec(&md) != exp.exec {
                 out.push(Divergence {
                     path: rel.clone(),
                     reason: DivergeReason::ExecMismatch {
@@ -1919,12 +1926,23 @@ mod tests {
 
         let mut ap = Applier::new(&w.store, &target);
         let s2 = ap.apply_tree(&root).unwrap();
-        assert_eq!(
-            s2.mutations(),
-            0,
-            "second identical apply must perform zero writes; stats {s2:?}"
-        );
-        assert_eq!(s2.skipped_unchanged, 4, "all four entries skipped");
+        if cfg!(unix) {
+            assert_eq!(
+                s2.mutations(),
+                0,
+                "second identical apply must perform zero writes; stats {s2:?}"
+            );
+            assert_eq!(s2.skipped_unchanged, 4, "all four entries skipped");
+        } else {
+            // Documented deviation: a link's OWN mtime cannot be restored on
+            // windows (no std API without following the link), so the link
+            // alone is recreated each pass while every other entry skips.
+            assert_eq!(
+                s2.symlinks_written, 1,
+                "only the link may rewrite; stats {s2:?}"
+            );
+            assert_eq!(s2.skipped_unchanged, 3, "the other three entries skip");
+        }
     }
 
     #[test]
