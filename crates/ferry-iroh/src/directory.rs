@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
 
+use crate::lock::lock;
+
 /// An explicit or directory-discovered route to a peer.
 #[derive(Debug, Clone)]
 pub struct Route {
@@ -51,20 +53,20 @@ fn table() -> &'static Mutex<HashMap<RouteKey, (Route, RouteScope)>> {
 /// Directory routes are only added if no entry (of either scope) exists:
 /// first publisher wins, keeping repeated test setups stable.
 pub fn publish_route(key: RouteKey, route: Route) {
-    let mut t = table().lock().unwrap();
+    let mut t = lock(table());
     t.entry(key).or_insert((route, RouteScope::Directory));
 }
 
 /// Register an operator/config-provided route. Overrides any previous
 /// registration for the same key.
 pub fn register_explicit_route(key: RouteKey, route: Route) {
-    let mut t = table().lock().unwrap();
+    let mut t = lock(table());
     t.insert(key, (route, RouteScope::Explicit));
 }
 
 /// Resolve a route key. Returns None when nothing was ever published.
 pub fn resolve_route(key: &RouteKey) -> Option<(Route, RouteScope)> {
-    table().lock().unwrap().get(key).cloned()
+    lock(table()).get(key).cloned()
 }
 
 #[cfg(test)]

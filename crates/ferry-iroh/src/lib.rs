@@ -44,6 +44,8 @@ pub mod directory;
 pub mod identity;
 pub mod transport;
 
+mod lock;
+
 pub use config::{IrohConfig, IrohConfigBuilder, MdnsSetting, RelaySetting};
 pub use directory::{publish_route, register_explicit_route, resolve_route, Route, RouteScope};
 pub use transport::{DialFailure, IrohTransport, PathObservation};
