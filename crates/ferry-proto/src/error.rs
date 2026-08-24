@@ -86,4 +86,7 @@ pub enum ProtoError {
 
     #[error("folder {folder} is not shared by the peer")]
     FolderUnknown { folder: String },
+
+    #[error("session receive budget exceeded ({what}): limit {limit}")]
+    ResourceLimit { what: &'static str, limit: usize },
 }

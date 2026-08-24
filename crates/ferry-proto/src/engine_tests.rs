@@ -6,8 +6,8 @@
 
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, FLAG_EXTENSION_AWARE};
-use crate::engine::Session;
+use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, IndexAdvert, FLAG_EXTENSION_AWARE};
+use crate::engine::{ingest_pack, recv_advert_map, Session, MAX_ADVERT_ROWS_TOTAL};
 use crate::error::ByeReason;
 use crate::frame::{read_body, write_body};
 use crate::secure::{kdf_handshake, traffic_keys, transcript_hash};
@@ -281,4 +281,99 @@ fn skipped_unknown_types_must_be_sealed_correctly_too() {
     write_body(&mut inject, &body).unwrap();
     let err = sess.recv_frame().unwrap_err();
     assert!(matches!(err, ProtoError::Auth(_)), "{err}");
+}
+
+// --- T-016: session-wide receive budgets + crash-safe pack ingest -------------
+
+#[test]
+fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
+    // A hostile peer streams MAX_ROWS-row advert frames with more=1 forever.
+    // recv_advert_map must stop at the session-wide row budget with a typed
+    // ResourceLimit (→ BYE(ResourceLimit) on the wire), never OOM.
+    let (mut inject, mut inbox) = duplex_pair();
+    let mut sess = policy_session(&mut inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
+
+    // Distinct ids per row: the index-table encoder sorts AND dedups
+    // (kind,id) pairs, so repeated rows would collapse to one and never
+    // trip any budget.
+    let entries_for = |frame: usize| -> Vec<ferry_store::index::IndexEntry> {
+        (0..IndexAdvert::MAX_ROWS)
+            .map(|j| {
+                let n = (frame * IndexAdvert::MAX_ROWS + j) as u64;
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&n.to_be_bytes());
+                ferry_store::index::IndexEntry {
+                    kind: ferry_store::format::BlobKind::DataChunk,
+                    id,
+                    pack: [0u8; 32],
+                    plain_off: 0,
+                    plain_len: 0,
+                }
+            })
+            .collect()
+    };
+    // One frame PAST the budget: 129 full frames = 264_192 rows > 262_144.
+    let frames = MAX_ADVERT_ROWS_TOTAL / IndexAdvert::MAX_ROWS + 1;
+    for f in 0..frames {
+        write_frame(
+            &mut inject,
+            &FrameBody::new(
+                codec::MSG_INDEX_ADVERT,
+                ProtocolVersion::V1_0,
+                IndexAdvert {
+                    entries: entries_for(f),
+                    more: true,
+                }
+                .encode(),
+            ),
+        );
+    }
+
+    let err = recv_advert_map(&mut sess).unwrap_err();
+    match err {
+        ProtoError::ResourceLimit { limit, .. } => assert_eq!(limit, MAX_ADVERT_ROWS_TOTAL),
+        other => panic!("expected ResourceLimit, got {other}"),
+    }
+}
+
+#[test]
+fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        ferry_store::store::Store::create(
+            dir.path(),
+            [7u8; 32],
+            Box::new(ferry_store::crypto::PassthroughCipher),
+        )
+        .unwrap(),
+    );
+
+    let bytes: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
+
+    // Two "processes" racing on the same store dir. The unique pid+entropy
+    // temp names mean neither writer's bytes can interleave into the other's
+    // file; both must succeed and the final pack must match its name.
+    let s2 = Arc::clone(&store);
+    let b2 = bytes.clone();
+    let racer = std::thread::spawn(move || ingest_pack(&s2, &b2));
+    let here = ingest_pack(&store, &bytes).unwrap();
+    let there = racer.join().unwrap().unwrap();
+    assert_eq!(here, there, "same bytes ⇒ same verified BLAKE3 name");
+
+    let name = ferry_store::format::hex(&here);
+    let store_dir = dir.path().join(ferry_store::store::STORE_DIR_NAME);
+    let on_disk = std::fs::read(store_dir.join("packs").join(format!("{name}.pack"))).unwrap();
+    assert_eq!(*blake3::hash(&on_disk).as_bytes(), here);
+    assert_eq!(on_disk, bytes);
+
+    // No orphaned temps survive a successful ingest — and the error path
+    // removes its temp too (best-effort cleanup in ingest_pack); crash
+    // residue is ticket 20's sweeper.
+    let residue: Vec<_> = std::fs::read_dir(store_dir.join("tmp"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(residue.is_empty(), "{residue:?}");
 }
