@@ -38,7 +38,7 @@ use ferry_platform::{classify_link, find_case_conflict, host_folds_case, is_rese
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::chunker::chunk;
+use crate::chunker::{chunk, PolynomialError, ValidatedPoly};
 use crate::format::{BlobId, BlobKind};
 use crate::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, RootManifest,
@@ -72,6 +72,8 @@ pub enum SnapshotError {
     InvalidTimestamp,
     #[error("store rejected a blob: {0}")]
     Store(#[from] StoreError),
+    #[error("chunker polynomial rejected: {0}")]
+    Polynomial(#[from] PolynomialError),
 }
 
 /// Why one path was refused a place in the snapshot. Refusals are loud:
@@ -155,9 +157,12 @@ pub struct SnapshotOutput {
 /// Walk `source` and store every chunk, tree node, and the root manifest
 /// into `store`. Seals all staging packs before returning (end-of-burst
 /// rule), so a resnapshot of an unchanged tree writes no new pack bytes.
+///
+/// Takes a [`ValidatedPoly`] — validated once at folder-open/config-load —
+/// so an invalid polynomial cannot reach the chunker mid-walk.
 pub fn snapshot_dir(
     store: &Store,
-    poly: u64,
+    poly: ValidatedPoly,
     source: &Path,
     identity: &SnapshotIdentity,
 ) -> Result<SnapshotOutput, SnapshotError> {
@@ -290,7 +295,7 @@ fn exec_of(meta: &std::fs::Metadata) -> bool {
 
 struct Walker<'a> {
     store: &'a Store,
-    poly: u64,
+    poly: ValidatedPoly,
     stats: ScanStats,
     refused: Vec<RefusedPath>,
 }
@@ -413,8 +418,11 @@ impl Walker<'_> {
 
         if ft.is_file() {
             let bytes = std::fs::read(path).map_err(io_err(path))?;
+            // `poly` is validated at the API boundary; the error arm is
+            // unreachable in practice but stays typed rather than panicking.
+            let pieces = chunk(self.poly.get(), &bytes)?;
             let mut chunks = Vec::new();
-            for piece in chunk(self.poly, &bytes) {
+            for piece in pieces {
                 let id = self.store.put_data(piece)?;
                 self.stats.bytes_chunked += piece.len() as u64;
                 chunks.push((id, piece.len() as u64));
@@ -465,8 +473,8 @@ pub(crate) mod testutil {
         (dir, store)
     }
 
-    pub(crate) fn poly_of(seed: u64) -> u64 {
-        crate::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed))
+    pub(crate) fn poly_of(seed: u64) -> crate::chunker::ValidatedPoly {
+        crate::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
     }
 
     pub(crate) fn identity(at: (i64, u32)) -> SnapshotIdentity {

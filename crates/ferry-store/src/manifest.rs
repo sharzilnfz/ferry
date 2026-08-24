@@ -232,6 +232,41 @@ mod tests {
         ));
     }
 
+    /// T-02 acceptance: a wire `chunk_count` that lies must come back as a
+    /// typed error with no huge pre-reservation and no panic (debug AND
+    /// release). The count is a raw u32 off the wire; the parser must never
+    /// trust it for capacity.
+    #[test]
+    fn lying_chunk_count_is_a_typed_error_without_huge_allocation() {
+        // One well-formed file-entry header, then chunk_count = u32::MAX and
+        // zero chunk bytes. Pre-T-02 this reserved ~139 GB up front.
+        let mut evil: Vec<u8> = Vec::new();
+        put_u32(&mut evil, 1); // entry_count
+        evil.push(0x00); // type: file
+        put_u32(&mut evil, 1);
+        put_bytes(&mut evil, b"f");
+        evil.push(0x00); // flags
+        put_i64(&mut evil, 0); // mtime_sec
+        put_u32(&mut evil, 0); // mtime_nsec
+        put_u64(&mut evil, 0); // size
+        put_u32(&mut evil, u32::MAX); // lying chunk_count
+        let err = parse_tree_node(&evil).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::Corrupt("truncated")),
+            "got {err:?}"
+        );
+
+        // Same lie but with one real chunk following: still fails cleanly at
+        // the second iteration.
+        let mut half = evil.clone();
+        half.extend_from_slice(&[0xaa; 32]); // chunk id
+        put_u64(&mut half, 5); // chunk len
+        assert!(matches!(
+            parse_tree_node(&half),
+            Err(ManifestError::Corrupt("truncated"))
+        ));
+    }
+
     #[test]
     fn manifest_reserved_field_must_be_zero() {
         let m = RootManifest {
@@ -607,8 +642,13 @@ pub fn parse_tree_node(bytes: &[u8]) -> Result<TreeNode, ManifestError> {
         let payload = match type_byte {
             0x00 => {
                 let size = r.u64()?;
-                let chunk_count = r.u32()? as usize;
-                let mut chunks = Vec::with_capacity(chunk_count);
+                let chunk_count = r.u32()?;
+                // Never pre-reserve from an untrusted wire count: a lying
+                // u32 would reserve ~139 GB before a single entry byte is
+                // read. Grow incrementally instead — the loop below fails
+                // with `truncated` within one iteration once the frame runs
+                // out, so worst-case work is bounded by the input length.
+                let mut chunks = Vec::new();
                 for _ in 0..chunk_count {
                     let id = r.array()?;
                     let len = r.u64()?;

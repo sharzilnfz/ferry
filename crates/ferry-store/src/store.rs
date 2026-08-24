@@ -70,7 +70,7 @@ mod tests {
 
         for (i, size) in sizes.iter().enumerate() {
             let data: Vec<u8> = (0..*size).map(|_| rng.gen()).collect();
-            let parts = crate::chunker::chunk(poly, &data);
+            let parts = crate::chunker::chunk(poly, &data).unwrap();
 
             if *size == 0 {
                 assert!(parts.is_empty(), "empty file must produce zero chunks");
@@ -144,7 +144,7 @@ mod tests {
 
         let id_of = |b: &[u8]| -> BlobId { *blake3::hash(b).as_bytes() };
 
-        let before_parts = chunk_offsets(poly, &base);
+        let before_parts = chunk_offsets(poly, &base).unwrap();
         let before_ids: Vec<BlobId> = before_parts
             .iter()
             .map(|(o, l)| id_of(&base[*o..*o + l]))
@@ -160,7 +160,7 @@ mod tests {
         shifted.extend_from_slice(b"[INSERTED PAYLOAD]".repeat(56).as_slice());
         shifted.extend_from_slice(&base[insert_at..]);
 
-        let after_parts = chunk_offsets(poly, &shifted);
+        let after_parts = chunk_offsets(poly, &shifted).unwrap();
         let after_ids: Vec<BlobId> = after_parts
             .iter()
             .map(|(o, l)| id_of(&shifted[*o..*o + l]))

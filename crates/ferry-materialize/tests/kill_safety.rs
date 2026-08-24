@@ -237,6 +237,7 @@ fn store_model(w: &WorldRoot, model: &Model) -> BlobId {
         for (rel, spec) in &model.files {
             if in_dir(rel) {
                 let chunks: Vec<(BlobId, u64)> = chunk(w.poly, &spec.bytes)
+                    .unwrap()
                     .iter()
                     .map(|b| (store.put_data(b).unwrap(), b.len() as u64))
                     .collect();
@@ -327,6 +328,7 @@ fn apply_once_path() -> PathBuf {
 
 fn chunk_ids(poly: u64, bytes: &[u8]) -> Vec<BlobId> {
     chunk(poly, bytes)
+        .expect("fixture poly valid")
         .iter()
         .map(|b| *blake3::hash(b).as_bytes())
         .collect()

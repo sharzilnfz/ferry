@@ -1836,6 +1836,7 @@ mod tests {
     /// ordered chunk list for a manifest entry.
     fn chunked(w: &World, bytes: &[u8]) -> Vec<(BlobId, u64)> {
         chunk(w.poly, bytes)
+            .expect("fixture poly valid")
             .iter()
             .map(|b| (w.store.put_data(b).unwrap(), b.len() as u64))
             .collect()

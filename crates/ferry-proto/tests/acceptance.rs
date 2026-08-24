@@ -97,7 +97,7 @@ fn build_source_tree(base: &Path) -> std::collections::BTreeMap<String, Vec<u8>>
 }
 
 fn snapshot(store: &Store, source: &Path, device: DeviceId, created: i64) -> BlobId {
-    let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(99));
+    let poly = ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(99));
     let out = snapshot_dir(
         store,
         poly,

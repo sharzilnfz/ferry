@@ -525,7 +525,9 @@ mod tests {
         };
         let out = ferry_store::snapshot::snapshot_dir(
             &store,
-            ferry_store::chunker::generate_polynomial(&mut rand::rngs::StdRng::seed_from_u64(3)),
+            ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(
+                3,
+            )),
             &tree,
             &idn,
         )

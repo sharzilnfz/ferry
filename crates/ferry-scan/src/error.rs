@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use ferry_store::chunker::PolynomialError;
 use ferry_store::manifest::ManifestError;
 use ferry_store::snapshot::SnapshotError;
 use ferry_store::store::StoreError;
@@ -29,6 +30,8 @@ pub enum ScanError {
     },
     #[error("store rejected a blob: {0}")]
     Store(#[from] StoreError),
+    #[error("chunker polynomial rejected: {0}")]
+    Polynomial(#[from] PolynomialError),
     #[error("full snapshot failed: {0}")]
     Snapshot(#[from] SnapshotError),
     #[error("stored tree node failed validation: {0}")]

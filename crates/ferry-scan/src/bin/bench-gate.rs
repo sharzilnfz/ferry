@@ -143,7 +143,8 @@ fn main() {
     let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
-        poly: 0x0025_b468_838d_cb75 | (1 << 53),
+        poly: ferry_store::chunker::ValidatedPoly::new(0x0025_b468_838d_cb75 | (1 << 53))
+            .expect("bench polynomial constant is monic irreducible of degree 53"),
         folder_id: [7; 16],
         device_id: [8; 32],
     };

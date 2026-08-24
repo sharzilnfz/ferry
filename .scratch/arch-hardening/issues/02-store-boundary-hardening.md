@@ -1,6 +1,6 @@
 # T-02: Store boundary hardening — no panics on user/disk/wire input
 
-Status: ready-for-agent
+Status: done
 
 Three panic/DoS paths at ferry-store's trust boundaries:
 

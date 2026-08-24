@@ -111,7 +111,7 @@ pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
 /// mutably and left coherent for the next pass.
 pub(crate) struct Walker<'a> {
     store: &'a Store,
-    poly: u64,
+    poly: ferry_store::chunker::ValidatedPoly,
     ignore: &'a dyn IgnorePolicy,
     disk_root: &'a Path,
     cache: &'a mut DirCache,
@@ -129,7 +129,7 @@ impl<'a> Walker<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run(
         store: &'a Store,
-        poly: u64,
+        poly: ferry_store::chunker::ValidatedPoly,
         ignore: &'a dyn IgnorePolicy,
         disk_root: &'a Path,
         cache: &'a mut DirCache,
@@ -369,8 +369,11 @@ impl<'a> Walker<'a> {
                     _ => {
                         let bytes =
                             std::fs::read(&child_disk).map_err(Self::io_err(&child_disk))?;
+                        // `poly` is a ValidatedPoly from the store handle; the
+                        // error arm is unreachable but stays typed, never a panic.
+                        let pieces = ferry_store::chunker::chunk(self.poly.get(), &bytes)?;
                         let mut chunks = Vec::new();
-                        for piece in ferry_store::chunker::chunk(self.poly, &bytes) {
+                        for piece in pieces {
                             let id = self.store.put_data(piece)?;
                             self.stats.bytes_chunked += piece.len() as u64;
                             chunks.push((id, piece.len() as u64));
@@ -529,7 +532,7 @@ mod tests {
         _tmp: tempfile::TempDir,
         _store_dir: tempfile::TempDir,
         store: Store,
-        poly: u64,
+        poly: ferry_store::chunker::ValidatedPoly,
         root: PathBuf,
         cache: DirCache,
         prev_root_tree_id: BlobId,

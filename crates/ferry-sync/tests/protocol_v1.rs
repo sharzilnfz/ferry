@@ -39,8 +39,8 @@ use ferry_sync::{
 
 const POLY_SEED: u64 = 20260824;
 
-fn poly() -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(POLY_SEED))
+fn poly() -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(POLY_SEED))
 }
 
 fn open_store(dir: &Path) -> Arc<Store> {

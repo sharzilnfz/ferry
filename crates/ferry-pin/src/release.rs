@@ -153,7 +153,6 @@ mod tests {
 /// harness because cfg(test) items are not visible across crate lines.)
 #[cfg(test)]
 pub(crate) mod ferry_pin_testutil {
-    use ferry_store::chunker::generate_polynomial;
     use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     use ferry_store::store::Store;
@@ -187,8 +186,8 @@ pub(crate) mod ferry_pin_testutil {
         core::array::from_fn(|i| (i * 17 + 3) as u8)
     }
 
-    pub fn poly_of(seed: u64) -> u64 {
-        generate_polynomial(&mut StdRng::seed_from_u64(seed))
+    pub fn poly_of(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+        ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
     }
 
     impl Rig {

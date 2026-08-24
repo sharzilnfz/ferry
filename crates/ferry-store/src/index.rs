@@ -148,6 +148,36 @@ mod tests {
         assert!(matches!(err, IndexError::NotAnIndex));
     }
 
+    /// T-02 acceptance: a corrupt trailer whose table length exceeds
+    /// everything before it must yield a typed error, not an underflow panic
+    /// (debug) or a wrapped huge-slice index (release).
+    #[test]
+    fn corrupt_trailer_length_is_a_typed_error_not_a_panic() {
+        let cipher = PassthroughCipher;
+        let file = seal_index_container(&fmk(), &salt(), &[], &cipher).unwrap();
+
+        // Lie large: tlen = u32::MAX is far more than the whole file.
+        let mut evil = file.clone();
+        let n = evil.len();
+        evil[n - 4..].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            open_index_container(&evil, &fmk(), &cipher),
+            Err(IndexError::Corrupt("negative table extent"))
+        ));
+
+        // Lie just past the salt: ct_start would land below
+        // HEADER_LEN + SALT_LEN — the explicit lower-bound guard that must
+        // keep working after the checked_sub reorder.
+        let mut small = file;
+        let n = small.len();
+        let tlen = (n - HEADER_LEN) as u32;
+        small[n - 4..].copy_from_slice(&tlen.to_le_bytes());
+        assert!(matches!(
+            open_index_container(&small, &fmk(), &cipher),
+            Err(IndexError::Corrupt("negative table extent"))
+        ));
+    }
+
     #[test]
     fn union_of_indexes_resolves_duplicates_preferring_existing_packs() {
         let mut table = LocationTable::default();
@@ -179,6 +209,22 @@ mod tests {
         let mut duped = LocationTable::default();
         duped.merge([a.clone(), a.clone(), b.clone()]);
         assert_eq!(duped.candidates(BlobKind::DataChunk, &a.id).len(), 2);
+    }
+
+    /// `packs()` dedups and stays deterministic (sorted) regardless of merge
+    /// order — the O(n²) Vec-scan it replaced preserved insertion order, so
+    /// pin the new contract explicitly.
+    #[test]
+    fn packs_dedup_and_sort_regardless_of_merge_order() {
+        let mk = |pack_byte: u8| entry(BlobKind::DataChunk, pack_byte, pack_byte, 0, 0);
+        let mut t1 = LocationTable::default();
+        t1.merge([mk(0x02), mk(0x01)]);
+        let mut t2 = LocationTable::default();
+        t2.merge([mk(0x03)]);
+        t1.merge(t2.entries.clone());
+        assert_eq!(t1.packs(), vec![[0x01; 32], [0x02; 32], [0x03; 32]]);
+        // Exact duplicates collapse in merge too.
+        assert_eq!(t1.len(), 3);
     }
 
     #[test]
@@ -289,7 +335,7 @@ pub enum IndexError {
 }
 
 /// One resolved location row.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IndexEntry {
     pub kind: BlobKind,
     pub id: BlobId,
@@ -402,7 +448,13 @@ pub fn open_index_container(
         .unwrap();
     let tlen_pos = file_bytes.len() - 4;
     let tlen = u32::from_le_bytes(file_bytes[tlen_pos..].try_into().unwrap()) as usize;
-    let ct_start = tlen_pos - tlen;
+    // checked_sub BEFORE the guard: on a corrupt trailer `tlen` can exceed
+    // everything before it, and the previous `tlen_pos - tlen` overflowed
+    // (panic in debug, wrapped huge index in release) before its own
+    // lower-bound check could run.
+    let ct_start = tlen_pos
+        .checked_sub(tlen)
+        .ok_or(IndexError::Corrupt("negative table extent"))?;
     if ct_start < HEADER_LEN + SALT_LEN {
         return Err(IndexError::Corrupt("negative table extent"));
     }
@@ -422,6 +474,9 @@ pub fn open_index_container(
 #[derive(Debug, Default)]
 pub struct LocationTable {
     entries: Vec<IndexEntry>,
+    /// Membership mirror of `entries` so `merge` stays O(1) per row instead
+    /// of O(n) `Vec::contains` scans over the whole union.
+    seen: std::collections::HashSet<IndexEntry>,
 }
 
 impl LocationTable {
@@ -430,7 +485,7 @@ impl LocationTable {
     /// whose pack still exists).
     pub fn merge<I: IntoIterator<Item = IndexEntry>>(&mut self, incoming: I) {
         for e in incoming {
-            if !self.entries.contains(&e) {
+            if self.seen.insert(e.clone()) {
                 self.entries.push(e);
             }
         }
@@ -467,15 +522,12 @@ impl LocationTable {
             .find(|e| pack_exists(&e.pack))
     }
 
-    /// Every distinct pack id mentioned anywhere in the table.
+    /// Every distinct pack id mentioned anywhere in the table, sorted for
+    /// deterministic output (`BTreeSet`, not an O(n²) membership `Vec`).
     pub fn packs(&self) -> Vec<PackId> {
-        let mut seen = Vec::new();
-        for e in &self.entries {
-            if !seen.contains(&e.pack) {
-                seen.push(e.pack);
-            }
-        }
-        seen
+        let seen: std::collections::BTreeSet<PackId> =
+            self.entries.iter().map(|e| e.pack).collect();
+        seen.into_iter().collect()
     }
 
     /// Sorted iteration over the whole union (serialization order).

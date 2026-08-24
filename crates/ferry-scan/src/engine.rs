@@ -47,7 +47,9 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Clone)]
 pub struct StoreHandle {
     pub store: Arc<Store>,
-    pub poly: u64,
+    /// Validated once at handle construction (folder-open/config-load);
+    /// walkers can never hold an invalid polynomial.
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub device_id: [u8; 32],
 }

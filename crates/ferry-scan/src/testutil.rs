@@ -24,8 +24,8 @@ pub fn fresh_store() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
-pub fn poly_of(seed: u64) -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed))
+pub fn poly_of(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
 }
 
 pub fn identity(at: (i64, u32)) -> SnapshotIdentity {
