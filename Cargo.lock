@@ -1064,6 +1064,7 @@ dependencies = [
 name = "ferry-pin"
 version = "0.1.0"
 dependencies = [
+ "ferry-platform",
  "ferry-store",
  "ferry-sync-engine",
  "ignore",
@@ -1082,6 +1083,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "unicode-normalization",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1155,9 +1157,11 @@ dependencies = [
  "ferry-crypto",
  "ferry-iroh",
  "ferry-materialize",
+ "ferry-pin",
  "ferry-platform",
  "ferry-proto",
  "ferry-store",
+ "ferry-sync-engine",
  "hkdf",
  "rand 0.8.7",
  "sha2 0.10.9",

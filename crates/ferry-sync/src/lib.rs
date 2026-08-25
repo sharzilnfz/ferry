@@ -82,7 +82,7 @@ pub mod transport;
 
 // Re-exports so tests, bins, and future crates reach the vocabulary through
 // one facade.
-pub use applier::SessionApplier;
+pub use applier::{ApplyError, ApplyOutcome, SessionApplier};
 pub use engine::{
     pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError, PeerState,
     SessionError, SyncEngine,

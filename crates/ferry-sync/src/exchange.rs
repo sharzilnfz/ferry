@@ -75,6 +75,13 @@ pub trait ExchangeHost {
     fn bump_rejected(&self);
     /// The working tree materialization applies to.
     fn tree_root(&self) -> &Path;
+    /// The folder's `.ferry` directory whose pin record gates
+    /// materialization; `None` = no-pin policy (default). Consulted fresh
+    /// at the execution boundary AFTER fetch, immediately before apply,
+    /// which is what closes the fetch-to-apply TOCTOU (T-06).
+    fn pin_state_dir(&self) -> Option<&Path> {
+        None
+    }
     /// Adopt `manifest` as our current folder state (no agreement yet).
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError>;
     /// Record the last-agreed pointer against `peer`, locally.
@@ -414,15 +421,32 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             // clock, exactly like pick_donor's rule 1.
             self.status("SESSION skipping stale peer offer (lineage guard)");
         } else {
-            self.pull_content(&man)?;
-            self.adopt(target, man_bytes, man)?;
+            let held = self.pull_content(&man, target)?;
+            if held == 0 {
+                self.adopt(target, man_bytes, man)?;
+            } else {
+                // An active pin withheld part of the peer state: do NOT
+                // adopt (or locally agree to) a manifest whose tree we do
+                // not fully hold. Our next scan mints a child of OUR own
+                // lineage; the withheld decisions stay ledgered under
+                // `.ferry/held/<peer>.jsonl` until release reconciles them.
+                self.status(&format!(
+                    "pin: held {held} path(s) from peer {} (release with `ferry pin release`)",
+                    hex_short(&self.est.peer)
+                ));
+            }
         }
 
         self.close_stage()
     }
 
     /// Tree walk + diff + packs-first data fetch + durable materialize.
-    fn pull_content(&mut self, man: &RootManifest) -> Result<(), SessionError> {
+    /// Returns how many paths an active pin withheld from the tree.
+    fn pull_content(
+        &mut self,
+        man: &RootManifest,
+        remote_manifest_id: BlobId,
+    ) -> Result<usize, SessionError> {
         // 2. Breadth-first walk of the peer's tree: fetch missing nodes.
         let mut queue = vec![man.root_tree_id];
         let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
@@ -484,10 +508,18 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
 
         // 6. Materialize durably into the working tree BEFORE round 2.
-        SessionApplier::new(self.store, self.host.tree_root())
+        //    Pin enforcement rides the shared applier boundary: the pin is
+        //    re-read here, after fetch completed and immediately before the
+        //    tree mutates (T-06).
+        let mut applier = SessionApplier::new(self.store, self.host.tree_root());
+        if let Some(state_dir) = self.host.pin_state_dir() {
+            applier =
+                applier.pin_enforcement(state_dir, hex(&self.est.peer), hex(&remote_manifest_id));
+        }
+        let outcome = applier
             .apply(man, &changes)
             .map_err(|e| SessionError::Apply(format!("{e}")))?;
-        Ok(())
+        Ok(outcome.held)
     }
 
     /// Close MY stage: the empty `REQUEST_ITEMS` marker. Per the reference

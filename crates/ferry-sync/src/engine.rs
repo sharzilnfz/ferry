@@ -83,6 +83,11 @@ pub struct EngineConfig {
     /// DEV ONLY: speak the retired M0 plaintext framing instead of protocol
     /// v1. Defaults OFF; production engines must never set it.
     pub legacy_m0_proto: bool,
+    /// The folder's `.ferry` directory whose pin-state.json gates tree
+    /// mutation at the shared execution boundary (T-06 session pinning).
+    /// `None` (the default) is the no-pin policy: materialization never
+    /// consults pin state.
+    pub pin_state_dir: Option<PathBuf>,
     /// Silence stdout status lines (tests).
     pub quiet: bool,
 }
@@ -104,6 +109,7 @@ impl EngineConfig {
             connect_to: None,
             expected_peer_id: None,
             legacy_m0_proto: false,
+            pin_state_dir: None,
             quiet: true,
         }
     }
@@ -614,6 +620,10 @@ impl ExchangeHost for EngineHost<'_> {
         &self.ctx.cfg.tree_dir
     }
 
+    fn pin_state_dir(&self) -> Option<&std::path::Path> {
+        self.ctx.cfg.pin_state_dir.as_deref()
+    }
+
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError> {
         let id = *blake3::hash(bytes).as_bytes();
         let data = Arc::new(SnapshotData {
@@ -961,7 +971,18 @@ fn run_as_puller(
         }
     }
 
-    SessionApplier::new(&ctx.store, &ctx.cfg.tree_dir)
+    // Pin enforcement rides the shared applier boundary (T-06); the dev-only
+    // M0 path keeps its wire flow (AGREED still goes out) even when part of
+    // the change set was withheld.
+    let mut puller = SessionApplier::new(&ctx.store, &ctx.cfg.tree_dir);
+    if let Some(dir) = ctx.cfg.pin_state_dir.as_deref() {
+        puller = puller.pin_enforcement(
+            dir,
+            hex(&device_id_from_tag(&peer_tag)),
+            hex(&peer_manifest_id),
+        );
+    }
+    puller
         .apply(&peer_manifest, &changes)
         .map_err(|e| SessionError::Apply(format!("{e}")))?;
 

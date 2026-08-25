@@ -252,6 +252,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
             paths: vec!["src/**".into()],
             released: false,
             base_agreements: base_agreements.clone(),
+            proc_start_token: None, // start() stamps its own writer
         })
         .unwrap();
     assert!(pin_store.load().unwrap().expect("recorded").holding());
@@ -464,6 +465,7 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
             paths: vec!["*".into()],
             released: false,
             base_agreements: BTreeMap::new(),
+            proc_start_token: None,
         })
         .unwrap();
 
