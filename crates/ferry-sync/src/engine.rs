@@ -1616,8 +1616,17 @@ pub struct SyncEngine {
 impl SyncEngine {
     /// Build (but do not start) an engine. Opens or creates the store,
     /// creates the tree dir, binds the listener when configured.
+    ///
+    /// Startup also runs the T-20 crash-residue sweep, bounded older-than:
+    /// store-side temps under `.ferry/` (pack staging, sidecar and ledger
+    /// temps — `ferry_store::reclaim`) plus tree-side materialize temps
+    /// (`ferry_materialize::sweep_stale_temps`). Failures are best-effort
+    /// and never block startup.
     pub fn new(cfg: EngineConfig, transport: Arc<dyn Transport>) -> Result<Self, EngineError> {
         std::fs::create_dir_all(&cfg.tree_dir)?;
+        let stale = Duration::from_secs(ferry_materialize::DEFAULT_STALE_TEMP_AGE_SECS);
+        let _ = ferry_materialize::sweep_stale_temps(&cfg.tree_dir, stale);
+        let _ = ferry_store::reclaim::sweep_store_temps(&cfg.store_dir, stale);
         let store = Arc::new(open_or_create_store(&cfg.store_dir)?);
         let listener = match cfg.bind_addr {
             Some(addr) => Some(Transport::listen(transport.as_ref(), addr)?),
@@ -2198,6 +2207,55 @@ mod tests {
                 g.current.as_ref().map(|s| s.manifest_id),
                 "current and next-parent move together under the one lock"
             );
+        }
+    }
+
+    #[test]
+    fn startup_sweep_removes_planted_stale_temps_at_every_site() {
+        // T-20 acceptance: SyncEngine::new is the documented startup hook;
+        // residue planted before startup must be reclaimed, live files kept.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let sd = root.join(".ferry");
+        for d in ["tmp", "peers", "agreement", "index"] {
+            std::fs::create_dir_all(sd.join(d)).unwrap();
+        }
+        let tree_dir = dir.path().join("tree");
+        std::fs::create_dir_all(&tree_dir).unwrap();
+
+        let stale: Vec<std::path::PathBuf> = vec![
+            sd.join("tmp").join(format!("pack-{}.tmp", hex(&[7u8; 16]))),
+            sd.join(format!("pin-state.json.tmp.{}.0.9", std::process::id())),
+            sd.join("peers").join(".tmp-dead-beef"),
+            sd.join("agreement").join(".tmp-aa-bb"),
+            tree_dir.join(".ferry.notes.tmp.aabbccdd"),
+        ];
+        for p in &stale {
+            std::fs::write(p, b"stale residue").unwrap();
+            // Epoch mtime: far older than any sane sweep bound.
+            let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+                .unwrap();
+        }
+        let fresh = vec![
+            sd.join("peers")
+                .join(format!("{}-{}.peer", hex(&[1u8; 16]), hex(&[2u8; 32]))),
+            tree_dir.join("real.txt"),
+        ];
+        for p in &fresh {
+            std::fs::write(p, b"live").unwrap();
+        }
+
+        let mut cfg = EngineConfig::default_for_test(11);
+        cfg.store_dir = root.clone();
+        cfg.tree_dir = tree_dir.clone();
+        let _engine = SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).unwrap();
+
+        for p in &stale {
+            assert!(!p.exists(), "startup must sweep {p:?}");
+        }
+        for p in &fresh {
+            assert!(p.exists(), "startup must never touch {p:?}");
         }
     }
 
