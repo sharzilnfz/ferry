@@ -338,10 +338,178 @@ mod tests {
             assert_eq!(*blake3::hash(&bytes).as_bytes(), claimed, "{name}");
         }
     }
+
+    fn count_ferryindex(index_dir: &std::path::Path) -> usize {
+        std::fs::read_dir(index_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "ferryindex"))
+            .count()
+    }
+
+    /// T-15 acceptance: ingesting K packs appends K single-pack INDEX
+    /// records (cost proportional to K, never a full-store rescan), and the
+    /// union alone makes every blob readable from a cold start.
+    #[test]
+    fn steady_state_ingest_appends_one_incremental_record_per_sealed_pack() {
+        let folder = temp_folder();
+        let mut store = new_store(folder.path());
+        store.set_seal_target(64 * 1024); // force several small packs
+        let index_dir = folder.path().join(".ferry/index");
+        assert_eq!(count_ferryindex(&index_dir), 0);
+
+        let mut rng = StdRng::seed_from_u64(909);
+        let mut written = Vec::new();
+        for _ in 0..6 {
+            let bytes: Vec<u8> = (0..80 * 1024).map(|_| rng.gen()).collect();
+            let id = store.put_data(&bytes).unwrap();
+            written.push((bytes, id));
+            store.flush().unwrap(); // end-of-burst seal
+        }
+
+        let fmk = core::array::from_fn(|i| i as u8);
+        let packs = pack_count(folder.path());
+        assert!(packs >= 6, "small seal target must force multiple packs");
+        assert_eq!(
+            count_ferryindex(&index_dir),
+            packs,
+            "exactly one INDEX record per sealed pack"
+        );
+
+        // Every record covers EXACTLY ONE pack: incremental appends, not
+        // full-table snapshots.
+        for entry in std::fs::read_dir(&index_dir).unwrap().flatten() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            let rows = crate::index::open_index_container(&bytes, &fmk, &PassthroughCipher)
+                .unwrap_or_else(|e| panic!("{}: {e}", entry.path().display()));
+            assert!(!rows.is_empty());
+            let pack = rows[0].pack;
+            assert!(
+                rows.iter().all(|e| e.pack == pack),
+                "a record spanning multiple packs is not incremental"
+            );
+        }
+
+        // The union alone resolves every blob from disk state only.
+        let reopened = reopen(folder.path());
+        for (bytes, id) in &written {
+            assert_eq!(&reopened.get(BlobKind::DataChunk, id).unwrap(), bytes);
+        }
+    }
+
+    /// Build a deliverable pack out-of-band (as a peer would send it):
+    /// one `DataChunk` blob sealed into a `PackData` container.
+    fn sealed_test_pack(seed: u8, body_len: usize) -> (BlobId, Vec<u8>, Vec<u8>) {
+        let body: Vec<u8> = (0..body_len)
+            .map(|i| (i as u8).wrapping_add(seed))
+            .collect();
+        let id: BlobId = *blake3::hash(&body).as_bytes();
+        let entries = vec![FooterEntry {
+            kind: BlobKind::DataChunk,
+            id,
+            plain_off: 0,
+            plain_len: body.len() as u64,
+        }];
+        let salt: [u8; crate::crypto::SALT_LEN] = core::array::from_fn(|i| i as u8);
+        let file = seal_pack_bytes(
+            crate::format::ContainerKind::PackData,
+            &core::array::from_fn(|i| i as u8),
+            &salt,
+            &body,
+            &entries,
+            &PassthroughCipher,
+        )
+        .unwrap();
+        (id, file, body)
+    }
+
+    #[test]
+    fn adopt_pack_folds_locations_in_incrementally_without_any_rebuild() {
+        let folder = temp_folder();
+        let store = new_store(folder.path());
+        let index_dir = folder.path().join(".ferry/index");
+        let packs_dir = folder.path().join(".ferry/packs");
+        let fmk = core::array::from_fn(|i| i as u8);
+        let (id, file, body) = sealed_test_pack(7, 4096);
+        let name = pack_name_of(&file);
+
+        assert_eq!(count_ferryindex(&index_dir), 0);
+        store.adopt_pack(&name, &file).unwrap();
+
+        // Readable immediately: the location table merged synchronously,
+        // no flush or rebuild involved.
+        assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
+
+        // Exactly one pack landed and one incremental record covers it.
+        assert_eq!(pack_count(folder.path()), 1);
+        assert_eq!(count_ferryindex(&index_dir), 1);
+        let record = std::fs::read_dir(&index_dir)
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap();
+        let rows = crate::index::open_index_container(
+            &std::fs::read(record.path()).unwrap(),
+            &fmk,
+            &PassthroughCipher,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pack, name);
+
+        // Re-adoption (CLI sync racing a daemon) is idempotent: no second
+        // pack file, blob still readable.
+        store.adopt_pack(&name, &file).unwrap();
+        assert_eq!(pack_count(folder.path()), 1);
+        assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
+
+        // Cold start resolves it through the appended record alone.
+        drop(store);
+        let reopened = reopen(folder.path());
+        assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
+
+        // A lying claimed name is rejected before any disk write.
+        let (_id2, file2, _b2) = sealed_test_pack(9, 512);
+        let fake = [0xEE; 32];
+        let err = reopened.adopt_pack(&fake, &file2).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                StoreError::Pack(crate::pack::PackError::NameMismatch { .. })
+            ),
+            "{err}"
+        );
+        assert_eq!(pack_count(folder.path()), 1);
+        assert!(!std::fs::read_dir(&packs_dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("eeee")));
+    }
+
+    /// T-15 acceptance: a multi-MiB delivered pack ingests through the
+    /// incremental path with bounded work per stage and stays readable.
+    #[test]
+    fn large_delivered_pack_ingests_incrementally_and_reads_back() {
+        let folder = temp_folder();
+        let store = new_store(folder.path());
+        // ~8 MiB body: realistic pack scale, bounded RAM.
+        let (id, file, body) = sealed_test_pack(3, 8 * 1024 * 1024);
+        let name = pack_name_of(&file);
+
+        store.adopt_pack(&name, &file).unwrap();
+        assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
+
+        // Cold start through the single incremental record.
+        drop(store);
+        let reopened = reopen(folder.path());
+        assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
+    }
 }
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use thiserror::Error;
 
@@ -356,6 +524,37 @@ use crate::pack::{
 };
 
 pub const STORE_DIR_NAME: &str = ".ferry";
+
+/// Diagnostic counter (T-15): full index rebuilds this process has run.
+/// Steady-state ingest must never bump it; it is a cold-start recovery path
+/// only. Tests assert zero during normal operation.
+static REBUILD_INDEX_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Diagnostic metric (T-15): longest single hold of the global inner lock,
+/// in microseconds, across every ingest/read critical section. A growing
+/// ceiling under load is the early-warning sign for lock starvation.
+static LOCK_HOLD_MAX_US: AtomicU64 = AtomicU64::new(0);
+static DEBUG_LOCKS: OnceLock<bool> = OnceLock::new();
+
+/// Full `rebuild_index` invocations in this process so far.
+pub fn rebuild_index_calls() -> u64 {
+    REBUILD_INDEX_CALLS.load(Ordering::Relaxed)
+}
+
+/// Longest observed hold of the global lock, microseconds (process-wide).
+pub fn max_lock_hold_us() -> u64 {
+    LOCK_HOLD_MAX_US.load(Ordering::Relaxed)
+}
+
+fn note_hold(start: Instant) {
+    let us = start.elapsed().as_micros() as u64;
+    if LOCK_HOLD_MAX_US.fetch_max(us, Ordering::Relaxed) < us
+        && *DEBUG_LOCKS.get_or_init(|| std::env::var_os("FERRY_DEBUG").is_some())
+        && us > 100_000
+    {
+        eprintln!("ferry-store: long lock hold {us}us (max so far)");
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -390,6 +589,11 @@ pub struct Store {
     fmk: [u8; KEY_LEN],
     cipher: Box<dyn PackCipher>,
     inner: Mutex<Inner>,
+    /// Serializes INDEX file allocation + rename so concurrent appends
+    /// never overwrite each other's numeric name. T-15 made appends
+    /// per-pack (frequent); the held region is number-scan + rename only,
+    /// no crypto or table work.
+    index_seq: Mutex<()>,
     /// Staging seal target. Production default is the spec's 16 MiB
     /// (`SEAL_TARGET_BYTES`); tests shrink it to force many small packs.
     seal_target: usize,
@@ -425,6 +629,7 @@ impl Store {
                 staging: StagingPools::new(),
                 locations: LocationTable::default(),
             }),
+            index_seq: Mutex::new(()),
             seal_target: SEAL_TARGET_BYTES,
         })
     }
@@ -462,6 +667,7 @@ impl Store {
                 staging: StagingPools::new(),
                 locations,
             }),
+            index_seq: Mutex::new(()),
             seal_target: SEAL_TARGET_BYTES,
         })
     }
@@ -506,15 +712,18 @@ impl Store {
         }
 
         let mut sealed = {
+            let start = Instant::now();
             let mut inner = self.lock()?;
-            inner.staging.offer(
+            let sealed = inner.staging.offer(
                 kind,
                 id,
                 bytes,
                 self.seal_target,
                 STAGING_OPEN_PACKS,
                 &mut rand::thread_rng(),
-            )
+            );
+            note_hold(start);
+            sealed
         };
         // offer() returns any packs sealed early by the overflow rule.
         for sp in sealed.drain(..) {
@@ -616,10 +825,20 @@ impl Store {
             let inner = self.lock()?;
             inner.locations.iter_sorted()
         };
+        self.append_index_file(&entries)
+    }
+
+    /// Seal and atomically append one INDEX container covering exactly
+    /// `entries`. Crypto work happens before the critical section; number
+    /// allocation and the final rename share one short serialized region
+    /// (`index_seq`) so concurrent appends can never overwrite each other's
+    /// numeric name. Callers must NOT hold the inner lock.
+    fn append_index_file(&self, entries: &[IndexEntry]) -> Result<PathBuf, StoreError> {
         let mut salt = [0u8; SALT_LEN];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        let file = seal_index_container(&self.fmk, &salt, &entries, self.cipher.as_ref())?;
+        let file = seal_index_container(&self.fmk, &salt, entries, self.cipher.as_ref())?;
         let index_dir = self.root.join("index");
+        let _seq = self.index_seq.lock().map_err(|_| StoreError::Poisoned)?;
         let n = next_index_number(&index_dir)?;
         Ok(write_named_atomically(
             &self.root.join("tmp"),
@@ -629,9 +848,64 @@ impl Store {
         )?)
     }
 
+    /// T-15: fold an externally delivered pack (bytes received over the
+    /// wire) into the store WITHOUT any full-store rescan. Verifies the
+    /// BLAKE3 name, parses the footer, writes the pack atomically — all
+    /// OUTSIDE the global lock — then merges just this pack's locations
+    /// into the table under a short hold and appends an incremental INDEX
+    /// record covering only them. Full rebuilds become cold-start-only.
+    ///
+    /// Idempotent: re-adopting an existing pack (CLI sync while a daemon
+    /// runs) skips the disk write but still refreshes the location table,
+    /// healing a crash between rename and index append.
+    pub fn adopt_pack(&self, claimed: &PackId, bytes: &[u8]) -> Result<(), StoreError> {
+        // Step 2 (name verification precedes any crypto or disk IO).
+        let found = crate::pack::pack_name_of(bytes);
+        if &found != claimed {
+            return Err(StoreError::Pack(PackError::NameMismatch {
+                expected: hex(claimed),
+                found: hex(&found),
+            }));
+        }
+        // Footer parse outside the lock: O(this pack), never O(store).
+        let (_, footer) =
+            crate::pack::read_footer(bytes, claimed, &self.fmk, self.cipher.as_ref())?;
+
+        let dest = self.pack_path(claimed);
+        if !dest.is_file() {
+            crate::pack::write_pack_atomically(
+                &self.root.join("tmp"),
+                &self.root.join("packs"),
+                bytes,
+            )?;
+        }
+
+        let entries: Vec<IndexEntry> = footer
+            .into_iter()
+            .map(|e| IndexEntry {
+                kind: e.kind,
+                id: e.id,
+                pack: *claimed,
+                plain_off: e.plain_off,
+                plain_len: e.plain_len,
+            })
+            .collect();
+        let start = Instant::now();
+        {
+            let mut inner = self.lock()?;
+            inner.locations.merge(entries.iter().cloned());
+            note_hold(start);
+        }
+        self.append_index_file(&entries)?;
+        Ok(())
+    }
+
     /// Recovery: rebuild the location table straight from the packs and
-    /// append it as a fresh index file (restic-style `rebuild`).
+    /// append it as a fresh index file (restic-style `rebuild`). T-15: this
+    /// is a cold-start recovery path only — steady-state ingest folds
+    /// locations in incrementally and must never reach here.
     pub fn rebuild_index(&self) -> Result<(usize, Vec<String>), StoreError> {
+        REBUILD_INDEX_CALLS.fetch_add(1, Ordering::Relaxed);
         let (entries, skipped) = crate::index::rebuild_entries(
             &self.root.join("packs"),
             &self.fmk,
@@ -685,16 +959,25 @@ impl Store {
         )?;
         let name = write_pack_atomically(&self.root.join("tmp"), &self.root.join("packs"), &file)?;
         debug_assert_eq!(name, pack_name_of(&file));
-        let mut inner = self.lock()?;
-        inner
-            .locations
-            .merge(entries.into_iter().map(|e| IndexEntry {
+        let index_entries: Vec<IndexEntry> = entries
+            .into_iter()
+            .map(|e| IndexEntry {
                 kind: e.kind,
                 id: e.id,
                 pack: name,
                 plain_off: e.plain_off,
                 plain_len: e.plain_len,
-            }));
+            })
+            .collect();
+        let start = Instant::now();
+        {
+            let mut inner = self.lock()?;
+            inner.locations.merge(index_entries.iter().cloned());
+            note_hold(start);
+        }
+        // T-15: persist an incremental record covering only this pack so a
+        // flush alone leaves the store fully indexed; no rebuild needed.
+        self.append_index_file(&index_entries)?;
         Ok(())
     }
 

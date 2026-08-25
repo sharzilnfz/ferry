@@ -350,10 +350,29 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
         .unwrap(),
     );
 
-    let bytes: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
+    // A real sealed pack (T-15: ingest verifies the BLAKE3 name AND parses
+    // the footer before anything touches disk, so raw bytes are rejected).
+    let body: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let chunk_id = *blake3::hash(&body).as_bytes();
+    let entries = vec![ferry_store::pack::FooterEntry {
+        kind: ferry_store::format::BlobKind::DataChunk,
+        id: chunk_id,
+        plain_off: 0,
+        plain_len: body.len() as u64,
+    }];
+    let salt: [u8; ferry_store::crypto::SALT_LEN] = core::array::from_fn(|i| i as u8);
+    let bytes = ferry_store::pack::seal_pack_bytes(
+        ferry_store::format::ContainerKind::PackData,
+        &[7u8; 32],
+        &salt,
+        &body,
+        &entries,
+        &ferry_store::crypto::PassthroughCipher,
+    )
+    .unwrap();
 
-    // Two "processes" racing on the same store dir. The unique pid+entropy
-    // temp names mean neither writer's bytes can interleave into the other's
+    // Two "processes" racing on the same store dir. The unique entropy temp
+    // names mean neither writer's bytes can interleave into the other's
     // file; both must succeed and the final pack must match its name.
     let s2 = Arc::clone(&store);
     let b2 = bytes.clone();
@@ -367,6 +386,15 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
     let on_disk = std::fs::read(store_dir.join("packs").join(format!("{name}.pack"))).unwrap();
     assert_eq!(*blake3::hash(&on_disk).as_bytes(), here);
     assert_eq!(on_disk, bytes);
+
+    // Concurrent adoption left exactly one valid location behind: the chunk
+    // is readable through the merged table.
+    assert_eq!(
+        store
+            .get(ferry_store::format::BlobKind::DataChunk, &chunk_id)
+            .unwrap(),
+        body
+    );
 
     // No orphaned temps survive a successful ingest — and the error path
     // removes its temp too (best-effort cleanup in ingest_pack); crash
