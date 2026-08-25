@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ferry_crypto::folder_key::{unwrap_folder_key, Fmk, WRAPPED_LEN};
+use ferry_crypto::folder_key::{unwrap_folder_key, wrap_folder_key, Fmk, WRAPPED_LEN};
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_crypto::pairing::{
     complete_pairing, open_pair_grant, respond, seal_pair_grant, GrantError, PairingOffer,
@@ -309,6 +309,25 @@ pub fn accept(
         overrides: Vec::new(),
     };
     save_settings(target, &settings)?;
+
+    // The acceptor's CONFIG_HEAD must name EVERY authorized device, not just
+    // itself (T-14/T-18 follow-up): the engine seeds its peer allow-list from
+    // CONFIG_HEAD wrap entries and denies unknown peers. `adopt_folder` wrote
+    // a single-entry head {us}; without the initiator's entry the first
+    // session to the owner is rejected as unauthorized and never converges.
+    // Re-wrap the FMK for the initiator so the appended record is a real,
+    // usable key envelope — mirroring what `append_wrap_entry_for` does on
+    // the initiator's side.
+    let wrapped_for_initiator = wrap_folder_key(&fmk, &folder_id, &offer.initiator_pub).code(
+        "crypto",
+        "identity keys are local; retry with a fresh identity if this repeats",
+    )?;
+    append_wrap_entry_for(
+        target,
+        folder_id,
+        &offer.initiator_pub,
+        &wrapped_for_initiator,
+    )?;
 
     let json_doc = json!({
         "command": "pair",
