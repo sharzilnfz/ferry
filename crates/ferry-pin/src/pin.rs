@@ -485,7 +485,18 @@ mod tests {
         child.kill().expect("kill sleeper");
         child.wait().expect("reap");
         // After death even the honest record goes stale (existence fails).
-        assert_eq!(rec.liveness(), Liveness::Stale);
+        // Windows caveat: a killed-and-reaped pid can still read ALIVE
+        // briefly — pending process-object cleanup, or immediate pid
+        // reuse by another spawn. Poll for convergence rather than
+        // asserting on the instant after reap.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while rec.liveness() != Liveness::Stale {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "dead writer's record must go stale after death"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]
