@@ -210,11 +210,10 @@ mod tests {
     #[test]
     fn names_are_nfc_composed_and_bad_bytes_refused_with_lossy_display() {
         // Decomposed e + combining acute composes to the precomposed form.
-        let nfd = if cfg!(unix) {
-            os(b"cafe\xcc\x81.txt")
-        } else {
-            OsStr::new("cafe\u{301}.txt")
-        };
+        #[cfg(unix)]
+        let nfd = os(b"cafe\xcc\x81.txt");
+        #[cfg(not(unix))]
+        let nfd = OsStr::new("cafe\u{301}.txt");
         let got = admit_name(nfd).unwrap();
         assert_eq!(got, "caf\u{e9}.txt");
 

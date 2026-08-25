@@ -195,19 +195,39 @@ mod tests {
     /// A spawned child has its OWN birth time: different from ours, and
     /// still observable after it exits on Linux (zombie keeps /proc entry)
     /// while macOS/Windows may lose it — either way the call must be safe.
+    ///
+    /// Granularity caveat (Linux): starttime ticks at `CONFIG_HZ` (usually
+    /// 100/s). If this test binary is younger than one jiffy when the child
+    /// spawns, both births land in the same tick and the tokens legitimately
+    /// collide. One retry after a sleep past that window makes the assertion
+    /// deterministic without weakening it.
     #[test]
     fn child_process_token_differs_from_parent_when_visible() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleeper");
-        let child_token = process_start_token(child.id());
-        child.kill().expect("kill sleeper");
-        child.wait().expect("reap");
+        let mut attempt = 0;
+        loop {
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn sleeper");
+            let child_token = process_start_token(child.id());
+            child.kill().expect("kill sleeper");
+            child.wait().expect("reap");
 
-        if let Some(ct) = child_token {
-            let mine = process_start_token(std::process::id());
-            assert_ne!(Some(ct), mine, "parent and child are distinct instances");
+            match child_token {
+                Some(ct) => {
+                    let mine = process_start_token(std::process::id());
+                    if mine == Some(ct) && attempt == 0 {
+                        // Same-tick birth collision; once we're older than a
+                        // jiffy any new child is provably born after us.
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                        continue;
+                    }
+                    assert_ne!(Some(ct), mine, "parent and child are distinct instances");
+                }
+                None => break,
+            }
+            break;
         }
     }
 }
