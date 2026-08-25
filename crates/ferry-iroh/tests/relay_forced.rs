@@ -149,6 +149,25 @@ fn wait_converged(pair: &PairFixture, budget: Duration) {
     }
 }
 
+/// Agreement ids can settle on an intermediate round while A is still
+/// scanning in freshly planted markers, and the materializer's rename
+/// lands on B's disk after agreement under loaded-runner scheduling.
+/// Poll until every marker exists instead of racing the applier.
+fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Duration) {
+    let deadline = Instant::now() + budget;
+    loop {
+        let missing: Vec<_> = rels.iter().filter(|r| !tree_b.join(r).is_file()).collect();
+        if missing.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "markers never landed on b after convergence: {missing:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 #[test]
 fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
     let relay = ferry_relay::spawn_sync(ferry_relay::RelayOptions::new(
@@ -168,12 +187,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
     let planted = plant_markers(&tree_a);
 
     wait_converged(&pair, Duration::from_secs(90));
-    for rel in &planted {
-        assert!(
-            tree_b.join(rel).is_file(),
-            "marked file {rel} did not arrive"
-        );
-    }
+    wait_markers_landed(&tree_b, &planted, Duration::from_secs(30));
 
     // Give iroh's path sampler one last beat, then stop the engines so
     // observations are final before asserting.

@@ -4,7 +4,6 @@
   "model": "opencode/ox-alpha-free-unlimited",
   "permissions": [
     { "action": "*", "resource": "*", "effect": "allow" },
-    { "action": "shell", "resource": "git push*", "effect": "deny" },
     { "action": "shell", "resource": "rm -rf /*", "effect": "deny" },
     { "action": "shell", "resource": "rm -rf ~*", "effect": "deny" },
     { "action": "external_directory", "resource": "/tmp/*", "effect": "allow" },
@@ -21,7 +20,6 @@
       "color": "#4f9cf9",
       "permissions": [
         { "action": "*", "resource": "*", "effect": "allow" },
-        { "action": "shell", "resource": "git push*", "effect": "deny" },
         { "action": "edit", "resource": "*", "effect": "deny" }
       ]
     },
