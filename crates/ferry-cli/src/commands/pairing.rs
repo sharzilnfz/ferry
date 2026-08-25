@@ -301,7 +301,6 @@ pub fn accept(
     store
         .write_index_snapshot()
         .map_err(|e| CliError::new("store", e.to_string(), "retry"))?;
-    folder::write_default_ignore_if_absent(target)?;
     let settings = Settings {
         format_version: SETTINGS_FORMAT_VERSION,
         folder_id: ferry_store::format::hex(&folder_id),

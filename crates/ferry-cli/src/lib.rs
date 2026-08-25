@@ -4,7 +4,6 @@
 pub mod cli;
 pub mod commands;
 pub mod error;
-pub mod exchange;
 pub mod folder;
 pub mod home;
 pub mod out;

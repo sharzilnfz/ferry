@@ -9,10 +9,7 @@ ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-ignore = { path = "../ferry-ignore" }
-# The M0 crate supplies two reusable seams this CLI drives directly:
-# `proto` (HELLO/OFFER/REQ_META/REQ_DATA/ITEM message codecs) and
-# `transport` (the Transport/Listener/Connection trait + TcpTransport).
-# T-009/T-014 swap the implementation under these same seams.
+# Ferry engine: daemon and sync commands run SyncEngine directly (T-14).
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 # Session pinning: the exchange loop consults the hold filter pre-apply and
@@ -21,9 +18,6 @@ ferry-pin = { path = "../ferry-pin" }
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
-# Content hashing for manifest/blob ids in the exchange loop only — not key
-# handling; T-03 kept it local rather than widening ferry-crypto's API.
-blake3.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 # Terminal QR rendering only (ASCII art over the matrix). All pairing and

@@ -174,11 +174,21 @@ pub fn snapshot_dir(
     if identity.created_nsec > 999_999_999 {
         return Err(SnapshotError::InvalidTimestamp);
     }
+    let mut rules: Vec<String> = DEFAULT_IGNORE
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    if let Ok(content) = std::fs::read_to_string(source.join("ferry.ignore")) {
+        for line in content.lines() {
+            rules.push(line.to_string());
+        }
+    }
     let mut walker = Walker {
         store,
         poly,
         stats: ScanStats::default(),
         refused: Vec::new(),
+        rules,
     };
     let mut rel = Vec::new();
     let root = walker.walk_dir(source, &mut rel)?;
@@ -298,11 +308,76 @@ fn exec_of(meta: &std::fs::Metadata) -> bool {
     }
 }
 
+/// Store-level default ignore lines applied by [`snapshot_dir`].
+///
+/// MUST stay in lockstep with `ferry_ignore::defaults::DEFAULT_RULES` (the
+/// canonical product decision, CONTEXT.md "Selective rules"); a cross-crate
+/// test in ferry-ignore fails if the two lists drift.
+pub const DEFAULT_IGNORE: &[&str] = &[
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    "*.swp",
+    "*~",
+    "node_modules/",
+    ".env",
+    ".env.*",
+];
+
+fn matches_pattern(pat: &str, name: &str, is_dir: bool) -> bool {
+    let (pat, dir_only) = if let Some(stripped) = pat.strip_suffix('/') {
+        (stripped, true)
+    } else {
+        (pat, false)
+    };
+    if dir_only && !is_dir {
+        return false;
+    }
+    if pat.contains('*') {
+        if let Some(suffix) = pat.strip_prefix('*') {
+            name.ends_with(suffix)
+        } else if let Some(prefix) = pat.strip_suffix('*') {
+            name.starts_with(prefix)
+        } else {
+            let parts: Vec<&str> = pat.split('*').collect();
+            if parts.len() == 2 {
+                name.starts_with(parts[0]) && name.ends_with(parts[1])
+            } else {
+                name == pat
+            }
+        }
+    } else {
+        name == pat
+    }
+}
+
+fn is_ignored(rules: &[String], name: &str, is_dir: bool) -> bool {
+    if name.contains(".ferry-conflict.") {
+        return false;
+    }
+    let mut ignored = false;
+    for line in rules {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(unneg) = trimmed.strip_prefix('!') {
+            if matches_pattern(unneg, name, is_dir) {
+                ignored = false;
+            }
+        } else if matches_pattern(trimmed, name, is_dir) {
+            ignored = true;
+        }
+    }
+    ignored
+}
+
 struct Walker<'a> {
     store: &'a Store,
     poly: ValidatedPoly,
     stats: ScanStats,
     refused: Vec<RefusedPath>,
+    rules: Vec<String>,
 }
 
 impl Walker<'_> {
@@ -334,7 +409,18 @@ impl Walker<'_> {
             if raw == b"." || raw == b".." {
                 continue;
             }
+            // Structural store-dir exclusion: .ferry at the root is store metadata, not content.
+            if rel.is_empty() && raw == crate::store::STORE_DIR_NAME.as_bytes() {
+                continue;
+            }
             let child_path = dir.join(&name);
+            let Ok(meta) = std::fs::symlink_metadata(&child_path) else {
+                continue;
+            };
+            let is_dir = meta.is_dir();
+            if is_ignored(&self.rules, &name.to_string_lossy(), is_dir) {
+                continue;
+            }
             // `visit` runs the shared admission gate, records refusals with
             // `rel` + component pushed/popped internally.
             let visited = self.visit(&child_path, name.as_os_str(), rel);
