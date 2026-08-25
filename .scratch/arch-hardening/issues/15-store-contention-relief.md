@@ -1,6 +1,6 @@
 # T-15: Store contention — incremental index maintenance, no full-pack RAM loads
 
-Status: ready-for-agent
+Status: done
 Depends on: T-07, T-14 (exchange paths settled)
 
 Two structural hotspots in ferry-store usage:
