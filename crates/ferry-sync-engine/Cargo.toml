@@ -18,5 +18,13 @@ tempfile.workspace = true
 rand.workspace = true
 ferry-platform.workspace = true
 
+# testutil::set_dir_mtime stamps directory mtimes; std cannot open
+# directory handles for time writes on Windows (SetFileTime needs
+# FILE_FLAG_BACKUP_SEMANTICS), so the windows branch goes through
+# filetime — same approach as ferry-store's and ferry-materialize's
+# fixtures (T-17 lineage).
+[target.'cfg(not(unix))'.dev-dependencies]
+filetime.workspace = true
+
 [lints]
 workspace = true

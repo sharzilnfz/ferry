@@ -1178,6 +1178,7 @@ dependencies = [
  "ferry-materialize",
  "ferry-platform",
  "ferry-store",
+ "filetime",
  "rand 0.8.7",
  "serde",
  "serde_json",

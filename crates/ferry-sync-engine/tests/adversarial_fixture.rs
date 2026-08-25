@@ -90,14 +90,12 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        let f = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-            .unwrap();
-        stamp(&f, mt);
+        // std set_times through a read handle cannot stamp directories
+        // here: SetFileTime requires FILE_WRITE_ATTRIBUTES on the handle,
+        // which GENERIC_READ (+ even FILE_FLAG_BACKUP_SEMANTICS) does not
+        // carry. filetime opens the directory with the right access —
+        // same approach as ferry-store's and ferry-materialize's fixtures.
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
     }
     #[cfg(not(any(unix, windows)))]
     {

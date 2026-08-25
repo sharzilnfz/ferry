@@ -131,6 +131,14 @@ Everything else is already done; confirm and you're finished:
     confirmed left=(111,200) right=(111,222), pure FILETIME truncation.
   - proactive: burst-coalescing test in ferry-scan made poll-free +
     bounded count (scheduler-speed artifact, not semantics).
+  - follow-up run 32906110140 exposed the next layer: cargo test stops
+    at the first failing binary, so ferry-sync-engine (alphabetically
+    last) had NEVER been reached on windows. Its testutil set_dir_mtime
+    used std File::open on a directory = ERROR_ACCESS_DENIED there
+    (dirs need FILE_FLAG_BACKUP_SEMANTICS); fixed via filetime like
+    ferry-store's fixture, plus the adversarial fixture's windows
+    branch replaced (std read-handle set_times lacks
+    FILE_WRITE_ATTRIBUTES => would have failed too).
 - Optional cleanup afterwards: delete merged wave branches (wave*/tNN,
   ticket/T-0xx) and any leftover scratch worktrees; consider merging
   arch-hardening into master.

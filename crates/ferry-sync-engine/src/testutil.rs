@@ -55,14 +55,26 @@ pub fn set_mtime(path: &Path, sec: i64, nsec: u32) {
     .unwrap();
 }
 
-/// Directories need a read-only handle for futimens.
+/// Directories need a read-only handle for futimens on unix. Windows
+/// cannot open directory handles for time writes at all (`SetFileTime`
+/// needs `FILE_FLAG_BACKUP_SEMANTICS`, which std does not expose), so the
+/// windows branch goes through filetime like ferry-store's fixture.
 pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
-    let f = std::fs::File::open(path).unwrap();
-    f.set_times(
-        std::fs::FileTimes::new()
-            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
-    )
-    .unwrap();
+    #[cfg(unix)]
+    {
+        let f = std::fs::File::open(path).unwrap();
+        f.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
+        )
+        .unwrap();
+    }
+    #[cfg(windows)]
+    {
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(sec, nsec)).unwrap();
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = (path, sec, nsec);
 }
 
 pub struct Device {
