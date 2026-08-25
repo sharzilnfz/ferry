@@ -819,45 +819,17 @@ impl<'a> Applier<'a> {
             });
         }
 
-        // 1. Fetch every chunk and verify each against its id AFTER reading
-        //    from the store (defense in depth; the store verifies too).
-        let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(chunks.len());
-        for (index, (id, len)) in chunks.iter().enumerate() {
-            let bytes = self.store.get(BlobKind::DataChunk, id)?;
-            if bytes.len() as u64 != *len {
-                return Err(MaterializeError::ChunkCorrupt {
-                    path: rel_display,
-                    index,
-                    expected: format!("len {len}"),
-                    found: format!("len {}", bytes.len()),
-                });
-            }
-            let found = *blake3::hash(&bytes).as_bytes();
-            if &found != id {
-                return Err(MaterializeError::ChunkCorrupt {
-                    path: rel_display,
-                    index,
-                    expected: hex(id),
-                    found: hex(&found),
-                });
-            }
-            bufs.push(bytes);
-        }
-
-        // 2. Write the temp file in the DESTINATION directory (same
-        //    filesystem, atomic rename), with its final permissions.
+        // 1. Stream chunks sequentially to the temp file (T-09): fetch one
+        //    chunk, verify it against its id AFTER reading from the store
+        //    (defense in depth; the store verifies too), write it, drop it.
+        //    Only the current chunk is ever resident — peak memory is
+        //    O(max chunk size), not O(file size). A corrupt chunk aborts
+        //    mid-stream; the caller removes the temp, so nothing partial
+        //    survives and the destination is never touched.
         let parent = parent_of(abs_dest);
         let tmp_path = parent.join(temp_name_for(&rel_display, self.style, &fresh_entropy()));
-        let outcome = self.write_temp_then_rename(
-            &tmp_path,
-            abs_dest,
-            &rel_display,
-            exec,
-            sec,
-            nsec,
-            chunks,
-            &bufs,
-        );
+        let outcome =
+            self.write_temp_then_rename(&tmp_path, abs_dest, &rel_display, exec, sec, nsec, chunks);
         if outcome.is_err() {
             // Never leave our temp behind on a handled failure.
             let _ = std::fs::remove_file(&tmp_path);
@@ -866,7 +838,6 @@ impl<'a> Applier<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::unused_self)] // kept as a method for call-site symmetry with the other apply steps
     fn write_temp_then_rename(
         &self,
         tmp_path: &Path,
@@ -876,13 +847,30 @@ impl<'a> Applier<'a> {
         sec: i64,
         nsec: u32,
         chunks: &[(BlobId, u64)],
-        bufs: &[Vec<u8>],
     ) -> Result<(), MaterializeError> {
         let mut file = std::fs::File::create(tmp_path).map_err(|e| io_at(tmp_path, e))?;
         set_exec_bit(&file, exec).map_err(|e| io_at(tmp_path, e))?;
 
-        for b in bufs {
-            file.write_all(b).map_err(|e| io_at(tmp_path, e))?;
+        for (index, (id, len)) in chunks.iter().enumerate() {
+            let bytes = self.store.get(BlobKind::DataChunk, id)?;
+            if bytes.len() as u64 != *len {
+                return Err(MaterializeError::ChunkCorrupt {
+                    path: rel_display.to_string(),
+                    index,
+                    expected: format!("len {len}"),
+                    found: format!("len {}", bytes.len()),
+                });
+            }
+            let found = *blake3::hash(&bytes).as_bytes();
+            if &found != id {
+                return Err(MaterializeError::ChunkCorrupt {
+                    path: rel_display.to_string(),
+                    index,
+                    expected: hex(id),
+                    found: hex(&found),
+                });
+            }
+            file.write_all(&bytes).map_err(|e| io_at(tmp_path, e))?;
         }
 
         // Durability + final mtime, both before the rename so the
@@ -891,7 +879,7 @@ impl<'a> Applier<'a> {
             .map_err(|e| io_at(tmp_path, e))?;
         file.sync_all().map_err(|e| io_at(tmp_path, e))?;
 
-        // 3. Pre-rename verification: re-read every chunk region from the
+        // 2. Pre-rename verification: re-read every chunk region from the
         //    temp file and re-hash. Covers torn temp writes; the
         //    destination is still untouched when this fails. Reopen for
         //    reading: File::create yields a write-only handle.
