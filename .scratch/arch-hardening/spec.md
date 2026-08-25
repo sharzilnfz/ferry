@@ -1,6 +1,6 @@
 # Spec: Architecture hardening pass (arch-hardening)
 
-Status: in-progress
+Status: done (T-15, T-20 deferred by product call, 2026-08-25)
 
 ## Goal
 
@@ -118,3 +118,14 @@ offsets, secret-file permissions, store crypto schedule, iroh transport.
 Execution model from wave 2 onward: each wave runs as PARALLEL sub-agents,
 one git worktree + branch per ticket off the current arch-hardening head;
 branches merge back after the wave with full gates re-run per merge.
+
+## Closure note (2026-08-25)
+
+Wrapped at HEAD with fmt/clippy green and 542 tests passing / 0 failed;
+quickstart-e2e.sh, skeleton-e2e.sh, adversarial-fixture.sh all pass;
+docs/cli-json.md unchanged since the verified baseline (64e3467).
+Deferred, deliberately not started: T-15 (store contention relief) and
+T-20 (storage-efficiency sweep) — both remain `ready-for-agent` in
+issues/, T-20 carries a REPORTED-NOT-MADE implementation brief in scope
+notes. Known follow-ups recorded in ticket 14: multi-folder daemon
+listener sharing; optional `--allow-peer` CLI flag (ticket 18).
