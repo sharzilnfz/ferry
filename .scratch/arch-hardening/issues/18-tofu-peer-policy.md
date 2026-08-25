@@ -1,7 +1,14 @@
 # T-18: Peer authorization policy — TOFU result persisted and enforced
 
-Status: ready-for-agent
+Status: done
 Depends on: T-07 (folder-pointer/engine state settled)
+
+Post-merge orchestrator notes (2026-08-25):
+- Follow-up (out of scope here): `ferry daemon` could expose `--allow-peer <hex>`
+  / multi-peer allow-lists via `SyncEngine::set_peer_policy`; engine API ready.
+- The acceptor side now appends the initiator's wrap entry to its CONFIG_HEAD
+  (see 88ce8a6) and CLI engines run under the FERRY_HOME identity (2d751de);
+  without both, CONFIG_HEAD-seeded allow-lists denied every paired session.
 
 Audit finding (High): the shipped daemon constructs
 `EngineConfig { expected_peer_id: None, ... }`

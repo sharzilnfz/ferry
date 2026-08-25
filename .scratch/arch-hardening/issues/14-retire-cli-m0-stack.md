@@ -1,8 +1,20 @@
 # T-14: Retire the CLI's M0 exchange stack — one production sync loop
 
-Status: ready-for-agent
+Status: done
 Depends on: T-06 (pin enforcement lives in the engine), T-07 (stable engine
 state machine)
+
+Post-merge orchestrator notes (2026-08-25):
+- Worker touched crates/ferry-store/src/snapshot.rs (declared deviation,
+  accepted): root `.ferry` structural exclusion + default-ignore handling were
+  required because SyncEngine snapshots via `snapshot_dir` directly. A
+  lockstep test (ferry-ignore/tests/defaults_lockstep.rs) pins the duplicated
+  DEFAULT_IGNORE list to ferry_ignore::DEFAULT_RULES.
+- Known limitation: multi-folder daemons bind the listener for folder[0] only;
+  incoming sessions for other folders need listener sharing across engines
+  (candidate follow-up ticket).
+- Offer-phase struct rename in ferry-sync/engine.rs was REPORTED-NOT-MADE per
+  scope rules and is now moot: no CLI code references it after consolidation.
 
 ferry-cli/src/exchange.rs (~559 lines) + commands/daemon.rs implement a FULL
 second exchange protocol (own accept-loop, HELLO string-splitting at daemon
