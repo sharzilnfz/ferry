@@ -1,6 +1,6 @@
 # T-10: One canonical last-agreed codec + one store
 
-Status: ready-for-agent
+Status: done
 Depends on: T-07 (folder-pointer ownership settled so consumers are known)
 
 Three independent encodings of the same spec record (peer id + manifest id +

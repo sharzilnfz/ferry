@@ -1,6 +1,6 @@
 # T-07: One owner for folder pointer state — serialize tick vs adopt, bounded accept, safe shutdown
 
-Status: ready-for-agent
+Status: done
 Depends on: T-06 (pin boundary settled)
 
 `crates/ferry-sync/engine.rs` `Ctx` spreads folder state over eight mutexes

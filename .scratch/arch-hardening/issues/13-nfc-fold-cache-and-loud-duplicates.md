@@ -1,6 +1,6 @@
 # T-13: NFC live-fold: cache per-parent listings; loud error on duplicate spellings
 
-Status: ready-for-agent
+Status: done
 Depends on: T-09 (apply.rs streaming rewrite lands first)
 
 In ferry-materialize/src/apply.rs, abs_under/live_nfc_match resolve EVERY
