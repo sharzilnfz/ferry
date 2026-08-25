@@ -3492,6 +3492,24 @@ mod tests {
             return;
         }
 
+        // Self-verify the fixture: the host must present BOTH spellings
+        // under one NFC key to readdir. Anything else (merging, renaming,
+        // re-encoding) means the ambiguity scenario cannot be constructed
+        // here and there is nothing honest to assert about resolve().
+        let seen = scan_dir_fold(dir.path());
+        match seen.get("\u{c5}.txt").map(Vec::as_slice) {
+            Some([a, b])
+                if (a.as_str(), b.as_str()) == ("\u{212b}.txt", "a\u{30a}.txt")
+                    || (a.as_str(), b.as_str()) == ("a\u{30a}.txt", "\u{212b}.txt") => {}
+            other => {
+                eprintln!(
+                    "skipping: host did not present both spellings under one NFC key \
+                     (saw {other:?}); resolver behavior unchanged by this environment"
+                );
+                return;
+            }
+        }
+
         let fold = NfcFoldCache::refusing();
         let err = fold
             .resolve(dir.path(), &["\u{c5}.txt".to_string()])

@@ -120,7 +120,7 @@ fn symlink_creation_works(root: &Path) -> bool {
         }
         #[cfg(windows)]
         {
-            std::os::windows::fs::symlink_file("target", &probe).is_ok_and(|_| {
+            std::os::windows::fs::symlink_file("target", &probe).is_ok_and(|()| {
                 let _ = std::fs::remove_file(&probe);
                 true
             })
