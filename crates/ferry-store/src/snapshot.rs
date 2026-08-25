@@ -27,6 +27,11 @@
 //!   apart from that. Policy per T-012: relative internal targets sync as
 //!   links; absolute targets and `..`-escaping targets are refused loudly.
 //!
+//! Since T-11 these per-entry rules live in ONE place,
+//! [`crate::admission`], and this walker merely feeds it facts (raw name,
+//! lstat kind, raw link target, parent depth). The incremental walker in
+//! ferry-scan calls the same gate, so the two can never drift apart again.
+//!
 //! Platform: cross-platform since T-012. Metadata access goes through
 //! `std::fs::Metadata::modified()` / `file_type()`; the exec bit needs POSIX
 //! mode bits where available.
@@ -34,10 +39,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use ferry_platform::{classify_link, find_case_conflict, host_folds_case, is_reserved_device_name};
+use ferry_platform::{find_case_conflict, host_folds_case};
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
 
+use crate::admission::{self, AdmittedEntry, AdmittedKind, ObservedKind};
 use crate::chunker::{chunk, PolynomialError, ValidatedPoly};
 use crate::format::{BlobId, BlobKind};
 use crate::manifest::{
@@ -329,27 +334,10 @@ impl Walker<'_> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            let component = match std::str::from_utf8(raw) {
-                Ok(s) => s.nfc().collect::<String>(),
-                Err(_) => {
-                    rel.push(String::from_utf8_lossy(raw).into_owned());
-                    self.refuse(rel, RefusalReason::NonUtf8Name);
-                    rel.pop();
-                    continue;
-                }
-            };
-            // Reserved Windows device names can never be materialized on a
-            // Windows endpoint; refuse loudly at the source (T-012).
-            if is_reserved_device_name(&component) {
-                rel.push(component);
-                self.refuse(rel, RefusalReason::ReservedName);
-                rel.pop();
-                continue;
-            }
             let child_path = dir.join(&name);
-            rel.push(component);
-            let visited = self.visit(&child_path, rel);
-            rel.pop();
+            // `visit` runs the shared admission gate, records refusals with
+            // `rel` + component pushed/popped internally.
+            let visited = self.visit(&child_path, name.as_os_str(), rel);
             if let Some(e) = visited? {
                 entries.push(e);
             }
@@ -359,84 +347,107 @@ impl Walker<'_> {
         Ok(TreeNode { entries })
     }
 
-    /// Stat, read, chunk, and encode one directory entry. Returns `None` for
-    /// loudly-refused paths (recorded in `self.refused`).
+    /// Stat one directory entry, run it through the shared admission gate
+    /// ([`crate::admission`]), and build its manifest payload. Returns
+    /// `None` for loudly-refused paths (recorded in `self.refused`).
     fn visit(
         &mut self,
         path: &Path,
+        raw_name: &std::ffi::OsStr,
         rel: &mut Vec<String>,
     ) -> Result<Option<TreeEntry>, SnapshotError> {
-        let component = rel.last().expect("component pushed before visit").clone();
         // symlink_metadata never follows links: a symlinked dir must be
         // stored as a link, not walked through.
         let meta = std::fs::symlink_metadata(path).map_err(io_err(path))?;
         let ft = meta.file_type();
+        let kind = if ft.is_symlink() {
+            ObservedKind::Symlink
+        } else if ft.is_dir() {
+            ObservedKind::Dir
+        } else if ft.is_file() {
+            ObservedKind::File
+        } else {
+            ObservedKind::Other
+        };
+        // Only links carry a target; `read_link` is their one extra stat.
+        let link_target = if ft.is_symlink() {
+            Some(
+                std::fs::read_link(path)
+                    .map_err(io_err(path))?
+                    .into_os_string(),
+            )
+        } else {
+            None
+        };
 
-        if ft.is_symlink() {
-            let target = std::fs::read_link(path).map_err(io_err(path))?;
-            return match target.to_str() {
-                Some(t) => {
-                    // T-012 symlink policy: only relative targets that stay
-                    // inside the folder sync as links (see ferry_platform).
-                    let depth = rel.len().saturating_sub(1);
-                    match classify_link(depth, t) {
-                        ferry_platform::LinkDecision::SyncAsLink => {
-                            self.stats.symlinks += 1;
-                            let (sec, nsec) = mtime_of(&meta);
-                            Ok(Some(symlink_entry(&component, sec, nsec, t)))
-                        }
-                        ferry_platform::LinkDecision::Refuse(reason) => {
-                            let r = match reason {
-                                ferry_platform::LinkRefusal::AbsoluteTarget => {
-                                    RefusalReason::AbsoluteSymlinkTarget
-                                }
-                                ferry_platform::LinkRefusal::EscapesRoot => {
-                                    RefusalReason::EscapingSymlinkTarget
-                                }
-                            };
-                            self.refuse(rel, r);
-                            Ok(None)
-                        }
-                    }
-                }
-                None => {
-                    self.refuse(rel, RefusalReason::NonUtf8SymlinkTarget);
-                    Ok(None)
-                }
-            };
-        }
-
-        if ft.is_dir() {
-            // Recurse first so the child node exists to point at; identical
-            // listings dedup inside put_meta by content addressing.
-            let child = self.walk_dir(path, rel)?;
-            let child_tree_id = self.put_tree(&child)?;
-            self.stats.dirs += 1;
-            let (sec, nsec) = mtime_of(&meta);
-            return Ok(Some(dir_entry(&component, sec, nsec, child_tree_id)));
-        }
-
-        if ft.is_file() {
-            let bytes = std::fs::read(path).map_err(io_err(path))?;
-            // `poly` is validated at the API boundary; the error arm is
-            // unreachable in practice but stays typed rather than panicking.
-            let pieces = chunk(self.poly.get(), &bytes)?;
-            let mut chunks = Vec::new();
-            for piece in pieces {
-                let id = self.store.put_data(piece)?;
-                self.stats.bytes_chunked += piece.len() as u64;
-                chunks.push((id, piece.len() as u64));
+        // THE admission gate (T-11): NFC names, non-UTF-8 refusals,
+        // reserved device names, symlink policy, representable kinds —
+        // the same code the incremental walker runs.
+        let admitted = match admission::admit(admission::EntryFacts {
+            raw_name,
+            kind,
+            link_target: link_target.as_deref(),
+            parent_depth: rel.len(),
+        }) {
+            Ok(a) => a,
+            Err(r) => {
+                rel.push(r.display_name);
+                self.refuse(rel, r.reason);
+                rel.pop();
+                return Ok(None);
             }
-            let exec = exec_of(&meta);
-            self.stats.files += 1;
-            let (sec, nsec) = mtime_of(&meta);
-            return Ok(Some(file_entry(&component, exec, sec, nsec, chunks)));
-        }
+        };
 
-        // Sockets, FIFOs, devices: no manifest representation exists. Loud
-        // refusal, snapshot continues without the path.
-        self.refuse(rel, RefusalReason::UnknownFileType);
-        Ok(None)
+        rel.push(admitted.component.clone());
+        let out = self.payload(path, &meta, admitted, rel);
+        rel.pop();
+        out
+    }
+
+    /// Payload construction for an ADMITTED entry. Pure dispatch — every
+    /// policy decision already happened in the gate; what remains is
+    /// legitimately walker-specific work (chunking into the store).
+    fn payload(
+        &mut self,
+        path: &Path,
+        meta: &std::fs::Metadata,
+        admitted: AdmittedEntry,
+        rel: &mut Vec<String>,
+    ) -> Result<Option<TreeEntry>, SnapshotError> {
+        let component = admitted.component;
+        match admitted.kind {
+            AdmittedKind::Symlink { target } => {
+                self.stats.symlinks += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(symlink_entry(&component, sec, nsec, &target)))
+            }
+            AdmittedKind::Dir => {
+                // Recurse first so the child node exists to point at;
+                // identical listings dedup inside put_meta by content
+                // addressing.
+                let child = self.walk_dir(path, rel)?;
+                let child_tree_id = self.put_tree(&child)?;
+                self.stats.dirs += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(dir_entry(&component, sec, nsec, child_tree_id)))
+            }
+            AdmittedKind::File => {
+                let bytes = std::fs::read(path).map_err(io_err(path))?;
+                // `poly` is validated at the API boundary; the error arm is
+                // unreachable in practice but stays typed rather than panicking.
+                let pieces = chunk(self.poly.get(), &bytes)?;
+                let mut chunks = Vec::new();
+                for piece in pieces {
+                    let id = self.store.put_data(piece)?;
+                    self.stats.bytes_chunked += piece.len() as u64;
+                    chunks.push((id, piece.len() as u64));
+                }
+                let exec = exec_of(meta);
+                self.stats.files += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(file_entry(&component, exec, sec, nsec, chunks)))
+            }
+        }
     }
 }
 

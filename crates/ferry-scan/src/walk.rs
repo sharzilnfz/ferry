@@ -19,12 +19,16 @@
 //!    - untouched subdirectories keep their cached node and id wholesale —
 //!      not even a stat is spent on their contents,
 //!    - symlinks are re-read (cheap) and NFC/UTF-8 rules applied.
-//! 3. Walk rules mirror `snapshot.rs` exactly: NFC names, loud refusals for
-//!    non-UTF-8 names/targets and unsupported file types, sibling-collision
-//!    hard errors, exec-bit-only permissions. One documented divergence:
-//!    an entry that vanishes mid-pass is skipped rather than failed — the
-//!    next event or audit repairs it, and racing deletions are not a scan
-//!    bug.
+//! 3. Per-entry admission rules are NOT re-implemented here (T-11): names,
+//!    reserved device names, symlink policy, and representable kinds all go
+//!    through `ferry_store::admission` — the same gate `snapshot.rs` runs —
+//!    so "incremental == from-scratch" holds by construction, not by oracle
+//!    tests alone. One documented divergence: an entry that vanishes
+//!    mid-pass is skipped rather than failed — the next event or audit
+//!    repairs it, and racing deletions are not a scan bug. Walker-local
+//!    filters (store-dir exclusion, ignore policy) deliberately sit BETWEEN
+//!    the gate's two phases: ignored entries are skipped silently, never
+//!    refused loudly.
 //! 4. The new root id is compared with the previous one. Only a CHANGED root
 //!    produces a manifest (parent = previous manifest id), so no-op bursts
 //!    write zero pack bytes.
@@ -38,16 +42,16 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ferry_platform::{classify_link, is_reserved_device_name};
-use unicode_normalization::UnicodeNormalization;
-
 use ferry_store::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, EntryPayload,
     RootManifest, TreeEntry, TreeNode,
 };
-use ferry_store::snapshot::{ensure_no_collisions, RefusalReason, RefusedPath};
+use ferry_store::snapshot::{ensure_no_collisions, RefusedPath};
 use ferry_store::store::Store;
-use ferry_store::{BlobId, BlobKind};
+use ferry_store::{
+    admission::{self, AdmittedKind, ObservedKind},
+    BlobId, BlobKind,
+};
 
 use crate::error::ScanError;
 use crate::ignore::{EntryKind, IgnorePolicy};
@@ -277,12 +281,17 @@ impl<'a> Walker<'a> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            let component = match std::str::from_utf8(raw) {
-                Ok(s) => s.nfc().collect::<String>(),
-                Err(_) => {
+            // Shared admission gate, phase 1 (T-11): UTF-8 + NFC. The
+            // walker-local filters below sit between the phases by design:
+            // ignored entries are skipped silently, never refused loudly.
+            let component = match admission::admit_name(name.as_os_str()) {
+                Ok(c) => c,
+                Err(r) => {
+                    let mut path = rel.clone();
+                    path.push(r.display_name);
                     self.refused.push(RefusedPath {
-                        path: vec![String::from_utf8_lossy(raw).into_owned()],
-                        reason: RefusalReason::NonUtf8Name,
+                        path,
+                        reason: r.reason,
                     });
                     continue;
                 }
@@ -317,77 +326,71 @@ impl<'a> Walker<'a> {
             if self.ignore.ignored(&child_rel, kind) {
                 continue;
             }
-            // Reserved Windows device names can never materialize on a
-            // Windows endpoint; refuse loudly at the source (T-012).
-            if is_reserved_device_name(&component) {
-                self.refused.push(RefusedPath {
-                    path: child_rel,
-                    reason: RefusalReason::ReservedName,
-                });
-                continue;
-            }
 
-            let entry = if ft.is_symlink() {
-                let target = std::fs::read_link(&child_disk).map_err(Self::io_err(&child_disk))?;
-                match target.to_str() {
-                    // T-012 policy: relative internal targets sync as links;
-                    // absolute or root-escaping targets are refused loudly.
-                    Some(t) => match classify_link(rel.len(), t) {
-                        ferry_platform::LinkDecision::SyncAsLink => {
-                            self.stats.symlinks += 1;
-                            symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), t)
-                        }
-                        ferry_platform::LinkDecision::Refuse(reason) => {
-                            self.refused.push(RefusedPath {
-                                path: child_rel,
-                                reason: match reason {
-                                    ferry_platform::LinkRefusal::AbsoluteTarget => {
-                                        RefusalReason::AbsoluteSymlinkTarget
-                                    }
-                                    ferry_platform::LinkRefusal::EscapesRoot => {
-                                        RefusalReason::EscapingSymlinkTarget
-                                    }
-                                },
-                            });
-                            continue;
-                        }
-                    },
-                    None => {
+            // Shared admission gate, phase 2 (T-11): reserved device names,
+            // symlink policy, representable kinds — byte-for-byte the rules
+            // snapshot_dir runs, from one implementation.
+            let observed = if ft.is_symlink() {
+                ObservedKind::Symlink
+            } else if ft.is_dir() {
+                ObservedKind::Dir
+            } else if ft.is_file() {
+                ObservedKind::File
+            } else {
+                ObservedKind::Other
+            };
+            let link_target = if ft.is_symlink() {
+                Some(
+                    std::fs::read_link(&child_disk)
+                        .map_err(Self::io_err(&child_disk))?
+                        .into_os_string(),
+                )
+            } else {
+                None
+            };
+            let admitted =
+                match admission::admit_kind(component, observed, link_target.as_deref(), rel.len())
+                {
+                    Ok(a) => a,
+                    Err(r) => {
                         self.refused.push(RefusedPath {
                             path: child_rel,
-                            reason: RefusalReason::NonUtf8SymlinkTarget,
+                            reason: r.reason,
                         });
                         continue;
                     }
-                }
-            } else if ft.is_dir() {
-                let child_id = self.ensure_child(&child_rel, &disk, dirty_closed)?;
-                listed_dirs.push(child_rel.clone());
-                self.stats.dirs += 1;
-                dir_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), child_id)
-            } else if ft.is_file() {
-                let size = meta.len();
-                let mt = (mtime_sec(&meta), mtime_nsec(&meta));
-                let exec = live_exec(&meta.permissions());
-                self.stats.files += 1;
-
-                let chunks = match old_node.as_ref().and_then(|n| find_entry(n, &component)) {
-                    Some(prev) if reusable(prev, size, mt, exec) => {
-                        match &prev.payload {
-                            EntryPayload::File { chunks, .. } => chunks.clone(),
-                            _ => unreachable!("reusable() guarantees a File payload"),
-                        }
-                        // Short-circuit hit: zero bytes read.
-                    }
-                    _ => self.stream_file_chunks(&child_disk)?,
                 };
-                file_entry(&component, exec, mt.0, mt.1, chunks)
-            } else {
-                self.refused.push(RefusedPath {
-                    path: child_rel,
-                    reason: RefusalReason::UnknownFileType,
-                });
-                continue;
+            let component = admitted.component;
+
+            let entry = match admitted.kind {
+                AdmittedKind::Symlink { target } => {
+                    self.stats.symlinks += 1;
+                    symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), &target)
+                }
+                AdmittedKind::Dir => {
+                    let child_id = self.ensure_child(&child_rel, &disk, dirty_closed)?;
+                    listed_dirs.push(child_rel.clone());
+                    self.stats.dirs += 1;
+                    dir_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), child_id)
+                }
+                AdmittedKind::File => {
+                    let size = meta.len();
+                    let mt = (mtime_sec(&meta), mtime_nsec(&meta));
+                    let exec = live_exec(&meta.permissions());
+                    self.stats.files += 1;
+
+                    let chunks = match old_node.as_ref().and_then(|n| find_entry(n, &component)) {
+                        Some(prev) if reusable(prev, size, mt, exec) => {
+                            match &prev.payload {
+                                EntryPayload::File { chunks, .. } => chunks.clone(),
+                                _ => unreachable!("reusable() guarantees a File payload"),
+                            }
+                            // Short-circuit hit: zero bytes read.
+                        }
+                        _ => self.stream_file_chunks(&child_disk)?,
+                    };
+                    file_entry(&component, exec, mt.0, mt.1, chunks)
+                }
             };
             entries.push(entry);
         }
@@ -1089,6 +1092,78 @@ mod tests {
         };
         assert_eq!(names, expected);
         assert_eq!(out.root_tree_id, fx.scratch_root_id());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn adversarial_entries_produce_identical_trees_and_ledgers_in_both_walkers() {
+        // T-11 acceptance: fold-adjacent adversarial cases (reserved names,
+        // non-UTF-8 names, unsupported types, link escapes) run through the
+        // SHARED gate, so the from-scratch snapshot_dir and the incremental
+        // walker must agree on the tree AND on every ledger line — nested
+        // paths included.
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut fx = Fixture::new("t11adv");
+        let sub = fx.root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
+        write_file(&sub.join("aux.txt"), b"reserved", false, (2, 0));
+        std::os::unix::fs::symlink("../../outside", sub.join("esc_link")).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(sub.join("pipe"))
+            .status()
+            .unwrap()
+            .success());
+        // Not every filesystem accepts non-UTF-8 names; only expect the
+        // ledger line where the host actually created the entry.
+        let non_utf8 = std::ffi::OsStr::from_bytes(b"na\xffme");
+        let name_refused = std::fs::write(sub.join(non_utf8), b"y").is_ok();
+
+        let ledger = fx.full_scan_with_ledger();
+        let inc_id = fx.prev_root_tree_id;
+
+        use ferry_store::snapshot::{snapshot_dir, RefusalReason};
+        let scratch = snapshot_dir(&fx.store, fx.poly, &fx.root, &identity((3, 0))).unwrap();
+
+        assert_eq!(
+            inc_id, scratch.root_tree_id,
+            "incremental == from-scratch by construction of the shared gate"
+        );
+
+        let mut want: Vec<(Vec<String>, RefusalReason)> = vec![
+            (
+                vec!["sub".into(), "aux.txt".into()],
+                RefusalReason::ReservedName,
+            ),
+            (
+                vec!["sub".into(), "esc_link".into()],
+                RefusalReason::EscapingSymlinkTarget,
+            ),
+            (
+                vec!["sub".into(), "pipe".into()],
+                RefusalReason::UnknownFileType,
+            ),
+        ];
+        if name_refused {
+            want.push((
+                vec!["sub".into(), "na\u{fffd}me".into()],
+                RefusalReason::NonUtf8Name,
+            ));
+        }
+        want.sort();
+
+        let mut got: Vec<_> = ledger.iter().map(|r| (r.path.clone(), r.reason)).collect();
+        got.sort();
+        assert_eq!(got, want, "incremental walker's ledger");
+
+        let mut scr: Vec<_> = scratch
+            .refused
+            .iter()
+            .map(|r| (r.path.clone(), r.reason))
+            .collect();
+        scr.sort();
+        assert_eq!(scr, want, "from-scratch snapshot's ledger");
     }
 
     #[test]

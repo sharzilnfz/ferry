@@ -9,6 +9,7 @@
 //! implemented and tested, so swapping the real ChaCha20-Poly1305 in touches
 //! only `crypto.rs`.
 
+pub mod admission;
 pub mod chunker;
 pub mod crypto;
 pub mod diff;
