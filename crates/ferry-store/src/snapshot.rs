@@ -859,6 +859,56 @@ mod tests {
         assert_eq!(before, after, "dedup must leave the pack set untouched");
     }
 
+    /// T-20 acceptance: an unchanged folder re-scanned K times (fresh
+    /// wall-clock identity per scan, like real scans) grows the store by a
+    /// small constant — chunks and tree nodes dedupe by content hash; only
+    /// the ~100-byte root manifest is new each scan.
+    #[test]
+    fn k_rescans_of_unchanged_folder_grow_the_store_below_a_small_constant() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
+        write_file(&tree.join("b/c.txt"), b"beta gamma", true, (20, 2));
+        write_file(
+            &tree.join("b/deep/d.bin"),
+            b"payload bytes here",
+            false,
+            (30, 3),
+        );
+
+        let pack_bytes = |p: &Path| -> u64 {
+            std::fs::read_dir(p.join(".ferry/packs"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.metadata().unwrap().len())
+                .sum()
+        };
+
+        const K: i64 = 5;
+        const SMALL_CONSTANT_BYTES: u64 = 8 * 1024;
+        let mut first_tree_id = None;
+        let mut baseline = None;
+        for scan in 0..K {
+            // Realistic: every scan stamps its own wall-clock identity.
+            let idn = identity((100 + scan, 7));
+            let out = snapshot_dir(&store, poly_of(13), &tree, &idn).unwrap();
+            match first_tree_id {
+                None => first_tree_id = Some(out.root_tree_id),
+                Some(prev) => assert_eq!(prev, out.root_tree_id, "scan {scan} reused the tree"),
+            }
+            if scan == 0 {
+                baseline = Some(pack_bytes(_dir.path()));
+            } else {
+                let growth = pack_bytes(_dir.path()) - baseline.unwrap();
+                assert!(
+                    growth < SMALL_CONSTANT_BYTES,
+                    "rescan {scan} grew store by {growth} bytes; unchanged-folder \
+                     churn must stay under {SMALL_CONSTANT_BYTES}"
+                );
+            }
+        }
+    }
+
     #[test]
     #[cfg(unix)]
     fn unsupported_entries_are_refused_loudly_not_silently() {
