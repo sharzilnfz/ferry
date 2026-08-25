@@ -308,7 +308,12 @@ fn exec_of(meta: &std::fs::Metadata) -> bool {
     }
 }
 
-const DEFAULT_IGNORE: &[&str] = &[
+/// Store-level default ignore lines applied by [`snapshot_dir`].
+///
+/// MUST stay in lockstep with `ferry_ignore::defaults::DEFAULT_RULES` (the
+/// canonical product decision, CONTEXT.md "Selective rules"); a cross-crate
+/// test in ferry-ignore fails if the two lists drift.
+pub const DEFAULT_IGNORE: &[&str] = &[
     ".DS_Store",
     "Thumbs.db",
     "desktop.ini",
