@@ -49,8 +49,9 @@ use crate::transport::{Connection, Transport};
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::store::Store;
 
-/// chunk id -> owning pack name + cached pack bytes.
-type PackMap = HashMap<BlobId, (PackId, Arc<Vec<u8>>)>;
+/// chunk id -> owning pack name (T-15: resolved from the in-memory location
+/// table; pack bytes are loaded lazily, only for packs actually sent).
+type PackMap = HashMap<BlobId, PackId>;
 
 /// Default poll cadence from the ticket ("sleep 200ms").
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -280,8 +281,6 @@ pub enum IngestError {
     Io(#[from] std::io::Error),
     #[error("pack: {0}")]
     Pack(#[from] ferry_store::pack::PackError),
-    #[error("index rebuild found damaged packs: {0:?}")]
-    RebuildSkipped(Vec<String>),
     #[error("{0}")]
     Other(String),
 }
@@ -1303,19 +1302,47 @@ fn serve_data_request(
     chunk_ids: &[BlobId],
 ) -> Result<(), SessionError> {
     let mut sent_packs: HashSet<PackId> = HashSet::new();
+    // Lazily loaded pack bytes, keyed by pack; a None entry marks a pack
+    // that failed verification so we never re-read (or re-send) it.
+    let mut pack_bytes: HashMap<PackId, Option<Arc<Vec<u8>>>> = HashMap::new();
     for id in chunk_ids {
         match map.get(id) {
-            Some((name, bytes)) => {
-                if sent_packs.insert(*name) {
+            Some(name) => {
+                let cached = match pack_bytes.get(name) {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let loaded = load_pack_verified(ctx, name);
+                        if loaded.is_none() {
+                            ctx.status(&format!("WARN skipping damaged pack {}", hex(name)));
+                        }
+                        pack_bytes.insert(*name, loaded.clone());
+                        loaded
+                    }
+                };
+                if let Some(bytes) = cached {
+                    if sent_packs.insert(*name) {
+                        proto::send_item(
+                            conn,
+                            &ItemPayload::Pack {
+                                name: *name,
+                                bytes: (*bytes).clone(),
+                            },
+                        )?;
+                    }
+                    // Chunk rides a pack already sent this round: nothing to do.
+                } else {
+                    // Damaged home pack: fall back to individual-blob
+                    // transfer through the store's own resolution.
+                    let bytes = ctx.store.get(BlobKind::DataChunk, id)?;
                     proto::send_item(
                         conn,
-                        &ItemPayload::Pack {
-                            name: *name,
-                            bytes: (**bytes).clone(),
+                        &ItemPayload::Blob {
+                            kind: BlobKind::DataChunk,
+                            id: *id,
+                            bytes,
                         },
                     )?;
                 }
-                // Chunk rides a pack already sent this round: nothing to do.
             }
             None => {
                 // Unmapped fallback (should not happen post-seal, but stay
@@ -1336,46 +1363,32 @@ fn serve_data_request(
     Ok(())
 }
 
-// Pack ingest lives in ONE place now: `exchange::ingest_pack_verified`
-// (re-exported from the crate root), shared by both protocol paths.
+/// Read one pack from disk and verify it against its own name. Returns
+/// `None` when the file is missing or its BLAKE3 disagrees with the name —
+/// callers skip it loudly rather than serving corrupt bytes.
+fn load_pack_verified(ctx: &Ctx, name: &PackId) -> Option<Arc<Vec<u8>>> {
+    let path = ctx
+        .store
+        .store_dir()
+        .join("packs")
+        .join(format!("{}.pack", hex(name)));
+    let bytes = std::fs::read(&path).ok()?;
+    if ferry_store::pack::pack_name_of(&bytes) != *name {
+        return None;
+    }
+    Some(Arc::new(bytes))
+}
 
-/// Scan the on-disk packs and map every DATA CHUNK id to its owning pack
-/// (with the pack's bytes cached for streaming). Packs failing their own
-/// name verification are skipped loudly; a requested chunk with no healthy
-/// home falls back to individual-blob transfer downstream.
+/// T-15: map every DATA CHUNK id to its owning pack straight from the
+/// in-memory location table — no pack bytes are read here, so building the
+/// map costs O(index entries), not O(total store). Damaged packs surface
+/// (and are skipped loudly) at send time in [`load_pack_verified`]; their
+/// chunks fall back to individual-blob transfer.
 fn build_pack_map(ctx: &Ctx) -> Result<PackMap, SessionError> {
-    let packs_dir = ctx.store.store_dir().join("packs");
     let mut out = HashMap::new();
-    for entry in std::fs::read_dir(&packs_dir)?.flatten() {
-        let path = entry.path();
-        let name_str = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let claimed: PackId = match ferry_store::format::unhex(&name_str) {
-            Some(v) => v,
-            None => continue,
-        };
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        if ferry_store::pack::pack_name_of(&bytes) != claimed {
-            ctx.status(&format!("WARN skipping damaged pack {name_str}"));
-            continue;
-        }
-        let Ok((_, entries)) = ferry_store::pack::read_footer(
-            &bytes,
-            &claimed,
-            &[0u8; ferry_store::crypto::KEY_LEN],
-            &PassthroughCipher,
-        ) else {
-            continue;
-        };
-        let shared = Arc::new(bytes);
-        for e in entries {
-            if e.kind == BlobKind::DataChunk {
-                out.insert(e.id, (claimed, Arc::clone(&shared)));
-            }
+    for e in ctx.store.index_entries()? {
+        if e.kind == BlobKind::DataChunk {
+            out.insert(e.id, e.pack);
         }
     }
     Ok(out)
@@ -1419,14 +1432,10 @@ fn run_as_puller(
     }
 
     if received_packs {
-        // Seal staged meta blobs, then teach the location table about the
-        // freshly landed packs. M0 shortcut: full rebuild per delivery;
-        // T-002/T-008 replace this with incremental index appends.
+        // Seal staged meta blobs so their locations join the table.
+        // Delivered packs were folded in incrementally at ingest time
+        // (T-15); no full rebuild on the session hot path.
         ctx.store.flush()?;
-        let (_, skipped) = ctx.store.rebuild_index()?;
-        if !skipped.is_empty() {
-            return Err(IngestError::RebuildSkipped(skipped).into());
-        }
     }
 
     // Pin enforcement rides the shared applier boundary (T-06); the dev-only

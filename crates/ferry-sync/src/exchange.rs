@@ -750,13 +750,11 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             }
         }
         if landed_pack {
-            // Fold freshly landed packs into the location table once per
-            // stage (M0 shortcut; T-002/T-008 replace with incremental).
+            // Delivered packs were folded into the location table (and an
+            // incremental INDEX record appended) at ingest time; flush only
+            // seals locally staged blobs. T-15: no full rebuild on the hot
+            // path.
             self.store.flush().map_err(wire_store_err)?;
-            let (_, skipped) = self.store.rebuild_index().map_err(wire_store_err)?;
-            if !skipped.is_empty() {
-                return Err(IngestError::RebuildSkipped(skipped).into());
-            }
         }
         Ok(satisfied)
     }
@@ -807,24 +805,26 @@ pub(crate) fn lineage_newer(candidate: &RootManifest, incumbent: &RootManifest) 
     ka > kb
 }
 
-/// Verify a pack's name against its ciphertext, then write it into the
-/// store's packs directory atomically. The single receiver-side ingest
-/// path shared by the v1 driver, tests, and the engine facade.
+/// Verify a pack's name against its ciphertext, then hand it to the store
+/// for incremental adoption (T-15): atomic disk write, short-lock table
+/// merge, per-pack INDEX record. The single receiver-side ingest path
+/// shared by the v1 driver, tests, and the engine facade.
 pub fn ingest_pack_verified(
     store: &Store,
     claimed_name: &PackId,
     bytes: &[u8],
 ) -> Result<(), IngestError> {
-    let found = ferry_store::pack::pack_name_of(bytes);
-    if found != *claimed_name {
-        return Err(IngestError::NameMismatch {
-            claimed: hex(claimed_name),
-            found: hex(&found),
-        });
+    match store.adopt_pack(claimed_name, bytes) {
+        Ok(()) => Ok(()),
+        Err(ferry_store::store::StoreError::Pack(ferry_store::pack::PackError::NameMismatch {
+            expected,
+            found,
+        })) => Err(IngestError::NameMismatch {
+            claimed: expected,
+            found,
+        }),
+        Err(other) => Err(IngestError::Other(other.to_string())),
     }
-    let dot = store.store_dir();
-    ferry_store::pack::write_pack_atomically(&dot.join("tmp"), &dot.join("packs"), bytes)?;
-    Ok(())
 }
 
 /// Chunk one folder's index rows into `INDEX_ADVERT` frames at the
