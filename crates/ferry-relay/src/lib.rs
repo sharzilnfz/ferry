@@ -17,6 +17,7 @@
 //! "Relay stays as fallback" is iroh's negotiation job (ADR-0003); this
 //! server does not fight it.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -99,7 +100,7 @@ impl Ledger {
 struct LedgerAccessControl(Ledger);
 
 impl AccessControl for LedgerAccessControl {
-    async fn on_connect(&self, request: &ClientRequest) -> Access {
+    fn on_connect(&self, request: &ClientRequest) -> impl Future<Output = Access> {
         let id = hex(request.endpoint_id().as_bytes());
         let remote = request
             .headers()
@@ -111,7 +112,7 @@ impl AccessControl for LedgerAccessControl {
             endpoint_id_hex: id,
             remote,
         });
-        Access::Allow
+        std::future::ready(Access::Allow)
     }
 
     fn on_disconnect(
