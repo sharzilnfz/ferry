@@ -152,6 +152,16 @@ pub enum MaterializeError {
         first: String,
         second: String,
     },
+    #[error(
+        "ambiguous disk spelling in {parent}: {first:?} and {second:?} both normalize \
+         to the same stored name; remove one of them on disk before syncing (ferry \
+         never picks silently)"
+    )]
+    AmbiguousDiskSpelling {
+        parent: String,
+        first: String,
+        second: String,
+    },
 }
 
 /// Wrap an io error with the path it happened at.
