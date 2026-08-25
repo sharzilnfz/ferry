@@ -1,6 +1,6 @@
 # Spec: Architecture hardening pass (arch-hardening)
 
-Status: done (T-15, T-20 deferred by product call, 2026-08-25)
+Status: done
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # T-20: Storage-efficiency sweep — bounded on-disk growth, no orphaned bytes
 
-Status: ready-for-agent
+Status: done
 Depends on: T-14, T-15 (exchange paths settled so the steady-state write set
 is final)
 
