@@ -77,9 +77,11 @@ pub struct EngineConfig {
     /// should be set per daemon; the connector drives sessions.
     pub connect_to: Option<SocketAddr>,
     /// Strictly expect this peer device id at the handshake (ADR-0003).
-    /// `None` = trust-on-first-use: accept whichever identity proves
-    /// possession of its claimed key. Wire behavior is identical either
-    /// way; this is LOCAL acceptance policy only.
+    /// If set to `Some(pin)`, the engine strictly enforces that single peer identity.
+    /// `None` indicates default policy: if a `CONFIG_HEAD` exists in the folder,
+    /// an allow-list is seeded from its wrapped keys (deny-unknown by default);
+    /// otherwise Trust-On-First-Use (TOFU) persists the first authenticated peer
+    /// identity per folder under `.ferry/peers/` and refuses any subsequent mismatches.
     pub expected_peer_id: Option<BlobId>,
     /// DEV ONLY: speak the retired M0 plaintext framing instead of protocol
     /// v1. Defaults OFF; production engines must never set it.
@@ -91,6 +93,134 @@ pub struct EngineConfig {
     pub pin_state_dir: Option<PathBuf>,
     /// Silence stdout status lines (tests).
     pub quiet: bool,
+}
+
+/// Local peer authorization policy (T-18).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PeerPolicy {
+    /// Trust on first use (TOFU): accepts the first peer that proves key
+    /// possession, persists its identity per-folder to disk under `.ferry/peers/`,
+    /// and strictly enforces that pinned identity on subsequent sessions
+    /// (refusing any mismatches loudly).
+    #[default]
+    TrustOnFirstUse,
+    /// Explicit allow-list: accepts only peers whose device ID is in the set.
+    /// Denies unknown peers by default. Does not perform TOFU.
+    AllowList(HashSet<BlobId>),
+}
+
+impl PeerPolicy {
+    /// Construct an allow-list policy from an iterator of allowed peer device IDs.
+    pub fn from_allowed<I: IntoIterator<Item = BlobId>>(peers: I) -> Self {
+        PeerPolicy::AllowList(peers.into_iter().collect())
+    }
+
+    /// Construct an allow-list policy seeded from `CONFIG_HEAD` container bytes.
+    /// Extracts every `device_pub` from the wrapped key entries.
+    pub fn from_config_head(
+        bytes: &[u8],
+    ) -> Result<Self, ferry_crypto::config_head::ConfigHeadError> {
+        let ch = ferry_crypto::config_head::parse_config_head(bytes)?;
+        let set: HashSet<BlobId> = ch.entries.into_iter().map(|e| e.device_pub).collect();
+        Ok(PeerPolicy::AllowList(set))
+    }
+}
+
+/// On-disk ledger for persisted TOFU peer identities (T-18).
+/// Records live under `<store_dir>/peers/` named `<folder_hex>-<peer_hex>.peer`.
+#[derive(Clone, Debug)]
+pub struct PeerLedger {
+    dir: PathBuf,
+}
+
+impl PeerLedger {
+    /// `store_dir` is the folder's `.ferry` directory (or stand-in in tests).
+    pub fn new(store_dir: impl Into<PathBuf>) -> Self {
+        PeerLedger {
+            dir: store_dir.into().join("peers"),
+        }
+    }
+
+    pub fn path_for(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> PathBuf {
+        self.dir
+            .join(format!("{}-{}.peer", hex(folder_id), hex(peer)))
+    }
+
+    /// Persist a first-seen peer identity atomically.
+    pub fn record_peer(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> Result<(), std::io::Error> {
+        std::fs::create_dir_all(&self.dir)?;
+        let tmp = self
+            .dir
+            .join(format!(".tmp-{}-{}", hex(folder_id), hex(peer)));
+        std::fs::write(&tmp, hex(peer).as_bytes())?;
+        std::fs::rename(&tmp, self.path_for(folder_id, peer))?;
+        Ok(())
+    }
+
+    /// List all persisted peers for `folder_id`, sorted for determinism.
+    pub fn list_peers(&self, folder_id: &[u8; 16]) -> Result<Vec<BlobId>, std::io::Error> {
+        let prefix = format!("{}-", hex(folder_id));
+        let rd = match std::fs::read_dir(&self.dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || !name_str.starts_with(&prefix)
+                || !name_str.ends_with(".peer")
+            {
+                continue;
+            }
+            let peer_hex = name_str
+                .trim_start_matches(&prefix)
+                .trim_end_matches(".peer");
+            if let Some(peer_id) = ferry_store::format::unhex::<32>(peer_hex) {
+                out.push(peer_id);
+            }
+        }
+        out.sort_unstable();
+        Ok(out)
+    }
+
+    /// Forget a folder's persisted peer identity. Returns true if removed.
+    pub fn forget_peer(
+        &self,
+        folder_id: &[u8; 16],
+        peer: &[u8; 32],
+    ) -> Result<bool, std::io::Error> {
+        match std::fs::remove_file(self.path_for(folder_id, peer)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Check candidate paths for a `CONFIG_HEAD` file to seed allow-list mode.
+fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolicy {
+    let candidates = [
+        store.store_dir().join("config"),
+        cfg.store_dir.join("config"),
+        cfg.store_dir.join(".ferry").join("config"),
+    ];
+    for path in &candidates {
+        if path.is_file() {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(policy) = PeerPolicy::from_config_head(&bytes) {
+                    if let PeerPolicy::AllowList(ref set) = policy {
+                        if !set.is_empty() {
+                            return policy;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    PeerPolicy::TrustOnFirstUse
 }
 
 impl EngineConfig {
@@ -177,6 +307,8 @@ pub enum SessionError {
     Diff(#[from] ferry_store::diff::DiffError),
     #[error("agreement state: {0}")]
     Agreement(#[from] ferry_store::agreement::AgreementError),
+    #[error("peer unauthorized: {0}")]
+    PeerUnauthorized(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -610,6 +742,8 @@ struct Ctx {
     /// latest / baseline / agreed / next-parent.
     folder: Arc<FolderState>,
     shared: Arc<SharedState>,
+    /// Local peer authorization policy (T-18).
+    peer_policy: PeerPolicy,
     clock: ClockFn,
     snapshot_source: SnapshotSourceFn,
 }
@@ -788,7 +922,10 @@ impl Ctx {
     fn note_session_failure(&self, e: &SessionError) {
         if matches!(
             e,
-            SessionError::Wire(ferry_proto::error::ProtoError::Auth(_))
+            SessionError::Wire(
+                ferry_proto::error::ProtoError::Auth(_)
+                    | ferry_proto::error::ProtoError::IdentityMismatch { .. }
+            ) | SessionError::PeerUnauthorized(_)
         ) {
             self.bump_rejected();
         }
@@ -822,13 +959,52 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     } else {
         ferry_proto::Role::Responder
     };
-    let expect = match ctx.cfg.expected_peer_id {
-        Some(pin) => ExpectPeer::Pin(pin),
-        None => ExpectPeer::TrustOnFirstUse,
+
+    let ledger = PeerLedger::new(ctx.store.store_dir());
+    let (expect, is_tofu_fresh) = match &ctx.peer_policy {
+        PeerPolicy::AllowList(set) => {
+            if set.len() == 1 {
+                let pin = *set.iter().next().unwrap();
+                (ExpectPeer::Pin(pin), false)
+            } else {
+                (ExpectPeer::TrustOnFirstUse, false)
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => {
+            let known = ledger.list_peers(&ctx.cfg.folder_id)?;
+            if let Some(first) = known.first() {
+                (ExpectPeer::Pin(*first), false)
+            } else {
+                (ExpectPeer::TrustOnFirstUse, true)
+            }
+        }
     };
 
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
+
+    match &ctx.peer_policy {
+        PeerPolicy::AllowList(set) => {
+            if !set.contains(&est.peer) {
+                let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
+                ctx.status(&format!(
+                    "PEER unauthorized: {} not in allow-list",
+                    hex(&est.peer)
+                ));
+                return Err(SessionError::PeerUnauthorized(hex(&est.peer)));
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => {
+            if is_tofu_fresh {
+                ctx.status(&format!(
+                    "PEER new device trusted (TOFU): {}",
+                    hex(&est.peer)
+                ));
+                ledger.record_peer(&ctx.cfg.folder_id, &est.peer)?;
+            }
+        }
+    }
+
     ctx.status(&format!(
         "SESSION v1 peer={} encrypted=yes version={} role={}",
         hex_short(&est.peer),
@@ -929,6 +1105,39 @@ fn run_session_legacy(
         proto::send_hello(conn, &ctx.cfg.tag)?;
         h.device_tag
     };
+
+    let peer_id = device_id_from_tag(&peer_tag);
+    let ledger = PeerLedger::new(ctx.store.store_dir());
+    match &ctx.peer_policy {
+        PeerPolicy::AllowList(set) => {
+            if !set.contains(&peer_id) {
+                ctx.status(&format!(
+                    "PEER unauthorized (legacy): {} not in allow-list",
+                    hex(&peer_id)
+                ));
+                return Err(SessionError::PeerUnauthorized(hex(&peer_id)));
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => {
+            let known = ledger.list_peers(&ctx.cfg.folder_id)?;
+            if let Some(first) = known.first() {
+                if *first != peer_id {
+                    ctx.status(&format!(
+                        "PEER refused (legacy): expected {}, got {}",
+                        hex(first),
+                        hex(&peer_id)
+                    ));
+                    return Err(SessionError::PeerUnauthorized(hex(&peer_id)));
+                }
+            } else {
+                ctx.status(&format!(
+                    "PEER new device trusted (TOFU): {}",
+                    hex(&peer_id)
+                ));
+                ledger.record_peer(&ctx.cfg.folder_id, &peer_id)?;
+            }
+        }
+    }
 
     proto::send_offer(
         conn,
@@ -1384,6 +1593,7 @@ pub struct SyncEngine {
     transport: Arc<dyn Transport>,
     store: Arc<Store>,
     listener: Option<Box<dyn crate::transport::Listener>>,
+    peer_policy: Option<PeerPolicy>,
     /// Test seams (T-07): None = real clock / real scanner.
     clock: Option<ClockFn>,
     snapshot_source: Option<SnapshotSourceFn>,
@@ -1404,9 +1614,15 @@ impl SyncEngine {
             transport,
             store,
             listener,
+            peer_policy: None,
             clock: None,
             snapshot_source: None,
         })
+    }
+
+    /// Explicitly configure the peer authorization policy (T-18).
+    pub fn set_peer_policy(&mut self, policy: PeerPolicy) {
+        self.peer_policy = Some(policy);
     }
 
     /// Swap the clock and the scanner (test seam, T-07): tick logic becomes
@@ -1446,6 +1662,15 @@ impl SyncEngine {
         let listen_addr = listener.as_ref().and_then(|l| l.local_addr().ok());
         let shared = Arc::new(SharedState::new());
         let folder = Arc::new(FolderState::new());
+        let peer_policy = if let Some(policy) = self.peer_policy.take() {
+            policy
+        } else if let Some(pin) = self.cfg.expected_peer_id {
+            PeerPolicy::AllowList([pin].into())
+        } else {
+            resolve_peer_policy_from_disk(&self.cfg, &self.store)
+        };
+        let store_dir = self.store.store_dir().to_path_buf();
+        let folder_id = self.cfg.folder_id;
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
             identity: device_identity_for_tag(&self.cfg.tag),
@@ -1454,6 +1679,7 @@ impl SyncEngine {
             session_lock: Mutex::new(()),
             folder: Arc::clone(&folder),
             shared: Arc::clone(&shared),
+            peer_policy,
             clock: self.clock.take().unwrap_or_else(system_clock),
             snapshot_source: self
                 .snapshot_source
@@ -1492,6 +1718,8 @@ impl SyncEngine {
             joins,
             listen_addr,
             transport: Arc::clone(&self.transport),
+            store_dir,
+            folder_id,
             tag: self.cfg.tag,
         }
     }
@@ -1612,6 +1840,8 @@ pub struct EngineHandle {
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     transport: Arc<dyn Transport>,
+    store_dir: PathBuf,
+    folder_id: [u8; 16],
     tag: String,
 }
 
@@ -1634,6 +1864,12 @@ impl EngineHandle {
 
     pub fn listen_addr(&self) -> Option<SocketAddr> {
         self.listen_addr
+    }
+
+    /// Return the list of pinned/persisted peer device IDs for this engine's folder (T-18).
+    pub fn pinned_peers(&self) -> Result<Vec<BlobId>, std::io::Error> {
+        let ledger = PeerLedger::new(&self.store_dir);
+        ledger.list_peers(&self.folder_id)
     }
 
     /// Signal shutdown and wait for every thread to exit — the poll loop,
@@ -1828,6 +2064,7 @@ mod tests {
             session_lock: Mutex::new(()),
             folder,
             shared: Arc::new(SharedState::new()),
+            peer_policy: PeerPolicy::TrustOnFirstUse,
             clock,
             snapshot_source: source,
         };
@@ -2098,5 +2335,59 @@ mod tests {
             at_shutdown,
             "probe saw writes AFTER shutdown returned: a thread was not joined"
         );
+    }
+
+    #[test]
+    fn peer_ledger_records_lists_and_forgets_peers() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = PeerLedger::new(dir.path());
+        let folder1 = [1u8; 16];
+        let folder2 = [2u8; 16];
+        let peer_a = [10u8; 32];
+        let peer_b = [20u8; 32];
+
+        // Initially empty.
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), Vec::<BlobId>::new());
+
+        // Record peer_a for folder1.
+        ledger.record_peer(&folder1, &peer_a).unwrap();
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a]);
+        // folder2 still empty.
+        assert_eq!(ledger.list_peers(&folder2).unwrap(), Vec::<BlobId>::new());
+
+        // Record peer_b for folder1.
+        ledger.record_peer(&folder1, &peer_b).unwrap();
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a, peer_b]);
+
+        // Forget peer_a.
+        assert!(ledger.forget_peer(&folder1, &peer_a).unwrap());
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_b]);
+
+        // Forget peer_a again returns false (not found).
+        assert!(!ledger.forget_peer(&folder1, &peer_a).unwrap());
+    }
+
+    #[test]
+    fn peer_policy_seeds_from_config_head_bytes() {
+        let folder_id = [42u8; 16];
+        let dev1 = [1u8; 32];
+        let dev2 = [2u8; 32];
+        let wrapped = [7u8; ferry_crypto::folder_key::WRAPPED_LEN];
+
+        let entries = vec![
+            ferry_crypto::config_head::WrappedKeyEntry::new(dev1, wrapped),
+            ferry_crypto::config_head::WrappedKeyEntry::new(dev2, wrapped),
+        ];
+        let bytes = ferry_crypto::config_head::write_config_head(&folder_id, &entries);
+
+        let policy = PeerPolicy::from_config_head(&bytes).unwrap();
+        match policy {
+            PeerPolicy::AllowList(set) => {
+                assert!(set.contains(&dev1));
+                assert!(set.contains(&dev2));
+                assert!(!set.contains(&[3u8; 32]));
+            }
+            PeerPolicy::TrustOnFirstUse => panic!("expected AllowList policy"),
+        }
     }
 }
