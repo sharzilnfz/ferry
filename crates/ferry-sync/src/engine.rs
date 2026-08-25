@@ -26,9 +26,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_crypto::identity::DeviceIdentity;
@@ -36,7 +36,7 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
 use ferry_store::manifest::{parse_manifest, serialize_manifest, RootManifest};
-use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
+use ferry_store::snapshot::{snapshot_dir, SnapshotError, SnapshotIdentity, SnapshotOutput};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -189,26 +189,292 @@ struct SnapshotData {
     manifest_id: BlobId,
 }
 
+/// How long a session waits for the first poll tick to publish state.
+const FIRST_STATE_WAIT: Duration = Duration::from_secs(10);
+
 /// What the local engine knows when a session starts.
 struct MyOffer {
     snap: Arc<SnapshotData>,
     agreed_id: BlobId,
     agreed_root: Option<BlobId>,
 }
+
+/// Max simultaneously ACCEPTED session threads. Beyond this, inbound
+/// connections are dropped politely (logged, never queued) — a hostile or
+/// accidental connection storm cannot exhaust threads or memory.
+const MAX_CONCURRENT_SESSIONS: usize = 4;
+
+/// The folder-pointer state machine (T-07): ONE owner for the current
+/// pointer, the raw latest scan, the last-agreed baseline, the agreed id,
+/// and the next self-mint parent — all behind one mutex so poll ticks and
+/// session adoptions can no longer interleave writes across four locks
+/// (spec B1). Every mutation is an explicit op below; readers wait on the
+/// condvar instead of spin-sleeping.
+///
+/// Ordering rule that makes clobbering impossible by construction:
+/// `publish_scan` re-checks under the lock whether the current pointer
+/// changed since the scan STARTED (`ScanToken`). An adoption that landed
+/// mid-scan wins; the stale pre-adoption scan is discarded whole rather
+/// than published over the adopted lineage.
+struct FolderState {
+    inner: Mutex<FolderPointers>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct FolderPointers {
+    /// Latest raw scan — refreshed every tick (legacy sessions read this).
+    latest: Option<Arc<SnapshotData>>,
+    /// CURRENT folder pointer: our latest snapshot OR an adopted peer manifest.
+    current: Option<Arc<SnapshotData>>,
+    /// Last-agreed manifest (divergence baseline).
+    baseline: Option<RootManifest>,
+    /// Manifest id of `baseline` (kept alongside it under the same lock).
+    agreed: Option<BlobId>,
+    /// Parent lineage for the next SELF-minted manifest.
+    last_own_manifest_id: BlobId,
+}
+
+/// What a scan captured before it started, so publication can tell whether
+/// the world moved underneath it.
+#[derive(Clone, Copy)]
+struct ScanToken {
+    parent: BlobId,
+    observed_current: Option<BlobId>,
+}
+
+/// What happened to a finished scan at publication time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishOutcome {
+    /// Real local change: current moved to the fresh scan.
+    Minted,
+    /// Scanned root equals the current pointer's root: adopt-and-hold.
+    Held,
+    /// An adoption landed mid-scan: the scan was discarded untouched.
+    DiscardedStale,
+}
+
+impl FolderState {
+    fn new() -> Self {
+        FolderState {
+            inner: Mutex::new(FolderPointers {
+                last_own_manifest_id: [0u8; 32],
+                ..FolderPointers::default()
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, FolderPointers> {
+        self.inner.lock().unwrap()
+    }
+
+    /// Capture the pre-scan view a later [`Self::publish_scan`] validates
+    /// against. Call BEFORE scanning; the token is cheap (`Copy`).
+    fn scan_token(&self) -> ScanToken {
+        let g = self.lock();
+        ScanToken {
+            parent: g.last_own_manifest_id,
+            observed_current: g.current.as_ref().map(|s| s.manifest_id),
+        }
+    }
+
+    /// Tick path: atomically validate + publish a finished scan. See the
+    /// type-level docs for why check-and-write share one critical section.
+    fn publish_scan(&self, tok: ScanToken, data: Arc<SnapshotData>) -> PublishOutcome {
+        let mut g = self.lock();
+        if g.current.as_ref().map(|s| s.manifest_id) != tok.observed_current {
+            // The current pointer moved while we scanned (an adoption): the
+            // scan describes PRE-adoption tree state. Publishing it would
+            // clobber the adopted lineage — discard whole; the next tick
+            // resnapshots the post-apply tree.
+            return PublishOutcome::DiscardedStale;
+        }
+        g.latest = Some(Arc::clone(&data));
+        let held_same_root = g
+            .current
+            .as_ref()
+            .is_some_and(|c| c.manifest.root_tree_id == data.manifest.root_tree_id);
+        if !held_same_root {
+            g.current = Some(Arc::clone(&data));
+            g.last_own_manifest_id = data.manifest_id;
+        }
+        drop(g);
+        self.changed.notify_all();
+        if held_same_root {
+            PublishOutcome::Held
+        } else {
+            PublishOutcome::Minted
+        }
+    }
+
+    /// Session path: take a peer manifest as our current folder state
+    /// (adoption precedes agreement). Also refreshes `latest` so legacy
+    /// sessions see adopted bytes.
+    fn adopt_peer(&self, data: Arc<SnapshotData>) {
+        let id = data.manifest_id;
+        let mut g = self.lock();
+        g.latest = Some(Arc::clone(&data));
+        g.current = Some(data);
+        g.last_own_manifest_id = id;
+        drop(g);
+        self.changed.notify_all();
+    }
+
+    /// Record agreement: baseline and agreed id move together under the
+    /// single lock, so offers can never pair a new baseline with an old id.
+    fn record_agreed(&self, manifest: RootManifest, manifest_id: BlobId) {
+        let mut g = self.lock();
+        g.baseline = Some(manifest);
+        g.agreed = Some(manifest_id);
+        drop(g);
+        self.changed.notify_all();
+    }
+
+    /// Wait until a raw scan exists (sessions may arrive before the first
+    /// tick), returning the snapshot AND baseline read under one lock so
+    /// an offer is never torn across an adoption.
+    fn wait_offer(&self, deadline: Instant) -> Option<(Arc<SnapshotData>, Option<RootManifest>)> {
+        let mut g = self.lock();
+        loop {
+            if let Some(snap) = g.latest.clone() {
+                return Some((snap, g.baseline.clone()));
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (ng, _) = self.changed.wait_timeout(g, deadline - now).unwrap();
+            g = ng;
+        }
+    }
+
+    /// Wait for the CURRENT folder pointer the same way.
+    fn wait_current(&self, deadline: Instant) -> Option<Arc<SnapshotData>> {
+        let mut g = self.lock();
+        loop {
+            if let Some(snap) = g.current.clone() {
+                return Some(snap);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (ng, _) = self.changed.wait_timeout(g, deadline - now).unwrap();
+            g = ng;
+        }
+    }
+
+    fn baseline_root(&self) -> Option<BlobId> {
+        self.lock().baseline.as_ref().map(|m| m.root_tree_id)
+    }
+
+    fn agreed_id(&self) -> Option<BlobId> {
+        self.lock().agreed
+    }
+
+    fn current_root(&self) -> Option<BlobId> {
+        self.lock()
+            .current
+            .as_ref()
+            .map(|s| s.manifest.root_tree_id)
+    }
+
+    /// Wake every waiter (shutdown): they re-check their deadlines instead
+    /// of sleeping out a 10s window while the engine dies.
+    fn wake_all(&self) {
+        self.changed.notify_all();
+    }
+}
+
 struct SharedState {
     shutdown: AtomicBool,
     stats: Mutex<EngineStats>,
-    agreed: Mutex<Option<BlobId>>,
-    root: Mutex<Option<BlobId>>,
+    /// window before their `JoinHandle` lands in the joins vec.
+    /// Incremented SYNCHRONOUSLY in the accept loop before `spawn`,
+    /// decremented by each handler's [`LiveSession`], so shutdown can
+    /// account for handlers even in that window.
+    live_sessions: Mutex<usize>,
+    live_idle: Condvar,
+    /// Remaining accept permits ([`MAX_CONCURRENT_SESSIONS`]).
+    free_permits: Mutex<usize>,
 }
 
 impl SharedState {
+    fn new() -> Self {
+        SharedState {
+            shutdown: AtomicBool::new(false),
+            stats: Mutex::new(EngineStats::default()),
+            live_sessions: Mutex::new(0),
+            live_idle: Condvar::new(),
+            free_permits: Mutex::new(MAX_CONCURRENT_SESSIONS),
+        }
+    }
+
     fn bump(&self, f: impl FnOnce(&mut EngineStats)) {
         f(&mut self.stats.lock().unwrap());
     }
 
     fn stats(&self) -> EngineStats {
         *self.stats.lock().unwrap()
+    }
+
+    fn shutting_down(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Semaphore-style try-acquire. `None` = engine busy: caller rejects
+    /// politely (log + drop) instead of queueing unbounded work.
+    fn acquire_permit(self: &Arc<Self>) -> Option<SessionPermit> {
+        let mut g = self.free_permits.lock().unwrap();
+        if *g == 0 {
+            return None;
+        }
+        *g -= 1;
+        Some(SessionPermit {
+            shared: Arc::clone(self),
+        })
+    }
+
+    /// Count this handler BEFORE spawning its thread (see `live_sessions`).
+    fn register_live_session(self: &Arc<Self>) -> LiveSession {
+        *self.live_sessions.lock().unwrap() += 1;
+        LiveSession {
+            shared: Arc::clone(self),
+        }
+    }
+
+    /// Block until every registered session handler has exited.
+    fn wait_sessions_done(&self) {
+        let mut g = self.live_sessions.lock().unwrap();
+        while *g > 0 {
+            g = self.live_idle.wait(g).unwrap();
+        }
+    }
+}
+
+/// RAII accept permit: released when the handler finishes or is dropped.
+struct SessionPermit {
+    shared: Arc<SharedState>,
+}
+
+impl Drop for SessionPermit {
+    fn drop(&mut self) {
+        *self.shared.free_permits.lock().unwrap() += 1;
+    }
+}
+
+/// RAII liveness marker: decrement + notify shutdown on exit, panics
+/// included, so a dying handler can never wedge `shutdown`.
+struct LiveSession {
+    shared: Arc<SharedState>,
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        let mut g = self.shared.live_sessions.lock().unwrap();
+        *g -= 1;
+        self.shared.live_idle.notify_all();
     }
 }
 
@@ -305,6 +571,31 @@ pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
     lineage_winner(a, b)
 }
 
+/// Injectable wall clock: seconds + nanoseconds since the epoch. Tests
+/// pin this so tick logic is deterministic without real time.
+pub(crate) type ClockFn = Arc<dyn Fn() -> (i64, u32) + Send + Sync>;
+
+/// Injectable snapshot source (the scan). Tests substitute canned outputs
+/// to interleave tick-vs-adopt deterministically.
+pub(crate) type SnapshotSourceFn = Arc<
+    dyn Fn(
+            &Store,
+            ferry_store::chunker::ValidatedPoly,
+            &Path,
+            &SnapshotIdentity,
+        ) -> Result<SnapshotOutput, SnapshotError>
+        + Send
+        + Sync,
+>;
+
+fn system_clock() -> ClockFn {
+    Arc::new(now_parts)
+}
+
+fn real_snapshot_source() -> SnapshotSourceFn {
+    Arc::new(snapshot_dir)
+}
+
 struct Ctx {
     cfg: EngineConfig,
     /// This daemon's long-term device identity: X25519 keypair derived
@@ -315,15 +606,12 @@ struct Ctx {
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
     session_lock: Mutex<()>,
-    /// Latest scan result — always refreshed each tick (legacy sessions
-    /// read this).
-    latest: Mutex<Option<Arc<SnapshotData>>>,
-    /// The CURRENT folder pointer: our latest snapshot OR an adopted peer
-    /// manifest. v1 announcements and parent chains flow from here.
-    current: Mutex<Option<Arc<SnapshotData>>>,
-    baseline: Mutex<Option<RootManifest>>,
-    last_own_manifest_id: Mutex<BlobId>,
+    /// The folder-pointer state machine (T-07): one owner for current /
+    /// latest / baseline / agreed / next-parent.
+    folder: Arc<FolderState>,
     shared: Arc<SharedState>,
+    clock: ClockFn,
+    snapshot_source: SnapshotSourceFn,
 }
 
 impl Ctx {
@@ -347,45 +635,33 @@ impl Ctx {
 
     fn my_offer(&self) -> Result<MyOffer, SessionError> {
         // Sessions may arrive before the very first poll tick; wait briefly.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(snap) = self.latest.lock().unwrap().clone() {
-                let baseline = self.baseline.lock().unwrap().clone();
-                let (agreed_id, agreed_root) = match &baseline {
-                    Some(m) => (
-                        *blake3::hash(&serialize_manifest(m)).as_bytes(),
-                        Some(m.root_tree_id),
-                    ),
-                    None => ([0u8; 32], None),
-                };
-                return Ok(MyOffer {
-                    snap,
-                    agreed_id,
-                    agreed_root,
-                });
-            }
-            if Instant::now() > deadline {
-                return Err(SessionError::Other("no local snapshot available".into()));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let deadline = Instant::now() + FIRST_STATE_WAIT;
+        // Snapshot + baseline read under ONE lock: an offer is a consistent
+        // pair even if an adoption lands mid-session (no torn offers).
+        let Some((snap, baseline)) = self.folder.wait_offer(deadline) else {
+            return Err(SessionError::Other("no local snapshot available".into()));
+        };
+        let (agreed_id, agreed_root) = match &baseline {
+            Some(m) => (
+                *blake3::hash(&serialize_manifest(m)).as_bytes(),
+                Some(m.root_tree_id),
+            ),
+            None => ([0u8; 32], None),
+        };
+        Ok(MyOffer {
+            snap,
+            agreed_id,
+            agreed_root,
+        })
     }
 
     /// The CURRENT folder pointer (own latest or adopted), waiting out the
     /// same pre-first-tick window as [`Ctx::my_offer`].
     fn current_snapshot(&self) -> Result<Arc<SnapshotData>, SessionError> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(snap) = self.current.lock().unwrap().clone() {
-                return Ok(snap);
-            }
-            if Instant::now() > deadline {
-                return Err(SessionError::Other(
-                    "no local folder state available".into(),
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let deadline = Instant::now() + FIRST_STATE_WAIT;
+        self.folder
+            .wait_current(deadline)
+            .ok_or_else(|| SessionError::Other("no local folder state available".into()))
     }
 
     /// Record the last-agreed pointer against a peer device: THE canonical
@@ -410,8 +686,8 @@ impl Ctx {
                 },
             )
             .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
-        *self.baseline.lock().unwrap() = Some(parse_manifest(manifest_bytes)?);
-        *self.shared.agreed.lock().unwrap() = Some(manifest_id);
+        let manifest = parse_manifest(manifest_bytes)?;
+        self.folder.record_agreed(manifest, manifest_id);
         self.status(&format!(
             "STATE agreed={} recorded vs {}",
             hex(&manifest_id),
@@ -429,17 +705,19 @@ impl Ctx {
     /// sides' round-2 ids stay comparable. A differing root means real
     /// local change: mint a child of the current lineage.
     fn tick(&self, n: u64) -> Result<(), SessionError> {
-        let parent = *self.last_own_manifest_id.lock().unwrap();
-        let (sec, nsec) = now_parts();
+        // Capture the pre-scan view FIRST: publication validates against it
+        // under the folder lock, so an adoption landing mid-scan wins.
+        let tok = self.folder.scan_token();
+        let (sec, nsec) = (self.clock)();
         let identity = SnapshotIdentity {
             folder_id: self.cfg.folder_id,
             device_id: *self.identity.device_id(),
-            parent_manifest_id: parent,
+            parent_manifest_id: tok.parent,
             created_sec: sec,
             created_nsec: nsec,
         };
         let out: SnapshotOutput =
-            snapshot_dir(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
+            (self.snapshot_source)(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
         let manifest_bytes = serialize_manifest(&out.manifest);
         let data = Arc::new(SnapshotData {
             manifest_id: out.manifest_id,
@@ -447,37 +725,23 @@ impl Ctx {
             manifest_bytes,
         });
 
-        // Always publish the raw scan for the legacy session path.
-        *self.latest.lock().unwrap() = Some(data.clone());
-
-        let held_same_root = match self.current.lock().unwrap().as_ref() {
-            Some(cur) => cur.manifest.root_tree_id == out.root_tree_id,
-            None => false,
-        };
-        if !held_same_root {
-            // Real local change (or fresh device): mint a child of the
-            // current lineage.
-            *self.current.lock().unwrap() = Some(Arc::clone(&data));
-            *self.last_own_manifest_id.lock().unwrap() = out.manifest_id;
+        let outcome = self.folder.publish_scan(tok, data);
+        match outcome {
+            PublishOutcome::DiscardedStale => {
+                // An adoption landed while we scanned; the scan described
+                // pre-adoption tree state. The next tick resnapshots the
+                // post-apply tree and publishes then.
+                self.status("STATE scan discarded: adoption landed mid-scan");
+                return Ok(());
+            }
+            PublishOutcome::Held | PublishOutcome::Minted => {}
         }
-        drop(data); // held case: scan blobs dedupe in the store
-        *self.shared.root.lock().unwrap() = Some(out.root_tree_id);
 
-        let base_root = self
-            .baseline
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|m| m.root_tree_id);
+        let base_root = self.folder.baseline_root();
         self.status(&format!(
             "STATE root={} agreed={}",
             hex(&out.root_tree_id),
-            self.shared
-                .agreed
-                .lock()
-                .unwrap()
-                .map(|i| hex(&i))
-                .unwrap_or("none".into())
+            self.folder.agreed_id().map_or("none".into(), |i| hex(&i))
         ));
 
         // Connector drives sessions; listener relies on opportunistic dials
@@ -619,10 +883,7 @@ impl ExchangeHost for EngineHost<'_> {
             manifest: manifest.clone(),
             manifest_bytes: bytes.to_vec(),
         });
-        *self.ctx.latest.lock().unwrap() = Some(Arc::clone(&data));
-        *self.ctx.current.lock().unwrap() = Some(data);
-        *self.ctx.last_own_manifest_id.lock().unwrap() = id;
-        *self.ctx.shared.root.lock().unwrap() = Some(manifest.root_tree_id);
+        self.ctx.folder.adopt_peer(data);
         self.ctx.status(&format!(
             "STATE root={} adopted",
             hex(&manifest.root_tree_id)
@@ -1123,6 +1384,9 @@ pub struct SyncEngine {
     transport: Arc<dyn Transport>,
     store: Arc<Store>,
     listener: Option<Box<dyn crate::transport::Listener>>,
+    /// Test seams (T-07): None = real clock / real scanner.
+    clock: Option<ClockFn>,
+    snapshot_source: Option<SnapshotSourceFn>,
 }
 
 impl SyncEngine {
@@ -1140,7 +1404,21 @@ impl SyncEngine {
             transport,
             store,
             listener,
+            clock: None,
+            snapshot_source: None,
         })
+    }
+
+    /// Swap the clock and the scanner (test seam, T-07): tick logic becomes
+    /// deterministic without real time or a real tree.
+    #[cfg(test)]
+    pub(crate) fn set_test_injections(
+        &mut self,
+        clock: ClockFn,
+        snapshot_source: SnapshotSourceFn,
+    ) {
+        self.clock = Some(clock);
+        self.snapshot_source = Some(snapshot_source);
     }
 
     /// Bound address (after `:0` resolution); None for pure connectors.
@@ -1166,23 +1444,21 @@ impl SyncEngine {
     pub fn start(mut self) -> EngineHandle {
         let listener = self.listener.take();
         let listen_addr = listener.as_ref().and_then(|l| l.local_addr().ok());
-        let shared = Arc::new(SharedState {
-            shutdown: AtomicBool::new(false),
-            stats: Mutex::new(EngineStats::default()),
-            agreed: Mutex::new(None),
-            root: Mutex::new(None),
-        });
+        let shared = Arc::new(SharedState::new());
+        let folder = Arc::new(FolderState::new());
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
             identity: device_identity_for_tag(&self.cfg.tag),
             store: Arc::clone(&self.store),
             transport: Arc::clone(&self.transport),
             session_lock: Mutex::new(()),
-            latest: Mutex::new(None),
-            current: Mutex::new(None),
-            baseline: Mutex::new(None),
-            last_own_manifest_id: Mutex::new([0u8; 32]),
+            folder: Arc::clone(&folder),
             shared: Arc::clone(&shared),
+            clock: self.clock.take().unwrap_or_else(system_clock),
+            snapshot_source: self
+                .snapshot_source
+                .take()
+                .unwrap_or_else(real_snapshot_source),
         });
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1212,6 +1488,7 @@ impl SyncEngine {
 
         EngineHandle {
             shared,
+            folder,
             joins,
             listen_addr,
             transport: Arc::clone(&self.transport),
@@ -1260,20 +1537,32 @@ fn accept_loop(
     shared: Arc<SharedState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
 ) {
-    while !shared.shutdown.load(Ordering::SeqCst) {
+    while !shared.shutting_down() {
         match listener.accept() {
             Ok(mut conn) => {
-                if shared.shutdown.load(Ordering::SeqCst) {
+                if shared.shutting_down() {
                     break;
                 }
+                // Bounded accept (T-07): no permit = engine busy; reject
+                // politely by dropping the connection instead of queueing
+                // unbounded threads.
+                let Some(permit) = shared.acquire_permit() else {
+                    ctx.status("SESSION refused: engine busy");
+                    drop(conn);
+                    continue;
+                };
+                // Count the handler BEFORE spawn so shutdown can account
+                // for it even before its JoinHandle lands in `joins`.
+                let live = shared.register_live_session();
                 let ctx = Arc::clone(&ctx);
-                let shared = Arc::clone(&shared);
                 let h = std::thread::Builder::new()
                     .name(format!("{}-session", ctx.cfg.tag))
                     .spawn(move || {
+                        let _live = live;
+                        let _permit = permit;
                         // Serialize sessions; bail promptly on shutdown.
                         let _guard = ctx.session_lock.lock().unwrap();
-                        if shared.shutdown.load(Ordering::SeqCst) {
+                        if ctx.shared.shutting_down() {
                             return;
                         }
                         match dispatch_session(conn.as_mut(), &ctx, false) {
@@ -1291,7 +1580,7 @@ fn accept_loop(
                 joins.lock().unwrap().push(h);
             }
             Err(e) => {
-                if shared.shutdown.load(Ordering::SeqCst) {
+                if shared.shutting_down() {
                     break;
                 }
                 ctx.status(&format!("ACCEPT error: {e}"));
@@ -1304,7 +1593,7 @@ fn accept_loop(
 fn poll_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>) {
     let mut n: u64 = 0;
     loop {
-        if shared.shutdown.load(Ordering::SeqCst) {
+        if shared.shutting_down() {
             return;
         }
         n += 1;
@@ -1319,6 +1608,7 @@ fn poll_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>) {
 #[derive(Clone)]
 pub struct EngineHandle {
     shared: Arc<SharedState>,
+    folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     transport: Arc<dyn Transport>,
@@ -1331,11 +1621,11 @@ impl EngineHandle {
     }
 
     pub fn agreed_id(&self) -> Option<BlobId> {
-        *self.shared.agreed.lock().unwrap()
+        self.folder.agreed_id()
     }
 
     pub fn root_id(&self) -> Option<BlobId> {
-        *self.shared.root.lock().unwrap()
+        self.folder.current_root()
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -1346,13 +1636,26 @@ impl EngineHandle {
         self.listen_addr
     }
 
-    /// Signal shutdown and wait for loops to exit. Idempotent.
+    /// Signal shutdown and wait for every thread to exit — the poll loop,
+    /// the accept loop, AND every session handler (including ones still in
+    /// their spawn window). Idempotent.
     pub fn shutdown(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
+        // Wake condvar waiters so nobody sleeps out a state-wait window
+        // while the engine dies; they re-check and exit on deadline/flag.
+        self.folder.wake_all();
         // Unblock a possibly-blocked accept() with a throwaway connection.
         if let Some(addr) = self.listen_addr {
             let _ = self.transport.dial(addr);
         }
+        while let Some(j) = self.joins.lock().unwrap().pop() {
+            let _ = j.join();
+        }
+        // Handlers counted before spawn (T-07): wait for any that were in
+        // their registration window during the drain above.
+        self.shared.wait_sessions_done();
+        // Final sweep: a handler finishing now may have just pushed its
+        // JoinHandle; nothing can spawn after this (accept loop is gone).
         while let Some(j) = self.joins.lock().unwrap().pop() {
             let _ = j.join();
         }
@@ -1465,6 +1768,335 @@ mod tests {
         assert_eq!(
             *blake3::hash(&bytes).as_bytes(),
             *blake3::hash(&serialize_manifest(&m)).as_bytes()
+        );
+    }
+
+    // ---- T-07: folder-pointer state machine, injectable tick inputs ----
+
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    /// A canned [`SnapshotOutput`] without touching disk or a tree.
+    fn fake_scan(sec: i64, dev: [u8; 32], root: BlobId, parent: BlobId) -> SnapshotOutput {
+        let m = RootManifest {
+            folder_id: crate::DEFAULT_FOLDER_ID,
+            device_id: dev,
+            created_sec: sec,
+            created_nsec: 0,
+            root_tree_id: root,
+            parent_manifest_id: parent,
+        };
+        let bytes = serialize_manifest(&m);
+        SnapshotOutput {
+            manifest_id: *blake3::hash(&bytes).as_bytes(),
+            manifest: m,
+            root_tree_id: root,
+            stats: ferry_store::snapshot::ScanStats::default(),
+            refused: Vec::new(),
+        }
+    }
+
+    fn snap_data(out: &SnapshotOutput) -> Arc<SnapshotData> {
+        Arc::new(SnapshotData {
+            manifest_id: out.manifest_id,
+            manifest: out.manifest.clone(),
+            manifest_bytes: serialize_manifest(&out.manifest),
+        })
+    }
+
+    /// A full Ctx against a throwaway store, with injectable clock/scanner.
+    /// Returns the Ctx and the [`tempfile::TempDir`] keeping its store alive.
+    fn test_ctx(
+        folder: Arc<FolderState>,
+        tag: &str,
+        clock: ClockFn,
+        source: SnapshotSourceFn,
+    ) -> (Ctx, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("root");
+        let store = Arc::new(open_or_create_store(&store_dir.join("store")).expect("test store"));
+        let mut cfg = EngineConfig::default_for_test(11);
+        cfg.tag = tag.into();
+        cfg.store_dir = store_dir.join("store");
+        cfg.tree_dir = store_dir.join("tree");
+        std::fs::create_dir_all(&cfg.tree_dir).unwrap();
+        let ctx = Ctx {
+            cfg,
+            identity: device_identity_for_tag(tag),
+            store,
+            transport: Arc::new(crate::transport::TcpTransport),
+            session_lock: Mutex::new(()),
+            folder,
+            shared: Arc::new(SharedState::new()),
+            clock,
+            snapshot_source: source,
+        };
+        (ctx, dir)
+    }
+
+    /// Scripted scanner: pops one canned output per call; runs an optional
+    /// hook BEFORE returning, which is how tests replay the exact
+    /// tick-vs-adopt interleaving from spec B1 deterministically.
+    type ScanScript = Arc<
+        Mutex<
+            VecDeque<(
+                SnapshotOutput,
+                Option<Box<dyn Fn(&FolderState) + Send + Sync>>,
+            )>,
+        >,
+    >;
+
+    fn scripted_source(script: ScanScript, folder: &Arc<FolderState>) -> SnapshotSourceFn {
+        let folder = Arc::clone(folder);
+        Arc::new(move |_store, _poly, _dir, _identity| {
+            let (out, hook) = script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script exhausted");
+            if let Some(hook) = hook {
+                hook(&folder);
+            }
+            Ok(out)
+        })
+    }
+
+    fn pinned_clock(sec: i64) -> ClockFn {
+        Arc::new(move || (sec, 0))
+    }
+
+    #[test]
+    fn adoption_survives_a_scan_that_started_before_it() {
+        // Spec B1 interleaving, replayed exactly: a tick reads its parent,
+        // starts scanning; a session adopts a peer manifest DURING the
+        // scan; the tick then tries to publish. The pre-adoption scan must
+        // be discarded whole — never published over the adopted lineage.
+        let me = [7u8; 32];
+        let peer = [9u8; 32];
+        let scan_a = fake_scan(10, me, [1; 32], [0; 32]); // first own snapshot
+        let adopted_out = fake_scan(20, peer, [2; 32], [0; 32]); // peer manifest
+        let scan_c = fake_scan(30, me, [3; 32], [0; 32]); // stale mid-scan product
+
+        let folder = Arc::new(FolderState::new());
+        let adopted = snap_data(&adopted_out);
+        let adopted_id = adopted.manifest_id;
+
+        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([
+            (
+                scan_c,
+                Some(Box::new({
+                    let adopted = Arc::clone(&adopted);
+                    move |f: &FolderState| f.adopt_peer(Arc::clone(&adopted))
+                })
+                    as Box<dyn Fn(&FolderState) + Send + Sync>),
+            ),
+            (scan_a, None),
+        ])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-a",
+            pinned_clock(100),
+            scripted_source(Arc::clone(&script), &folder),
+        );
+
+        // Tick 1 adopts mid-scan; its own scan product must NOT clobber.
+        ctx.tick(1).unwrap();
+        {
+            let g = folder.lock();
+            assert_eq!(
+                g.current.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "mid-scan adoption must survive the concurrent tick"
+            );
+            assert_eq!(
+                g.last_own_manifest_id, adopted_id,
+                "next self-mint continues the ADOPTED lineage"
+            );
+            assert_eq!(
+                g.latest.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "stale scan must not refresh the raw-scan slot either"
+            );
+        }
+
+        // Tick 2 scans cleanly (no adoption races it) and publishes.
+        let fresh = fake_scan(40, me, [4; 32], [0; 32]);
+        script.lock().unwrap().push_back((fresh, None));
+        ctx.tick(2).unwrap();
+        {
+            let g = folder.lock();
+            assert_ne!(
+                g.current.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "a clean later tick may mint again"
+            );
+            assert_eq!(
+                Some(g.last_own_manifest_id),
+                g.current.as_ref().map(|s| s.manifest_id),
+                "current and next-parent move together under the one lock"
+            );
+        }
+    }
+
+    #[test]
+    fn rescan_of_unchanged_tree_holds_the_current_pointer() {
+        // Adopt-and-hold: same scanned root keeps the current pointer (and
+        // the announced id) stable so round-2 comparisons stay valid.
+        let me = [3u8; 32];
+        let root = [5; 32];
+        let first = fake_scan(1, me, root, [0; 32]);
+        let again = fake_scan(2, me, root, [0; 32]); // same tree, later stamp
+        let first_id = first.manifest_id;
+        let second_id = again.manifest_id;
+
+        let folder = Arc::new(FolderState::new());
+        let script: ScanScript =
+            Arc::new(Mutex::new(VecDeque::from([(first, None), (again, None)])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-b",
+            pinned_clock(7),
+            scripted_source(script, &folder),
+        );
+
+        ctx.tick(1).unwrap();
+        assert_eq!(
+            folder.lock().current.as_ref().map(|s| s.manifest_id),
+            Some(first_id)
+        );
+
+        ctx.tick(2).unwrap();
+        let g = folder.lock();
+        assert_eq!(
+            g.current.as_ref().map(|s| s.manifest_id),
+            Some(first_id),
+            "unchanged root must hold the current pointer"
+        );
+        assert_eq!(g.last_own_manifest_id, first_id);
+        assert_eq!(
+            g.latest.as_ref().map(|s| s.manifest_id),
+            Some(second_id),
+            "raw scan slot still refreshes every tick"
+        );
+    }
+
+    #[test]
+    fn offers_are_never_torn_across_an_adoption() {
+        // An offer pairs (current snapshot, baseline id) read under ONE
+        // lock, so a reader sees either fully-old or fully-new state.
+        let me = [1u8; 32];
+        let peer = [2u8; 32];
+
+        let folder = Arc::new(FolderState::new());
+        let own = fake_scan(1, me, [1; 32], [0; 32]);
+        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([(own, None)])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-c",
+            pinned_clock(3),
+            scripted_source(script, &folder),
+        );
+        ctx.tick(1).unwrap();
+
+        // Offer before any agreement: zero agreed id, own snapshot.
+        let before = ctx.my_offer().unwrap();
+        assert_eq!(before.agreed_id, [0u8; 32]);
+        assert_eq!(before.agreed_root, None);
+
+        // Adopt + agree while no reader holds the lock.
+        let peer_out = fake_scan(9, peer, [2; 32], [0; 32]);
+        let peer_snap = snap_data(&peer_out);
+        folder.adopt_peer(Arc::clone(&peer_snap));
+        folder.record_agreed(peer_out.manifest.clone(), peer_out.manifest_id);
+
+        // Offer after: fully-new pair.
+        let after = ctx.my_offer().unwrap();
+        assert_eq!(after.snap.manifest_id, peer_out.manifest_id);
+        assert_eq!(after.agreed_id, peer_out.manifest_id);
+        assert_eq!(after.agreed_root, Some(peer_out.manifest.root_tree_id));
+
+        // The earlier offer is untouched: snapshots are immutable Arcs, so
+        // no in-place mutation can tear an in-flight offer either.
+        assert_eq!(before.agreed_id, [0u8; 32]);
+        assert_eq!(before.snap.manifest.root_tree_id, [1; 32]);
+
+        // current_snapshot agrees with the same state.
+        assert_eq!(
+            ctx.current_snapshot().unwrap().manifest_id,
+            peer_out.manifest_id
+        );
+    }
+
+    #[test]
+    fn accept_permits_bound_concurrency_and_replenish() {
+        let shared = Arc::new(SharedState::new());
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_SESSIONS {
+            held.push(shared.acquire_permit().expect("permit within bound"));
+        }
+        assert!(
+            shared.acquire_permit().is_none(),
+            "bound exhausted: further accepts must be rejected"
+        );
+        drop(held.pop());
+        assert!(
+            shared.acquire_permit().is_some(),
+            "a finished handler frees its permit"
+        );
+
+        // Liveness accounting: registered-before-spawn handlers are
+        // counted until their guard drops.
+        let live = shared.register_live_session();
+        drop(live);
+        shared.wait_sessions_done(); // must return promptly now
+    }
+
+    #[test]
+    fn shutdown_joins_everything_and_stops_all_writes() {
+        // Probe seam: every scanner invocation is a write-driving event.
+        // After shutdown() returns (all threads joined), the poll loop is
+        // gone, so the probe must stay silent forever after.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls = Arc::clone(&calls);
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("engine");
+        let mut cfg = EngineConfig::default_for_test(23);
+        cfg.tag = "t07-shutdown".into();
+        cfg.store_dir = root.join("store");
+        cfg.tree_dir = root.join("tree");
+        cfg.poll_interval = Duration::from_millis(15);
+        cfg.bind_addr = Some("127.0.0.1:0".parse().unwrap());
+        cfg.connect_to = None;
+
+        let mut engine =
+            SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).expect("engine");
+        engine.set_test_injections(
+            system_clock(),
+            Arc::new(move |store, poly, source, identity| {
+                probe_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                snapshot_dir(store, poly, source, identity)
+            }),
+        );
+        let handle = engine.start();
+
+        // Let several ticks run, then shut down and time the join.
+        std::thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        handle.shutdown();
+        let joined = started.elapsed();
+        assert!(
+            joined < Duration::from_secs(5),
+            "shutdown must join promptly, took {joined:?}"
+        );
+
+        let at_shutdown = calls.load(AtomicOrdering::SeqCst);
+        assert!(at_shutdown > 0, "poll loop ran while alive");
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            at_shutdown,
+            "probe saw writes AFTER shutdown returned: a thread was not joined"
         );
     }
 }
