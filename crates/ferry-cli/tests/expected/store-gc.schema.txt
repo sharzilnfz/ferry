@@ -1,0 +1,9 @@
+$.action:string
+$.command:string
+$.deleted[]
+$.deleted[0]:string
+$.dry_run:bool
+$.folder:string
+$.recorded_unreferenced:int
+$.scanned_packs:int
+$.skipped_corrupt[]

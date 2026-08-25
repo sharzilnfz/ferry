@@ -1,0 +1,11 @@
+$.action:string
+$.command:string
+$.dry_run:bool
+$.folder:string
+$.garbage_packs[]
+$.garbage_packs[0].bytes:int
+$.garbage_packs[0].pack:string
+$.live_packs:int
+$.reclaimable_bytes:int
+$.scanned_packs:int
+$.skipped_corrupt[]

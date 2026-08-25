@@ -160,6 +160,58 @@ earlier daemon/sync run (`.ferry/peers/<peer>.addr`); without one it is
 Entries mirror `.ferry/conflicts.jsonl` lines exactly (ferry-sync-engine
 schema, oldest first).
 
+The log compacts on threshold: past 4096 entries an append atomically
+drops the oldest lines down to 1024. The quarantined files the entries
+point at are never touched — only this report is capped.
+
+## `ferry store gc [folder] [--dry-run] [--grace-secs SECONDS]`
+
+Mark-from-live-manifests pack collection for the folder's store.
+Explicit user action only — Ferry never deletes packs on its own. Liveness
+roots are every last-agreed manifest recorded for this folder plus every
+held-change manifest still awaiting `ferry pin release`; the chunker
+polynomial's pack is always live. Packs younger than `--grace-secs`
+(default 86400) are never deleted, so in-flight writers and just-published
+manifests are safe. Quarantined conflict copies are ordinary tree files
+(ADR-0004) and are untouched.
+
+With `--dry-run`: read-only reachability report:
+
+```json
+{
+  "command": "store",
+  "action": "gc",
+  "folder": string,
+  "dry_run": true,
+  "scanned_packs": int,
+  "live_packs": int,
+  "garbage_packs": [
+    { "pack": string,            // 64 lowercase hex
+      "bytes": int }             // on-disk size
+  ],
+  "reclaimable_bytes": int,
+  "skipped_corrupt": [string]
+}
+```
+
+Without `--dry-run`, fully-unreachable packs past the grace period are
+deleted; younger ones are only recorded (their grace clock starts here):
+
+```json
+{
+  "command": "store",
+  "action": "gc",
+  "folder": string,
+  "dry_run": false,
+  "scanned_packs": int,
+  "deleted": [string],           // deleted pack ids, 64 hex
+  "recorded_unreferenced": int,
+  "skipped_corrupt": [string]
+}
+```
+
+Error codes: `not-a-folder`, `store-open`, `store`, `agreement-state`.
+
 ## `ferry ignore`
 
 Append (`ferry ignore '<pattern>'`):
