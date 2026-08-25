@@ -18,7 +18,7 @@ use ferry_store::diff::{Added, ChangeSet, EntryKind, EntryState};
 use ferry_store::manifest::{serialize_tree_node, RootManifest, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
-use ferry_sync::SessionApplier;
+use ferry_sync::{ApplyError, SessionApplier};
 
 fn open_store(dir: &Path) -> Store {
     std::fs::create_dir_all(dir).unwrap();
@@ -71,19 +71,19 @@ fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
         .apply(&manifest, &symlink_added(path, target))
         .unwrap_err();
 
-    match &err {
-        MaterializeError::SymlinkRefused {
+    match err {
+        ApplyError::Materialize(MaterializeError::SymlinkRefused {
             path: p,
             target: t,
             reason,
-        } => {
+        }) => {
             assert_eq!(
                 p.split('/').map(str::to_string).collect::<Vec<_>>(),
                 path.iter().copied().map(str::to_string).collect::<Vec<_>>(),
                 "refusal names the offending path"
             );
             assert_eq!(t.as_str(), target);
-            assert_eq!(reason, &want_reason, "refusal must name the reason");
+            assert_eq!(reason, want_reason, "refusal must name the reason");
         }
         other => panic!("expected SymlinkRefused for {target:?}, got {other}"),
     }

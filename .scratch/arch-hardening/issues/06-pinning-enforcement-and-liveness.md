@@ -1,6 +1,6 @@
 # T-06: Session pinning enforced on the v1 path + real stale-pin liveness
 
-Status: ready-for-agent
+Status: done
 Depends on: T-05 (single apply path through the engine)
 
 Three defects in session pinning:

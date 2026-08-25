@@ -64,6 +64,9 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
             paths: scope.clone(),
             released: false,
             base_agreements,
+            // start() stamps this writer's process birth time itself (T-06
+            // pid-reuse liveness); callers pass None.
+            proc_start_token: None,
         })
         .map_err(pin_error)?;
 

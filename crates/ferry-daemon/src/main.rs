@@ -235,6 +235,10 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         // Protocol v1 with encryption ON is the only production path; the
         // retired plaintext framing is reachable programmatically only.
         legacy_m0_proto: false,
+        // T-06: production daemons enforce session pins at the engine's
+        // execution boundary. The --store dir IS the folder root whose
+        // `.ferry/` holds pin-state.json and the held ledgers.
+        pin_state_dir: Some(d.store_dir.join(".ferry")),
         quiet: false,
     };
 

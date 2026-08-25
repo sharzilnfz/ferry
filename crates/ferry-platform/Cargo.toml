@@ -7,8 +7,16 @@ license.workspace = true
 [dependencies]
 unicode-normalization.workspace = true
 
-[target.'cfg(unix)'.dev-dependencies]
+[target.'cfg(unix)'.dependencies]
+# macOS process-start probe (T-06 anti-pid-reuse liveness) rides sysctl.
 libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Windows process-start probe (T-06): GetProcessTimes via OpenProcess.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true

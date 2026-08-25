@@ -168,6 +168,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
             paths: vec!["*".into()],
             released: false,
             base_agreements: BTreeMap::new(),
+            proc_start_token: None,
         })
         .unwrap();
 
