@@ -3480,6 +3480,17 @@ mod tests {
             );
             return;
         }
+        // A normalization-insensitive host can preserve bytes AND still
+        // resolve the composed spelling through a bare join at lookup time;
+        // there the ambiguity scenario cannot be constructed via disk (the
+        // direct hit wins before any fold-map consult).
+        if std::fs::symlink_metadata(dir.path().join("\u{c5}.txt")).is_ok() {
+            eprintln!(
+                "skipping: host resolves NFC-equivalent lookups natively \
+                 (ambiguity not constructible on this filesystem)"
+            );
+            return;
+        }
 
         let fold = NfcFoldCache::refusing();
         let err = fold

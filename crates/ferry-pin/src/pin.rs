@@ -149,7 +149,7 @@ fn pid_alive(pid: u32) -> bool {
                 == Some(ERROR_ACCESS_DENIED as i32);
         }
         let mut exit_code: u32 = 0;
-        let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+        let queried = unsafe { GetExitCodeProcess(handle, std::ptr::from_mut(&mut exit_code)) };
         unsafe { CloseHandle(handle) };
         if queried == 0 {
             return false; // vanished between open and query
