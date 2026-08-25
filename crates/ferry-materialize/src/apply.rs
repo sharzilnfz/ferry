@@ -3093,6 +3093,11 @@ mod tests {
         // a deep file; its ancestor directory appears nowhere yet carries
         // the donor's moved mtime, which apply_session_change_set must
         // stamp from the target tree.
+        //
+        // Windows FILETIME stores 100ns units: sub-NS_GRAN digits cannot
+        // survive the set_mtime/read-back round trip, so the planted pair
+        // is quantized exactly like MT_A/MT_B.
+        let inner_mt: (i64, u32) = (111, 222 / NS_GRAN * NS_GRAN);
         let (w, target) = World::new(35);
 
         let leaf_id = tree_id(
@@ -3104,7 +3109,7 @@ mod tests {
         let target_root = tree_id(
             &w,
             &TreeNode {
-                entries: vec![dir_entry("inner", 111, 222, leaf_id)],
+                entries: vec![dir_entry("inner", inner_mt.0, inner_mt.1, leaf_id)],
             },
         );
 
@@ -3135,7 +3140,7 @@ mod tests {
             ferry_platform::split_unix(md_of(&target, &["inner"]).modified().unwrap());
         assert_eq!(
             (sec, nsec),
-            (111, 222),
+            inner_mt,
             "ancestor dir mtime comes from the offered tree"
         );
         assert_eq!(read_target(&target, &["inner/deep.txt"]), b"");

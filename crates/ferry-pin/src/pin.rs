@@ -426,16 +426,36 @@ mod tests {
         );
     }
 
+    /// Granularity caveat (Linux): start-time ticks at `CONFIG_HZ` (~100/s).
+    /// If this test binary is younger than one jiffy when the child spawns,
+    /// both births land in the same tick and the tokens legitimately
+    /// collide. One retry after a sleep past that window makes the
+    /// assertion deterministic without weakening it (same pattern as the
+    /// platform probe test in ferry-platform/src/procs.rs).
     #[test]
     fn pid_reuse_is_detected_through_start_time_mismatch() {
-        // A real child process, alive when recorded: Alive.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleeper");
-        let child_pid = child.id();
-        let child_token = ferry_platform::process_start_token(child_pid)
-            .expect("child start time inspectable while it runs");
+        let mut attempt = 0;
+        let (child_pid, child_token, mut child) = loop {
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .expect("spawn sleeper");
+            let child_pid = child.id();
+            let child_token = ferry_platform::process_start_token(child_pid)
+                .expect("child start time inspectable while it runs");
+            let ours = ferry_platform::process_start_token(std::process::id())
+                .expect("own start time inspectable");
+            if child_token == ours && attempt == 0 {
+                // Same-tick birth collision; once we're older than a jiffy
+                // any new child is provably born after us.
+                child.kill().expect("kill sleeper");
+                child.wait().expect("reap");
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                continue;
+            }
+            break (child_pid, child_token, child);
+        };
 
         let mut rec = record(child_pid);
         rec.proc_start_token = Some(child_token);

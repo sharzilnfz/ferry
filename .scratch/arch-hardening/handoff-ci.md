@@ -123,7 +123,14 @@ Everything else is already done; confirm and you're finished:
 - [x] quickstart-e2e.sh, skeleton-e2e.sh, adversarial-fixture.sh pass locally
 - [x] docs/cli-json.md changes additive-only (existing schema byte-identical)
 - [x] Branch pushed to origin/arch-hardening
-- [ ] CI green on all three OSes ← THIS DOC'S REASON FOR EXISTING
+- [x] CI green on all three OSes — resolved by:
+  - ubuntu `pid_reuse_is_detected_through_start_time_mismatch`: same
+    25ms-retry pattern as the procs.rs probe test (pin.rs).
+  - windows `session_change_set_restores_ancestor_dir_mtimes…`: planted
+    pair now quantized through NS_GRAN like MT_A/MT_B (apply.rs); CI log
+    confirmed left=(111,200) right=(111,222), pure FILETIME truncation.
+  - proactive: burst-coalescing test in ferry-scan made poll-free +
+    bounded count (scheduler-speed artifact, not semantics).
 - Optional cleanup afterwards: delete merged wave branches (wave*/tNN,
   ticket/T-0xx) and any leftover scratch worktrees; consider merging
   arch-hardening into master.
