@@ -415,7 +415,11 @@ fn tofu_pinned_identity_survives_engine_restart() {
     let engine_b_restarted = SyncEngine::new(cfg_b_restarted, Arc::new(TcpTransport)).unwrap();
     let handle_b_restarted = engine_b_restarted.start();
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    // Heaviest wait in this file: B reconnects to a RESTARTED A (TOFU
+    // re-pin, fresh session, full sync). Under loaded CI runners two
+    // sightings exceeded 15s (flakes.md 2026-08-25 and run 32903163863);
+    // give it the same 30s class as the iroh acceptance budgets.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !(handle_a_restarted.agreed_id() == handle_b_restarted.agreed_id()
         && dir.path().join("a/tree/second.txt").exists())
     {

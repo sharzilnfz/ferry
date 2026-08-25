@@ -484,18 +484,44 @@ mod tests {
 
         child.kill().expect("kill sleeper");
         child.wait().expect("reap");
-        // After death even the honest record goes stale (existence fails).
-        // Windows caveat: a killed-and-reaped pid can still read ALIVE
-        // briefly — pending process-object cleanup, or immediate pid
-        // reuse by another spawn. Poll for convergence rather than
-        // asserting on the instant after reap.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while rec.liveness() != Liveness::Stale {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "dead writer's record must go stale after death"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
+        // Post-death convergence: on unix the reaped child is gone for real
+        // (`kill(pid, 0)` fails even while our Child handle lingers), so an
+        // honest record must flip to Stale. Poll briefly rather than assert
+        // on the instant after reap.
+        //
+        // Skipped on Windows, where this assert is NONDETERMINISTIC at test
+        // granularity, for two stacked platform reasons:
+        // 1. While our `Child` handle is open (until scope end), the killed
+        //    process OBJECT still exists and OpenProcess succeeds —
+        //    GetProcessTimes keeps reporting the child's original birth
+        //    time, so the token match legitimately reads Alive no matter
+        //    how long we poll. Windows does not recycle a pid while any
+        //    handle pins it, so dropping the handle is required before
+        //    staleness is even observable.
+        // 2. Once the handle closes, pids on Windows are recycled within
+        //    milliseconds (multiples of 4) and cargo test spawns many
+        //    processes. If the new occupant denies
+        //    PROCESS_QUERY_LIMITED_INFORMATION, pid_alive's deliberate
+        //    ACCESS_DENIED-means-alive rule (see the module docs) makes the
+        //    record read Alive indefinitely. That is correct product
+        //    behavior for an uninspectable squatter, but it means no poll
+        //    bound can make this assertion deterministic here.
+        // Windows still covers death-driven staleness deterministically:
+        // stale_pin_detected_from_dead_pid_and_does_not_hold uses a
+        // token-less record whose existence probe reads the pinned
+        // terminated object's TerminateProcess exit code (1 ≠ STILL_ACTIVE),
+        // and the synthetic `reused` / `forged` records above prove the
+        // token-mismatch => Stale path on every platform.
+        #[cfg(unix)]
+        {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while rec.liveness() != Liveness::Stale {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "dead writer's record must go stale after death"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
     }
 
