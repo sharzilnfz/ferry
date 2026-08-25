@@ -1594,6 +1594,11 @@ pub struct SyncEngine {
     store: Arc<Store>,
     listener: Option<Box<dyn crate::transport::Listener>>,
     peer_policy: Option<PeerPolicy>,
+    /// Explicit device identity (T-14/T-18 follow-up): when set, sessions use
+    /// this keypair instead of the tag-derived skeleton identity, so the wire
+    /// peer id equals the `device_pub` recorded in `CONFIG_HEAD` wrap entries
+    /// and allow-list authorization can match. None = legacy tag derivation.
+    identity: Option<DeviceIdentity>,
     /// Test seams (T-07): None = real clock / real scanner.
     clock: Option<ClockFn>,
     snapshot_source: Option<SnapshotSourceFn>,
@@ -1615,6 +1620,7 @@ impl SyncEngine {
             store,
             listener,
             peer_policy: None,
+            identity: None,
             clock: None,
             snapshot_source: None,
         })
@@ -1623,6 +1629,14 @@ impl SyncEngine {
     /// Explicitly configure the peer authorization policy (T-18).
     pub fn set_peer_policy(&mut self, policy: PeerPolicy) {
         self.peer_policy = Some(policy);
+    }
+
+    /// Run sessions with a real device identity instead of the tag-derived
+    /// skeleton keypair (T-14/T-18 follow-up). Production callers (ferry-cli)
+    /// pass the `FERRY_HOME` identity so handshake ids match the `device_pub`
+    /// entries their peers seed allow-lists from.
+    pub fn set_identity(&mut self, identity: DeviceIdentity) {
+        self.identity = Some(identity);
     }
 
     /// Swap the clock and the scanner (test seam, T-07): tick logic becomes
@@ -1673,7 +1687,10 @@ impl SyncEngine {
         let folder_id = self.cfg.folder_id;
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
-            identity: device_identity_for_tag(&self.cfg.tag),
+            identity: self
+                .identity
+                .take()
+                .unwrap_or_else(|| device_identity_for_tag(&self.cfg.tag)),
             store: Arc::clone(&self.store),
             transport: Arc::clone(&self.transport),
             session_lock: Mutex::new(()),

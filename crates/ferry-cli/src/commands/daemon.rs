@@ -95,7 +95,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             quiet: true,
         };
 
-        let engine = SyncEngine::new(cfg, transport.clone()).map_err(|e| {
+        let mut engine = SyncEngine::new(cfg, transport.clone()).map_err(|e| {
             CliError::new(
                 "bind",
                 format!(
@@ -105,6 +105,11 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
                 "pick another port or free the existing listener",
             )
         })?;
+        // Same as `ferry sync`: run sessions under the real FERRY_HOME
+        // identity so CONFIG_HEAD-seeded allow-lists recognize this device.
+        if let Ok(identity) = crate::home::load_device_identity() {
+            engine.set_identity(identity);
+        }
 
         if let Some(addr) = engine.listen_addr() {
             println!("LISTENING {addr}");
