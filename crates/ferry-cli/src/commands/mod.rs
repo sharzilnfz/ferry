@@ -9,4 +9,5 @@ pub mod pairing;
 pub mod pin;
 pub mod share;
 pub mod status;
+pub mod store;
 pub mod sync;

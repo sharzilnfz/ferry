@@ -5,3 +5,5 @@
 
 Pattern: convergence/relay tests use wall-clock budgets and are load-sensitive. Not observed on idle machines. If a third sighting occurs on an IDLE tree, file a determinism ticket (scale budgets or poll-count based assertions).
 - 2026-08-25 T-06 dev: pin_enforcement acceptance test flaked ~1-in-10 on 30s convergence wait during development; hardened assertions + diagnostics; clean across ~65 isolated + 14 full runs since. Same load-sensitivity class.
+- 2026-08-25 wave2/T-20 gate: tofu_pinned_identity_survives_engine_restart failed once under full-suite load (Node B sync deadline after engine restart); passed isolated + full re-run.
+- 2026-08-25 wave2/T-20 gate re-run: engine_holds_pinned_peer_changes_and_release_recovers_them (pin_enforcement, 30s wall-clock budget) hit its deadline once under full-suite load; passed isolated (0.81s) + full re-run.

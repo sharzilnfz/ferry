@@ -19,6 +19,7 @@ pub mod gc;
 pub mod index;
 pub mod manifest;
 pub mod pack;
+pub mod reclaim;
 pub mod snapshot;
 pub mod store;
 

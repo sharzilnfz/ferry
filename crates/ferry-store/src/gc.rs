@@ -142,6 +142,74 @@ mod tests {
     }
 
     #[test]
+    fn reachability_report_lists_superseded_packs_and_never_live_ones() {
+        let (_dir, store) = fresh();
+
+        // Live world: M1 -> T1 -> chunks a,b.
+        let a = chunk(&store, 10, 300);
+        let b = chunk(&store, 20, 300);
+        let poly_id = store.put_polynomial(0x1234).unwrap();
+        let t1 = put_tree(
+            &store,
+            &TreeNode {
+                entries: vec![
+                    file_entry("a", false, 0, 0, vec![(a, 300)]),
+                    file_entry("b", false, 0, 0, vec![(b, 300)]),
+                ],
+            },
+        );
+        let m1 = put_manifest(&store, &manifest_for(t1));
+
+        // Superseded world: content only an older snapshot referenced.
+        let d = chunk(&store, 40, 300);
+        let _t2 = put_tree(
+            &store,
+            &TreeNode {
+                entries: vec![file_entry("d", false, 0, 0, vec![(d, 300)])],
+            },
+        );
+
+        store.flush().unwrap();
+        store.write_index_snapshot().unwrap();
+
+        let r = reachability_report(&store, &[m1]).unwrap();
+        assert!(r.scanned_packs > 0);
+        assert!(r.live_packs > 0, "the live pack set is nonempty");
+        assert!(r.skipped_corrupt.is_empty());
+        assert_eq!(r.garbage_packs.len(), 1, "exactly one dead pack: {r:?}");
+        assert!(r.reclaimable_bytes > 0);
+
+        // The live manifest, its tree, its chunks, and the polynomial must be
+        // reachable — so NO pack containing them may appear as garbage.
+        let garbage_contents: HashSet<_> = r.garbage_packs.iter().map(|(id, _)| *id).collect();
+        for path in std::fs::read_dir(store.packs_dir()).unwrap().flatten() {
+            let stem = path.file_name().to_string_lossy().to_string();
+            let Some(claimed) = crate::format::unhex::<32>(stem.trim_end_matches(".pack")) else {
+                continue;
+            };
+            if !garbage_contents.contains(&claimed) {
+                continue;
+            }
+            let (_, entries) = store.pack_blob_list(&claimed).unwrap();
+            for e in entries {
+                // Only a, b, t1, m1, and the polynomial are live; `d` is
+                // deliberately orphaned, so its presence here is correct.
+                let live_ids = [a, b, t1, m1, poly_id];
+                assert!(
+                    !live_ids.contains(&e.id),
+                    "live blob {} found inside a garbage pack",
+                    crate::format::hex(&e.id)
+                );
+            }
+        }
+
+        // Everything-live edge: with every blob referenced, garbage is empty.
+        let m2 = put_manifest(&store, &manifest_for(_t2));
+        let r_all_live = reachability_report(&store, &[m1, m2]).unwrap();
+        assert!(r_all_live.garbage_packs.is_empty(), "{r_all_live:?}");
+    }
+
+    #[test]
     fn resurrected_content_is_protected_by_the_ledger() {
         let (_dir, store) = fresh();
 
@@ -276,6 +344,71 @@ pub struct GcReport {
     pub recorded_unreferenced: usize,
     /// Packs that failed verification; left alone on purpose.
     pub skipped_corrupt: Vec<String>,
+}
+
+/// Read-only reachability report backing `ferry store gc --dry-run`.
+#[derive(Debug, Default)]
+pub struct ReachabilityReport {
+    /// Pack files inspected.
+    pub scanned_packs: usize,
+    /// Packs holding at least one blob reachable from the live manifests
+    /// (or a polynomial). Never candidates for deletion.
+    pub live_packs: usize,
+    /// Packs whose every blob is unreachable, with their on-disk sizes in
+    /// bytes. Sorted by pack id for stable reports.
+    pub garbage_packs: Vec<(BlobId, u64)>,
+    /// Sum of [`ReachabilityReport::garbage_packs`] sizes.
+    pub reclaimable_bytes: u64,
+    /// Packs that failed verification; never touched.
+    pub skipped_corrupt: Vec<String>,
+}
+
+/// Mark-from-live-manifests WITHOUT deleting or recording anything: which
+/// packs could a later [`collect_garbage`] collect? The polynomial record
+/// keeps its pack live exactly as in real collection; corrupt packs are
+/// reported and skipped. This is the reachability report half of T-20's
+/// GC story (`ferry store gc --dry-run`); the delete path behind it is
+/// [`collect_garbage`], gated on an explicit grace period.
+pub fn reachability_report(
+    store: &Store,
+    live_manifest_ids: &[BlobId],
+) -> Result<ReachabilityReport, GcError> {
+    let reachable = collect_referenced(store, live_manifest_ids)?;
+
+    let mut packs: Vec<PathBuf> = std::fs::read_dir(store.packs_dir())?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "pack"))
+        .collect();
+    packs.sort();
+
+    let mut report = ReachabilityReport::default();
+    for path in packs {
+        report.scanned_packs += 1;
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let Some(claimed) = crate::format::unhex::<32>(&stem) else {
+            report.skipped_corrupt.push(stem);
+            continue;
+        };
+        let pack_is_live = match store.pack_blob_list(&claimed) {
+            Ok((_, entries)) => entries.iter().any(|e| match e.kind {
+                BlobKind::Polynomial => true,
+                _ => reachable.contains(&(e.kind, e.id)),
+            }),
+            Err(_) => {
+                report.skipped_corrupt.push(stem);
+                continue;
+            }
+        };
+        if pack_is_live {
+            report.live_packs += 1;
+        } else {
+            let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+            report.garbage_packs.push((claimed, size));
+            report.reclaimable_bytes += size;
+        }
+    }
+    Ok(report)
 }
 
 /// Collect garbage packs per the module rules. `live_manifest_ids` names the

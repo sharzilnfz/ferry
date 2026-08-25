@@ -125,6 +125,20 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             preset.as_deref(),
             *list,
         ),
+        Command::Store { action } => match action {
+            ferry_cli::cli::StoreAction::Gc {
+                dry_run,
+                grace_secs,
+                folder,
+            } => {
+                let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
+                ferry_cli::commands::store::run(ferry_cli::commands::store::GcArgs {
+                    folder: &f,
+                    dry_run: *dry_run,
+                    grace_secs: *grace_secs,
+                })
+            }
+        },
         Command::Daemon {
             folders,
             listen,

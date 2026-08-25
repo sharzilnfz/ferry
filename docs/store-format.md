@@ -523,6 +523,38 @@ find it.
     tmp/                        # staging area for atomic writes
 ```
 
+### Crash residue and reclamation (T-20)
+
+Every write above stages through a temp file and renames; a crash between
+write and rename orphans the temp. Each site's residue and its reclaimer:
+
+- `tmp/*` — pack sealing, index snapshots, and the gc-state ledger all
+  stage here. Swept by `ferry_store::reclaim::sweep_store_temps`.
+- `<sidecar>.tmp*` at the `.ferry/` top level — settings (`settings.json.tmp`)
+  and pin state (`pin-state.json.tmp.<pid>.<seq>.<nsec>`) writers. Same
+  sweeper; live sidecars never contain ".tmp".
+- `peers/.tmp-*` — peer-record writer temps. Same sweeper.
+- `agreement/.tmp-*` — agreement-record writer temps. Same sweeper.
+- Tree-side materialize temps (`.ferry.<name>.tmp`, `~ferry~<name>.tmp`)
+  live inside the synced tree with their own reserved-name grammar;
+  reclaimed by `ferry_materialize::sweep_stale_temps`.
+- Quarantined conflict copies are ordinary tree files under ADR-0004
+  semantics; nothing here sweeps them.
+
+Growth model of the sidecars themselves (T-20 audit): agreement records,
+peer records, pin state, and the gc-state ledger are all one-slot-per-key
+values overwritten atomically in place — they never grow with history.
+The two append-only ledgers are bounded: `.ferry/held/<peer>.jsonl`
+clears on `ferry pin release`, and `conflicts.jsonl` compacts-on-threshold
+(keeps its newest entries past 4096 lines).
+
+All store-side sites are reclaimed in one bounded, older-than pass at
+startup (`SyncEngine::new`, before any session thread starts); files newer
+than the bound are never touched, so concurrent writers are safe.
+Unreferenced PACKS (not temp residue) are collected only by explicit user
+action via `ferry store gc`, which never deletes a pack younger than its
+documented grace period.
+
 CONFIG_HEAD plaintext body (this container is NOT encrypted; it contains no
 secret, only public identifiers and key-wrapping ciphertexts):
 

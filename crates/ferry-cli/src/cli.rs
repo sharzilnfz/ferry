@@ -113,6 +113,11 @@ pub enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Store maintenance: garbage-collect unreferenced packs (T-20).
+    Store {
+        #[command(subcommand)]
+        action: StoreAction,
+    },
     /// Watch folders and continuously exchange with one peer over TCP.
     Daemon {
         /// Folders to watch (default: current directory).
@@ -153,6 +158,28 @@ pub enum Command {
 pub enum ConflictsAction {
     /// List recorded conflicts, oldest first.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StoreAction {
+    /// Collect packs no live manifest can reach.
+    ///
+    /// Liveness roots: every last-agreed manifest recorded for this folder
+    /// plus every held-change manifest still awaiting `ferry pin release`.
+    /// Explicit user action only — nothing is ever auto-deleted; packs
+    /// younger than --grace-secs are never removed, so an in-flight writer
+    /// or a just-published manifest is always safe. Quarantined conflict
+    /// copies are ordinary tree files (ADR-0004) and are untouched.
+    Gc {
+        /// Report what would be collected without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Never delete packs younger than this many seconds.
+        #[arg(long, default_value_t = 24 * 60 * 60, value_name = "SECONDS")]
+        grace_secs: u64,
+        /// Folder whose store to collect (default: current directory).
+        folder: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
