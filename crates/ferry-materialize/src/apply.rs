@@ -17,7 +17,7 @@
 //!    lands via temp+rename; every chunk is hash-verified after the store
 //!    read and again in the temp file pre-rename.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -292,6 +292,10 @@ pub struct Applier<'a> {
     overwrite: Overwrite,
     style: TempStyle,
     pace_ms: u64,
+    /// Per-parent NFC live-fold cache, reset at the start of every apply
+    /// (T-13): each parent directory is read at most once per apply
+    /// instead of once per resolved component.
+    fold: NfcFoldCache,
 }
 
 impl<'a> Applier<'a> {
@@ -304,6 +308,7 @@ impl<'a> Applier<'a> {
             overwrite: Overwrite::Always,
             style: TempStyle::current(),
             pace_ms: 0,
+            fold: NfcFoldCache::refusing(),
         }
     }
 
@@ -462,6 +467,7 @@ impl<'a> Applier<'a> {
         // otherwise be perturbed.
         dirs.sort_by_key(|d| std::cmp::Reverse(d.0.len()));
         let mut stats = ApplyStats::default();
+        self.fold.clear();
         for (rel, sec, nsec) in dirs {
             self.execute_touch(&rel, sec, nsec, &mut stats)?;
         }
@@ -475,6 +481,10 @@ impl<'a> Applier<'a> {
         mut removes: Vec<PlannedRemove>,
         mut upserts: Vec<PlannedUpsert>,
     ) -> Result<ApplyStats, MaterializeError> {
+        // Fresh fold cache per apply: the applier owns every mutation for
+        // the duration of one run, so a cache built here stays exact
+        // without outside invalidation (T-13).
+        self.fold.clear();
         upserts.sort_by(|a, b| a.path.cmp(&b.path));
 
         // Phase 2: plan each upsert against live state. An upsert whose
@@ -489,7 +499,7 @@ impl<'a> Applier<'a> {
         let mut touches: Vec<PlannedTouch> = Vec::new();
         let mut skipped = 0usize;
         for up in &mut upserts {
-            let abs = self.abs(&up.path);
+            let abs = self.abs(&up.path)?;
             let case_shadowed = shadowed.contains(&ferry_platform::fold_key(&join_path(&up.path)));
             plan_upsert(
                 self.store,
@@ -506,11 +516,25 @@ impl<'a> Applier<'a> {
             let base = Base::new(self.store, &expected.root_tree_id);
             let mut divergences: Vec<Divergence> = Vec::new();
             for rm in &removes {
-                guard_removal(self.store, &self.target, &base, rm, &mut divergences)?;
+                guard_removal(
+                    self.store,
+                    &self.target,
+                    &base,
+                    &self.fold,
+                    rm,
+                    &mut divergences,
+                )?;
             }
             for up in &upserts {
                 if up.mutation.is_mutation() {
-                    guard_upsert(self.store, &self.target, &base, up, &mut divergences)?;
+                    guard_upsert(
+                        self.store,
+                        &self.target,
+                        &base,
+                        &self.fold,
+                        up,
+                        &mut divergences,
+                    )?;
                 }
             }
             if !divergences.is_empty() {
@@ -555,7 +579,7 @@ impl<'a> Applier<'a> {
         deep: bool,
         stats: &mut ApplyStats,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(rel);
+        let abs = self.abs(rel)?;
         let md = match std::fs::symlink_metadata(&abs) {
             Ok(md) => md,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -572,6 +596,8 @@ impl<'a> Applier<'a> {
             std::fs::remove_file(&abs).map_err(|e| io_at(&abs, e))?;
             record_deletion(stats, rel);
         }
+        // The applier owns this write: keep the fold cache exact (T-13).
+        self.fold.note_removed(&abs, deep || md.is_dir());
         self.pace();
         Ok(())
     }
@@ -612,7 +638,7 @@ impl<'a> Applier<'a> {
         stats: &mut ApplyStats,
         touches: &mut Vec<PlannedTouch>,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(&up.path);
+        let abs = self.abs(&up.path)?;
         match up.mutation {
             Mutation::Skip => {}
             Mutation::Mkdir { sec, nsec } => {
@@ -625,6 +651,7 @@ impl<'a> Applier<'a> {
                     Ok(_) => {
                         std::fs::remove_file(&abs).map_err(|e| io_at(&abs, e))?;
                         record_deletion(stats, &up.path);
+                        self.fold.note_removed(&abs, false);
                     }
                 }
                 std::fs::create_dir(&abs)
@@ -638,6 +665,7 @@ impl<'a> Applier<'a> {
                     .map_err(|e| io_at(&abs, e))?;
                 stats.dirs_created += 1;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 // Fresh dirs carry wall-clock mtime; the touch phase fixes
                 // it once children exist. execute_touch skips no-op sets.
                 self.pace();
@@ -681,6 +709,7 @@ impl<'a> Applier<'a> {
                 if let Ok(md) = std::fs::symlink_metadata(&abs) {
                     if md.is_dir() && !md.is_symlink() {
                         self.remove_dir_children_first(&abs, &up.path, stats)?;
+                        self.fold.note_removed(&abs, true);
                     }
                 }
                 let parent = parent_of(&abs);
@@ -698,6 +727,7 @@ impl<'a> Applier<'a> {
                 fsync_dir(parent)?;
                 stats.symlinks_written += 1;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 // The deferred T-005 piece: restore the link's OWN mtime
                 // (std cannot open a link without following it).
                 if let Some((sec, nsec)) = times {
@@ -718,12 +748,14 @@ impl<'a> Applier<'a> {
                 if let Ok(md) = std::fs::symlink_metadata(&abs) {
                     if md.is_dir() {
                         self.remove_dir_children_first(&abs, &up.path, stats)?;
+                        self.fold.note_removed(&abs, true);
                     }
                 }
                 self.write_file_atomically(&abs, &up.path, exec, sec, nsec, size, &chunks)?;
                 stats.files_written += 1;
                 stats.bytes_written += size;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 self.pace();
             }
         }
@@ -775,7 +807,7 @@ impl<'a> Applier<'a> {
         nsec: u32,
         stats: &mut ApplyStats,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(rel);
+        let abs = self.abs(rel)?;
         let md = match std::fs::symlink_metadata(&abs) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(io_at(&abs, e)),
@@ -895,12 +927,12 @@ impl<'a> Applier<'a> {
 
     // -- helpers ------------------------------------------------------------
 
-    fn abs(&self, rel: &[String]) -> PathBuf {
-        let p = abs_under(&self.target, rel);
+    fn abs(&self, rel: &[String]) -> Result<PathBuf, MaterializeError> {
+        let p = self.fold.resolve(&self.target, rel)?;
         // Windows long paths: apply the \\?\ extended-length prefix when the
         // absolute path meets or exceeds MAX_PATH. Identity on short,
         // relative, and POSIX paths (T-012).
-        ferry_platform::extend_path(&p)
+        Ok(ferry_platform::extend_path(&p))
     }
 }
 
@@ -1076,6 +1108,7 @@ fn guard_removal(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     rm: &PlannedRemove,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
@@ -1089,7 +1122,7 @@ fn guard_removal(
         return Ok(());
     };
     let exp = ExpectedState::from(&exp_entry);
-    let abs = abs_under(target, &rm.path);
+    let abs = fold.resolve(target, &rm.path)?;
     let Some(md) = stat_opt(&abs)? else {
         out.push(Divergence {
             path: rm.path.clone(),
@@ -1111,9 +1144,9 @@ fn guard_removal(
     if rm.deep && live_kind == EntryKind::Dir {
         // The whole live subtree goes: account for every descendant against
         // the base manifest before allowing it.
-        verify_subtree_matches_base(store, target, base, &rm.path, &exp_entry, out)?;
+        verify_subtree_matches_base(store, target, base, fold, &rm.path, &exp_entry, out)?;
     } else {
-        check_live_matches(target, &rm.path, &exp, store, out)?;
+        check_live_matches(target, fold, &rm.path, &exp, store, out)?;
     }
     Ok(())
 }
@@ -1122,11 +1155,12 @@ fn guard_upsert(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     up: &PlannedUpsert,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
     let exp = base.lookup(&up.path)?;
-    let abs = abs_under(target, &up.path);
+    let abs = fold.resolve(target, &up.path)?;
     let live = classify_opt(stat_opt(&abs)?)?;
     match (exp.as_ref().map(ExpectedState::from), live) {
         (None, None) => Ok(()),
@@ -1146,7 +1180,7 @@ fn guard_upsert(
         }
         (Some(exp_state), Some(_)) => match exp_state.kind {
             EntryKind::Dir => Ok(()), // dirs: kind-only
-            _ => check_live_matches(target, &up.path, &exp_state, store, out),
+            _ => check_live_matches(target, fold, &up.path, &exp_state, store, out),
         },
     }
 }
@@ -1154,12 +1188,13 @@ fn guard_upsert(
 /// Compare one live leaf (or bare dir kind) against the expectation.
 fn check_live_matches(
     target: &Path,
+    fold: &NfcFoldCache,
     rel: &CompPath,
     exp: &ExpectedState,
     store: &Store,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
-    let abs = abs_under(target, rel);
+    let abs = fold.resolve(target, rel)?;
     let Some(md) = stat_opt(&abs)? else {
         out.push(Divergence {
             path: rel.clone(),
@@ -1237,6 +1272,7 @@ fn verify_subtree_matches_base(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     dir_path: &CompPath,
     dir_entry: &TreeEntry,
     out: &mut Vec<Divergence>,
@@ -1246,7 +1282,7 @@ fn verify_subtree_matches_base(
 
     // Walk live, checking each found path.
     let mut live_keys: HashSet<String> = HashSet::new();
-    let abs_dir = abs_under(target, dir_path);
+    let abs_dir = fold.resolve(target, dir_path)?;
     let mut stack = vec![abs_dir];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
@@ -1265,8 +1301,9 @@ fn verify_subtree_matches_base(
             };
             // Keys are NFC (manifest spelling); disk names may hold any
             // equivalent normalization on byte-preserving hosts. Leaf
-            // re-checks go through abs_under, which folds back to the LIVE
-            // spelling, so NFC keys stay honest here.
+            // re-checks go through the applier's NFC fold cache, which
+            // folds back to the LIVE spelling, so NFC keys stay honest
+            // here.
             let key = comp.nfc().collect::<String>();
             let mut rel = components_below(target, &dir);
             rel.push(key);
@@ -1287,7 +1324,7 @@ fn verify_subtree_matches_base(
                     path: rel,
                     reason: DivergeReason::ExpectedAbsent,
                 }),
-                Some(exp) => check_live_matches_leaf(target, &rel, exp, ft, store, out)?,
+                Some(exp) => check_live_matches_leaf(target, fold, &rel, exp, ft, store, out)?,
             }
         }
     }
@@ -1311,6 +1348,7 @@ fn verify_subtree_matches_base(
 #[allow(clippy::too_many_arguments)]
 fn check_live_matches_leaf(
     target: &Path,
+    fold: &NfcFoldCache,
     rel: &CompPath,
     exp: &ExpectedState,
     ft: std::fs::FileType,
@@ -1332,7 +1370,7 @@ fn check_live_matches_leaf(
         });
         return Ok(());
     }
-    check_live_matches(target, rel, exp, store, out)
+    check_live_matches(target, fold, rel, exp, store, out)
 }
 
 fn classify_opt(md: Option<std::fs::Metadata>) -> Result<Option<EntryKind>, MaterializeError> {
@@ -1528,50 +1566,215 @@ fn walk_live(root: &Path) -> Result<Vec<CompPath>, MaterializeError> {
 /// beside the original.
 ///
 /// Each component therefore resolves in two steps: prefer the exact stored
-/// name; on a miss, fold the live directory once (NFC both sides) and adopt
-/// the live spelling. Genuine absences keep the stored form so creations
-/// land as NFC. Existence checks use `symlink_metadata` (no link-following).
-fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
-    let mut cur = root.to_path_buf();
-    for comp in rel {
-        let direct = cur.join(comp);
-        if std::fs::symlink_metadata(&direct).is_ok() {
-            cur = direct;
-            continue;
-        }
-        match live_nfc_match(&cur, comp) {
-            Some(live) => cur = cur.join(live),
-            None => cur = direct,
+/// name; on a miss, consult the parent's NFC fold map (NFC both sides) and
+/// adopt the live spelling. Genuine absences keep the stored form so
+/// creations land as NFC. Existence checks use `symlink_metadata` (no
+/// link-following).
+///
+/// T-13: each parent's fold map is scanned at most ONCE per cache lifetime
+/// (one apply) instead of once per resolved component, removing the old
+/// O(paths * depth * dirsize) readdir amplification. The applier owns its
+/// own writes, so created/removed entries are recorded here directly and
+/// nothing else ever invalidates mid-apply.
+struct NfcFoldCache {
+    /// Parent directory -> NFC fold map (NFC key -> raw disk spellings).
+    /// Presence in this map means "scanned (or seeded) during this apply".
+    dirs: RefCell<HashMap<PathBuf, DirFold>>,
+    /// How many distinct parents were actually read from disk (test
+    /// observability for the at-most-one-readdir-per-parent guarantee).
+    scans: Cell<usize>,
+    /// What to do when a directory genuinely holds several spellings of
+    /// one NFC name. Applies refuse loudly ([`MaterializeError::
+    /// AmbiguousDiskSpelling`]); the read-only [`resolve_live`] helper
+    /// keeps the historical deterministic smallest-name pick because it
+    /// cannot return errors — the guarded apply that follows is what
+    /// refuses.
+    ambiguity: AmbiguityPolicy,
+}
+
+/// One directory's NFC fold: normalized key -> every raw spelling folding
+/// onto it (usually exactly one).
+type DirFold = HashMap<String, Vec<String>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AmbiguityPolicy {
+    Refuse,
+    PickSmallest,
+}
+
+impl NfcFoldCache {
+    fn refusing() -> Self {
+        NfcFoldCache {
+            dirs: RefCell::new(HashMap::new()),
+            scans: Cell::new(0),
+            ambiguity: AmbiguityPolicy::Refuse,
         }
     }
-    cur
+
+    fn lenient() -> Self {
+        NfcFoldCache {
+            ambiguity: AmbiguityPolicy::PickSmallest,
+            ..NfcFoldCache::refusing()
+        }
+    }
+
+    /// Drop everything: a new apply must not inherit stale listings.
+    fn clear(&self) {
+        self.dirs.borrow_mut().clear();
+        self.scans.set(0);
+    }
+
+    /// Directories actually read from disk so far.
+    #[cfg(test)]
+    fn scanned_dirs(&self) -> usize {
+        self.scans.get()
+    }
+
+    /// Resolve a full component path under `root`.
+    fn resolve(&self, root: &Path, rel: &[String]) -> Result<PathBuf, MaterializeError> {
+        let mut cur = root.to_path_buf();
+        for comp in rel {
+            let direct = cur.join(comp);
+            if std::fs::symlink_metadata(&direct).is_ok() {
+                cur = direct;
+                continue;
+            }
+            match self.match_live(&cur, comp)? {
+                Some(live) => cur = cur.join(live),
+                None => cur = direct,
+            }
+        }
+        Ok(cur)
+    }
+
+    /// Fold-match one component against one parent, scanning that parent
+    /// from disk at most once per cache lifetime.
+    fn match_live(&self, dir: &Path, want: &str) -> Result<Option<String>, MaterializeError> {
+        let want_nfc: String = want.nfc().collect();
+        if let Some(fold) = self.dirs.borrow().get(dir) {
+            return pick(fold, dir, &want_nfc, self.ambiguity);
+        }
+        let fold = scan_dir_fold(dir);
+        self.scans.set(self.scans.get() + 1);
+        self.dirs.borrow_mut().insert(dir.to_path_buf(), fold);
+        let dirs = self.dirs.borrow();
+        pick(&dirs[dir], dir, &want_nfc, self.ambiguity)
+    }
+
+    /// Record an entry THIS apply just created: the cache stays exact
+    /// without re-reading anything.
+    fn note_created_at(&self, entry_abs: &Path) {
+        let Some(parent) = entry_abs.parent() else {
+            return;
+        };
+        let Some(name) = entry_abs.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        let nfc: String = name.nfc().collect();
+        let mut dirs = self.dirs.borrow_mut();
+        let bucket = dirs
+            .entry(parent.to_path_buf())
+            .or_default()
+            .entry(nfc)
+            .or_default();
+        // Never duplicate within a bucket: two identical spellings are one
+        // entry, not an ambiguity.
+        if !bucket.iter().any(|n| n == name) {
+            bucket.push(name.to_string());
+        }
+    }
+
+    /// Record an entry THIS apply just removed. Deep removals also drop
+    /// every cached sub-map beneath the removed directory, so recreated
+    /// subtrees never resurrect deleted names.
+    ///
+    /// Windows long-path prefixed paths do not string-prefix-match their
+    /// unprefixed cache keys; there the sub-map sweep is skipped and only
+    /// an extra rescan can occur (never a wrong answer).
+    fn note_removed(&self, entry_abs: &Path, deep: bool) {
+        let Some(parent) = entry_abs.parent() else {
+            return;
+        };
+        let Some(name) = entry_abs.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        let nfc: String = name.nfc().collect();
+        let mut dirs = self.dirs.borrow_mut();
+        if deep {
+            dirs.retain(|cached, _| !cached.starts_with(entry_abs));
+        }
+        if let Some(fold) = dirs.get_mut(parent) {
+            if let Some(bucket) = fold.get_mut(&nfc) {
+                bucket.retain(|n| n != name);
+                if bucket.is_empty() {
+                    fold.remove(&nfc);
+                }
+            }
+        }
+    }
 }
 
-/// [`abs_under`] for callers outside this crate that must agree with the
-/// applier about where a stored path lives on disk. The sync engine's
-/// quarantine pre-verify reads the loser's live file BEFORE any guarded
-/// apply runs; a bare join there missed NFD-on-disk spellings on
-/// byte-preserving Linux filesystems and reported phantom `ExpectedPresent`
-/// divergences the applier would never have produced.
-pub fn resolve_live(root: &Path, rel: &[String]) -> PathBuf {
-    abs_under(root, rel)
-}
-
-/// One readdir, NFC-compared against `want`. Deterministic on pathological
-/// trees holding several spellings of one name: smallest raw name wins.
-fn live_nfc_match(dir: &Path, want: &str) -> Option<String> {
-    let want_nfc: String = want.nfc().collect();
-    let mut best: Option<String> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+/// One readdir over `dir`, grouped by NFC fold. An unreadable directory
+/// yields an empty map (cached, so a broken parent costs one scan per
+/// apply). Non-UTF-8 names are skipped: they cannot become components.
+fn scan_dir_fold(dir: &Path) -> DirFold {
+    let mut fold = DirFold::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return fold;
+    };
+    for entry in rd.flatten() {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let nfc: String = name.nfc().collect();
-        if nfc == want_nfc && best.as_ref().is_none_or(|b| name < *b) {
-            best = Some(name);
+        fold.entry(name.nfc().collect::<String>())
+            .or_default()
+            .push(name);
+    }
+    fold
+}
+
+/// Choose the live spelling for one NFC key out of a directory's fold map.
+/// Exactly one spelling adopts it; several mean the directory genuinely
+/// holds duplicate normalizations, which [`AmbiguityPolicy`] turns into
+/// either a loud typed error or the deterministic smallest raw name.
+fn pick(
+    fold: &DirFold,
+    dir: &Path,
+    want_nfc: &str,
+    policy: AmbiguityPolicy,
+) -> Result<Option<String>, MaterializeError> {
+    match fold.get(want_nfc).map(Vec::as_slice) {
+        None | Some([]) => Ok(None),
+        Some([only]) => Ok(Some(only.clone())),
+        Some(many) => {
+            let mut names = many.to_vec();
+            names.sort();
+            match policy {
+                AmbiguityPolicy::Refuse => Err(MaterializeError::AmbiguousDiskSpelling {
+                    parent: dir.to_string_lossy().into_owned(),
+                    first: names[0].clone(),
+                    second: names[1].clone(),
+                }),
+                AmbiguityPolicy::PickSmallest => Ok(Some(names.remove(0))),
+            }
         }
     }
-    best
+}
+
+/// [`NfcFoldCache::resolve`] for callers outside this crate that must agree
+/// with the applier about where a stored path lives on disk. The sync
+/// engine's quarantine pre-verify reads the loser's live file BEFORE any
+/// guarded apply runs; a bare join there missed NFD-on-disk spellings on
+/// byte-preserving Linux filesystems and reported phantom `ExpectedPresent`
+/// divergences the applier would never have produced.
+///
+/// Read-only and infallible by contract, so a fresh one-shot cache is used
+/// and genuine duplicate spellings fall back to the historical smallest-
+/// name pick here; the guarded apply is what refuses them loudly (T-13).
+pub fn resolve_live(root: &Path, rel: &[String]) -> PathBuf {
+    NfcFoldCache::lenient()
+        .resolve(root, rel)
+        .unwrap_or_else(|_| root.join(rel.iter().collect::<PathBuf>()))
 }
 
 fn components_below(root: &Path, dir: &Path) -> Vec<String> {
@@ -1822,7 +2025,8 @@ fn content_matches(
 /// actionable failure (T-012 policy). Colon-bearing or prefixed components
 /// ("C:x", "C:\\x", absolute paths) are refused on every host: on Windows,
 /// `PathBuf::push` with such a component replaces the whole base, so a
-/// remote manifest could escape the synced root via `abs_under` (T-17).
+/// remote manifest could escape the synced root via NFC path resolution
+/// (T-17).
 pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeError> {
     for c in path {
         if c.is_empty()
@@ -3062,7 +3266,10 @@ mod tests {
         // already succeeds and this passes trivially.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("rapport-anne\u{301}e.md"), b"x").unwrap();
-        let p = abs_under(dir.path(), &["rapport-ann\u{e9}e.md".to_string()]);
+        let fold = NfcFoldCache::refusing();
+        let p = fold
+            .resolve(dir.path(), &["rapport-ann\u{e9}e.md".to_string()])
+            .unwrap();
         assert!(
             std::fs::symlink_metadata(&p).is_ok(),
             "NFC manifest name must resolve onto the NFD disk file"
@@ -3070,6 +3277,193 @@ mod tests {
         // Byte-preserving hosts additionally get the LIVE spelling back
         // (so renames replace in place); folding hosts may return the
         // stored form — the OS folds either way.
+    }
+
+    // ---- T-13: NFC fold cache + loud duplicate spellings -------------------
+
+    #[test]
+    fn m_children_of_one_parent_cost_at_most_one_read_dir() {
+        // Cache observability: `scanned_dirs` counts parents actually read
+        // from disk, so M resolutions under one parent must move it by at
+        // most 1 — including the absent-name probe that forces a real
+        // fold scan on every host.
+        let dir = tempfile::tempdir().unwrap();
+        const M: usize = 16;
+        for i in 0..M {
+            std::fs::write(dir.path().join(format!("child-{i:02}.txt")), b"x").unwrap();
+        }
+        let mut paths: Vec<Vec<String>> =
+            (0..M).map(|i| vec![format!("child-{i:02}.txt")]).collect();
+        // An absent sibling forces a fold-map scan even where every exact
+        // stat above hit; absence keeps the stored form.
+        paths.push(vec!["never-written.txt".into()]);
+        // A nested path shares only the root parent so far.
+        paths.push(vec!["missing-dir".into(), "deep.txt".into()]);
+        // ...and creating it must not add scans for its own parent either:
+        // entries the applier creates go into the cache without readdir.
+
+        let fold = NfcFoldCache::refusing();
+        for p in &paths {
+            fold.resolve(dir.path(), p).unwrap();
+        }
+        assert_eq!(
+            fold.scanned_dirs(),
+            2,
+            "root scanned once, missing-dir once; never per-child"
+        );
+
+        // Repeat resolutions are free: everything is already cached.
+        for p in &paths {
+            fold.resolve(dir.path(), p).unwrap();
+        }
+        assert_eq!(fold.scanned_dirs(), 2);
+    }
+
+    #[test]
+    fn applier_created_entries_enter_the_cache_without_a_rescan() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("fresh")).unwrap();
+        let fold = NfcFoldCache::refusing();
+
+        // Warm both parents (one scan each: root via the absent probe,
+        // fresh/ via the nested probe's second component).
+        fold.resolve(dir.path(), &["probe".into()]).unwrap();
+        fold.resolve(dir.path(), &["fresh".into(), "probe".into()])
+            .unwrap();
+        assert_eq!(fold.scanned_dirs(), 2);
+
+        // The applier creates entries mid-apply and records them directly.
+        std::fs::write(dir.path().join("new.txt"), b"x").unwrap();
+        fold.note_created_at(&dir.path().join("new.txt"));
+        let inner_abs = dir.path().join("fresh").join("inner");
+        std::fs::create_dir(&inner_abs).unwrap();
+        fold.note_created_at(&inner_abs);
+
+        {
+            let dirs = fold.dirs.borrow();
+            let root_fold = &dirs[dir.path()];
+            assert_eq!(
+                root_fold.get("new.txt").map(Vec::as_slice),
+                Some(&["new.txt".to_string()][..])
+            );
+            let fresh_fold = &dirs[&dir.path().join("fresh")];
+            assert_eq!(
+                fresh_fold.get("inner").map(Vec::as_slice),
+                Some(&["inner".to_string()][..])
+            );
+        }
+        assert_eq!(fold.scanned_dirs(), 2, "no rescan to learn our own writes");
+    }
+
+    #[test]
+    fn applier_removed_entries_leave_the_cache_and_deep_removal_drops_submaps() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("gone/inside")).unwrap();
+        std::fs::write(dir.path().join("gone/inside/deep.txt"), b"d").unwrap();
+        std::fs::write(dir.path().join("stay.txt"), b"s").unwrap();
+        let fold = NfcFoldCache::refusing();
+
+        // Warm both maps via absent probes (exact names would hit their
+        // stats and never populate the cache).
+        fold.resolve(dir.path(), &["probe".into()]).unwrap();
+        fold.resolve(dir.path(), &["gone".into(), "probe".into()])
+            .unwrap();
+        {
+            let dirs = fold.dirs.borrow();
+            assert!(dirs.contains_key(&dir.path().join("gone")));
+            assert!(dirs[dir.path()].contains_key("stay.txt"));
+        }
+
+        // Deep removal of gone/: its own bucket entry AND every cached
+        // sub-map beneath it must vanish.
+        fold.note_removed(&dir.path().join("gone"), true);
+        let dirs = fold.dirs.borrow();
+        assert!(
+            !dirs.contains_key(&dir.path().join("gone")),
+            "sub-maps of a removed subtree are dropped"
+        );
+        assert!(
+            dirs[dir.path()]
+                .get("gone")
+                .is_none_or(std::vec::Vec::is_empty),
+            "the removed name leaves the parent's fold map"
+        );
+        assert!(dirs[dir.path()].contains_key("stay.txt"));
+    }
+
+    #[test]
+    fn duplicate_spellings_refuse_loudly_instead_of_lexicographic_min() {
+        // Portable unit proof of the pick policy: one directory map holds
+        // two raw spellings folding to the same NFC key ("café.txt").
+        let mut fold_map: DirFold = HashMap::new();
+        let want_nfc: String = "caf\u{e9}.txt".nfc().collect();
+        fold_map.insert(
+            want_nfc.clone(),
+            vec!["caf\u{e9}.txt".to_string(), "cafe\u{301}.txt".to_string()],
+        );
+
+        let err = pick(
+            &fold_map,
+            Path::new("/target"),
+            &want_nfc,
+            AmbiguityPolicy::Refuse,
+        )
+        .unwrap_err();
+        match err {
+            MaterializeError::AmbiguousDiskSpelling {
+                parent,
+                first,
+                second,
+            } => {
+                assert_eq!(parent, "/target");
+                let mut both = [first, second];
+                both.sort();
+                assert_eq!(both[0], "cafe\u{301}.txt");
+                assert_eq!(both[1], "caf\u{e9}.txt");
+            }
+            other => panic!("wrong error: {other}"),
+        }
+
+        // The lenient read-only helper keeps the deterministic smallest
+        // pick (documented deviation for resolve_live's infallible API).
+        let got = pick(
+            &fold_map,
+            Path::new("/target"),
+            &want_nfc,
+            AmbiguityPolicy::PickSmallest,
+        )
+        .unwrap();
+        assert_eq!(got.as_deref(), Some("cafe\u{301}.txt"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn ambiguous_disk_spellings_produce_the_typed_error_via_resolve() {
+        // Real byte-preserving-disk fixture: two names that both NFC-fold
+        // to "\u{c5}.txt" (decomposed a+ring and the ANGSTROM SIGN), with
+        // the composed spelling itself ABSENT — exactly the case where the
+        // old resolver silently picked the lexicographically smaller one.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a\u{30a}.txt"), b"one").unwrap();
+        std::fs::write(dir.path().join("\u{212b}.txt"), b"two").unwrap();
+
+        let fold = NfcFoldCache::refusing();
+        let err = fold
+            .resolve(dir.path(), &["\u{c5}.txt".to_string()])
+            .unwrap_err();
+        match err {
+            MaterializeError::AmbiguousDiskSpelling { first, second, .. } => {
+                let mut both = [first, second];
+                both.sort();
+                assert_eq!(both[0], "a\u{30a}.txt");
+                assert_eq!(both[1], "\u{212b}.txt");
+            }
+            other => panic!("wrong error: {other}"),
+        }
+
+        // And the lenient helper still resolves deterministically.
+        let p = resolve_live(dir.path(), &["\u{c5}.txt".to_string()]);
+        assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("a\u{30a}.txt"));
     }
 
     #[test]
