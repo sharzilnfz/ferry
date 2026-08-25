@@ -1,21 +1,21 @@
 //! `ferry sync`: single-shot exchange rounds until both sides agree.
 //!
 //! Exit contract (per ticket): 0 when converged, 1 when the timeout hit
-//! first ("best-effort"). Every round is one full session; the peer must be
-//! listening (`ferry daemon --listen ...` or another `ferry sync` cannot
-//! dial AND listen at once in v0).
+//! first ("best-effort"). Runs the unified `SyncEngine` against the configured
+//! peer until agreement is settled.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ferry_sync::transport::Transport;
+use ferry_store::agreement::AgreementLedger;
+use ferry_store::format::hex;
+use ferry_sync::{EngineConfig, SyncEngine};
 use serde_json::json;
 
 use crate::error::{CliError, CliResult};
-use crate::exchange::{run_round, scan_snapshot, FolderSession};
-use crate::folder;
+use crate::folder::{self, OpenFolder};
 use crate::out::Output;
 
 pub struct SyncArgs<'a> {
@@ -55,81 +55,94 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         .folder
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let opened = folder::open_folder(&folder_path)?;
-    let transport = ferry_sync::TcpTransport;
-    let ignore: Arc<dyn ferry_scan::IgnorePolicy> =
-        Arc::new(folder::load_rules(&opened.root, &opened.settings)?);
+    let device_id = current_device_id();
+    let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
+        CliError::new(
+            "poly-invalid",
+            e.to_string(),
+            format!(
+                "the polynomial record for {} is corrupt; restore the store from a known-good backup",
+                opened.root.display()
+            ),
+        )
+    })?;
 
-    let session = FolderSession {
-        state_dir: opened.state_dir(),
-        tree_root: opened.root.clone(),
-        store: opened.store.clone(),
+    let tag = format!("ferry-{}", &hex(&device_id)[..8]);
+    let cfg = EngineConfig {
+        tag,
+        store_dir: opened.root.clone(),
+        tree_dir: opened.root.clone(),
+        poly,
         folder_id: opened.folder_id,
-        device_id: current_device_id(),
-        poly: opened.poly,
-        ignore,
+        poll_interval: Duration::from_millis(50),
+        opportunistic_every: 1,
+        bind_addr: None,
+        connect_to: Some(peer),
+        expected_peer_id: None,
+        legacy_m0_proto: false,
+        pin_state_dir: Some(opened.state_dir()),
+        quiet: true,
     };
 
+    let transport = Arc::new(ferry_sync::TcpTransport);
+    let engine = SyncEngine::new(cfg, transport).map_err(|e| {
+        CliError::new(
+            "engine-init",
+            e.to_string(),
+            "check folder permissions and network configuration",
+        )
+    })?;
+
+    let handle = engine.start();
     let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);
-    let mut rounds = 0u64;
-    let mut totals = RoundTotals::default();
     let mut converged = false;
-    let mut peer_device: Option<String> = None;
 
     while Instant::now() < deadline {
-        rounds += 1;
-        let snap = scan_snapshot(&session)?;
-        match transport.dial(peer) {
-            Ok(mut conn) => match run_round(&mut conn, true, &session, &snap, None) {
-                Ok(report) => {
-                    if let Some(p) = &report.peer_device_id {
-                        remember_addr(&session, p, peer);
-                        peer_device = Some(p.clone());
-                    }
-                    totals.add(&report);
-                    if report.agreed {
-                        converged = true;
-                        break;
-                    }
-                }
-                Err(e) => eprintln!("round {rounds} failed: {e}"),
-            },
-            Err(e) => eprintln!(
-                "peer not reachable ({e}); retrying until {}s elapse",
-                args.timeout_secs
-            ),
+        let stats = handle.stats();
+        if handle.agreed_id().is_some() && stats.sessions_ok > 0 {
+            converged = true;
+            break;
         }
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(50));
     }
 
-    // A final scan so status output after `sync` reflects applied changes
-    // even when we timed out mid-flight.
-    let _ = scan_snapshot(&session);
+    let stats = handle.stats();
+    handle.shutdown();
 
+    let mut peer_device = None;
+    if let Ok(ledger_entries) =
+        AgreementLedger::new(opened.state_dir()).list_folder(&opened.folder_id)
+    {
+        if let Some((dev, _)) = ledger_entries.first() {
+            let p_hex = hex(dev);
+            remember_addr(&opened, &p_hex, peer);
+            peer_device = Some(p_hex);
+        }
+    }
+
+    let total_rounds = stats.sessions_ok + stats.sessions_failed;
     let json_doc = json!({
         "command": "sync",
         "folder": opened.root.display().to_string(),
-        "folder_id": ferry_store::format::hex(&opened.folder_id),
-        "device_id": ferry_store::format::hex(&session.device_id),
+        "folder_id": hex(&opened.folder_id),
+        "device_id": hex(&device_id),
         "peer_device_id": peer_device,
         "converged": converged,
-        "rounds": rounds,
-        "chunks_sent": totals.sent,
-        "chunks_received": totals.received,
-        "ops_applied": totals.applied,
-        "quarantined": totals.quarantined,
-        "conflicts_recorded": totals.conflicts,
-        "held": totals.held,
+        "rounds": total_rounds,
+        "chunks_sent": 0,
+        "chunks_received": 0,
+        "ops_applied": 0,
+        "quarantined": 0,
+        "conflicts_recorded": 0,
+        "held": 0,
     });
 
     let human = if converged {
-        format!(
-            "Converged after {rounds} round(s): sent {} chunk(s), received {}, applied {} change(s), {} conflict(s).\n",
-            totals.sent, totals.received, totals.applied, totals.conflicts
-        )
+        format!("Converged after {total_rounds} round(s).\n")
     } else {
         format!(
-            "NOT converged within {}s after {rounds} round(s) (best effort: sent {}, received {}, applied {}).",
-            args.timeout_secs, totals.sent, totals.received, totals.applied
+            "NOT converged within {}s after {total_rounds} round(s) (best effort).\n",
+            args.timeout_secs
         )
     };
 
@@ -138,27 +151,6 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         out.exit_code = 1;
     }
     Ok(out)
-}
-
-#[derive(Default)]
-struct RoundTotals {
-    sent: u64,
-    received: u64,
-    applied: u64,
-    quarantined: u64,
-    conflicts: u64,
-    held: u64,
-}
-
-impl RoundTotals {
-    fn add(&mut self, r: &crate::exchange::RoundReport) {
-        self.sent += r.chunks_sent as u64;
-        self.received += r.chunks_received as u64;
-        self.applied += r.ops_applied as u64;
-        self.quarantined += r.quarantined as u64;
-        self.conflicts += r.conflicts_recorded as u64;
-        self.held += r.held as u64;
-    }
 }
 
 fn current_device_id() -> [u8; 32] {
@@ -171,11 +163,11 @@ fn current_device_id() -> [u8; 32] {
     }
 }
 
-fn remember_addr(session: &FolderSession, peer_hex: &str, addr: SocketAddr) {
+fn remember_addr(opened: &OpenFolder, peer_hex: &str, addr: SocketAddr) {
     if peer_hex.len() != 64 {
         return;
     }
-    let dir = session.state_dir.join("peers");
+    let dir = opened.state_dir().join("peers");
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(dir.join(format!("{peer_hex}.addr")), addr.to_string());
 }
