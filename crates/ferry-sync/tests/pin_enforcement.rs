@@ -18,11 +18,12 @@ use std::time::{Duration, Instant};
 use rand::SeedableRng;
 
 use ferry_pin::{HeldLedger, PinRecord, PinStore};
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
 use ferry_store::store::Store;
 use ferry_sync::format::{hex, unhex};
-use ferry_sync::{engine, AgreementStore};
+use ferry_sync::{engine, DEFAULT_FOLDER_ID};
 
 use common::{timeout_from_env, EngineFixture};
 
@@ -45,6 +46,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     });
     let a_ferry = fx._dir.path().join("a/store/.ferry");
     let b_hex = hex(engine::device_identity_for_tag(TAG_B).device_id());
+    let b_dev = *engine::device_identity_for_tag(TAG_B).device_id();
     let read = |root: &std::path::Path, rel: &str| std::fs::read_to_string(root.join(rel));
 
     // --- phase 1: converge both engines on baseline content --------------
@@ -56,12 +58,15 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
             && read(&fx.tree_b(), "docs/other.txt").is_ok_and(|v| v == "d1")
     });
     wait_until("agreement recorded vs B", || {
-        AgreementStore::new(&a_ferry)
-            .load(&b_hex)
+        AgreementLedger::new(&a_ferry)
+            .get(&DEFAULT_FOLDER_ID, &b_dev)
             .unwrap_or(None)
             .is_some()
     });
-    let (agreed, _) = AgreementStore::new(&a_ferry).load(&b_hex).unwrap().unwrap();
+    let agreed = AgreementLedger::new(&a_ferry)
+        .get(&DEFAULT_FOLDER_ID, &b_dev)
+        .unwrap()
+        .unwrap();
     let mut bases = std::collections::BTreeMap::new();
     bases.insert(b_hex.clone(), hex(&agreed.manifest_id));
 

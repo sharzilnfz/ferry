@@ -10,6 +10,7 @@
 //! only `crypto.rs`.
 
 pub mod admission;
+pub mod agreement;
 pub mod chunker;
 pub mod crypto;
 pub mod diff;

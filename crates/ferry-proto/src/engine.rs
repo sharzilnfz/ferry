@@ -34,12 +34,12 @@ use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
+use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::index::IndexEntry;
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload};
 use ferry_store::store::Store;
 
-use crate::agreement::{AgreementLedger, AgreementRecord};
 use crate::codec::FLAG_EXTENSION_AWARE;
 use crate::codec::{
     self, AuthProof, Bye, FolderOffer, FrameBody, Hello, HelloAck, IndexAdvert, ItemBatch,
@@ -1503,8 +1503,8 @@ fn finish_after_sync<S: ByteStream>(
                 ledger
                     .record(
                         &out.folder_id,
-                        &AgreementRecord {
-                            peer: sess.peer_id,
+                        &AgreedRecord {
+                            peer_device_id: sess.peer_id,
                             manifest_id: mine,
                             agreed_sec: sec,
                             agreed_nsec: nsec,

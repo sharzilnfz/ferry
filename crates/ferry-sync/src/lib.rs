@@ -44,13 +44,11 @@
 //!    policy that refuses hostile targets loudly. The puller applies the
 //!    diff durably BEFORE round 2 observes equality — under v1, round 2
 //!    plays AGREED's role.
-//! 5. **Agreement bookkeeping** ([`state::AgreementStore`] plus
-//!    `ferry_proto::agreement::AgreementLedger`) — after each concluded
-//!    session both sides record the agreed manifest id per peer in THE
-//!    canonical 77-byte spec serialization (byte-exact on both sides), and
-//!    keep the M0 convenience record carrying the full manifest for
-//!    offline baseline recovery. T-010's three-way reconciliation consumes
-//!    these as base state.
+//! 5. **Agreement bookkeeping** (`ferry_store::agreement::AgreementLedger`,
+//!    the ONE canonical codec + ledger workspace-wide since T-10) — after
+//!    each concluded session both sides record the agreed manifest id per
+//!    peer in THE canonical 77-byte spec serialization (byte-exact on both
+//!    sides). T-010's three-way reconciliation consumes these as base state.
 //! 6. **Winner selection** — donor election collapsed into v1's symmetric
 //!    pull stages: each side pulls what it lacks; adoption follows lineage
 //!    (last-writer-wins) with M0's empty-vs-nonempty bootstrap guard
@@ -92,7 +90,7 @@ pub use ferry_crypto::identity::DeviceIdentity;
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
 pub use session::{Established, ExpectPeer};
-pub use state::{device_id_from_tag, AgreementStore};
+pub use state::device_id_from_tag;
 pub use transport::{Connection, Listener, TcpTransport, Transport};
 
 /// M0's default folder id (both daemons must share one folder id; the real

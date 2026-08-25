@@ -24,12 +24,13 @@ use std::path::{Path, PathBuf};
 use ferry_pin::{
     hold_filter, plan_release, HeldLedger, HoldDecision, PinRecord, PinStore, PIN_FORMAT_VERSION,
 };
+use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
 use ferry_sync_engine::report::list_conflicts;
-use ferry_sync_engine::{agree, execute, reconcile};
+use ferry_sync_engine::{execute, reconcile};
 use rand::SeedableRng;
 
 const DEV_A: [u8; 32] = [0xA1; 32];
@@ -189,18 +190,23 @@ fn transfer_chunks(from: &Store, to: &Store, ids: &[(BlobId, u64)]) {
 }
 
 fn record_agreement(d: &Dev, peer: [u8; 32], manifest_id: BlobId) {
-    agree::PeerState::new(&d.state)
-        .record(&agree::AgreedRecord {
-            peer_device_id: peer,
-            manifest_id,
-            agreed_sec: NOW.0,
-            agreed_nsec: 0,
-        })
+    AgreementLedger::new(&d.state)
+        .record(
+            &FOLDER,
+            &AgreedRecord {
+                peer_device_id: peer,
+                manifest_id,
+                agreed_sec: NOW.0,
+                agreed_nsec: 0,
+            },
+        )
         .unwrap();
 }
 
 fn load_agreed_manifest(d: &Dev, peer: [u8; 32]) -> Option<ferry_store::manifest::RootManifest> {
-    let rec = agree::PeerState::new(&d.state).load(&peer).unwrap()?;
+    let rec = AgreementLedger::new(&d.state)
+        .get(&FOLDER, &peer)
+        .unwrap()?;
     let bytes = d.store.get(BlobKind::Manifest, &rec.manifest_id).ok()?;
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }

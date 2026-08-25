@@ -20,12 +20,12 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_proto::agreement::AgreementLedger;
 use ferry_proto::stream::DuplexHalf;
 use ferry_proto::{
     duplex_pair, run_engine, ByteStream, DeviceId, EngineConfig, FolderState, Granularity,
     ProtoError, Role, SessionReport,
 };
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
@@ -363,7 +363,10 @@ fn assert_agreement_recorded(world: &World, report_a: &SessionReport, report_b: 
     assert_eq!(rec_a.manifest_id, world.manifest_a);
     assert_eq!(rec_b.manifest_id, world.manifest_a);
     // Canonical record shape per docs/store-format.md.
-    assert_eq!(rec_a.to_canonical().len(), 77);
+    assert_eq!(
+        ferry_store::agreement::encode_agreed_record(&rec_a).len(),
+        77
+    );
 }
 
 // --- the loopback matrix ---------------------------------------------------------

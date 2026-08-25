@@ -25,10 +25,10 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
+use ferry_sync_engine::execute;
 use ferry_sync_engine::plan::{ActionPlan, ConflictKind};
 use ferry_sync_engine::reconcile::{reconcile, ReconcileInput};
 use ferry_sync_engine::report::list_conflicts;
-use ferry_sync_engine::{agree, execute};
 use rand::SeedableRng;
 
 const DEV_A: [u8; 32] = [0xA1; 32];
@@ -226,18 +226,23 @@ fn run_plan(d: &mut Dev, plan: &ActionPlan) {
 }
 
 fn record_agreement(recorder: &mut Dev, peer: [u8; 32], manifest_id: BlobId) {
-    agree::PeerState::new(&recorder.state)
-        .record(&agree::AgreedRecord {
-            peer_device_id: peer,
-            manifest_id,
-            agreed_sec: NOW.0,
-            agreed_nsec: 0,
-        })
+    ferry_store::agreement::AgreementLedger::new(&recorder.state)
+        .record(
+            &FOLDER,
+            &ferry_store::agreement::AgreedRecord {
+                peer_device_id: peer,
+                manifest_id,
+                agreed_sec: NOW.0,
+                agreed_nsec: 0,
+            },
+        )
         .unwrap();
 }
 
-fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<agree::AgreedRecord> {
-    agree::PeerState::new(&d.state).load(&peer).unwrap()
+fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<ferry_store::agreement::AgreedRecord> {
+    ferry_store::agreement::AgreementLedger::new(&d.state)
+        .get(&FOLDER, &peer)
+        .unwrap()
 }
 
 /// One matrix cell, executed end to end.
