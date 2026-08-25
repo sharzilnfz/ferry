@@ -223,9 +223,12 @@ impl fmt::Display for Cut {
 
 /// Streaming CDC state machine for one file, bound to one folder polynomial.
 ///
-/// Feed bytes with [`Chunker::push`]; a returned `Some(len)` ends a chunk of
-/// exactly `len` bytes ending at the byte just pushed. State resets fully
-/// between chunks; fingerprints never carry across boundaries.
+/// Feed bytes with [`Chunker::push`] (one byte, yields a boundary) or
+/// [`Chunker::feed`] (a block, yields every boundary completed inside it);
+/// [`Chunker::finish`] reports the trailing unterminated chunk. A returned
+/// length ends a chunk of exactly that many bytes ending at the last byte
+/// fed. State resets fully between chunks; fingerprints never carry across
+/// boundaries.
 pub struct Chunker {
     poly: u64,
     win: [u8; WINDOW_SIZE],
@@ -303,6 +306,30 @@ impl Chunker {
         }
     }
 
+    /// Feed a block of bytes; returns the lengths of every chunk COMPLETED
+    /// inside this block, in order. Byte-identical boundaries to pushing the
+    /// same bytes one at a time — block edges never influence cutting.
+    ///
+    /// This is the whole-file-buffer-free entry point (T-09): callers stream
+    /// a bounded read buffer through here and keep only the current chunk's
+    /// bytes resident.
+    pub fn feed(&mut self, data: &[u8]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for &b in data {
+            if let Some(len) = self.push(b) {
+                out.push(len);
+            }
+        }
+        out
+    }
+
+    /// End of stream: the length of the trailing unterminated chunk (0 when
+    /// the input was empty or ended exactly on a boundary). The caller owns
+    /// those trailing bytes; this only reports how many there are.
+    pub fn finish(&self) -> usize {
+        self.pending_len()
+    }
+
     /// Fingerprint update for one appended byte, exactly as specified:
     /// during warm-up just fold the byte in; afterwards remove the outgoing
     /// byte's contribution (`out * x^504`) via the precomputed table, then
@@ -331,17 +358,18 @@ impl Chunker {
 /// Prefer threading a validated [`ValidatedPoly`] through your APIs and
 /// calling `.get()` here.
 pub fn chunk_offsets(poly: u64, data: &[u8]) -> Result<Vec<(usize, usize)>, PolynomialError> {
+    // Thin wrapper over the streaming state machine (T-09): one code path,
+    // so buffered and streamed boundaries cannot drift.
     let mut c = Chunker::new(poly)?;
     let mut out = Vec::new();
     let mut start = 0usize;
-    for &b in data {
-        if let Some(l) = c.push(b) {
-            out.push((start, l));
-            start += l;
-        }
+    for len in c.feed(data) {
+        out.push((start, len));
+        start += len;
     }
-    if c.pending_len() > 0 {
-        out.push((start, c.pending_len()));
+    let tail = c.finish();
+    if tail > 0 {
+        out.push((start, tail));
     }
     Ok(out)
 }
@@ -753,6 +781,79 @@ mod tests {
         }
         assert_eq!(consumed, data.len());
         assert_eq!(streamed, bulk);
+    }
+
+    /// T-09 acceptance: block-fed `feed`/`finish` must produce byte-identical
+    /// boundaries to the buffered slice functions, for every input size
+    /// around the min/avg/max clamp boundaries and every feed block size —
+    /// including blocks that split a cut decision's window state across two
+    /// feeds.
+    #[test]
+    fn streaming_feed_boundaries_are_identical_to_slice_output() {
+        let p = test_poly(46);
+        let avg = 1usize << AVG_BITS;
+        // Sizes span: empty, sub-window, window edges, sub-MIN, exactly MIN,
+        // around AVG, multi-MIN, around MAX, MAX+1 and one past a max clamp.
+        let sizes = [
+            0usize,
+            1,
+            63,
+            64,
+            65,
+            MIN_SIZE - 1,
+            MIN_SIZE,
+            MIN_SIZE + 1,
+            avg - 1,
+            avg,
+            avg + 1,
+            MIN_SIZE * 2 + 777,
+            MAX_SIZE - 1,
+            MAX_SIZE,
+            MAX_SIZE + 1,
+        ];
+
+        fn stream_in_blocks(p: u64, data: &[u8], block: usize) -> Vec<(usize, usize)> {
+            let mut c = Chunker::new(p).unwrap();
+            let mut out = Vec::new();
+            let mut start = 0usize;
+            for piece in data.chunks(block.max(1)) {
+                for len in c.feed(piece) {
+                    out.push((start, len));
+                    start += len;
+                }
+            }
+            let tail = c.finish();
+            if tail > 0 {
+                out.push((start, tail));
+            }
+            out
+        }
+
+        for (i, size) in sizes.iter().enumerate() {
+            let data = prng_bytes(2000 + i as u64, *size);
+            let expected = chunk_offsets(p, &data).unwrap();
+
+            // Reassembly identity holds through the streaming path too.
+            let total: usize = expected.iter().map(|(_, l)| l).sum();
+            assert_eq!(total, *size, "slice tiling broke at size {size}");
+
+            // Block sizes: 1, window edge ±1, page-ish, and a big block that
+            // swallows whole chunks at once.
+            for block in [
+                1usize,
+                WINDOW_SIZE - 1,
+                WINDOW_SIZE,
+                WINDOW_SIZE + 1,
+                4096,
+                256 * 1024,
+            ] {
+                assert_eq!(
+                    stream_in_blocks(p, &data, block),
+                    expected,
+                    "streamed boundaries diverged at size {size}, block {block}"
+                );
+            }
+        }
     }
 
     #[test]

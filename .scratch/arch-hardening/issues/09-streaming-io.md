@@ -1,6 +1,6 @@
 # T-09: Streaming chunk/read IO — stop buffering whole files in scan and apply
 
-Status: ready-for-agent
+Status: done
 Depends on: T-02 (chunker API)
 
 Two whole-file buffers defeat 1 MiB CDC chunks:

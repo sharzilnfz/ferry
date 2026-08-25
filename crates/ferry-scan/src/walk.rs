@@ -34,6 +34,7 @@
 //! renamed-away subtrees can never satisfy later short-circuits.
 
 use std::collections::{BTreeSet, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -378,21 +379,7 @@ impl<'a> Walker<'a> {
                         }
                         // Short-circuit hit: zero bytes read.
                     }
-                    _ => {
-                        let bytes =
-                            std::fs::read(&child_disk).map_err(Self::io_err(&child_disk))?;
-                        // `poly` is a ValidatedPoly from the store handle; the
-                        // error arm is unreachable but stays typed, never a panic.
-                        let pieces = ferry_store::chunker::chunk(self.poly.get(), &bytes)?;
-                        let mut chunks = Vec::new();
-                        for piece in pieces {
-                            let id = self.store.put_data(piece)?;
-                            self.stats.bytes_chunked += piece.len() as u64;
-                            chunks.push((id, piece.len() as u64));
-                        }
-                        self.stats.files_rehashed += 1;
-                        chunks
-                    }
+                    _ => self.stream_file_chunks(&child_disk)?,
                 };
                 file_entry(&component, exec, mt.0, mt.1, chunks)
             } else {
@@ -440,6 +427,56 @@ impl<'a> Walker<'a> {
         self.cache.insert(rel.clone(), CachedDir { id, node });
         self.rebuilt.insert(rel.clone(), id);
         Ok(id)
+    }
+
+    /// Stream one file through the CDC chunker with a bounded read buffer,
+    /// storing each chunk as its boundary completes (T-09). Peak memory is
+    /// one chunk (`MAX_SIZE`) plus the read buffer — never the file size;
+    /// GB-scale assets no longer spike RSS during rehash.
+    fn stream_file_chunks(&mut self, path: &Path) -> Result<Vec<(BlobId, u64)>, ScanError> {
+        const REHASH_READ_BUF: usize = 256 * 1024;
+
+        let store = self.store;
+        // `poly` is a ValidatedPoly from the store handle; rejection is
+        // unreachable but stays typed, never a panic.
+        let mut chunker = ferry_store::chunker::Chunker::new(self.poly.get())?;
+
+        let mut file = std::fs::File::open(path).map_err(Self::io_err(path))?;
+        let mut buf = vec![0u8; REHASH_READ_BUF];
+        // Current unterminated chunk only; never exceeds MAX_SIZE because a
+        // boundary fires there unconditionally.
+        let mut cur: Vec<u8> = Vec::with_capacity(ferry_store::chunker::MIN_SIZE * 2);
+        let mut chunks: Vec<(BlobId, u64)> = Vec::new();
+
+        loop {
+            let n = file.read(&mut buf).map_err(Self::io_err(path))?;
+            if n == 0 {
+                break;
+            }
+            let mut eaten = 0usize;
+            for len in chunker.feed(&buf[..n]) {
+                // The completed chunk spans `cur`'s pending tail plus
+                // `len - cur.len()` fresh bytes of this read.
+                let fresh = len - cur.len();
+                cur.extend_from_slice(&buf[eaten..eaten + fresh]);
+                eaten += fresh;
+                let id = store.put_data(&cur)?;
+                self.stats.bytes_chunked += cur.len() as u64;
+                chunks.push((id, cur.len() as u64));
+                cur.clear();
+            }
+            cur.extend_from_slice(&buf[eaten..n]);
+        }
+
+        let tail = chunker.finish();
+        debug_assert_eq!(tail, cur.len(), "streamed tail must match retained bytes");
+        if tail > 0 {
+            let id = store.put_data(&cur)?;
+            self.stats.bytes_chunked += tail as u64;
+            chunks.push((id, tail as u64));
+        }
+        self.stats.files_rehashed += 1;
+        Ok(chunks)
     }
 
     /// Resolve the tree-node id for a child directory encountered while
