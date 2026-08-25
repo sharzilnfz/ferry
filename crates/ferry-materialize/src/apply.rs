@@ -3444,8 +3444,42 @@ mod tests {
         // the composed spelling itself ABSENT — exactly the case where the
         // old resolver silently picked the lexicographically smaller one.
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a\u{30a}.txt"), b"one").unwrap();
-        std::fs::write(dir.path().join("\u{212b}.txt"), b"two").unwrap();
+        let nfd = dir.path().join("a\u{30a}.txt");
+        let singleton = dir.path().join("\u{212b}.txt");
+        std::fs::write(&nfd, b"one").unwrap();
+        std::fs::write(&singleton, b"two").unwrap();
+
+        // Premise check: this proof needs a byte-preserving host. A host
+        // whose temp filesystem merges NFC-equivalent spellings into one
+        // file leaves only one entry to scan, and there is nothing for the
+        // resolver to find ambiguous. The pick POLICY stays covered by
+        // `duplicate_spellings_refuse_loudly_instead_of_lexicographic_min`
+        // (pure in-memory DirFold), so skipping here loses no coverage of
+        // the resolver logic itself.
+        let distinct = match (
+            std::fs::symlink_metadata(&nfd),
+            std::fs::symlink_metadata(&singleton),
+        ) {
+            (Ok(a), Ok(b)) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    a.ino() != b.ino()
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            }
+            _ => false,
+        };
+        if !distinct {
+            eprintln!(
+                "skipping: host temp filesystem merges NFC-equivalent spellings \
+                 (no byte-preserving fixture possible here)"
+            );
+            return;
+        }
 
         let fold = NfcFoldCache::refusing();
         let err = fold

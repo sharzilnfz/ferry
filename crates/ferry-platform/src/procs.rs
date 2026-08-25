@@ -158,12 +158,20 @@ fn windows_token(pid: u32) -> Option<u64> {
         dwHighDateTime: 0,
     };
     // Safety: four FILETIME sinks sized by the API contract; handle owned above.
-    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    let ok = unsafe {
+        GetProcessTimes(
+            handle,
+            std::ptr::from_mut(&mut creation),
+            std::ptr::from_mut(&mut exit),
+            std::ptr::from_mut(&mut kernel),
+            std::ptr::from_mut(&mut user),
+        )
+    };
     unsafe { CloseHandle(handle) };
     if ok == 0 {
         return None;
     }
-    Some(((creation.dwHighDateTime as u64) << 32) | u64::from(creation.dwLowDateTime))
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
 #[cfg(test)]
