@@ -44,8 +44,9 @@ use crate::applier::SessionApplier;
 use crate::exchange::{self, CurrentState, ExchangeHost};
 use crate::proto::{self, ItemPayload, ProtoError};
 use crate::session::{self, ConnLink, Established, ExpectPeer};
-use crate::state::{device_id_from_tag, AgreedRecord, AgreementStore};
+use crate::state::device_id_from_tag;
 use crate::transport::{Connection, Transport};
+use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::store::Store;
 
 /// chunk id -> owning pack name + cached pack bytes.
@@ -175,7 +176,7 @@ pub enum SessionError {
     #[error("diff failed: {0}")]
     Diff(#[from] ferry_store::diff::DiffError),
     #[error("agreement state: {0}")]
-    State(#[from] crate::state::StateError),
+    Agreement(#[from] ferry_store::agreement::AgreementError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -313,7 +314,6 @@ struct Ctx {
     identity: DeviceIdentity,
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
-    agreements: AgreementStore,
     session_lock: Mutex<()>,
     /// Latest scan result — always refreshed each tick (legacy sessions
     /// read this).
@@ -389,10 +389,8 @@ impl Ctx {
     }
 
     /// Record the last-agreed pointer against a peer device: THE canonical
-    /// 77-byte ledger record (`ferry_proto::agreement`, byte-exact per
-    /// `docs/store-format.md` §"Last-agreed manifest pointer", the format
-    /// T-010's engine reads), plus the M0 convenience record that keeps
-    /// the full manifest bytes for offline baseline recovery. Also moves
+    /// 77-byte ledger record (`ferry_store::agreement`, byte-exact per
+    /// `docs/store-format.md` §"Last-agreed manifest pointer"). Also moves
     /// the in-memory baseline so divergence gating sees agreement.
     fn record_agreement(
         &self,
@@ -401,27 +399,17 @@ impl Ctx {
         manifest_id: BlobId,
     ) -> Result<(), SessionError> {
         let (sec, nsec) = now_parts();
-        // Canonical, spec-shaped ledger under <store>/.ferry/agreement/.
-        ferry_proto::agreement::AgreementLedger::new(self.store.store_dir())
+        AgreementLedger::new(self.store.store_dir())
             .record(
                 &self.cfg.folder_id,
-                &ferry_proto::agreement::AgreementRecord {
-                    peer,
+                &AgreedRecord {
+                    peer_device_id: peer,
                     manifest_id,
                     agreed_sec: sec,
                     agreed_nsec: nsec,
                 },
             )
             .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
-        // M0-local convenience copy (per-peer dir + manifest.bin).
-        let rec = AgreedRecord {
-            peer_device_id: peer,
-            manifest_id,
-            agreed_sec: sec,
-            agreed_nsec: nsec,
-            flags: 0,
-        };
-        self.agreements.record(&hex(&peer), rec, manifest_bytes)?;
         *self.baseline.lock().unwrap() = Some(parse_manifest(manifest_bytes)?);
         *self.shared.agreed.lock().unwrap() = Some(manifest_id);
         self.status(&format!(
@@ -1184,13 +1172,11 @@ impl SyncEngine {
             agreed: Mutex::new(None),
             root: Mutex::new(None),
         });
-        let agreements = AgreementStore::new(self.store.store_dir());
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
             identity: device_identity_for_tag(&self.cfg.tag),
             store: Arc::clone(&self.store),
             transport: Arc::clone(&self.transport),
-            agreements,
             session_lock: Mutex::new(()),
             latest: Mutex::new(None),
             current: Mutex::new(None),

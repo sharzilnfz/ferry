@@ -35,12 +35,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ferry_pin::{hold_filter, HeldLedger, HoldDecision};
+use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::manifest::{parse_manifest, RootManifest};
 use ferry_store::store::Store;
 use ferry_sync::proto::{self, ItemPayload, ItemStream};
 use ferry_sync::transport::Connection;
-use ferry_sync_engine::{execute, reconcile, AgreedRecord, PeerState};
+use ferry_sync_engine::{execute, reconcile};
 
 use crate::error::{CliError, CliResult};
 
@@ -514,8 +515,7 @@ fn compute_plan(
     local: &RootManifest,
     remote: &RootManifest,
 ) -> Result<ferry_sync_engine::ActionPlan, ExchangeError> {
-    let ps = PeerState::new(&session.state_dir);
-    let base = load_base(session, &ps, &remote.device_id);
+    let base = load_base(session, &remote.device_id);
     Ok(reconcile(ferry_sync_engine::reconcile::ReconcileInput {
         store: &session.store,
         local,
@@ -526,8 +526,9 @@ fn compute_plan(
 
 /// Parse the last-agreed manifest object for a peer; None when never agreed
 /// or when its bytes are gone from the store (documented degradation).
-fn load_base(session: &FolderSession, ps: &PeerState, peer: &[u8; 32]) -> Option<RootManifest> {
-    let rec = ps.load(peer).ok().flatten()?;
+fn load_base(session: &FolderSession, peer: &[u8; 32]) -> Option<RootManifest> {
+    let ledger = AgreementLedger::new(&session.state_dir);
+    let rec = ledger.get(&session.folder_id, peer).ok().flatten()?;
     let bytes = session
         .store
         .get(BlobKind::Manifest, &rec.manifest_id)
@@ -540,20 +541,23 @@ fn record_agreement(
     peer: &[u8; 32],
     manifest_id: BlobId,
 ) -> CliResult<()> {
-    let ps = PeerState::new(&session.state_dir);
     let (sec, nsec) = ferry_sync_engine::timefmt::now_unix();
-    ps.record(&AgreedRecord {
-        peer_device_id: *peer,
-        manifest_id,
-        agreed_sec: sec,
-        agreed_nsec: nsec,
-    })
-    .map_err(|e| {
-        CliError::new(
-            "agreement-state",
-            e.to_string(),
-            "check .ferry/peers permissions",
+    AgreementLedger::new(&session.state_dir)
+        .record(
+            &session.folder_id,
+            &AgreedRecord {
+                peer_device_id: *peer,
+                manifest_id,
+                agreed_sec: sec,
+                agreed_nsec: nsec,
+            },
         )
-    })?;
+        .map_err(|e| {
+            CliError::new(
+                "agreement-state",
+                e.to_string(),
+                "check .ferry/agreement permissions",
+            )
+        })?;
     Ok(())
 }

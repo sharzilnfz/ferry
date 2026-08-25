@@ -13,8 +13,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use ferry_pin::{plan_release, HeldEntry, HeldLedger, PathMatcher, PinRecord, PinStore};
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
-use ferry_sync_engine::{list_conflicts, PeerState};
+use ferry_sync_engine::list_conflicts;
 use serde_json::json;
 
 use crate::error::{CliError, CliResult};
@@ -38,16 +39,14 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
 
     // Freeze the last-agreed base per peer NOW: release's three-way
     // ancestor is exactly "last agreed before the pin started".
-    let ps = PeerState::new(&state_dir);
     let mut base_agreements = BTreeMap::new();
-    if let Ok(rd) = std::fs::read_dir(state_dir.join("peers")) {
-        for path in rd.flatten().map(|e| e.path()) {
-            if let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) {
-                if let Ok(Some(rec)) = ps.load(&dev) {
-                    base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
-                }
-            }
-        }
+    // Absent agreement directory means nothing was ever agreed; list_folder
+    // maps that to an empty vec. Anything else is loud.
+    for (dev, rec) in AgreementLedger::new(&state_dir)
+        .list_folder(&opened.folder_id)
+        .map_err(|e| CliError::new("agreement-state", e.to_string(), "check .ferry permissions"))?
+    {
+        base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
     }
 
     let (sec, nsec) = ferry_sync_engine::timefmt::now_unix();

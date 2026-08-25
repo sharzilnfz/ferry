@@ -7,12 +7,13 @@
 //!   address; without a recorded address it is "unknown".
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use ferry_pin::{HeldLedger, PinStore};
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
-use ferry_sync_engine::{list_conflicts, PeerState};
+use ferry_sync_engine::{list_conflicts, timefmt};
 use serde_json::json;
 
 use crate::error::CliResult;
@@ -230,25 +231,21 @@ pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
 /// Every peer this folder has agreement state for, plus best-effort
 /// connectivity.
 fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
-    let ps = PeerState::new(opened.state_dir());
+    let ledger = AgreementLedger::new(opened.state_dir());
     let mut rows = Vec::new();
-    let dir = opened.state_dir().join("peers");
-    let mut names: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-        Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
-        Err(_) => Vec::new(),
-    };
-    names.sort();
-    for path in names {
-        let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
-            continue;
-        };
-        let rec = ps.load(&dev).ok().flatten();
+    for (dev, rec) in ledger.list_folder(&opened.folder_id).map_err(|e| {
+        crate::error::CliError::new(
+            "agreement-state",
+            e.to_string(),
+            "check .ferry/agreement permissions",
+        )
+    })? {
         let dev_hex = hex(&dev);
         let connectivity = probe_peer(opened, &dev_hex);
         rows.push(PeerRow {
             device_id: dev_hex,
-            last_agreed_manifest_id: rec.as_ref().map(|r| hex(&r.manifest_id)),
-            agreed_at: rec.as_ref().map(format_agreed_time),
+            last_agreed_manifest_id: Some(hex(&rec.manifest_id)),
+            agreed_at: Some(format_agreed_time(&rec)),
             connectivity,
         });
     }
@@ -256,29 +253,25 @@ fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
 }
 
 fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
-    let ps = PeerState::new(opened.state_dir());
-    let dir = opened.state_dir().join("peers");
-    let mut best: Option<(i64, u32)> = None;
-    let mut best_id: Option<[u8; 32]> = None;
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for path in rd.flatten().map(|e| e.path()) {
-            let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
-                continue;
-            };
-            if let Ok(Some(rec)) = ps.load(&dev) {
-                if best.is_none_or(|(s, n)| (rec.agreed_sec, rec.agreed_nsec) > (s, n)) {
-                    best = Some((rec.agreed_sec, rec.agreed_nsec));
-                    best_id = Some(rec.manifest_id);
-                }
-            }
-        }
-    }
-    let Some(mid) = best_id else {
+    let ledger = AgreementLedger::new(opened.state_dir());
+    let records = ledger.list_folder(&opened.folder_id).map_err(|e| {
+        crate::error::CliError::new(
+            "agreement-state",
+            e.to_string(),
+            "check .ferry/agreement permissions",
+        )
+    })?;
+    // Most recent by (sec, nsec); the list is peer-sorted so ties resolve
+    // deterministically to the last peer id.
+    let best = records
+        .into_iter()
+        .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec));
+    let Some((_, rec)) = best else {
         return Ok(BaseLookup::NoAgreement);
     };
     match opened
         .store
-        .get(ferry_store::format::BlobKind::Manifest, &mid)
+        .get(ferry_store::format::BlobKind::Manifest, &rec.manifest_id)
     {
         Ok(bytes) => match ferry_store::manifest::parse_manifest(&bytes) {
             Ok(m) => Ok(BaseLookup::Base(m)),
@@ -324,6 +317,6 @@ fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
 }
 
 /// Fixed UTC rendering of an agreement timestamp (no local timezone drift).
-pub fn format_agreed_time(rec: &ferry_sync_engine::AgreedRecord) -> String {
-    ferry_sync_engine::timefmt::fmt_rfc3339(rec.agreed_sec)
+pub fn format_agreed_time(rec: &ferry_store::agreement::AgreedRecord) -> String {
+    timefmt::fmt_rfc3339(rec.agreed_sec)
 }

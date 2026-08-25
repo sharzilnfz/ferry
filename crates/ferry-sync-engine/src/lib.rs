@@ -10,8 +10,6 @@
 //!
 //! Module map:
 //!
-//! - [`agree`]: last-agreed manifest pointers per peer, canonical record
-//!   format from `docs/store-format.md`, stored under `<state>/peers/`.
 //! - [`plan`]: the [`plan::ActionPlan`] the planner emits and the executor
 //!   runs: materialize transitions, quarantine saves, send/fetch blob lists,
 //!   planned conflicts.
@@ -61,7 +59,6 @@
 //! pass `<folder>/.ferry`). Tests keep it outside the synced trees because
 //! the scanner does not yet exclude `.ferry`.
 
-pub mod agree;
 pub mod execute;
 pub mod naming;
 pub mod plan;
@@ -71,7 +68,6 @@ pub mod report;
 pub(crate) mod testutil;
 pub mod timefmt;
 
-pub use agree::{AgreedRecord, PeerState, StateError};
 pub use execute::{execute, ExecuteStats};
 pub use naming::{conflict_display_name, device_short, unique_conflict_dest};
 pub use plan::{

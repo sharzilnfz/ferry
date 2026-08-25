@@ -138,11 +138,11 @@ impl ExchangeHost for TestHost {
             let (sec, nsec) = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or((0, 0), |d| (d.as_secs() as i64, d.subsec_nanos()));
-            ferry_proto::agreement::AgreementLedger::new(dot)
+            ferry_store::agreement::AgreementLedger::new(dot)
                 .record(
                     &DEFAULT_FOLDER_ID,
-                    &ferry_proto::agreement::AgreementRecord {
-                        peer,
+                    &ferry_store::agreement::AgreedRecord {
+                        peer_device_id: peer,
                         manifest_id,
                         agreed_sec: sec,
                         agreed_nsec: nsec,
@@ -284,12 +284,12 @@ fn ferry_sync_stack_interops_with_reference_engine() {
     let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id())).expect("our-side ledger exists");
     assert_eq!(rb.len(), 77);
     assert_eq!(mb.len(), 77);
-    let rrec = ferry_proto::agreement::AgreementRecord::from_canonical(&rb).unwrap();
-    let mrec = ferry_proto::agreement::AgreementRecord::from_canonical(&mb).unwrap();
+    let rrec = ferry_store::agreement::parse_agreed_record(&rb).unwrap();
+    let mrec = ferry_store::agreement::parse_agreed_record(&mb).unwrap();
     assert_eq!(rrec.manifest_id, ref_manifest_id);
     assert_eq!(mrec.manifest_id, ref_manifest_id);
-    assert_eq!(rrec.peer, *id_my.device_id());
-    assert_eq!(mrec.peer, *id_ref.device_id());
+    assert_eq!(rrec.peer_device_id, *id_my.device_id());
+    assert_eq!(mrec.peer_device_id, *id_ref.device_id());
 }
 
 #[test]
