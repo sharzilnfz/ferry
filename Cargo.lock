@@ -968,6 +968,7 @@ dependencies = [
  "ferry-crypto",
  "ferry-ignore",
  "ferry-pin",
+ "ferry-platform",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",

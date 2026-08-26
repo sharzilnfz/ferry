@@ -340,10 +340,8 @@ mod tests {
     fn stale_pin_detected_from_dead_pid_and_does_not_hold() {
         // kill -9 simulation: a real child process, killed, its pid orphaned
         // into the record.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleeper");
+        let mut child =
+            ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
         let pid = child.id();
         let dead = {
             child.kill().expect("kill -9 equivalent");
@@ -408,10 +406,8 @@ mod tests {
 
         // Round trip through the tolerant reader: a pre-T-06 record without
         // the field still loads and keeps working (existence-only).
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleeper");
+        let mut child =
+            ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
         let dead = {
             child.kill().expect("kill -9 equivalent");
             child.wait().expect("reap");
@@ -436,10 +432,8 @@ mod tests {
     fn pid_reuse_is_detected_through_start_time_mismatch() {
         let mut attempt = 0;
         let (child_pid, child_token, mut child) = loop {
-            let mut child = std::process::Command::new("sleep")
-                .arg("30")
-                .spawn()
-                .expect("spawn sleeper");
+            let mut child =
+                ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
             let child_pid = child.id();
             let child_token = ferry_platform::process_start_token(child_pid)
                 .expect("child start time inspectable while it runs");

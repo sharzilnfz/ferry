@@ -174,6 +174,27 @@ fn windows_token(pid: u32) -> Option<u64> {
     Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
 
+/// Test fixture: spawn a live, distinct, killable child that sleeps for
+/// `secs` seconds, so tests get a real pid whose start token is inspectable
+/// while it runs. The unix arm is exactly the `sleep <secs>` spawn the test
+/// suite has always used; Windows has no `sleep`, so the same shape is
+/// provided by the always-present Windows PowerShell (`Start-Sleep`).
+pub fn spawn_sleeper(secs: u64) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("powershell");
+        c.args(["-NoProfile", "-Command", &format!("Start-Sleep -Seconds {secs}")]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut c = std::process::Command::new("sleep");
+        c.arg(secs.to_string());
+        c
+    };
+    command.spawn()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,10 +226,7 @@ mod tests {
     fn child_process_token_differs_from_parent_when_visible() {
         let mut attempt = 0;
         loop {
-            let mut child = std::process::Command::new("sleep")
-                .arg("30")
-                .spawn()
-                .expect("spawn sleeper");
+            let mut child = spawn_sleeper(30).expect("spawn sleeper");
             let child_token = process_start_token(child.id());
             child.kill().expect("kill sleeper");
             child.wait().expect("reap");

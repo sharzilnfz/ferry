@@ -26,6 +26,8 @@ qrcode.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Test fixtures spawn a cross-platform sleeper child (see ferry-platform).
+ferry-platform = { path = "../ferry-platform" }
 
 [lints]
 workspace = true
