@@ -550,6 +550,7 @@ impl FolderState {
 
 struct SharedState {
     shutdown: AtomicBool,
+    force_full_scan: AtomicBool,
     stats: Mutex<EngineStats>,
     /// window before their `JoinHandle` lands in the joins vec.
     /// Incremented SYNCHRONOUSLY in the accept loop before `spawn`,
@@ -569,6 +570,7 @@ impl SharedState {
     fn new() -> Self {
         SharedState {
             shutdown: AtomicBool::new(false),
+            force_full_scan: AtomicBool::new(false),
             stats: Mutex::new(EngineStats::default()),
             live_sessions: Mutex::new(0),
             live_idle: Condvar::new(),
@@ -815,10 +817,6 @@ struct Ctx {
     /// the audit-grade walk for post-session ticks. Tests inject a single
     /// scripted source, so there is nothing to upgrade to.
     audit_source: Option<SnapshotSourceFn>,
-    /// Set by the session path whenever remote entries were applied or a
-    /// peer manifest adopted; the next tick consumes it and runs the
-    /// audit-grade scan once.
-    force_full_scan: AtomicBool,
 }
 
 impl Ctx {
@@ -926,7 +924,7 @@ impl Ctx {
         // A session that applied changes or adopted a manifest forces ONE
         // audit-grade scan (apply restores mtimes; stat-reuse must not judge
         // the post-session tree). Quiet ticks stay on the incremental walk.
-        let forced = self.force_full_scan.swap(false, Ordering::Relaxed);
+        let forced = self.shared.force_full_scan.swap(false, Ordering::Relaxed);
         let scan: SnapshotSourceFn = match (forced, &self.audit_source) {
             (true, Some(audit)) => Arc::clone(audit),
             _ => Arc::clone(&self.snapshot_source),
@@ -1154,7 +1152,7 @@ impl ExchangeHost for EngineHost<'_> {
             manifest: manifest.clone(),
             manifest_bytes: bytes.to_vec(),
         });
-        self.ctx.force_full_scan.store(true, Ordering::Relaxed);
+        self.ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
         self.ctx.folder.adopt_peer(data);
         self.ctx.status(&format!(
             "STATE root={} adopted",
@@ -1164,7 +1162,7 @@ impl ExchangeHost for EngineHost<'_> {
     }
 
     fn note_tree_mutation(&self) {
-        self.ctx.force_full_scan.store(true, Ordering::Relaxed);
+        self.ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
     }
 
     fn agree(&self, peer: BlobId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError> {
@@ -1553,7 +1551,7 @@ fn run_as_puller(
     puller
         .apply(&peer_manifest, &changes)
         .map_err(|e| SessionError::Apply(format!("{e}")))?;
-    ctx.force_full_scan.store(true, Ordering::Relaxed);
+    ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
 
     ctx.record_agreement(
         device_id_from_tag(&peer_tag),
@@ -1839,7 +1837,6 @@ impl SyncEngine {
             clock: self.clock.take().unwrap_or_else(system_clock),
             snapshot_source,
             audit_source,
-            force_full_scan: AtomicBool::new(false),
         });
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2050,6 +2047,19 @@ impl EngineHandle {
         ledger.list_peers(&self.folder_id)
     }
 
+    pub fn store_dir(&self) -> &Path {
+        &self.store_dir
+    }
+
+    pub fn folder_id(&self) -> &[u8; 16] {
+        &self.folder_id
+    }
+
+    /// Trigger an immediate manual audit-grade filesystem rescan.
+    pub fn trigger_scan(&self) {
+        self.shared.force_full_scan.store(true, Ordering::Relaxed);
+    }
+
     /// Signal shutdown and wait for every thread to exit — the poll loop,
     /// the accept loop, AND every session handler (including ones still in
     /// their spawn window). Idempotent.
@@ -2252,7 +2262,6 @@ mod tests {
             clock,
             snapshot_source: source,
             audit_source: None,
-            force_full_scan: AtomicBool::new(false),
         };
         (ctx, dir)
     }

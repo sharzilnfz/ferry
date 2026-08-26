@@ -28,7 +28,7 @@ async fn test_in_memory_high_throughput_ordering() {
                 .expect("expected msg");
             match msg {
                 ClientCommand::StartPin { paths } => {
-                    assert_eq!(paths, vec![format!("path_{}", i)]);
+                    assert_eq!(paths, vec![format!("path_{i}")]);
                 }
                 _ => panic!("unexpected command"),
             }
@@ -171,7 +171,7 @@ mod unix_tests {
                 assert_eq!(cmd, ClientCommand::Ping);
                 conn.send_message(&DaemonMessage::Ack {
                     command: "ping".to_string(),
-                    message: Some(format!("client_{}", i)),
+                    message: Some(format!("client_{i}")),
                 })
                 .await
                 .unwrap();

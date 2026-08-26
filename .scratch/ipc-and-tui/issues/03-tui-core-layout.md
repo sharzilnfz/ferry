@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: ferry-ipc crate and wire protocol.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to inspect `docs/cli-json.md` and `crates/ferry-daemon/src/ui/status.rs` for field formatting conventions.
@@ -18,7 +18,7 @@
 - Ensure event loop sleeps on `tokio::select!` and wakes only on incoming IPC messages or terminal key events.
 
 ## Acceptance Criteria
-- [ ] New crate `crates/ferry-tui` compiles cleanly.
-- [ ] `TestBackend` tests verify rendering against 80x24 and 120x40 character grids for all sync states (`SYNCED`, `SYNCING`, `CONFLICT`, `PINNED`).
-- [ ] Progress gauge renders chunk transfer progress smoothly without string allocations inside the render loop.
-- [ ] Activity log records incoming events and truncates to a fixed circular buffer.
+- [x] New crate `crates/ferry-tui` compiles cleanly.
+- [x] `TestBackend` tests verify rendering against 80x24 and 120x40 character grids for all sync states (`SYNCED`, `SYNCING`, `CONFLICT`, `PINNED`).
+- [x] Progress gauge renders chunk transfer progress smoothly without string allocations inside the render loop.
+- [x] Activity log records incoming events and truncates to a fixed circular buffer.

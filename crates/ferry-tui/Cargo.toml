@@ -1,0 +1,20 @@
+[package]
+name = "ferry-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crossterm = { workspace = true, features = ["event-stream"] }
+ferry-ipc.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "sync", "macros", "time", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-util"] }
+
+[lints]
+workspace = true

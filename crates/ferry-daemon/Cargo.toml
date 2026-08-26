@@ -20,14 +20,22 @@ ferry-ignore = { path = "../ferry-ignore" }
 # .ferry/pin-state.json, held/*.jsonl and conflicts.jsonl.
 ferry-pin = { path = "../ferry-pin" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
+ferry-ipc = { path = "../ferry-ipc" }
 rand.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 axum.workspace = true
 
+[lib]
+name = "ferry_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ferry-sync"
 path = "src/main.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

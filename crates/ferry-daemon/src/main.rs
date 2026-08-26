@@ -36,8 +36,7 @@ use rand::SeedableRng;
 use ferry_crypto::identity as crypto_identity;
 use ferry_store::format::unhex;
 use ferry_sync::{EngineConfig, SyncEngine};
-
-mod ui;
+use ferry_daemon::ui;
 
 /// Port 0 makes the transport mint a unique alias.
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
@@ -67,7 +66,12 @@ TCP TRANSPORT (--transport tcp; M0 throwaway, tests only):
     ferry-sync daemon --role listen  --addr HOST:PORT
     ferry-sync daemon --role connect --addr HOST:PORT
 
-WEB DASHBOARD:
+IPC SERVER:
+    The daemon always runs an IPC server on the folder socket
+    (<store>/.ferry/daemon.sock or --socket PATH) broadcasting live
+    snapshots, engine state changes, transfers, and conflicts.
+
+WEB DASHBOARD (optional):
     ferry-sync daemon ... [--ui [HOST:PORT]]   (default 127.0.0.1:8098)
     Loopback binds only, no auth (v0 stance); serves the embedded UI plus
     /api/status, /api/conflicts, /api/share, /api/pair/accept and
@@ -162,6 +166,7 @@ struct DaemonArgs {
     poll_ms: u64,
     opportunistic_every: u32,
     ui_addr: Option<std::net::SocketAddr>,
+    socket_path: Option<std::path::PathBuf>,
 }
 
 /// `--ui [ADDR]`: bare flag means the documented default; any non-loopback
@@ -229,6 +234,7 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(ferry_sync::engine::DEFAULT_OPPORTUNISTIC_EVERY),
         ui_addr: parse_ui_addr(args)?,
+        socket_path: flag(args, "--socket").map(std::path::PathBuf::from),
     };
     run_daemon(parsed)
 }
@@ -333,6 +339,24 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     }
     // Run until killed; EngineHandle shutdown happens on drop.
     let handle = engine.start();
+
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
+    let daemon_state = Arc::new(ferry_daemon::state::DaemonState::new(
+        handle.clone(),
+        d.store_dir.clone(),
+        d.tree_dir.clone(),
+        d.folder_id,
+        device.clone(),
+        broadcast_tx,
+    ));
+
+    let socket_path = d
+        .socket_path
+        .unwrap_or_else(|| ferry_ipc::paths::socket_path_for_dir(&d.store_dir));
+    let ipc_handle = ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state))
+        .map_err(|e| format!("ipc server: {e}"))?;
+    println!("IPC LISTENING {}", socket_path.display());
+
     if let Some(addr) = d.ui_addr {
         let state = ui::UiState::new(
             handle.clone(),
@@ -343,7 +367,9 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         );
         ui::spawn(addr, Arc::new(state)).map_err(|e| format!("--ui: {e}"))?;
     }
+
     handle.join_until_signal();
+    ipc_handle.shutdown();
     Ok(())
 }
 

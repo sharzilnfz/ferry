@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: ferry-ipc crate and wire protocol.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to inspect `crates/ferry-sync/src/engine.rs` and `crates/ferry-daemon/src/main.rs`.
@@ -14,8 +14,8 @@
 - Clean up socket files on graceful exit.
 
 ## Acceptance Criteria
-- [ ] Daemon starts headlessly and opens the local IPC socket.
-- [ ] Connecting clients receive an immediate `DaemonMessage::Snapshot` with full current folder state.
-- [ ] Engine state changes emit `DaemonMessage::StateChanged` events across all active IPC client streams.
-- [ ] `ClientCommand::StartPin` and `ClientCommand::ReleasePin` alter the daemon engine pin state immediately.
-- [ ] Terminating the daemon cleans up the socket file from disk.
+- [x] Daemon starts headlessly and opens the local IPC socket.
+- [x] Connecting clients receive an immediate `DaemonMessage::Snapshot` with full current folder state.
+- [x] Engine state changes emit `DaemonMessage::StateChanged` events across all active IPC client streams.
+- [x] `ClientCommand::StartPin` and `ClientCommand::ReleasePin` alter the daemon engine pin state immediately.
+- [x] Terminating the daemon cleans up the socket file from disk.

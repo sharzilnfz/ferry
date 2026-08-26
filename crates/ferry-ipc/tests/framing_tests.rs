@@ -111,7 +111,7 @@ async fn test_message_size_limit_rejection() {
             assert!(size > 32);
             assert_eq!(max, 32);
         }
-        other => panic!("Expected MessageTooLarge error, got: {:?}", other),
+        other => panic!("Expected MessageTooLarge error, got: {other:?}"),
     }
 }
 
