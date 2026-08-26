@@ -4,7 +4,7 @@
 
 **Blocked by:** 04: CLI IPC integration, 05: TUI interactive actions, 06: Ephemeral on-demand Web UI.
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to inspect existing E2E scripts under `scripts/quickstart-e2e.sh` and `scripts/dashboard-e2e.sh`.
@@ -17,6 +17,6 @@
   6. Measure idle CPU and memory RSS of the headless daemon over 30 seconds, asserting CPU < 0.1%.
 
 ## Acceptance Criteria
-- [ ] `scripts/ipc-tui-e2e.sh` passes end-to-end in CI across macOS and Linux runners.
-- [ ] Idle daemon process CPU utilization is measured and verified at < 0.1%.
-- [ ] Full workspace unit and integration test suite (`cargo test --workspace`) passes with zero failures.
+- [x] `scripts/ipc-tui-e2e.sh` passes end-to-end in CI across macOS and Linux runners.
+- [x] Idle daemon process CPU utilization is measured and verified at < 0.1%.
+- [x] Full workspace unit and integration test suite (`cargo test --workspace`) passes with zero failures.

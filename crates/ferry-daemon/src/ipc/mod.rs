@@ -325,9 +325,16 @@ async fn run_state_watcher(
         .scan_counts()
         .map(|s| ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked));
     let mut last_pending = state.handle().pending_changes();
-    let mut last_conflicts_count = state.list_conflicts().map_or(0, |c| c.len());
 
-    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    let conflicts_file = state.state_dir().join("conflicts.jsonl");
+    let mut last_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
+    let mut last_conflicts_count = if last_meta.is_some() {
+        state.list_conflicts().map_or(0, |c| c.len())
+    } else {
+        0
+    };
+
+    let mut interval = tokio::time::interval(Duration::from_millis(100));
 
     loop {
         tokio::select! {
@@ -376,25 +383,29 @@ async fn run_state_watcher(
                     });
                 }
 
-                // Check for new conflicts in .ferry/conflicts.jsonl
-                if let Ok(conflicts) = state.list_conflicts() {
-                    if conflicts.len() > last_conflicts_count {
-                        for entry in &conflicts[last_conflicts_count..] {
-                            let ts = crate::timefmt::parse_rfc3339_to_unix(&entry.ts)
-                                .unwrap_or_else(|| crate::timefmt::now_unix().0 as u64);
-                            state.broadcast(DaemonMessage::ConflictRecorded {
-                                path: entry.path.clone(),
-                                conflict_path: entry
-                                    .quarantined_as
-                                    .clone()
-                                    .unwrap_or_else(|| entry.path.clone()),
-                                timestamp: ts,
-                                quarantined_as: entry.quarantined_as.clone(),
-                            });
+                // Check for new conflicts in .ferry/conflicts.jsonl when file metadata changes
+                let cur_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
+                if cur_meta != last_meta {
+                    last_meta = cur_meta;
+                    if let Ok(conflicts) = state.list_conflicts() {
+                        if conflicts.len() > last_conflicts_count {
+                            for entry in &conflicts[last_conflicts_count..] {
+                                let ts = crate::timefmt::parse_rfc3339_to_unix(&entry.ts)
+                                    .unwrap_or_else(|| crate::timefmt::now_unix().0 as u64);
+                                state.broadcast(DaemonMessage::ConflictRecorded {
+                                    path: entry.path.clone(),
+                                    conflict_path: entry
+                                        .quarantined_as
+                                        .clone()
+                                        .unwrap_or_else(|| entry.path.clone()),
+                                    timestamp: ts,
+                                    quarantined_as: entry.quarantined_as.clone(),
+                                });
+                            }
+                            last_conflicts_count = conflicts.len();
+                        } else if conflicts.len() < last_conflicts_count {
+                            last_conflicts_count = conflicts.len();
                         }
-                        last_conflicts_count = conflicts.len();
-                    } else if conflicts.len() < last_conflicts_count {
-                        last_conflicts_count = conflicts.len();
                     }
                 }
             }
