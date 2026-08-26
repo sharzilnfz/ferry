@@ -229,7 +229,28 @@ fn test_render_conflicts_modal() {
     let rendered = buffer_to_string(terminal.backend());
     assert!(rendered.contains("Quarantined Conflicts"), "Missing modal title");
     assert!(rendered.contains("docs/architecture.md"), "Missing conflict path");
-    assert!(rendered.contains("Press [Esc] or [C] to close"), "Missing close hint");
+    assert!(rendered.contains("2026-08-26T12:05:00Z"), "Missing conflict timestamp");
+    assert!(rendered.contains("docs/architecture.sync-conflict-20260826.md"), "Missing quarantined file");
+    assert!(rendered.contains("Press [Esc], [Q], or [C] to close"), "Missing close hint");
+}
+
+#[test]
+fn test_render_conflicts_modal_empty() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut state = setup_test_state(SyncState::Synced);
+    state.conflicts = 0;
+    state.conflict_entries.clear();
+    state.show_conflicts_modal = true;
+    let app = TuiApp::new(state);
+
+    terminal.draw(|f| app.render(f)).unwrap();
+
+    let rendered = buffer_to_string(terminal.backend());
+    assert!(rendered.contains("Quarantined Conflicts"), "Missing modal title");
+    assert!(rendered.contains("No quarantined conflict files detected"), "Missing empty message");
+    assert!(rendered.contains("Press [Esc], [Q], or [C] to return"), "Missing empty return hint");
 }
 
 #[test]

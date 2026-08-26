@@ -1,6 +1,6 @@
 //! High-level `TuiApp` state machine and asynchronous event loop.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ferry_ipc::framing::{IpcConnection, IpcReceiver, IpcSender};
 use ferry_ipc::protocol::{ClientCommand, DaemonMessage};
 use ratatui::backend::Backend;
@@ -50,6 +50,11 @@ impl TuiApp {
 
     /// Process a keyboard event, potentially returning a `ClientCommand` to send over IPC.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<ClientCommand> {
+        // Ignore key releases if terminal emits release events
+        if key.kind == KeyEventKind::Release {
+            return None;
+        }
+
         // Ctrl+C terminates immediately
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if let KeyCode::Char('c' | 'C') = key.code {

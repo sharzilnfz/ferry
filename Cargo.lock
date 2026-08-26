@@ -1101,21 +1101,27 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "ferry-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "ferry-crypto",
+ "ferry-daemon",
  "ferry-folder",
  "ferry-ignore",
+ "ferry-ipc",
  "ferry-pin",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",
  "ferry-sync-engine",
+ "ferry-tui",
  "qrcode",
  "rand 0.8.7",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

@@ -374,7 +374,7 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     if state.conflict_entries.is_empty() && state.conflicts == 0 {
         let content = Paragraph::new(
-            "No quarantined conflict files detected in .ferry/conflicts.jsonl.\n\nPress [Esc] or [C] to return to dashboard.",
+            "No quarantined conflict files detected in .ferry/conflicts.jsonl.\n\nPress [Esc], [Q], or [C] to return to dashboard.",
         )
         .style(Style::default().fg(Color::White))
         .alignment(Alignment::Center);
@@ -383,8 +383,14 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     }
 
     let mut lines = Vec::new();
+    let total_count = if state.conflict_entries.is_empty() {
+        state.conflicts
+    } else {
+        state.conflict_entries.len().max(state.conflicts)
+    };
+
     lines.push(Line::from(Span::styled(
-        format!("Total Conflicts: {}", state.conflicts),
+        format!("Total Conflicts: {total_count}"),
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -393,6 +399,9 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled("Path: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(&entry.path, Style::default().fg(Color::Red)),
+            Span::styled("  [", Style::default().fg(Color::DarkGray)),
+            Span::styled(&entry.ts, Style::default().fg(Color::DarkGray)),
+            Span::styled("]", Style::default().fg(Color::DarkGray)),
         ]));
         if let Some(ref q) = entry.quarantined_as {
             lines.push(Line::from(vec![
@@ -410,7 +419,7 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     }
 
     lines.push(Line::from(Span::styled(
-        "Press [Esc] or [C] to close",
+        "Press [Esc], [Q], or [C] to close",
         Style::default().fg(Color::DarkGray),
     )));
 

@@ -12,13 +12,17 @@ use crate::out::Output;
 
 pub fn run(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
-    let entries = ferry_sync_engine::list_conflicts(&opened.state_dir()).map_err(|e| {
-        CliError::new(
-            "conflict-log",
-            e.to_string(),
-            "the conflict report is corrupt; fix or archive .ferry/conflicts.jsonl (entries are never lost silently)",
-        )
-    })?;
+    let entries = if let Some(entries) = crate::ipc::query_conflicts(folder) {
+        entries
+    } else {
+        ferry_sync_engine::list_conflicts(&opened.state_dir()).map_err(|e| {
+            CliError::new(
+                "conflict-log",
+                e.to_string(),
+                "the conflict report is corrupt; fix or archive .ferry/conflicts.jsonl (entries are never lost silently)",
+            )
+        })?
+    };
 
     let json_doc = json!({
         "command": "conflicts",

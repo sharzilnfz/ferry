@@ -15,4 +15,4 @@ pub use activity_log::{ActivityLog, LogEntry, LogLevel};
 pub use app::TuiApp;
 pub use error::TuiError;
 pub use state::{format_bytes, SyncState, TransferProgressState, TuiState};
-pub use terminal::{install_panic_hook, TerminalEvents, TerminalGuard};
+pub use terminal::{install_panic_hook, restore_terminal_writer, TerminalEvents, TerminalGuard};

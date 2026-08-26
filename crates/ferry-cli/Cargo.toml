@@ -18,6 +18,11 @@ ferry-sync-engine = { path = "../ferry-sync-engine" }
 # Session pinning: the exchange loop consults the hold filter pre-apply and
 # `ferry pin` drives start/stop/release/status on top of its ledgers.
 ferry-pin = { path = "../ferry-pin" }
+ferry-ipc = { path = "../ferry-ipc" }
+ferry-tui = { path = "../ferry-tui" }
+ferry-daemon = { path = "../ferry-daemon" }
+tokio = { workspace = true, features = ["signal"] }
+axum.workspace = true
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -26,6 +31,7 @@ thiserror.workspace = true
 # Terminal QR rendering only (ASCII art over the matrix). All pairing and
 # key-handling crypto lives behind ferry-crypto (T-03).
 qrcode.workspace = true
+subtle.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

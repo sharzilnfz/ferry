@@ -4,7 +4,7 @@
 
 **Blocked by:** 02: Daemon IPC server and engine broadcast.
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to inspect `crates/ferry-cli/src/commands/status.rs`, `pin.rs`, and `conflicts.rs`.
@@ -14,7 +14,7 @@
 - Add `ferry tui` command that connects to the IPC socket and starts `ferry-tui::TuiApp`.
 
 ## Acceptance Criteria
-- [ ] `ferry status` returns instant cached status from the running daemon without initiating a disk rescan.
-- [ ] `ferry status --json` output schema matches `docs/cli-json.md` exactly whether querying over IPC or running offline.
-- [ ] `ferry pin start` and `ferry pin release` dispatch commands over IPC to the active daemon.
-- [ ] Stopping the daemon and running `ferry status` falls back to direct disk reads without crashing.
+- [x] `ferry status` returns instant cached status from the running daemon without initiating a disk rescan.
+- [x] `ferry status --json` output schema matches `docs/cli-json.md` exactly whether querying over IPC or running offline.
+- [x] `ferry pin start` and `ferry pin release` dispatch commands over IPC to the active daemon.
+- [x] Stopping the daemon and running `ferry status` falls back to direct disk reads without crashing.

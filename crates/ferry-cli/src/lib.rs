@@ -6,6 +6,7 @@ pub mod commands;
 pub mod error;
 pub mod folder;
 pub mod home;
+pub mod ipc;
 pub mod out;
 pub mod scan;
 

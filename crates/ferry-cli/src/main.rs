@@ -164,5 +164,21 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             timeout_secs: *timeout_secs,
             transport,
         }),
+        Command::Tui { folder } => {
+            ferry_cli::commands::tui::run(folder.as_deref())
+        }
+        Command::Ui {
+            folder,
+            host,
+            port,
+            no_open,
+            test,
+        } => ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+            folder: folder.as_deref(),
+            host,
+            port: *port,
+            no_open: *no_open,
+            test: *test,
+        }),
     }
 }

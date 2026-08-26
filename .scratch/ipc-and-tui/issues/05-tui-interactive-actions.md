@@ -4,7 +4,7 @@
 
 **Blocked by:** 02: Daemon IPC server and engine broadcast, 03: ferry-tui core layout and test backend.
 
-**Status:** ready-for-agent
+**Status:** closed
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to inspect `crates/ferry-tui` and `crates/ferry-ipc`.
@@ -16,7 +16,7 @@
 - Ensure terminal state (raw mode, alternate screen, mouse capture) is reliably restored even on panics or error returns.
 
 ## Acceptance Criteria
-- [ ] Pressing `q` or `Esc` exits the TUI and cleanly restores normal terminal mode.
-- [ ] Pressing `p` toggles pin state over IPC, updating the header badge from `SYNCED` to `PINNED`.
-- [ ] Pressing `c` displays quarantined conflict entries from `.ferry/conflicts.jsonl`.
-- [ ] `TestBackend` tests verify all keypress actions and modal state transitions.
+- [x] Pressing `q` or `Esc` exits the TUI and cleanly restores normal terminal mode.
+- [x] Pressing `p` toggles pin state over IPC, updating the header badge from `SYNCED` to `PINNED`.
+- [x] Pressing `c` displays quarantined conflict entries from `.ferry/conflicts.jsonl`.
+- [x] `TestBackend` tests verify all keypress actions and modal state transitions.

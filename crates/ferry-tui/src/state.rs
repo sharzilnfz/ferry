@@ -334,6 +334,9 @@ impl TuiState {
 
     /// Apply an error notification from the daemon.
     pub fn apply_error(&mut self, code: String, message: String) {
+        self.is_connected = true;
+        self.engine_state = self.resolve_sync_state();
+        self.update_cached_strings();
         self.activity_log.record_daemon_message(
             current_time_str(),
             &DaemonMessage::Error {
@@ -345,6 +348,17 @@ impl TuiState {
 
     /// Apply an acknowledgement notification.
     pub fn apply_ack(&mut self, command: String, message: Option<String>) {
+        self.is_connected = true;
+        if command == "list_conflicts" {
+            if let Some(ref msg_json) = message {
+                if let Ok(entries) = serde_json::from_str::<Vec<ConflictEntry>>(msg_json) {
+                    self.conflict_entries = entries;
+                    self.conflicts = self.conflict_entries.len().max(self.conflicts);
+                }
+            }
+        }
+        self.engine_state = self.resolve_sync_state();
+        self.update_cached_strings();
         self.activity_log.record_daemon_message(
             current_time_str(),
             &DaemonMessage::Ack {
@@ -356,6 +370,9 @@ impl TuiState {
 
     /// Apply a heartbeat pong notification.
     pub fn apply_pong(&mut self) {
+        self.is_connected = true;
+        self.engine_state = self.resolve_sync_state();
+        self.update_cached_strings();
         self.activity_log
             .record_daemon_message(current_time_str(), &DaemonMessage::Pong);
     }

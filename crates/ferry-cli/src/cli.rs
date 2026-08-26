@@ -162,6 +162,28 @@ pub enum Command {
         #[arg(long, default_value = "tcp", value_name = "KIND")]
         transport: String,
     },
+    /// Launch the interactive terminal user interface dashboard.
+    Tui {
+        /// Folder to monitor (default: current directory).
+        folder: Option<PathBuf>,
+    },
+    /// Launch on-demand local web dashboard in your browser.
+    Ui {
+        /// Folder to serve (default: current directory).
+        folder: Option<PathBuf>,
+        /// Bind host (default: 127.0.0.1).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to bind (default: 0 for random ephemeral port).
+        #[arg(short, long, default_value_t = 0)]
+        port: u16,
+        /// Do not open the browser automatically.
+        #[arg(long)]
+        no_open: bool,
+        /// Test mode: start server, verify startup, and exit immediately.
+        #[arg(long, hide = true)]
+        test: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

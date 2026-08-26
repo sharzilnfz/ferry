@@ -14,9 +14,19 @@ function esc(s) {
 }
 
 async function api(path, body) {
-  const opts = body !== undefined
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-    : {};
+  const token = new URLSearchParams(window.location.search).get("token");
+  const headers = {};
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token) {
+    headers["Authorization"] = "Bearer " + token;
+  }
+  const opts = {
+    method: body !== undefined ? "POST" : "GET",
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  };
   let res;
   try {
     res = await fetch(path, opts);
@@ -196,7 +206,9 @@ function startPolling() {
 
 function startEvents() {
   try {
-    sse = new EventSource("/api/events");
+    const token = new URLSearchParams(window.location.search).get("token");
+    const url = token ? "/api/events?token=" + encodeURIComponent(token) : "/api/events";
+    sse = new EventSource(url);
   } catch {
     startPolling();
     return;

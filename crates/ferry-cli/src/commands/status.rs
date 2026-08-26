@@ -25,10 +25,79 @@ struct PeerRow {
     device_id: String,
     last_agreed_manifest_id: Option<String>,
     agreed_at: Option<String>,
-    connectivity: &'static str,
+    connectivity: String,
 }
 
 pub fn run(folder: &Path) -> CliResult<Output> {
+    if let Some(snap) = crate::ipc::query_status(folder) {
+        return Ok(output_from_snapshot(&snap));
+    }
+
+    run_offline(folder)
+}
+
+fn output_from_snapshot(snap: &ferry_ipc::EngineSnapshot) -> Output {
+    let manifest_id = snap.manifest_id.clone().unwrap_or_default();
+    let json_doc = json!({
+        "command": "status",
+        "folder": snap.folder,
+        "folder_id": snap.folder_id,
+        "device_id": snap.device_id,
+        "manifest_id": manifest_id,
+        "scanned": {
+            "files": snap.scanned.files,
+            "dirs": snap.scanned.dirs,
+            "symlinks": snap.scanned.symlinks,
+            "bytes_chunked": snap.scanned.bytes_chunked,
+        },
+        "pending_changes": snap.pending_changes,
+        "pin": {
+            "state": snap.pin.state,
+            "holding": snap.pin.holding,
+            "paths": snap.pin.paths,
+        },
+        "held_changes": snap.held_changes,
+        "held_by_peer": snap.held_by_peer,
+        "peers": snap.peers.iter().map(|p| json!({
+            "device_id": p.device_id,
+            "last_agreed_manifest_id": p.last_agreed_manifest_id,
+            "agreed_at": p.agreed_at,
+            "connectivity": p.connectivity,
+        })).collect::<Vec<_>>(),
+        "conflicts": snap.conflicts,
+    });
+
+    let peer_rows: Vec<PeerRow> = snap
+        .peers
+        .iter()
+        .map(|p| PeerRow {
+            device_id: p.device_id.clone(),
+            last_agreed_manifest_id: p.last_agreed_manifest_id.clone(),
+            agreed_at: p.agreed_at.clone(),
+            connectivity: p.connectivity.clone(),
+        })
+        .collect();
+
+    let human = render_human(
+        &snap.folder,
+        &snap.folder_id,
+        &snap.device_id,
+        snap.scanned.files,
+        snap.scanned.dirs,
+        snap.scanned.symlinks,
+        &manifest_id,
+        snap.pending_changes,
+        snap.conflicts,
+        &snap.pin.state,
+        &snap.pin.paths,
+        snap.held_changes,
+        &peer_rows,
+    );
+
+    Output::new(json_doc, human)
+}
+
+fn run_offline(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let identity = {
         let home = crate::home::ferry_home()?;
@@ -85,14 +154,14 @@ pub fn run(folder: &Path) -> CliResult<Output> {
                 "inspect .ferry/pin-state.json",
             )
         })? {
-            None => ("none", Vec::<String>::new(), false),
+            None => ("none".to_string(), Vec::<String>::new(), false),
             Some(rec) => (
                 if rec.released {
-                    "released"
+                    "released".to_string()
                 } else if rec.holding() {
-                    "active"
+                    "active".to_string()
                 } else {
-                    "stale"
+                    "stale".to_string()
                 },
                 rec.paths.clone(),
                 rec.holding(),
@@ -120,10 +189,13 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         held_by_peer.insert(peer, json!(paths));
     }
 
+    let folder_str = opened.root.display().to_string();
+    let folder_id_str = hex(&opened.folder_id);
+
     let json_doc = json!({
         "command": "status",
-        "folder": opened.root.display().to_string(),
-        "folder_id": hex(&opened.folder_id),
+        "folder": folder_str,
+        "folder_id": folder_id_str,
         "device_id": device_id,
         "manifest_id": manifest_id,
         "scanned": {
@@ -149,18 +221,47 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         "conflicts": conflicts.len(),
     });
 
-    let mut human = String::new();
-    let _ = writeln!(
-        human,
-        "Folder     {} ({})",
-        display(opened.root.display()),
-        hex(&opened.folder_id)
+    let human = render_human(
+        &folder_str,
+        &folder_id_str,
+        &device_id,
+        scan.stats.files as u64,
+        scan.stats.dirs as u64,
+        scan.stats.symlinks as u64,
+        &manifest_id,
+        pending,
+        conflicts.len(),
+        &pin_state,
+        &pin_paths,
+        held_total,
+        &peers,
     );
+
+    Ok(Output::new(json_doc, human))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_human(
+    folder: &str,
+    folder_id: &str,
+    device_id: &str,
+    scanned_files: u64,
+    scanned_dirs: u64,
+    scanned_symlinks: u64,
+    manifest_id: &str,
+    pending: Option<i64>,
+    conflicts: usize,
+    pin_state: &str,
+    pin_paths: &[String],
+    held_total: usize,
+    peers: &[PeerRow],
+) -> String {
+    let mut human = String::new();
+    let _ = writeln!(human, "Folder     {folder} ({folder_id})");
     let _ = writeln!(human, "Device     {device_id}");
     let _ = writeln!(
         human,
-        "Scan       {} files, {} dirs, {} symlinks",
-        scan.stats.files, scan.stats.dirs, scan.stats.symlinks
+        "Scan       {scanned_files} files, {scanned_dirs} dirs, {scanned_symlinks} symlinks"
     );
     let _ = writeln!(human, "Manifest   {manifest_id}");
     match pending {
@@ -170,7 +271,7 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         Some(_) => human.push_str("Pending    unknown (base manifest unreadable)\n"),
         None => human.push_str("Pending    no agreement yet\n"),
     }
-    let _ = writeln!(human, "Conflicts  {}", conflicts.len());
+    let _ = writeln!(human, "Conflicts  {conflicts}");
     match pin_state {
         "none" => human.push_str("Pin        none\n"),
         s => {
@@ -189,7 +290,7 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         human.push_str("Peers      none yet — run `ferry pair`\n");
     } else {
         human.push_str("Peers:\n");
-        for p in &peers {
+        for p in peers {
             let agreed = p
                 .last_agreed_manifest_id
                 .clone()
@@ -205,12 +306,7 @@ pub fn run(folder: &Path) -> CliResult<Output> {
             );
         }
     }
-
-    Ok(Output::new(json_doc, human))
-}
-
-fn display(d: std::path::Display<'_>) -> String {
-    d.to_string()
+    human
 }
 
 /// A fresh policy-aware scan into the folder's store.
@@ -246,7 +342,7 @@ fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
             device_id: dev_hex,
             last_agreed_manifest_id: Some(hex(&rec.manifest_id)),
             agreed_at: Some(format_agreed_time(&rec)),
-            connectivity,
+            connectivity: connectivity.to_string(),
         });
     }
     Ok(rows)

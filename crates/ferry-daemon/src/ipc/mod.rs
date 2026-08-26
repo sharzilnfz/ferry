@@ -80,10 +80,10 @@ pub fn spawn_ipc_server(
     socket_path: PathBuf,
     state: Arc<DaemonState>,
 ) -> Result<IpcServerHandle, IpcError> {
-    let server = IpcServer::bind(&socket_path)?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let (server_task, watcher_task, runtime) = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let server = IpcServer::bind(&socket_path)?;
         let st_clone = Arc::clone(&state);
         let s_rx = shutdown_rx.clone();
         let server_task = handle.spawn(async move {
@@ -102,6 +102,11 @@ pub fn spawn_ipc_server(
             .enable_all()
             .build()
             .map_err(IpcError::Io)?;
+
+        let server = {
+            let _guard = rt.enter();
+            IpcServer::bind(&socket_path)?
+        };
 
         let st_clone = Arc::clone(&state);
         let s_rx = shutdown_rx.clone();

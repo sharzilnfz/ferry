@@ -20,6 +20,7 @@ pub struct TerminalGuard {
 impl TerminalGuard {
     /// Initialize raw mode, enter alternate screen, and construct the Ratatui Terminal instance.
     pub fn init() -> io::Result<Self> {
+        install_panic_hook();
         enable_raw_mode()?;
         let mut out = stdout();
         execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
@@ -40,10 +41,23 @@ impl Drop for TerminalGuard {
         let _ = execute!(
             self.terminal.backend_mut(),
             LeaveAlternateScreen,
-            DisableMouseCapture
+            DisableMouseCapture,
+            crossterm::cursor::Show
         );
         let _ = self.terminal.show_cursor();
     }
+}
+
+/// Explicitly restore terminal state (raw mode disabled, leave alternate screen, disable mouse capture, show cursor) to a writer.
+pub fn restore_terminal_writer<W: io::Write>(writer: &mut W) -> io::Result<()> {
+    let _ = disable_raw_mode();
+    execute!(
+        writer,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        crossterm::cursor::Show
+    )?;
+    Ok(())
 }
 
 /// Install a panic hook that resets the terminal back to normal mode before printing panic info.
@@ -52,7 +66,12 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
         let mut out = stdout();
-        let _ = execute!(out, LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(
+            out,
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        );
         original_hook(panic_info);
     }));
 }

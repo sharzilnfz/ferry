@@ -37,37 +37,71 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
         paths.to_vec()
     };
 
-    // Freeze the last-agreed base per peer NOW: release's three-way
-    // ancestor is exactly "last agreed before the pin started".
-    let mut base_agreements = BTreeMap::new();
-    // Absent agreement directory means nothing was ever agreed; list_folder
-    // maps that to an empty vec. Anything else is loud.
-    for (dev, rec) in AgreementLedger::new(&state_dir)
-        .list_folder(&opened.folder_id)
-        .map_err(|e| CliError::new("agreement-state", e.to_string(), "check .ferry permissions"))?
-    {
-        base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
-    }
-
-    let (sec, nsec) = ferry_sync_engine::timefmt::now_unix();
-    let pid = std::process::id();
-    let base_peers_recorded = base_agreements.len();
-    let store = PinStore::new(&state_dir);
-    store
-        .start(&PinRecord {
-            format_version: ferry_pin::PIN_FORMAT_VERSION,
-            device_id: device_id.clone(),
-            pid,
-            started_sec: sec,
-            started_nsec: nsec,
+    // Try dispatching over IPC to running daemon first.
+    let ipc_res = crate::ipc::send_command(
+        folder,
+        ferry_ipc::ClientCommand::StartPin {
             paths: scope.clone(),
-            released: false,
-            base_agreements,
-            // start() stamps this writer's process birth time itself (T-06
-            // pid-reuse liveness); callers pass None.
-            proc_start_token: None,
-        })
-        .map_err(pin_error)?;
+        },
+    );
+
+    let (pid, started_sec, base_peers_recorded) = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { .. }) => {
+            let store = PinStore::new(&state_dir);
+            if let Ok(Some(rec)) = store.load() {
+                (rec.pid, rec.started_sec, rec.base_agreements.len())
+            } else {
+                let (sec, _) = ferry_sync_engine::timefmt::now_unix();
+                (std::process::id(), sec, 0)
+            }
+        }
+        Some(ferry_ipc::DaemonMessage::Error { code, message }) => {
+            if code == "pin_error" || code == "pin-active" {
+                return Err(CliError::new(
+                    "pin-active",
+                    message,
+                    "run `ferry pin stop` first (or `ferry pin status` to inspect)",
+                ));
+            }
+            return Err(CliError::new("pin-error", message, "check pin state"));
+        }
+        _ => {
+            // Offline fallback: freeze base agreements and write PinRecord to disk
+            let mut base_agreements = BTreeMap::new();
+            for (dev, rec) in AgreementLedger::new(&state_dir)
+                .list_folder(&opened.folder_id)
+                .map_err(|e| {
+                    CliError::new(
+                        "agreement-state",
+                        e.to_string(),
+                        "check .ferry permissions",
+                    )
+                })?
+            {
+                base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
+            }
+
+            let (sec, nsec) = ferry_sync_engine::timefmt::now_unix();
+            let pid = std::process::id();
+            let base_peers_recorded = base_agreements.len();
+            let store = PinStore::new(&state_dir);
+            store
+                .start(&PinRecord {
+                    format_version: ferry_pin::PIN_FORMAT_VERSION,
+                    device_id: device_id.clone(),
+                    pid,
+                    started_sec: sec,
+                    started_nsec: nsec,
+                    paths: scope.clone(),
+                    released: false,
+                    base_agreements,
+                    proc_start_token: None,
+                })
+                .map_err(pin_error)?;
+
+            (pid, sec, base_peers_recorded)
+        }
+    };
 
     let json_doc = json!({
         "command": "pin",
@@ -76,7 +110,7 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
         "device_id": device_id,
         "pid": pid,
         "paths": scope,
-        "started_at": ferry_sync_engine::timefmt::fmt_rfc3339(sec),
+        "started_at": ferry_sync_engine::timefmt::fmt_rfc3339(started_sec),
         "base_peers_recorded": base_peers_recorded,
     });
 
@@ -91,8 +125,18 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
 pub fn stop(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let state_dir = opened.state_dir();
-    let store = PinStore::new(&state_dir);
-    let existed = store.mark_released().map_err(pin_error)?;
+
+    // Try dispatching over IPC to running daemon first.
+    let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
+    let existed = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { message, .. }) => {
+            message.as_deref() != Some("no active pin")
+        }
+        _ => {
+            let store = PinStore::new(&state_dir);
+            store.mark_released().map_err(pin_error)?
+        }
+    };
 
     // Surface what remains held so nobody mistakes stop for reconciliation.
     let held = held_summary(&state_dir)?;
@@ -167,10 +211,14 @@ pub fn release(folder: &Path) -> CliResult<Output> {
         }));
     }
 
-    // End the marker too (absent/released/stale pins are all fine here).
-    let ended = PinStore::new(&state_dir)
-        .mark_released()
-        .map_err(pin_error)?;
+    // End the marker too. Dispatch over IPC if daemon running, otherwise local mark_released.
+    let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
+    let ended = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { .. }) => true,
+        _ => PinStore::new(&state_dir)
+            .mark_released()
+            .map_err(pin_error)?,
+    };
 
     let conflicts_total = list_conflicts(&state_dir)
         .map(|e| e.len())
