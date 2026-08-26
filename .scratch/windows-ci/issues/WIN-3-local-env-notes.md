@@ -1,6 +1,7 @@
 # Ticket WIN-3: record local-env requirements (no code)
 
-Status: ready-for-agent
+Status: done
+
 Depends on:
 Blocks:
 
@@ -20,3 +21,15 @@ Requirements for a clean Windows dev box to run the suite locally:
 Append these findings to triage.md ## Comments and close this ticket.
 NO production code changes, NO test weakening, NO doc-file edits beyond
 the scratch tracker (README semantics are owned elsewhere).
+
+## Comments
+
+Verified by CI runs 32969906200 (pin_enforcement red, adversarial hidden)
+and 32980463581 (all green). GitHub windows-2022 images have Developer
+Mode ON and sleep(1) on PATH, so three local-only failures (apply
+idempotent, symlinks_created, type_changes — Os 1314) and seven NotFound
+sleep spawns do not reproduce on the runner. Local dev boxes without
+DevMode/admin or without coreutils on PATH will see them; triage.md
+documents this. No production fix needed for local-only cluster beyond
+WIN-1 (sleep) and the symlink mtime fix (039db0d) which was required for
+CI determinism even with DevMode (adversarial_fixture). Ticket closed.

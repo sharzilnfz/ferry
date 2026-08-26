@@ -1,6 +1,7 @@
 # Ticket WIN-2: post-release lost-update race in pin_enforcement (CI red)
 
-Status: ready-for-review
+Status: done
+
 Depends on:
 Blocks:
 

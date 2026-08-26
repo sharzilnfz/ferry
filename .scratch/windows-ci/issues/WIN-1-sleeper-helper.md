@@ -1,6 +1,7 @@
 # Ticket WIN-1: cross-platform sleeper helper for spawn-based tests
 
-Status: ready-for-agent
+Status: done
+
 Depends on:
 Blocks:
 
@@ -38,3 +39,14 @@ Self-sleeper via current_exe rejected (libtest owns main; see report).
 
 cargo test -p ferry-pin -p ferry-platform -p ferry-cli green locally on
 Windows; clippy -D warnings clean workspace-wide.
+
+## Comments
+
+Landed acf0fa4 (spawn_sleeper in ferry-platform, unix= sleep 30,
+windows= powershell Start-Sleep 30, both arms type-check everywhere;
+replaced 6 call sites; added ferry-platform dev-dep to ferry-cli). Local
+Windows: clippy clean, ferry-platform 26 passed, ferry-pin 27+2 passed,
+ferry-cli pin_cli 5 passed (previously 7 NotFound failures). CI windows
+runner already had sleep on PATH so the fix is local-repro hardening;
+no prod code touched. Follow-up fmt fallout (9a1 long lines) fixed in
+c29180d.
