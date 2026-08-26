@@ -43,19 +43,12 @@ use ferry_store::snapshot::{
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::applier::SessionApplier;
 use crate::exchange::{self, CurrentState, ExchangeHost};
-use crate::proto::{self, ItemPayload, ProtoError};
 use crate::session::{self, ConnLink, Established, ExpectPeer};
-use crate::state::device_id_from_tag;
 use crate::transport::{Connection, Transport};
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 pub use ferry_store::snapshot::ScanStats;
 use ferry_store::store::Store;
-
-/// chunk id -> owning pack name (T-15: resolved from the in-memory location
-/// table; pack bytes are loaded lazily, only for packs actually sent).
-type PackMap = HashMap<BlobId, PackId>;
 
 /// Default poll cadence from the ticket ("sleep 200ms").
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -91,9 +84,6 @@ pub struct EngineConfig {
     /// otherwise Trust-On-First-Use (TOFU) persists the first authenticated peer
     /// identity per folder under `.ferry/peers/` and refuses any subsequent mismatches.
     pub expected_peer_id: Option<BlobId>,
-    /// DEV ONLY: speak the retired M0 plaintext framing instead of protocol
-    /// v1. Defaults OFF; production engines must never set it.
-    pub legacy_m0_proto: bool,
     /// The folder's `.ferry` directory whose pin-state.json gates tree
     /// mutation at the shared execution boundary (T-06 session pinning).
     /// `None` (the default) is the no-pin policy: materialization never
@@ -247,7 +237,6 @@ impl EngineConfig {
             bind_addr: None,
             connect_to: None,
             expected_peer_id: None,
-            legacy_m0_proto: false,
             pin_state_dir: None,
             quiet: true,
         }
@@ -294,8 +283,6 @@ pub enum IngestError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("proto: {0}")]
-    Proto(#[from] ProtoError),
     /// Protocol v1 wire failure (handshake, framing, seal/open, flow).
     #[error("v1 wire: {0}")]
     Wire(#[from] ferry_proto::error::ProtoError),
@@ -329,13 +316,6 @@ struct SnapshotData {
 
 /// How long a session waits for the first poll tick to publish state.
 const FIRST_STATE_WAIT: Duration = Duration::from_secs(10);
-
-/// What the local engine knows when a session starts.
-struct MyOffer {
-    snap: Arc<SnapshotData>,
-    agreed_id: BlobId,
-    agreed_root: Option<BlobId>,
-}
 
 /// Max simultaneously ACCEPTED session threads. Beyond this, inbound
 /// connections are dropped politely (logged, never queued) — a hostile or
@@ -475,24 +455,6 @@ impl FolderState {
         g.agreed = Some(manifest_id);
         drop(g);
         self.changed.notify_all();
-    }
-
-    /// Wait until a raw scan exists (sessions may arrive before the first
-    /// tick), returning the snapshot AND baseline read under one lock so
-    /// an offer is never torn across an adoption.
-    fn wait_offer(&self, deadline: Instant) -> Option<(Arc<SnapshotData>, Option<RootManifest>)> {
-        let mut g = self.lock();
-        loop {
-            if let Some(snap) = g.latest.clone() {
-                return Some((snap, g.baseline.clone()));
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return None;
-            }
-            let (ng, _) = self.changed.wait_timeout(g, deadline - now).unwrap();
-            g = ng;
-        }
     }
 
     /// Wait for the CURRENT folder pointer the same way.
@@ -838,30 +800,8 @@ impl Ctx {
         self.shared.bump(|s| s.rejected_items += 1);
     }
 
-    fn my_offer(&self) -> Result<MyOffer, SessionError> {
-        // Sessions may arrive before the very first poll tick; wait briefly.
-        let deadline = Instant::now() + FIRST_STATE_WAIT;
-        // Snapshot + baseline read under ONE lock: an offer is a consistent
-        // pair even if an adoption lands mid-session (no torn offers).
-        let Some((snap, baseline)) = self.folder.wait_offer(deadline) else {
-            return Err(SessionError::Other("no local snapshot available".into()));
-        };
-        let (agreed_id, agreed_root) = match &baseline {
-            Some(m) => (
-                *blake3::hash(&serialize_manifest(m)).as_bytes(),
-                Some(m.root_tree_id),
-            ),
-            None => ([0u8; 32], None),
-        };
-        Ok(MyOffer {
-            snap,
-            agreed_id,
-            agreed_root,
-        })
-    }
-
     /// The CURRENT folder pointer (own latest or adopted), waiting out the
-    /// same pre-first-tick window as [`Ctx::my_offer`].
+    /// same pre-first-tick window.
     fn current_snapshot(&self) -> Result<Arc<SnapshotData>, SessionError> {
         let deadline = Instant::now() + FIRST_STATE_WAIT;
         self.folder
@@ -980,14 +920,9 @@ impl Ctx {
             return;
         };
         match self.transport.dial(addr) {
-            Ok(mut conn) => match dispatch_session(conn.as_mut(), self, true) {
+            Ok(mut conn) => match run_session_v1(conn.as_mut(), self, true) {
                 Ok(()) => self.bump_ok(),
                 Err(e) => {
-                    // v1 sessions already said a best-effort BYE; only the
-                    // legacy path knows the ERROR frame.
-                    if self.cfg.legacy_m0_proto {
-                        proto::send_error(conn.as_mut(), &format!("{e}"));
-                    }
                     self.note_session_failure(&e);
                     self.status(&format!("SESSION failed (dial): {e}"));
                 }
@@ -1016,20 +951,6 @@ impl Ctx {
             self.bump_rejected();
         }
         self.bump_failed();
-    }
-}
-
-/// Pick the session shape: protocol v1 (default, encrypted) or the
-/// retired M0 plaintext framing behind the dev flag.
-fn dispatch_session(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    dialer: bool,
-) -> Result<(), SessionError> {
-    if ctx.cfg.legacy_m0_proto {
-        run_session_legacy(conn, ctx, dialer)
-    } else {
-        run_session_v1(conn, ctx, dialer)
     }
 }
 
@@ -1181,504 +1102,8 @@ fn now_parts() -> (i64, u32) {
     (d.as_secs() as i64, d.subsec_nanos())
 }
 
-/// One sync conversation over an established connection — RETIRED M0
-/// plaintext framing, kept behind [`EngineConfig::legacy_m0_proto`].
-/// Caller holds the per-daemon session lock. `dialer` speaks first (HELLO
-/// order only; every subsequent decision is symmetric).
-fn run_session_legacy(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    dialer: bool,
-) -> Result<(), SessionError> {
-    let my = ctx.my_offer()?;
-
-    let peer_tag = if dialer {
-        proto::send_hello(conn, &ctx.cfg.tag)?;
-        let h = proto::recv_hello(conn)?;
-        ctx.status(&format!("SESSION opened with {}", h.device_tag));
-        h.device_tag
-    } else {
-        let h = proto::recv_hello(conn)?;
-        ctx.status(&format!("SESSION accepted from {}", h.device_tag));
-        proto::send_hello(conn, &ctx.cfg.tag)?;
-        h.device_tag
-    };
-
-    let peer_id = device_id_from_tag(&peer_tag);
-    let ledger = PeerLedger::new(ctx.store.store_dir());
-    match &ctx.peer_policy {
-        PeerPolicy::AllowList(set) => {
-            if !set.contains(&peer_id) {
-                ctx.status(&format!(
-                    "PEER unauthorized (legacy): {} not in allow-list",
-                    hex(&peer_id)
-                ));
-                return Err(SessionError::PeerUnauthorized(hex(&peer_id)));
-            }
-        }
-        PeerPolicy::TrustOnFirstUse => {
-            let known = ledger.list_peers(&ctx.cfg.folder_id)?;
-            if let Some(first) = known.first() {
-                if *first != peer_id {
-                    ctx.status(&format!(
-                        "PEER refused (legacy): expected {}, got {}",
-                        hex(first),
-                        hex(&peer_id)
-                    ));
-                    return Err(SessionError::PeerUnauthorized(hex(&peer_id)));
-                }
-            } else {
-                ctx.status(&format!(
-                    "PEER new device trusted (TOFU): {}",
-                    hex(&peer_id)
-                ));
-                ledger.record_peer(&ctx.cfg.folder_id, &peer_id)?;
-            }
-        }
-    }
-
-    proto::send_offer(
-        conn,
-        &proto::Offer {
-            manifest_bytes: my.snap.manifest_bytes.clone(),
-            agreed_manifest_id: my.agreed_id,
-            agreed_root_tree_id: my.agreed_root.unwrap_or([0; 32]),
-        },
-    )?;
-    let theirs = proto::recv_offer(conn)?;
-    let peer_manifest = parse_manifest(&theirs.manifest_bytes)?;
-    let peer_manifest_id = *blake3::hash(&theirs.manifest_bytes).as_bytes();
-
-    // Keep the offered manifest as a stored blob: agreement records may
-    // reference it across restarts.
-    ctx.store
-        .put_meta(BlobKind::Manifest, &theirs.manifest_bytes)?;
-
-    decide_and_transfer(
-        conn,
-        ctx,
-        my,
-        theirs,
-        peer_manifest,
-        peer_manifest_id,
-        peer_tag,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn decide_and_transfer(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: MyOffer,
-    theirs: proto::Offer,
-    peer_manifest: RootManifest,
-    peer_manifest_id: BlobId,
-    peer_tag: String,
-) -> Result<(), SessionError> {
-    if my.snap.manifest.root_tree_id == peer_manifest.root_tree_id {
-        // Same content already. If agreement pointers match, nothing to do;
-        // otherwise settle on the lineage winner so records converge even
-        // between fresh peers (both-empty bootstrap included).
-        if my.agreed_id != [0; 32] && theirs.agreed_manifest_id == my.agreed_id {
-            ctx.status("SESSION converged already");
-            return Ok(());
-        }
-        let win = lineage_winner(&my.snap.manifest, &peer_manifest);
-        let (winner_bytes, winner_id) = match win {
-            Donor::First => (my.snap.manifest_bytes.clone(), my.snap.manifest_id),
-            Donor::Second => (theirs.manifest_bytes.clone(), peer_manifest_id),
-        };
-        // Deterministic speakers: the First side receives the confirmation
-        // it computes; the Second side records then sends it.
-        match win {
-            Donor::First => {
-                let got = proto::recv_agreed(conn)?;
-                if got != winner_id {
-                    return Err(SessionError::Other(format!(
-                        "agreement mismatch: expected {}, peer said {}",
-                        hex(&winner_id),
-                        hex(&got)
-                    )));
-                }
-                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
-            }
-            Donor::Second => {
-                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
-                proto::send_agreed(conn, winner_id)?;
-            }
-        }
-        ctx.status("SESSION settled agreement without transfer");
-        return Ok(());
-    }
-
-    let their_baseline = if theirs.agreed_manifest_id == [0u8; 32] {
-        None
-    } else {
-        Some(theirs.agreed_root_tree_id)
-    };
-    let win = select_donor(
-        PeerState {
-            current_root: my.snap.manifest.root_tree_id,
-            baseline_root: my.agreed_root,
-        },
-        PeerState {
-            current_root: peer_manifest.root_tree_id,
-            baseline_root: their_baseline,
-        },
-        &my.snap.manifest,
-        &peer_manifest,
-    );
-
-    match win {
-        Donor::First => serve_as_donor(conn, ctx, &my.snap, &peer_tag)?,
-        Donor::Second => run_as_puller(
-            conn,
-            ctx,
-            my.snap,
-            theirs,
-            peer_manifest,
-            peer_manifest_id,
-            peer_tag,
-        )?,
-    }
-    Ok(())
-}
-
-/// Donor side: answer requests until AGREED arrives.
-fn serve_as_donor(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: &Arc<SnapshotData>,
-    peer_tag: &str,
-) -> Result<(), SessionError> {
-    let mut pack_cache: Option<PackMap> = None;
-    loop {
-        let (t, body) = proto::recv_msg(conn)?;
-        match t {
-            proto::tag::REQ_META => {
-                for (kind, id) in proto::decode_req_meta(&body)? {
-                    let bytes = ctx.store.get(kind, &id)?;
-                    proto::send_item(conn, &ItemPayload::Blob { kind, id, bytes })?;
-                }
-                proto::send_items_done(conn)?;
-            }
-            proto::tag::REQ_DATA => {
-                let ids = proto::decode_req_data(&body)?;
-                if pack_cache.is_none() {
-                    pack_cache = Some(build_pack_map(ctx)?);
-                }
-                serve_data_request(conn, ctx, pack_cache.as_ref().unwrap(), &ids)?;
-            }
-            proto::tag::AGREED => {
-                let id = proto::decode_agreed(&body)?;
-                if id != my.manifest_id {
-                    return Err(SessionError::Other(format!(
-                        "peer agreed on {} but I offered {}",
-                        hex(&id),
-                        hex(&my.manifest_id)
-                    )));
-                }
-                ctx.record_agreement(
-                    device_id_from_tag(peer_tag),
-                    &my.manifest_bytes,
-                    my.manifest_id,
-                )?;
-                ctx.status(&format!(
-                    "SESSION complete: peer agreed on {}",
-                    hex_short(&id)
-                ));
-                return Ok(());
-            }
-            other => return Err(ProtoError::BadTag(other).into()),
-        }
-    }
-}
-
-fn serve_data_request(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    map: &PackMap,
-    chunk_ids: &[BlobId],
-) -> Result<(), SessionError> {
-    let mut sent_packs: HashSet<PackId> = HashSet::new();
-    // Lazily loaded pack bytes, keyed by pack; a None entry marks a pack
-    // that failed verification so we never re-read (or re-send) it.
-    let mut pack_bytes: HashMap<PackId, Option<Arc<Vec<u8>>>> = HashMap::new();
-    for id in chunk_ids {
-        match map.get(id) {
-            Some(name) => {
-                let cached = match pack_bytes.get(name) {
-                    Some(cached) => cached.clone(),
-                    None => {
-                        let loaded = load_pack_verified(ctx, name);
-                        if loaded.is_none() {
-                            ctx.status(&format!("WARN skipping damaged pack {}", hex(name)));
-                        }
-                        pack_bytes.insert(*name, loaded.clone());
-                        loaded
-                    }
-                };
-                if let Some(bytes) = cached {
-                    if sent_packs.insert(*name) {
-                        proto::send_item(
-                            conn,
-                            &ItemPayload::Pack {
-                                name: *name,
-                                bytes: (*bytes).clone(),
-                            },
-                        )?;
-                    }
-                    // Chunk rides a pack already sent this round: nothing to do.
-                } else {
-                    // Damaged home pack: fall back to individual-blob
-                    // transfer through the store's own resolution.
-                    let bytes = ctx.store.get(BlobKind::DataChunk, id)?;
-                    proto::send_item(
-                        conn,
-                        &ItemPayload::Blob {
-                            kind: BlobKind::DataChunk,
-                            id: *id,
-                            bytes,
-                        },
-                    )?;
-                }
-            }
-            None => {
-                // Unmapped fallback (should not happen post-seal, but stay
-                // correct): serve the blob individually.
-                let bytes = ctx.store.get(BlobKind::DataChunk, id)?;
-                proto::send_item(
-                    conn,
-                    &ItemPayload::Blob {
-                        kind: BlobKind::DataChunk,
-                        id: *id,
-                        bytes,
-                    },
-                )?;
-            }
-        }
-    }
-    proto::send_items_done(conn)?;
-    Ok(())
-}
-
-/// Read one pack from disk and verify it against its own name. Returns
-/// `None` when the file is missing or its BLAKE3 disagrees with the name —
-/// callers skip it loudly rather than serving corrupt bytes.
-fn load_pack_verified(ctx: &Ctx, name: &PackId) -> Option<Arc<Vec<u8>>> {
-    let path = ctx
-        .store
-        .store_dir()
-        .join("packs")
-        .join(format!("{}.pack", hex(name)));
-    let bytes = std::fs::read(&path).ok()?;
-    if ferry_store::pack::pack_name_of(&bytes) != *name {
-        return None;
-    }
-    Some(Arc::new(bytes))
-}
-
-/// T-15: map every DATA CHUNK id to its owning pack straight from the
-/// in-memory location table — no pack bytes are read here, so building the
-/// map costs O(index entries), not O(total store). Damaged packs surface
-/// (and are skipped loudly) at send time in [`load_pack_verified`]; their
-/// chunks fall back to individual-blob transfer.
-fn build_pack_map(ctx: &Ctx) -> Result<PackMap, SessionError> {
-    let mut out = HashMap::new();
-    for e in ctx.store.index_entries()? {
-        if e.kind == BlobKind::DataChunk {
-            out.insert(e.id, e.pack);
-        }
-    }
-    Ok(out)
-}
-
-/// Puller side: hydrate the peer's tree nodes, diff, request data by chunk
-/// id, ingest, materialize durably, confirm.
-fn run_as_puller(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: Arc<SnapshotData>,
-    theirs: proto::Offer,
-    peer_manifest: RootManifest,
-    peer_manifest_id: BlobId,
-    peer_tag: String,
-) -> Result<(), SessionError> {
-    fetch_meta_tree(conn, ctx, &peer_manifest.root_tree_id)?;
-
-    let changes = ferry_store::diff::diff_manifests(&ctx.store, &my.manifest, &peer_manifest)?;
-    let wanted = collect_chunk_ids(&changes);
-    ctx.status(&format!(
-        "SESSION pulling: {} added / {} removed / {} modified / {} metadata, {} chunks wanted",
-        changes.added.len(),
-        changes.removed.len(),
-        changes.content_modified.len() + changes.type_changed.len(),
-        changes.metadata_modified.len(),
-        wanted.len()
-    ));
-
-    proto::send_req_data(conn, &wanted)?;
-    let mut received_packs = false;
-    loop {
-        match proto::recv_item_stream(conn)? {
-            proto::ItemStream::Done => break,
-            proto::ItemStream::Item(item) => {
-                if ingest_item(ctx, &item)? {
-                    received_packs = true;
-                }
-            }
-        }
-    }
-
-    if received_packs {
-        // Seal staged meta blobs so their locations join the table.
-        // Delivered packs were folded in incrementally at ingest time
-        // (T-15); no full rebuild on the session hot path.
-        ctx.store.flush()?;
-    }
-
-    // Pin enforcement rides the shared applier boundary (T-06); the dev-only
-    // M0 path keeps its wire flow (AGREED still goes out) even when part of
-    // the change set was withheld.
-    let mut puller = SessionApplier::new(&ctx.store, &ctx.cfg.tree_dir);
-    if let Some(dir) = ctx.cfg.pin_state_dir.as_deref() {
-        puller = puller.pin_enforcement(
-            dir,
-            hex(&device_id_from_tag(&peer_tag)),
-            hex(&peer_manifest_id),
-        );
-    }
-    puller
-        .apply(&peer_manifest, &changes)
-        .map_err(|e| SessionError::Apply(format!("{e}")))?;
-    ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
-
-    ctx.record_agreement(
-        device_id_from_tag(&peer_tag),
-        &theirs.manifest_bytes,
-        peer_manifest_id,
-    )?;
-    proto::send_agreed(conn, peer_manifest_id)?;
-    ctx.status(&format!(
-        "SESSION complete: agreed on {}",
-        hex_short(&peer_manifest_id)
-    ));
-    Ok(())
-}
-
-/// Walk the offered tree level by level, requesting missing tree nodes as
-/// individual meta blobs. Presence probing goes through the store (staging
-/// included), so repeat sessions only fetch what is genuinely absent.
-fn fetch_meta_tree(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    root: &BlobId,
-) -> Result<(), SessionError> {
-    let mut frontier: Vec<BlobId> = vec![*root];
-    let mut fetched = 0usize;
-    while !frontier.is_empty() {
-        let missing: Vec<BlobId> = frontier
-            .iter()
-            .filter(|id| ctx.store.get(BlobKind::TreeNode, id).is_err())
-            .copied()
-            .collect();
-        if !missing.is_empty() {
-            let req: Vec<(BlobKind, BlobId)> =
-                missing.iter().map(|id| (BlobKind::TreeNode, *id)).collect();
-            proto::send_req_meta(conn, &req)?;
-            let mut got: HashSet<BlobId> = HashSet::new();
-            while got.len() < missing.len() {
-                match proto::recv_item_stream(conn)? {
-                    proto::ItemStream::Done => {
-                        return Err(SessionError::Other("tree-node stream ended early".into()))
-                    }
-                    proto::ItemStream::Item(ItemPayload::Blob {
-                        kind: BlobKind::TreeNode,
-                        id,
-                        bytes,
-                    }) => {
-                        if !missing.contains(&id) || got.contains(&id) {
-                            return Err(SessionError::Other(format!(
-                                "unexpected tree node {} in response",
-                                hex(&id)
-                            )));
-                        }
-                        let found = *blake3::hash(&bytes).as_bytes();
-                        if found != id {
-                            ctx.bump_rejected();
-                            return Err(IngestError::BlobHashMismatch {
-                                id: hex(&id),
-                                found: hex(&found),
-                            }
-                            .into());
-                        }
-                        ctx.store.put_meta(BlobKind::TreeNode, &bytes)?;
-                        got.insert(id);
-                        fetched += 1;
-                    }
-                    proto::ItemStream::Item(other) => {
-                        return Err(SessionError::Other(format!(
-                            "expected tree node item, got kind {other:?}"
-                        )))
-                    }
-                }
-            }
-            proto::recv_items_done(conn)?;
-        }
-        // Expand frontier: children of every node now present locally.
-        let mut next = Vec::new();
-        for id in &frontier {
-            let bytes = ctx.store.get(BlobKind::TreeNode, id)?;
-            let node = ferry_store::manifest::parse_tree_node(&bytes)?;
-            for e in node.entries {
-                if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } = e.payload {
-                    next.push(child_tree_id);
-                }
-            }
-        }
-        frontier = next;
-    }
-    if fetched > 0 {
-        ctx.status(&format!("SESSION fetched {fetched} tree nodes"));
-    }
-    Ok(())
-}
-
-/// Verify-after-receipt, then persist. Returns true when a PACK landed on
-/// disk (caller must refresh the index).
-fn ingest_item(ctx: &Ctx, item: &ItemPayload) -> Result<bool, IngestError> {
-    match item {
-        ItemPayload::Pack { name, bytes } => {
-            match exchange::ingest_pack_verified(&ctx.store, name, bytes) {
-                Ok(()) => Ok(true),
-                Err(e @ IngestError::NameMismatch { .. }) => {
-                    ctx.bump_rejected();
-                    Err(e)
-                }
-                Err(e) => Err(e),
-            }
-        }
-        ItemPayload::Blob { kind, id, bytes } => {
-            let found = *blake3::hash(bytes).as_bytes();
-            if found != *id {
-                ctx.bump_rejected();
-                return Err(IngestError::BlobHashMismatch {
-                    id: hex(id),
-                    found: hex(&found),
-                });
-            }
-            ctx.store.put_blob(*kind, bytes)?;
-            Ok(false)
-        }
-    }
-}
-
-fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
-    collect_chunk_ids_public(changes)
-}
-
 /// Shared with the v1 exchange driver (`exchange::pull_content`).
-pub(crate) fn collect_chunk_ids_public(changes: &ChangeSet) -> Vec<BlobId> {
+pub(crate) fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
     let mut seen: HashSet<BlobId> = HashSet::new();
     let mut out = Vec::new();
     for state in changes
@@ -1948,12 +1373,9 @@ fn accept_loop(
                         if ctx.shared.shutting_down() {
                             return;
                         }
-                        match dispatch_session(conn.as_mut(), &ctx, false) {
+                        match run_session_v1(conn.as_mut(), &ctx, false) {
                             Ok(()) => ctx.bump_ok(),
                             Err(e) => {
-                                if ctx.cfg.legacy_m0_proto {
-                                    proto::send_error(conn.as_mut(), &format!("{e}"));
-                                }
                                 ctx.note_session_failure(&e);
                                 ctx.status(&format!("SESSION failed (accept): {e}"));
                             }
@@ -2462,9 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn offers_are_never_torn_across_an_adoption() {
-        // An offer pairs (current snapshot, baseline id) read under ONE
-        // lock, so a reader sees either fully-old or fully-new state.
+    fn snapshot_and_adoption_state_transitions() {
         let me = [1u8; 32];
         let peer = [2u8; 32];
 
@@ -2479,10 +1899,9 @@ mod tests {
         );
         ctx.tick(1).unwrap();
 
-        // Offer before any agreement: zero agreed id, own snapshot.
-        let before = ctx.my_offer().unwrap();
-        assert_eq!(before.agreed_id, [0u8; 32]);
-        assert_eq!(before.agreed_root, None);
+        // Initial snapshot
+        let before = ctx.current_snapshot().unwrap();
+        assert_eq!(before.manifest.root_tree_id, [1; 32]);
 
         // Adopt + agree while no reader holds the lock.
         let peer_out = fake_scan(9, peer, [2; 32], [0; 32]);
@@ -2490,22 +1909,13 @@ mod tests {
         folder.adopt_peer(Arc::clone(&peer_snap));
         folder.record_agreed(peer_out.manifest.clone(), peer_out.manifest_id);
 
-        // Offer after: fully-new pair.
-        let after = ctx.my_offer().unwrap();
-        assert_eq!(after.snap.manifest_id, peer_out.manifest_id);
-        assert_eq!(after.agreed_id, peer_out.manifest_id);
-        assert_eq!(after.agreed_root, Some(peer_out.manifest.root_tree_id));
+        // Snapshot after adoption: fully-new pair.
+        let after = ctx.current_snapshot().unwrap();
+        assert_eq!(after.manifest_id, peer_out.manifest_id);
+        assert_eq!(after.manifest.root_tree_id, [2; 32]);
 
-        // The earlier offer is untouched: snapshots are immutable Arcs, so
-        // no in-place mutation can tear an in-flight offer either.
-        assert_eq!(before.agreed_id, [0u8; 32]);
-        assert_eq!(before.snap.manifest.root_tree_id, [1; 32]);
-
-        // current_snapshot agrees with the same state.
-        assert_eq!(
-            ctx.current_snapshot().unwrap().manifest_id,
-            peer_out.manifest_id
-        );
+        // The earlier snapshot is untouched: snapshots are immutable Arcs.
+        assert_eq!(before.manifest.root_tree_id, [1; 32]);
     }
 
     #[test]

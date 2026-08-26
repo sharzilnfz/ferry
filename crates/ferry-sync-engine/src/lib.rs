@@ -66,7 +66,6 @@ pub mod reconcile;
 pub mod report;
 #[cfg(test)]
 pub(crate) mod testutil;
-pub mod timefmt;
 
 pub use execute::{execute, ExecuteStats};
 pub use naming::{conflict_display_name, device_short, unique_conflict_dest};
@@ -75,3 +74,4 @@ pub use plan::{
 };
 pub use reconcile::{reconcile, ReconcileError};
 pub use report::{append_entries, list_conflicts, ConflictEntry, DeviceStamp, LogError};
+pub use ferry_platform::time as timefmt;

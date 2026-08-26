@@ -42,7 +42,7 @@ pub fn conflict_display_name(
     format!(
         "{nfc}.ferry-conflict.{}-{}",
         device_short(loser_device),
-        crate::timefmt::fmt_compact(loser_mtime_sec)
+        ferry_platform::time::fmt_compact(loser_mtime_sec)
     )
 }
 

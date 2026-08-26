@@ -21,6 +21,7 @@ ferry-pin = { path = "../ferry-pin" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-tui = { path = "../ferry-tui" }
 ferry-daemon = { path = "../ferry-daemon" }
+ferry-platform.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 axum.workspace = true
 clap = { version = "4", features = ["derive"] }

@@ -390,8 +390,8 @@ async fn run_state_watcher(
                     if let Ok(conflicts) = state.list_conflicts() {
                         if conflicts.len() > last_conflicts_count {
                             for entry in &conflicts[last_conflicts_count..] {
-                                let ts = crate::timefmt::parse_rfc3339_to_unix(&entry.ts)
-                                    .unwrap_or_else(|| crate::timefmt::now_unix().0 as u64);
+                                let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
+                                    .unwrap_or_else(|| ferry_platform::time::now_unix().0 as u64);
                                 state.broadcast(DaemonMessage::ConflictRecorded {
                                     path: entry.path.clone(),
                                     conflict_path: entry

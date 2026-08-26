@@ -7,7 +7,7 @@ use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::{
     DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
 };
-use ferry_pin::{HeldLedger, PinError, PinRecord, PinStore, PIN_FORMAT_VERSION};
+use ferry_pin::{HeldSummary, PinError, PinManager, PinRecord};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
@@ -108,36 +108,19 @@ impl DaemonState {
 
         let pending_changes = self.handle.pending_changes();
 
-        let pin_view = match PinStore::new(self.state_dir()).load() {
-            Ok(Some(rec)) => {
-                let st = if rec.released {
-                    "released"
-                } else if rec.liveness() == ferry_pin::Liveness::Alive {
-                    "active"
-                } else {
-                    "stale"
-                };
-                PinView {
-                    state: st.to_string(),
-                    holding: st == "active",
-                    paths: rec.paths,
-                }
-            }
-            _ => PinView::none(),
+        let pin_summary = PinManager::new(self.state_dir())
+            .summary()
+            .unwrap_or_else(|_| HeldSummary::none());
+
+        let pin_view = PinView {
+            state: pin_summary.state,
+            holding: pin_summary.holding,
+            paths: pin_summary.paths,
         };
 
-        let mut held_by_peer = HashMap::new();
-        let mut held_total = 0;
-        if let Ok(peers) = HeldLedger::new(self.state_dir()).peers() {
-            let ledger = HeldLedger::new(self.state_dir());
-            for p in peers {
-                if let Ok(entries) = ledger.load_peer(&p) {
-                    let paths = ferry_pin::distinct_paths(&entries);
-                    held_total += paths.len();
-                    held_by_peer.insert(p, paths);
-                }
-            }
-        }
+        let held_by_peer: HashMap<String, Vec<String>> =
+            pin_summary.held_by_peer.into_iter().collect();
+        let held_total = pin_summary.total_held_paths;
 
         let peers = match AgreementLedger::new(self.state_dir()).list_folder(&self.folder_id) {
             Ok(records) => {
@@ -146,7 +129,7 @@ impl DaemonState {
                     list.push(PeerStatusView {
                         device_id: hex_str(&dev),
                         last_agreed_manifest_id: Some(hex_str(&rec.manifest_id)),
-                        agreed_at: Some(crate::timefmt::fmt_rfc3339(rec.agreed_sec)),
+                        agreed_at: Some(ferry_platform::time::fmt_rfc3339(rec.agreed_sec)),
                         connectivity: self.handle.peer_connectivity(&dev).to_string(),
                     });
                 }
@@ -177,12 +160,6 @@ impl DaemonState {
 
     /// Start a session pin on the specified paths.
     pub fn start_pin(&self, paths: Vec<String>) -> Result<PinRecord, PinError> {
-        let scope = if paths.is_empty() {
-            vec!["*".to_string()]
-        } else {
-            paths
-        };
-
         let mut base_agreements = BTreeMap::new();
         if let Ok(records) = AgreementLedger::new(self.state_dir()).list_folder(&self.folder_id) {
             for (dev, rec) in records {
@@ -190,27 +167,17 @@ impl DaemonState {
             }
         }
 
-        let (sec, nsec) = crate::timefmt::now_unix();
-        let pid = std::process::id();
-        let record = PinRecord {
-            format_version: PIN_FORMAT_VERSION,
-            device_id: self.device_hex.clone(),
-            pid,
-            started_sec: sec,
-            started_nsec: nsec,
-            paths: scope,
-            released: false,
+        PinManager::new(self.state_dir()).start_session(
+            paths,
+            std::process::id(),
+            &self.device_hex,
             base_agreements,
-            proc_start_token: None,
-        };
-
-        PinStore::new(self.state_dir()).start(&record)?;
-        Ok(record)
+        )
     }
 
     /// Release an active session pin.
     pub fn release_pin(&self) -> Result<bool, PinError> {
-        PinStore::new(self.state_dir()).mark_released()
+        PinManager::new(self.state_dir()).stop_session()
     }
 
     /// Trigger an audit-grade filesystem rescan.

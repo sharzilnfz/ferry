@@ -50,18 +50,3 @@ pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
         }
     }
 }
-
-/// Returns the socket path for a specific folder ID hex string:
-/// - Unix: `default_socket_path()` (Unix daemon serves multiple folders on the domain socket)
-/// - Windows: `\\.\pipe\ferry-<folder_id>`
-pub fn socket_path_for_folder_id(folder_id: &str) -> PathBuf {
-    #[cfg(windows)]
-    {
-        PathBuf::from(format!(r"{}-{}", DEFAULT_WINDOWS_PIPE_PREFIX, folder_id))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = folder_id;
-        default_socket_path()
-    }
-}

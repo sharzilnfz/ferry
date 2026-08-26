@@ -37,5 +37,8 @@ pub use casefold::{find_case_conflict, fold_key, host_folds_case, CaseConflict, 
 pub use links::{allow_windows_dir_links, classify_link, LinkDecision, LinkRefusal};
 pub use procs::process_start_token;
 pub use reserved::is_reserved_device_name;
-pub use time::{join_unix, split_unix};
+pub use time::{
+    civil_from_days, civil_utc, current_time_str, days_from_civil, fmt_compact, fmt_rfc3339,
+    fmt_time_utc, join_unix, now_unix, parse_rfc3339_to_unix, split_unix,
+};
 pub use winpath::{extend_path, needs_extended_length, MAX_PATH};

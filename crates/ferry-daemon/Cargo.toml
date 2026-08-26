@@ -21,8 +21,11 @@ ferry-ignore = { path = "../ferry-ignore" }
 ferry-pin = { path = "../ferry-pin" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-ipc = { path = "../ferry-ipc" }
+ferry-scan = { path = "../ferry-scan" }
+ferry-platform.workspace = true
 rand.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 tokio.workspace = true
 axum.workspace = true
 

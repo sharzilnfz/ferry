@@ -46,13 +46,7 @@ pub fn endpoint_seed_from_device_identity(dev: &DeviceIdentity) -> [u8; 32] {
 /// Short display form of an endpoint id (first 8 hex bytes + ellipsis),
 /// for logs and Debug output. Never the full key.
 pub fn id_short(id: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::new();
-    for b in &id[..4] {
-        let _ = write!(s, "{b:02x}");
-    }
-    s.push('\u{2026}');
-    s
+    format!("{}\u{2026}", ferry_store::format::hex(&id[..4]))
 }
 
 #[cfg(test)]

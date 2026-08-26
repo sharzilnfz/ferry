@@ -14,8 +14,6 @@
 //!   any agreement.
 //! - [`unknown_message_type_is_a_clean_protocol_violation`] exercises the
 //!   normative unknown-type rule (v1.0 peers never skip).
-//! - [`legacy_dev_flag_still_converges`] proves the retired plaintext M0
-//!   framing still syncs behind `EngineConfig::legacy_m0_proto`.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -33,8 +31,7 @@ use ferry_store::manifest::RootManifest;
 use ferry_store::store::Store;
 use ferry_sync::session::{establish, RawLink};
 use ferry_sync::{
-    run_v1_session, CurrentState, EngineConfig, EngineHandle, Established, ExchangeHost,
-    SyncEngine, TcpTransport, DEFAULT_FOLDER_ID,
+    run_v1_session, CurrentState, Established, ExchangeHost, DEFAULT_FOLDER_ID,
 };
 
 const POLY_SEED: u64 = 20260824;
@@ -542,49 +539,4 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
         matches!(got, ProtoError::UnknownMessage { msg_type: 0x7F }),
         "{got}"
     );
-}
-
-/// The retired plaintext framing still syncs behind the dev flag.
-#[test]
-fn legacy_dev_flag_still_converges() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let mk_cfg = |slot: &str| {
-        let mut cfg = EngineConfig::default_for_test(POLY_SEED);
-        cfg.tag = format!("leg-{slot}");
-        cfg.store_dir = dir.path().join(format!("{slot}/store"));
-        cfg.tree_dir = dir.path().join(format!("{slot}/tree"));
-        cfg.poly = poly();
-        cfg.quiet = true;
-        cfg.legacy_m0_proto = true; // THE flag under test
-        fs::create_dir_all(&cfg.tree_dir).unwrap();
-        cfg
-    };
-
-    let mut cfg_a = mk_cfg("a");
-    cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
-    let addr = engine_a.listen_addr().unwrap();
-    let a: EngineHandle = engine_a.start();
-
-    let mut cfg_b = mk_cfg("b");
-    cfg_b.connect_to = Some(addr);
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
-    let b = engine_b.start();
-
-    fs::write(dir.path().join("a/tree/legacy.txt"), b"legacy bytes").unwrap();
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let target = dir.path().join("b/tree/legacy.txt");
-    while !(a.agreed_id().is_some() && a.agreed_id() == b.agreed_id() && target.exists()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "legacy mode did not converge"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert_eq!(fs::read(&target).unwrap(), b"legacy bytes");
-
-    a.shutdown();
-    b.shutdown();
 }

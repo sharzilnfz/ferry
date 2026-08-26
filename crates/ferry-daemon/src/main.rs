@@ -34,7 +34,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use ferry_crypto::identity as crypto_identity;
-use ferry_store::format::unhex;
+use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
 use ferry_daemon::ui;
 
@@ -239,8 +239,15 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
     run_daemon(parsed)
 }
 
+fn validate_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() || tag.len() > 64 || tag.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("tag must be 1..64 non-whitespace chars".to_string());
+    }
+    Ok(())
+}
+
 fn run_daemon(d: DaemonArgs) -> Result<(), String> {
-    ferry_sync::proto::validate_tag(&d.tag).map_err(|e| format!("--tag: {e}"))?;
+    validate_tag(&d.tag).map_err(|e| format!("--tag: {e}"))?;
     if d.role != "listen" && d.role != "connect" {
         return Err(format!("--role must be listen|connect, got {:?}", d.role));
     }
@@ -261,9 +268,6 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         // Strict peer pinning arrives with T-007's pairing ritual; the
         // skeleton accepts whichever identity proves key possession.
         expected_peer_id: None,
-        // Protocol v1 with encryption ON is the only production path; the
-        // retired plaintext framing is reachable programmatically only.
-        legacy_m0_proto: false,
         // T-06: production daemons enforce session pins at the engine's
         // execution boundary. The --store dir IS the folder root whose
         // `.ferry/` holds pin-state.json and the held ledgers.
@@ -371,13 +375,4 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     handle.join_until_signal();
     ipc_handle.shutdown();
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
 }

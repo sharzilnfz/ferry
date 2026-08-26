@@ -8,8 +8,7 @@ license.workspace = true
 ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-ignore = { path = "../ferry-ignore" }
-# Timestamps for pairing offers ride ferry-sync-engine's shared timefmt.
-ferry-sync-engine = { path = "../ferry-sync-engine" }
+ferry-platform = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 

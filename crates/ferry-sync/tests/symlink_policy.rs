@@ -1,9 +1,8 @@
 //! T-05 regression: hostile symlink targets are REFUSED loudly through the
 //! ENGINE's apply path.
 //!
-//! The v1 pull stages both materialize through
-//! [`ferry_sync::SessionApplier`], an adapter over
-//! `ferry-materialize::Applier`. The deleted inline applier had NO policy:
+//! The v1 pull stages both materialize through `ferry-materialize::Applier`.
+//! The deleted inline applier had NO policy:
 //! `/etc`, `../../outside`, and `C:x` went straight to `symlink()`. These
 //! tests prove the engine path now refuses every hostile class with a loud
 //! `SymlinkRefused` error and zero filesystem effect — and that a benign
@@ -11,14 +10,13 @@
 
 use std::path::Path;
 
-use ferry_materialize::MaterializeError;
+use ferry_materialize::{Applier, MaterializeError};
 use ferry_platform::LinkRefusal;
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::{Added, ChangeSet, EntryKind, EntryState};
 use ferry_store::manifest::{serialize_tree_node, RootManifest, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
-use ferry_sync::{ApplyError, SessionApplier};
 
 fn open_store(dir: &Path) -> Store {
     std::fs::create_dir_all(dir).unwrap();
@@ -67,16 +65,16 @@ fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
     std::fs::create_dir_all(&tree).unwrap();
     let manifest = empty_manifest(&store);
 
-    let err = SessionApplier::new(&store, &tree)
-        .apply(&manifest, &symlink_added(path, target))
+    let err = Applier::new(&store, &tree)
+        .apply_session_change_set(&symlink_added(path, target), &manifest.root_tree_id)
         .unwrap_err();
 
     match err {
-        ApplyError::Materialize(MaterializeError::SymlinkRefused {
+        MaterializeError::SymlinkRefused {
             path: p,
             target: t,
             reason,
-        }) => {
+        } => {
             assert_eq!(
                 p.split('/').map(str::to_string).collect::<Vec<_>>(),
                 path.iter().copied().map(str::to_string).collect::<Vec<_>>(),
@@ -138,10 +136,10 @@ fn benign_relative_link_still_applies_through_the_engine_path() {
     // along in the change set; mirror that by having it exist already.
     std::fs::create_dir_all(tree.join("sub")).unwrap();
 
-    SessionApplier::new(&store, &tree)
-        .apply(
-            &manifest,
+    Applier::new(&store, &tree)
+        .apply_session_change_set(
             &symlink_added(&["sub", "lnk"], "../shared/file.txt"),
+            &manifest.root_tree_id,
         )
         .expect("in-tree relative links are legitimate");
 

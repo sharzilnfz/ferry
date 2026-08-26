@@ -6,7 +6,7 @@ use ferry_ipc::protocol::{
     TransferDirection,
 };
 use crate::activity_log::ActivityLog;
-use crate::timefmt::current_time_str;
+use ferry_platform::time::current_time_str;
 
 /// Core synchronization state badge displayed in the TUI header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -98,7 +98,7 @@ pub fn initiate_begin(
     std::fs::create_dir_all(&dot).code("io", "check folder permissions")?;
     let _fmk = unwrap_own_fmk(opened, identity)?;
 
-    let now = ferry_sync_engine::timefmt::now_unix();
+    let now = ferry_platform::time::now_unix();
     let offer = PairingOffer::create(opened.folder_id, identity, now.0);
     let offer_bytes = offer.serialize();
     let short_code = offer.short_code(TransportHints(0));
@@ -248,7 +248,7 @@ pub fn accept_begin(
     let expected_short_code = offer.short_code(TransportHints(0));
 
     // Our half of the ritual, written where the initiator looks for it.
-    let response = respond(&offer, identity, ferry_sync_engine::timefmt::now_unix().0);
+    let response = respond(&offer, identity, ferry_platform::time::now_unix().0);
     let response_path = offer_file.with_file_name(RESPONSE_SUFFIX);
     std::fs::write(&response_path, response.serialize()).code(
         "io",

@@ -163,6 +163,7 @@ impl RecoveryExport<'_> {
     /// import it back into a FRESH identity directory, reconstructing both
     /// the device secret file and returning the FMK. Refuses if `identity_dir`
     /// already holds an identity (callers wiping state should have removed it).
+    #[cfg(test)]
     pub fn round_trip_through_files(
         &self,
         passphrase: &str,
@@ -177,6 +178,7 @@ impl RecoveryExport<'_> {
     }
 }
 
+#[cfg(test)]
 fn io_err(e: crate::identity::IdentityError) -> RecoveryError {
     match e {
         crate::identity::IdentityError::Io(io) => RecoveryError::Io(io),

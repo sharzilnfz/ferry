@@ -16,14 +16,18 @@
 //!   plans; outcomes are exactly ADR-0004 outcomes.
 
 pub mod error;
+pub mod gate;
 pub mod held;
+pub mod manager;
 pub mod matcher;
 pub mod pin;
 pub mod release;
 pub mod split;
 
 pub use error::PinError;
+pub use gate::SessionPinGate;
 pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
+pub use manager::{HeldSummary, PinManager};
 pub use matcher::PathMatcher;
 pub use pin::{Liveness, PinRecord, PinStore, PIN_FORMAT_VERSION};
 pub use release::{plan_release, ReleasePeerPlan};

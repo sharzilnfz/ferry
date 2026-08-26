@@ -34,13 +34,23 @@ impl ApiError {
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
             message.to_string(),
-            "check the server stderr log",
+            "check the daemon's stderr log",
         )
     }
 
     #[must_use]
     pub fn forbidden(message: impl Into<String>, hint: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, "forbidden", message, hint)
+    }
+
+    #[must_use]
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    #[must_use]
+    pub fn body(&self) -> &Value {
+        &self.body
     }
 }
 
@@ -80,38 +90,6 @@ impl OpError {
 impl From<std::io::Error> for OpError {
     fn from(e: std::io::Error) -> Self {
         Self::new("io", e.to_string(), "check folder permissions and disk space")
-    }
-}
-
-impl From<crate::error::CliError> for OpError {
-    fn from(e: crate::error::CliError) -> Self {
-        let code = match e.code {
-            "not-found" => "not-found",
-            "warming-up" => "warming-up",
-            "not-implemented" => "not-implemented",
-            "secrets-found" => "secrets-found",
-            "pin-active" => "pin-active",
-            "already-initialized" => "already-initialized",
-            "pair-timeout" => "pair-timeout",
-            "io" => "io",
-            "store" => "store",
-            "store-open" => "store-open",
-            "internal" => "internal",
-            "config-corrupt" => "config-corrupt",
-            "key-unwrap" => "key-unwrap",
-            "identity-corrupt" => "identity-corrupt",
-            "pin-state-corrupt" => "pin-state-corrupt",
-            "held-ledger-corrupt" => "held-ledger-corrupt",
-            "conflict-log" => "conflict-log",
-            "agreement-state" => "agreement-state",
-            "forbidden" => "forbidden",
-            _ => "bad-request",
-        };
-        let mut op = Self::new(code, e.message, e.hint);
-        if let Some(detail) = e.detail {
-            op = op.with_detail(detail);
-        }
-        op
     }
 }
 

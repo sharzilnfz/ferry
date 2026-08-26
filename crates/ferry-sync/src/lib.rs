@@ -36,11 +36,11 @@
 //!    individual blobs otherwise; manifests/tree nodes always move as
 //!    individual metadata blobs because the puller needs them before it
 //!    can even compute what it wants. See [`exchange`].
-//! 4. **[`applier::SessionApplier`]** — the applier seam. One thin adapter
-//!    over `ferry-materialize::Applier`: temp + atomic rename,
-//!    parents-first creation, children-first deletion, exec bit, exact
-//!    mtimes (files, symlinks AND directories, restored from the target
-//!    tree), NFC live-name folding, and the untrusted-symlink-target
+//! 4. **[`ferry_materialize::Applier`]** — the applier boundary. Direct
+//!    materialization with [`ferry_materialize::Applier::with_pin_gate`]:
+//!    temp + atomic rename, parents-first creation, children-first deletion,
+//!    exec bit, exact mtimes (files, symlinks AND directories, restored from
+//!    the target tree), NFC live-name folding, and the untrusted-symlink-target
 //!    policy that refuses hostile targets loudly. The puller applies the
 //!    diff durably BEFORE round 2 observes equality — under v1, round 2
 //!    plays AGREED's role.
@@ -70,17 +70,14 @@
 //! (T-007/T-008/T-009), no Windows path handling beyond cfg-gated unix
 //! extras (T-012).
 
-pub mod applier;
 pub mod engine;
 pub mod exchange;
-pub mod proto;
 pub mod session;
-pub mod state;
 pub mod transport;
 
 // Re-exports so tests, bins, and future crates reach the vocabulary through
 // one facade.
-pub use applier::{ApplyError, ApplyOutcome, SessionApplier};
+pub use ferry_materialize::{ApplyOutcome, MaterializeError as ApplyError};
 pub use engine::{
     pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError, PeerState,
     SessionError, SyncEngine,
@@ -90,7 +87,6 @@ pub use ferry_crypto::identity::DeviceIdentity;
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
 pub use session::{Established, ExpectPeer};
-pub use state::device_id_from_tag;
 pub use transport::{Connection, Listener, TcpTransport, Transport};
 
 /// M0's default folder id (both daemons must share one folder id; the real

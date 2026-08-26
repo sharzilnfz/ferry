@@ -21,6 +21,8 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ferry_store::format::hex;
+
 /// Lock a mutex, tolerating poisoning: the guarded state here (append-only
 /// ledger, server handle slot) is safe to continue using after a panic in
 /// another thread, so recover the guard instead of cascading the panic.
@@ -126,15 +128,6 @@ impl AccessControl for LedgerAccessControl {
             endpoint_id_hex: id,
         });
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 /// A running local relay.

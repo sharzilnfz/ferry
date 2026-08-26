@@ -183,7 +183,7 @@ pub fn execute(
     };
     for c in &plan.conflicts {
         stats.conflicts.push(ConflictEntry {
-            ts: crate::timefmt::fmt_rfc3339(now.0),
+            ts: ferry_platform::time::fmt_rfc3339(now.0),
             folder_id: folder_id.clone(),
             path: join_path(&c.path),
             kind: kind_str(c.kind).to_string(),

@@ -50,7 +50,7 @@ use ferry_store::index::IndexEntry;
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload, RootManifest};
 use ferry_store::store::Store;
 
-use crate::applier::SessionApplier;
+use ferry_materialize::Applier;
 use crate::engine::{IngestError, SessionError};
 use crate::session::{Established, SessionIo};
 
@@ -485,7 +485,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         //    manifests (same chunk lists), and anything in OUR manifest
         //    was ingested locally, so diff coverage is sound.
         let changes = ferry_store::diff::diff_manifests(self.store, &self.cur.manifest, man)?;
-        let wanted: Vec<BlobId> = crate::engine::collect_chunk_ids_public(&changes)
+        let wanted: Vec<BlobId> = crate::engine::collect_chunk_ids(&changes)
             .into_iter()
             .filter(|id| self.store.get(BlobKind::DataChunk, id).is_err())
             .collect();
@@ -516,13 +516,17 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         //    Pin enforcement rides the shared applier boundary: the pin is
         //    re-read here, after fetch completed and immediately before the
         //    tree mutates (T-06).
-        let mut applier = SessionApplier::new(self.store, self.host.tree_root());
+        let mut applier = Applier::new(self.store, self.host.tree_root());
         if let Some(state_dir) = self.host.pin_state_dir() {
-            applier =
-                applier.pin_enforcement(state_dir, hex(&self.est.peer), hex(&remote_manifest_id));
+            let gate = ferry_pin::SessionPinGate::new(
+                state_dir,
+                hex(&self.est.peer),
+                hex(&remote_manifest_id),
+            );
+            applier = applier.with_pin_gate(gate);
         }
         let outcome = applier
-            .apply(man, &changes)
+            .apply_session_change_set(&changes, &man.root_tree_id)
             .map_err(|e| SessionError::Apply(format!("{e}")))?;
         self.host.note_tree_mutation();
         Ok(outcome.held)

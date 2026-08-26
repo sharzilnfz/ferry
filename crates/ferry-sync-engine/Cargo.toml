@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ferry-store = { path = "../ferry-store" }
 ferry-materialize = { path = "../ferry-materialize" }
+ferry-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -16,7 +17,6 @@ unicode-normalization.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 rand.workspace = true
-ferry-platform.workspace = true
 
 # testutil::set_dir_mtime stamps directory mtimes; std cannot open
 # directory handles for time writes on Windows (SetFileTime needs

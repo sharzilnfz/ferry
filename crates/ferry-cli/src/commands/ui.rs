@@ -5,27 +5,19 @@
 //! endpoints, proxies queries to the daemon over IPC (with disk fallback), opens the
 //! default browser, and shuts down automatically after 10 minutes of inactivity or on Ctrl+C.
 
-pub mod disk;
-pub mod error;
-pub mod handlers;
-pub mod ipc;
-
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
-use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::Router;
+pub use ferry_daemon::ui::{
+    extract_token, generate_token, is_token_valid, ApiError, DashboardServer, IpcBackend, OpError,
+};
 use serde_json::json;
-use subtle::ConstantTimeEq as _;
 
 use crate::error::{CliError, CliResult};
 use crate::out::Output;
-pub use error::{ApiError, OpError};
 
 /// 10 minutes of inactivity before automatic shutdown.
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -38,8 +30,8 @@ pub struct UiArgs<'a> {
     pub test: bool,
 }
 
-/// Shared server state.
-#[derive(Clone)]
+/// Shared server state preserved for backwards compatibility with tests and callers.
+#[derive(Clone, Debug)]
 pub struct UiServerState {
     pub folder: PathBuf,
     pub token: String,
@@ -71,98 +63,14 @@ impl UiServerState {
     }
 }
 
-/// Generate a secure 32-character random hex token (16 random bytes).
-#[must_use]
-pub fn generate_token() -> String {
-    let mut bytes = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
-    ferry_store::format::hex(&bytes)
-}
-
-/// Constant-time token verification.
-#[must_use]
-pub fn is_token_valid(expected: &str, provided: Option<&str>) -> bool {
-    let Some(prov) = provided else {
-        return false;
-    };
-    if expected.len() != prov.len() {
-        return false;
-    }
-    expected.as_bytes().ct_eq(prov.as_bytes()).into()
-}
-
-/// Extract authentication token from `Authorization: Bearer <token>` header or `?token=<token>` query param.
-pub fn extract_token(req: &axum::extract::Request) -> Option<String> {
-    if let Some(auth_val) = req.headers().get(axum::http::header::AUTHORIZATION) {
-        if let Ok(s) = auth_val.to_str() {
-            if let Some(tok) = s.strip_prefix("Bearer ") {
-                let trimmed = tok.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-
-    if let Some(query) = req.uri().query() {
-        for pair in query.split('&') {
-            let mut parts = pair.splitn(2, '=');
-            if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
-                if k == "token" && !v.is_empty() {
-                    return Some(v.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Middleware that records activity timestamp and enforces token authentication on `/api/*` endpoints.
-pub async fn auth_and_activity_middleware(
-    State(state): State<Arc<UiServerState>>,
-    req: axum::extract::Request,
-    next: Next,
-) -> Response {
-    state.record_activity();
-
-    let path = req.uri().path();
-    if path == "/api" || path.starts_with("/api/") {
-        let provided = extract_token(&req);
-        if !is_token_valid(&state.token, provided.as_deref()) {
-            return ApiError::forbidden(
-                "access denied: invalid or missing token",
-                "pass the token in the Authorization header (Bearer <token>) or ?token=<token> query parameter",
-            )
-            .into_response();
-        }
-    }
-
-    next.run(req).await
-}
-
-/// Construct the Axum router for the web UI.
+/// Construct the Axum router for the web UI backed by `DashboardServer` and `IpcBackend`.
 pub fn router(state: Arc<UiServerState>) -> Router {
-    Router::new()
-        .route("/", get(handlers::serve_index))
-        .route("/index.html", get(handlers::serve_index))
-        .route("/index", get(handlers::serve_index))
-        .route("/style.css", get(handlers::serve_css))
-        .route("/app.js", get(handlers::serve_js))
-        .route("/api/status", get(handlers::api_status))
-        .route("/api/conflicts", get(handlers::api_conflicts))
-        .route("/api/share", post(handlers::api_share))
-        .route("/api/pair/accept", post(handlers::api_pair_accept))
-        .route("/api/pin/start", post(handlers::api_pin_start))
-        .route("/api/pin/stop", post(handlers::api_pin_stop))
-        .route("/api/pin/release", post(handlers::api_pin_release))
-        .route("/api/events", get(handlers::api_events))
-        .fallback(handlers::fallback)
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&state),
-            auth_and_activity_middleware,
-        ))
-        .with_state(state)
+    let socket_path = ferry_ipc::paths::socket_path_for_dir(&state.folder);
+    let backend = IpcBackend::new(socket_path).with_fallback(state.folder.clone());
+    let server = DashboardServer::new(Arc::new(backend))
+        .with_token(&state.token)
+        .with_inactivity_timeout(INACTIVITY_TIMEOUT);
+    server.router()
 }
 
 /// Platform-specific browser opener.
@@ -234,8 +142,11 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
             token
         );
 
-        let state = Arc::new(UiServerState::new(folder_path, token.clone()));
-        let app = router(Arc::clone(&state));
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&folder_path);
+        let backend = IpcBackend::new(socket_path).with_fallback(folder_path);
+        let server = DashboardServer::new(Arc::new(backend))
+            .with_token(token.clone())
+            .with_inactivity_timeout(INACTIVITY_TIMEOUT);
 
         if args.test {
             // Test mode: server bound successfully, verify and exit cleanly
@@ -262,13 +173,13 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
         // Inactivity monitor
-        let monitor_state = Arc::clone(&state);
+        let monitor_server = server.clone();
         let monitor_shutdown = shutdown_tx.clone();
         let monitor_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                if monitor_state.idle_duration() >= INACTIVITY_TIMEOUT {
+                if monitor_server.idle_duration() >= INACTIVITY_TIMEOUT {
                     eprintln!("Ferry UI: inactive for 10 minutes, shutting down server.");
                     let _ = monitor_shutdown.send(true);
                     break;
@@ -285,12 +196,13 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
             }
         };
 
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(graceful_signal)
-            .await
-        {
+        if let Err(e) = server.serve_with_graceful_shutdown(listener, graceful_signal).await {
             monitor_handle.abort();
-            return Err(CliError::new("server-error", e.to_string(), "Axum server terminated with error"));
+            return Err(CliError::new(
+                "server-error",
+                e.to_string(),
+                "Axum server terminated with error",
+            ));
         }
 
         monitor_handle.abort();

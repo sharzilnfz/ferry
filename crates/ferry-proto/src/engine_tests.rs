@@ -7,10 +7,10 @@
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, IndexAdvert, FLAG_EXTENSION_AWARE};
-use crate::engine::{ingest_pack, recv_advert_map, Session, MAX_ADVERT_ROWS_TOTAL};
+use crate::engine::{ingest_pack, recv_advert_map, MAX_ADVERT_ROWS_TOTAL};
 use crate::error::ByeReason;
 use crate::frame::{read_body, write_body};
-use crate::secure::{kdf_handshake, traffic_keys, transcript_hash};
+use crate::secure::{kdf_handshake, traffic_keys, transcript_hash, SecureSession};
 use crate::stream::{duplex_pair, DuplexHalf};
 use crate::version::ProtocolVersion;
 use crate::{run_engine, EngineConfig, Granularity, ProtoError, Role};
@@ -197,26 +197,26 @@ fn replayed_hello_cannot_complete_authentication() {
 /// Build a live post-auth `Session` over a duplex half using the REAL key
 /// schedule (fabricated DH terms), so sealed frames authenticate normally.
 fn policy_session(
-    io: &mut DuplexHalf,
+    io: DuplexHalf,
     peer_max: ProtocolVersion,
     peer_flags: u64,
-) -> Session<'_, DuplexHalf> {
+) -> SecureSession<DuplexHalf> {
     // tx/rx None = plaintext frames: isolates the TYPE policy from sealing.
-    Session {
+    SecureSession::from_parts(
         io,
-        version: ProtocolVersion::V1_0,
+        ProtocolVersion::V1_0,
         peer_max,
         peer_flags,
-        peer_id: [0; 32],
-        tx: None,
-        rx: None,
-    }
+        [0; 32],
+        None,
+        None,
+    )
 }
 
 #[test]
 fn unknown_type_same_version_is_a_protocol_violation() {
-    let (mut inject, mut inbox) = duplex_pair();
-    let mut sess = policy_session(&mut inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
@@ -227,9 +227,9 @@ fn unknown_type_same_version_is_a_protocol_violation() {
 
 #[test]
 fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
-    let (mut inject, mut inbox) = duplex_pair();
+    let (mut inject, inbox) = duplex_pair();
     let mut sess = policy_session(
-        &mut inbox,
+        inbox,
         ProtocolVersion::new(1, 5),
         FLAG_EXTENSION_AWARE | (1 << 6), // flag we do not know
     );
@@ -249,8 +249,8 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
 
 #[test]
 fn unknown_type_higher_minor_without_new_flags_still_violates() {
-    let (mut inject, mut inbox) = duplex_pair();
-    let mut sess = policy_session(&mut inbox, ProtocolVersion::new(1, 5), FLAG_EXTENSION_AWARE);
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::new(1, 5), FLAG_EXTENSION_AWARE);
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
@@ -262,19 +262,19 @@ fn unknown_type_higher_minor_without_new_flags_still_violates() {
 fn skipped_unknown_types_must_be_sealed_correctly_too() {
     // A "skippable" frame still has to authenticate under the session keys:
     // garbage wrapped in an unknown type is an auth failure, not a skip.
-    let (mut inject, mut inbox) = duplex_pair();
+    let (mut inject, inbox) = duplex_pair();
     let (_, _, prk) = kdf_handshake(&[0; 32], &[1; 32], &[2; 32], &[3; 32]);
     let th_final = transcript_hash(&[]);
     let (ka, kb) = traffic_keys(&prk, &th_final);
-    let mut sess = Session {
-        io: &mut inbox,
-        version: ProtocolVersion::V1_0,
-        peer_max: ProtocolVersion::new(1, 5),
-        peer_flags: FLAG_EXTENSION_AWARE | (1 << 6),
-        peer_id: [0; 32],
-        tx: Some(kb.cipher()),
-        rx: Some(ka.cipher()),
-    };
+    let mut sess = SecureSession::from_parts(
+        inbox,
+        ProtocolVersion::V1_0,
+        ProtocolVersion::new(1, 5),
+        FLAG_EXTENSION_AWARE | (1 << 6),
+        [0; 32],
+        Some(kb.cipher()),
+        Some(ka.cipher()),
+    );
     // Write the frame UNSEALED while the session expects sealing. Payload
     // is large enough that the failure is the TAG check, not a length guard.
     let body = FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![1u8; 64]).encode();
@@ -290,8 +290,8 @@ fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
     // A hostile peer streams MAX_ROWS-row advert frames with more=1 forever.
     // recv_advert_map must stop at the session-wide row budget with a typed
     // ResourceLimit (→ BYE(ResourceLimit) on the wire), never OOM.
-    let (mut inject, mut inbox) = duplex_pair();
-    let mut sess = policy_session(&mut inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
 
     // Distinct ids per row: the index-table encoder sorts AND dedups
     // (kind,id) pairs, so repeated rows would collapse to one and never

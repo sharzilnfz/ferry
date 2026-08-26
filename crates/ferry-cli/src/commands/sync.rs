@@ -79,7 +79,6 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         bind_addr: None,
         connect_to: Some(peer),
         expected_peer_id: None,
-        legacy_m0_proto: false,
         pin_state_dir: Some(opened.state_dir()),
         quiet: true,
     };

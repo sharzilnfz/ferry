@@ -10,6 +10,7 @@ iroh.workspace = true
 iroh-relay = { version = "=1.0.3", features = ["server"] }
 tokio = { workspace = true, features = ["signal"] }
 futures-util = "0.3"
+ferry-store = { path = "../ferry-store" }
 
 # Log capture for the plaintext-absence proof (tests) and normal logging.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::error::TuiError;
 use crate::state::{SyncState, TuiState};
 use crate::terminal::TerminalEvents;
-use crate::timefmt::current_time_str;
+use ferry_platform::time::current_time_str;
 use crate::ui;
 
 /// Main TUI Application state machine managing incoming IPC messages,

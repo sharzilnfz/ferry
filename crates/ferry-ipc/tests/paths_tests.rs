@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use ferry_ipc::{
-    default_socket_path, socket_path_for_dir, socket_path_for_folder_id, DEFAULT_SOCKET_FILENAME,
-};
+use ferry_ipc::{default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME};
 
 #[test]
 fn test_default_socket_path() {
@@ -38,23 +36,5 @@ fn test_socket_path_for_dir() {
     #[cfg(unix)]
     {
         assert_eq!(path2, PathBuf::from("/custom/project/.ferry/daemon.sock"));
-    }
-}
-
-#[test]
-fn test_socket_path_for_folder_id() {
-    let folder_id = "0123456789abcdef0123456789abcdef";
-    let path = socket_path_for_folder_id(folder_id);
-
-    #[cfg(unix)]
-    {
-        assert!(path.ends_with(DEFAULT_SOCKET_FILENAME));
-    }
-    #[cfg(windows)]
-    {
-        assert_eq!(
-            path,
-            PathBuf::from(format!(r"\\.\pipe\ferry-{}", folder_id))
-        );
     }
 }

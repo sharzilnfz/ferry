@@ -97,7 +97,7 @@ pub fn plan_release(
     Ok(out)
 }
 
-fn load_manifest(
+pub(crate) fn load_manifest(
     store: &Store,
     id_hex: &str,
     peer: &str,

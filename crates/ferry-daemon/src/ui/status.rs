@@ -78,7 +78,7 @@ fn peer_rows(st: &UiState, records: &[([u8; 32], AgreedRecord)]) -> Result<Value
                 json!({
                     "device_id": dev_hex,
                     "last_agreed_manifest_id": hex_str(&rec.manifest_id),
-                    "agreed_at": Some(super::timefmt::fmt_rfc3339(rec.agreed_sec)),
+                    "agreed_at": Some(ferry_platform::time::fmt_rfc3339(rec.agreed_sec)),
                     "connectivity": st.handle().peer_connectivity(&dev_bytes),
                 })
             })
@@ -87,27 +87,16 @@ fn peer_rows(st: &UiState, records: &[([u8; 32], AgreedRecord)]) -> Result<Value
 }
 
 /// The pin block of the status document, read via ferry-pin's
-/// [`ferry_pin::PinStore`] so liveness uses the same platform
+/// [`ferry_pin::PinManager`] so liveness uses the same platform
 /// proc-start-token evidence as the CLI (`ferry pin status` and this view
 /// can no longer disagree about staleness).
 fn pin_view(st: &UiState) -> Result<Value, OpError> {
-    match super::actions::pin_store(st).load().map_err(super::actions::pin_err)? {
-        None => Ok(json!({"state": "none", "holding": false, "paths": []})),
-        Some(rec) => {
-            let state = if rec.released {
-                "released"
-            } else if rec.liveness() == ferry_pin::Liveness::Alive {
-                "active"
-            } else {
-                "stale"
-            };
-            Ok(json!({
-                "state": state,
-                "holding": state == "active",
-                "paths": rec.paths,
-            }))
-        }
-    }
+    let summary = super::actions::pin_manager(st).summary().map_err(super::actions::pin_err)?;
+    Ok(json!({
+        "state": summary.state,
+        "holding": summary.holding,
+        "paths": summary.paths,
+    }))
 }
 
 fn held_map(held: &[(String, Vec<String>)]) -> Value {

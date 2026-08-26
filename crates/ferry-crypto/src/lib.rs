@@ -69,12 +69,7 @@ pub mod recovery;
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in
 /// Debug impls and logs.
 pub(crate) fn hex_short(data: &[u8]) -> String {
-    let mut s = String::new();
-    for b in &data[..8.min(data.len())] {
-        s.push(char::from_digit(u32::from(b >> 4), 16).unwrap());
-        s.push(char::from_digit(u32::from(b & 0xf), 16).unwrap());
-    }
-    s
+    ferry_store::format::hex(&data[..8.min(data.len())])
 }
 
 /// Shared test fixtures. Compiled only for tests within this crate.

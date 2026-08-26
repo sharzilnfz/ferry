@@ -10,10 +10,11 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-use ferry_pin::{HeldLedger, PinStore};
+use ferry_pin::PinManager;
+use ferry_platform::time::fmt_rfc3339;
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
-use ferry_sync_engine::{list_conflicts, timefmt};
+use ferry_sync_engine::list_conflicts;
 use serde_json::json;
 
 use crate::error::CliResult;
@@ -146,46 +147,19 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
 
     // Session pinning (T-015): surface the pin state and the full held set
     // so held changes are visible, never silently parked.
-    let (pin_state, pin_paths, pin_holding) =
-        match PinStore::new(opened.state_dir()).load().map_err(|e| {
-            crate::error::CliError::new(
-                "pin-state-corrupt",
-                e.to_string(),
-                "inspect .ferry/pin-state.json",
-            )
-        })? {
-            None => ("none".to_string(), Vec::<String>::new(), false),
-            Some(rec) => (
-                if rec.released {
-                    "released".to_string()
-                } else if rec.holding() {
-                    "active".to_string()
-                } else {
-                    "stale".to_string()
-                },
-                rec.paths.clone(),
-                rec.holding(),
-            ),
-        };
-    let held_ledger = HeldLedger::new(opened.state_dir());
-    let mut held_by_peer = serde_json::Map::new();
-    let mut held_total = 0usize;
-    for peer in held_ledger.peers().map_err(|e| {
+    let pin_summary = PinManager::new(opened.state_dir()).summary().map_err(|e| {
         crate::error::CliError::new(
-            "held-ledger-corrupt",
+            "pin-state-corrupt",
             e.to_string(),
-            "run `ferry pin status` for detail",
+            "inspect .ferry/pin-state.json",
         )
-    })? {
-        let entries = held_ledger.load_peer(&peer).map_err(|e| {
-            crate::error::CliError::new(
-                "held-ledger-corrupt",
-                e.to_string(),
-                "run `ferry pin release` to recover what remains readable",
-            )
-        })?;
-        let paths = ferry_pin::distinct_paths(&entries);
-        held_total += paths.len();
+    })?;
+    let pin_state = pin_summary.state;
+    let pin_paths = pin_summary.paths;
+    let pin_holding = pin_summary.holding;
+    let held_total = pin_summary.total_held_paths;
+    let mut held_by_peer = serde_json::Map::new();
+    for (peer, paths) in pin_summary.held_by_peer {
         held_by_peer.insert(peer, json!(paths));
     }
 
@@ -414,5 +388,5 @@ fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
 
 /// Fixed UTC rendering of an agreement timestamp (no local timezone drift).
 pub fn format_agreed_time(rec: &ferry_store::agreement::AgreedRecord) -> String {
-    timefmt::fmt_rfc3339(rec.agreed_sec)
+    fmt_rfc3339(rec.agreed_sec)
 }

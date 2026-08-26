@@ -1109,6 +1109,7 @@ dependencies = [
  "ferry-ignore",
  "ferry-ipc",
  "ferry-pin",
+ "ferry-platform",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",
@@ -1155,11 +1156,14 @@ dependencies = [
  "ferry-ipc",
  "ferry-iroh",
  "ferry-pin",
+ "ferry-platform",
+ "ferry-scan",
  "ferry-store",
  "ferry-sync",
  "ferry-sync-engine",
  "rand 0.8.7",
  "serde_json",
+ "subtle",
  "tempfile",
  "tokio",
 ]
@@ -1170,8 +1174,8 @@ version = "0.1.0"
 dependencies = [
  "ferry-crypto",
  "ferry-ignore",
+ "ferry-platform",
  "ferry-store",
- "ferry-sync-engine",
  "serde",
  "serde_json",
  "tempfile",
@@ -1240,6 +1244,7 @@ dependencies = [
 name = "ferry-pin"
 version = "0.1.0"
 dependencies = [
+ "ferry-materialize",
  "ferry-platform",
  "ferry-store",
  "ferry-sync-engine",
@@ -1285,6 +1290,7 @@ name = "ferry-relay"
 version = "0.1.0"
 dependencies = [
  "ferry-iroh",
+ "ferry-store",
  "ferry-sync",
  "futures-util",
  "iroh",
@@ -1370,6 +1376,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ferry-ipc",
+ "ferry-platform",
  "ratatui",
  "serde",
  "serde_json",

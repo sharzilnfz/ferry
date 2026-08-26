@@ -35,7 +35,6 @@ pub mod unix {
     pub struct IpcServer {
         listener: UnixListener,
         socket_path: PathBuf,
-        auto_remove: bool,
     }
 
     impl IpcServer {
@@ -53,7 +52,6 @@ pub mod unix {
             Ok(Self {
                 listener,
                 socket_path: path.to_path_buf(),
-                auto_remove: true,
             })
         }
 
@@ -69,11 +67,6 @@ pub mod unix {
             &self.socket_path
         }
 
-        /// Control whether the socket file is removed on Drop (default true).
-        pub fn set_auto_remove(&mut self, auto_remove: bool) {
-            self.auto_remove = auto_remove;
-        }
-
         /// Explicitly clean up the socket file from the filesystem.
         pub fn close(&self) {
             let _ = std::fs::remove_file(&self.socket_path);
@@ -82,9 +75,7 @@ pub mod unix {
 
     impl Drop for IpcServer {
         fn drop(&mut self) {
-            if self.auto_remove {
-                let _ = std::fs::remove_file(&self.socket_path);
-            }
+            let _ = std::fs::remove_file(&self.socket_path);
         }
     }
 

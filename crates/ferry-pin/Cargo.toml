@@ -9,6 +9,7 @@ ferry-store = { path = "../ferry-store" }
 # T-06: pin liveness compares the recorded writer against the ACTUAL start
 # time of whatever process now owns the pid (anti pid-reuse).
 ferry-platform.workspace = true
+ferry-materialize = { path = "../ferry-materialize" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 serde.workspace = true
 serde_json.workspace = true

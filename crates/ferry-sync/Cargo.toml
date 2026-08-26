@@ -8,8 +8,7 @@ license.workspace = true
 ferry-store = { path = "../ferry-store" }
 ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
-# T-06: session-pin enforcement at the shared execution boundary
-# (`applier::SessionApplier` consults the folder's pin state + ledgers).
+# Session-pin types for sync engine tests and release planning.
 ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true
 rand.workspace = true

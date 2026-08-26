@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use ferry_folder::folder::{load_rules, open_folder};
 use ferry_folder::pairing::{accept_begin, accept_complete, initiate_begin, initiate_complete};
-use ferry_pin::{HeldLedger, PinError, PinRecord, PinStore, PIN_FORMAT_VERSION};
+use ferry_pin::{PinError, PinManager};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 
@@ -14,8 +14,8 @@ use super::{OpError, UiState};
 
 const PAIR_TIMEOUT_SECS: u64 = 120;
 
-pub(super) fn pin_store(st: &UiState) -> PinStore {
-    PinStore::new(st.state_dir())
+pub(super) fn pin_manager(st: &UiState) -> PinManager {
+    PinManager::new(st.state_dir())
 }
 
 pub(super) fn pin_err(e: PinError) -> OpError {
@@ -44,7 +44,7 @@ pub(super) fn pin_err(e: PinError) -> OpError {
     }
 }
 
-fn log_err(e: ferry_sync_engine::LogError) -> OpError {
+pub(super) fn log_err(e: ferry_sync_engine::LogError) -> OpError {
     match e {
         ferry_sync_engine::LogError::Corrupt { path, reason, .. } => OpError::new(
             "conflict-log",
@@ -56,13 +56,8 @@ fn log_err(e: ferry_sync_engine::LogError) -> OpError {
 }
 
 pub(crate) fn held_by_peer(st: &UiState) -> Result<Vec<(String, Vec<String>)>, OpError> {
-    let ledger = HeldLedger::new(st.state_dir());
-    let mut out = Vec::new();
-    for peer in ledger.peers().map_err(pin_err)? {
-        let entries = ledger.load_peer(&peer).map_err(pin_err)?;
-        out.push((peer, ferry_pin::distinct_paths(&entries)));
-    }
-    Ok(out)
+    let summary = pin_manager(st).summary().map_err(pin_err)?;
+    Ok(summary.held_by_peer.into_iter().collect())
 }
 
 pub(crate) fn conflict_entries(state_dir: &Path) -> Result<Vec<Value>, OpError> {
@@ -77,7 +72,7 @@ pub(crate) fn conflict_entries(state_dir: &Path) -> Result<Vec<Value>, OpError> 
         .collect()
 }
 
-fn folder_err(e: ferry_folder::FolderError) -> OpError {
+pub(super) fn folder_err(e: ferry_folder::FolderError) -> OpError {
     OpError::new(e.code, e.message, e.hint)
 }
 
@@ -163,11 +158,6 @@ pub(super) fn pair_accept(
 }
 
 pub(super) fn pin_start(st: &UiState, paths: Option<Vec<String>>) -> Result<Value, OpError> {
-    let scope: Vec<String> = match paths {
-        Some(p) if !p.is_empty() => p,
-        _ => vec!["*".to_string()],
-    };
-
     let mut base_agreements = BTreeMap::new();
     for (dev, rec) in AgreementLedger::new(st.state_dir())
         .list_folder(&st.folder_id())
@@ -176,21 +166,17 @@ pub(super) fn pin_start(st: &UiState, paths: Option<Vec<String>>) -> Result<Valu
         base_agreements.insert(hex_str(&dev), hex_str(&rec.manifest_id));
     }
 
-    let (sec, nsec) = super::timefmt::now_unix();
-    let pid = std::process::id();
     let base_peers_recorded = base_agreements.len();
-    let record = PinRecord {
-        format_version: PIN_FORMAT_VERSION,
-        device_id: st.device_hex().to_string(),
-        pid,
-        started_sec: sec,
-        started_nsec: nsec,
-        paths: scope.clone(),
-        released: false,
-        base_agreements,
-        proc_start_token: None,
-    };
-    pin_store(st).start(&record).map_err(pin_err)?;
+    let mgr = pin_manager(st);
+    let pid = std::process::id();
+    let record = mgr
+        .start_session(
+            paths.unwrap_or_default(),
+            pid,
+            st.device_hex(),
+            base_agreements,
+        )
+        .map_err(pin_err)?;
 
     Ok(json!({
         "command": "pin",
@@ -198,47 +184,47 @@ pub(super) fn pin_start(st: &UiState, paths: Option<Vec<String>>) -> Result<Valu
         "folder": st.tree_dir().display().to_string(),
         "device_id": st.device_hex(),
         "pid": pid,
-        "paths": scope,
-        "started_at": super::timefmt::fmt_rfc3339(sec),
+        "paths": record.paths,
+        "started_at": ferry_platform::time::fmt_rfc3339(record.started_sec),
         "base_peers_recorded": base_peers_recorded,
     }))
 }
 
 pub(super) fn pin_stop(st: &UiState) -> Result<Value, OpError> {
-    let store = pin_store(st);
-    let was_pinned = store.load().map_err(pin_err)?.is_some();
-    let was_pinned = store.mark_released().map_err(pin_err)? && was_pinned;
+    let mgr = pin_manager(st);
+    let summary = mgr.summary().map_err(pin_err)?;
+    let was_pinned = summary.holding || summary.state == "active" || summary.state == "stale";
+    let _ = mgr.stop_session().map_err(pin_err)?;
 
-    let held = held_by_peer(st)?;
-    let by_peer: serde_json::Map<String, Value> = held
+    let by_peer: serde_json::Map<String, Value> = summary
+        .held_by_peer
         .iter()
         .map(|(peer, paths)| (peer.clone(), json!(paths.len())))
         .collect();
-    let total: usize = held.iter().map(|(_, paths)| paths.len()).sum();
 
     Ok(json!({
         "command": "pin",
         "action": "stop",
         "folder": st.tree_dir().display().to_string(),
         "was_pinned": was_pinned,
-        "held_changes": total,
+        "held_changes": summary.total_held_paths,
         "held_by_peer": Value::Object(by_peer),
     }))
 }
 
 pub(super) fn pin_release(st: &UiState) -> Result<Value, OpError> {
-    let held = held_by_peer(st)?;
-    let total_held: usize = held.iter().map(|(_, paths)| paths.len()).sum();
+    let mgr = pin_manager(st);
+    let summary = mgr.summary().map_err(pin_err)?;
 
-    if total_held > 0 {
+    if summary.total_held_paths > 0 {
         return Err(OpError::new(
             "not-implemented",
-            format!("{total_held} held change(s) need reconciliation via the CLI"),
+            format!("{} held change(s) need reconciliation via the CLI", summary.total_held_paths),
             "run `ferry pin release` in this folder on the command line",
         ));
     }
 
-    let pin_ended = pin_store(st).mark_released().map_err(pin_err)?;
+    let pin_ended = mgr.stop_session().map_err(pin_err)?;
     let conflicts_total = conflict_entries(&st.state_dir())?.len();
 
     Ok(json!({

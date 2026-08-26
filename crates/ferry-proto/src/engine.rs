@@ -28,9 +28,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rand::rngs::OsRng;
-use x25519_dalek::{PublicKey, StaticSecret};
-
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::format::{hex, BlobId, BlobKind};
@@ -38,17 +35,12 @@ use ferry_store::index::IndexEntry;
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload};
 use ferry_store::store::Store;
 
-use crate::codec::FLAG_EXTENSION_AWARE;
 use crate::codec::{
-    self, AuthProof, Bye, FolderOffer, FrameBody, Hello, HelloAck, IndexAdvert, ItemBatch,
-    PackItem, RequestItems, RequestPacks,
+    self, Bye, FolderOffer, IndexAdvert, ItemBatch, PackItem, RequestItems, RequestPacks,
 };
 use crate::error::{ByeReason, ProtoError};
-use crate::secure::{
-    kdf_handshake, open_auth, seal_auth, traffic_keys, transcript_hash, SessionCipher,
-};
+use crate::secure::SecureSession;
 use crate::stream::ByteStream;
-use crate::version::negotiate;
 use crate::version::ProtocolVersion;
 
 /// Zero `folder_id` marks "end of announcement list" in offer rounds.
@@ -142,40 +134,19 @@ pub struct SessionReport {
 
 /// Run one full session over `io`.
 pub fn run_engine<S: ByteStream>(
-    mut io: S,
+    io: S,
     role: Role,
     cfg: EngineConfig,
 ) -> Result<SessionReport, ProtoError> {
     let our_max = ProtocolVersion::V1_0;
-    let hs = match handshake(&mut io, role, &cfg, our_max) {
-        Ok(h) => h,
-        // No session ciphers exist yet: the clean disconnect is a plaintext
-        // BYE carrying the typed reason.
-        Err(e) => {
-            if !matches!(e, ProtoError::ByeReceived { .. } | ProtoError::Io(_)) {
-                let reason = match e {
-                    ProtoError::VersionIncompatible { .. } => ByeReason::VersionIncompatible,
-                    ProtoError::Auth(_) | ProtoError::IdentityMismatch { .. } => {
-                        ByeReason::AuthFailed
-                    }
-                    _ => ByeReason::ProtocolViolation,
-                };
-                let _ = send_plain(&mut io, codec::MSG_BYE, our_max, &[reason as u8]);
-            }
-            return Err(e);
-        }
-    };
-
-    let encrypted = hs.tx.is_some();
-    let mut sess = Session {
-        io: &mut io,
-        version: hs.agreed,
-        peer_max: hs.peer_max,
-        peer_flags: hs.peer_flags,
-        peer_id: cfg.expected_peer,
-        tx: hs.tx,
-        rx: hs.rx,
-    };
+    let mut sess = SecureSession::establish(
+        io,
+        role,
+        &cfg.identity,
+        cfg.expected_peer,
+        our_max,
+        cfg.encryption,
+    )?;
 
     let mut outcomes: Vec<FolderOutcome> = cfg
         .folders
@@ -219,9 +190,9 @@ pub fn run_engine<S: ByteStream>(
     }
 
     Ok(SessionReport {
-        peer: cfg.expected_peer,
-        agreed_version: hs.agreed,
-        encrypted,
+        peer: sess.peer_id(),
+        agreed_version: sess.version(),
+        encrypted: sess.is_encrypted(),
         folders: outcomes,
     })
 }
@@ -229,7 +200,7 @@ pub fn run_engine<S: ByteStream>(
 /// Best-effort BYE (post-auth ciphers when present) then propagate the
 /// original error untouched.
 fn abort<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     err: ProtoError,
 ) -> Result<SessionReport, ProtoError> {
     if !matches!(err, ProtoError::ByeReceived { .. } | ProtoError::Io(_)) {
@@ -250,361 +221,13 @@ fn abort<S: ByteStream>(
     Err(err)
 }
 
-// --- low-level frame io ------------------------------------------------------
-
-/// Full wire bytes of a pre-auth frame: length prefix || magic || type ||
-/// version || payload. The handshake hashes exactly these bytes.
-fn full_wire(fb: &FrameBody) -> Vec<u8> {
-    let body = fb.encode();
-    let mut out = Vec::with_capacity(4 + body.len());
-    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    out.extend_from_slice(&body);
-    out
-}
-
-fn send_plain<S: ByteStream>(
-    io: &mut S,
-    msg_type: u8,
-    version: ProtocolVersion,
-    payload: &[u8],
-) -> Result<(), ProtoError> {
-    crate::frame::write_body(
-        io,
-        &full_wire(&FrameBody::new(msg_type, version, payload.to_vec())).as_slice()[4..],
-    )
-}
-
-/// Send one pre-auth frame, returning its exact wire image.
-fn send_preauth<S: ByteStream>(
-    io: &mut S,
-    msg_type: u8,
-    version: ProtocolVersion,
-    payload: &[u8],
-) -> Result<Vec<u8>, ProtoError> {
-    let fb = FrameBody::new(msg_type, version, payload.to_vec());
-    let wire = full_wire(&fb);
-    crate::frame::write_body(io, &wire[4..])?;
-    Ok(wire)
-}
-
-fn recv_preauth<S: ByteStream>(io: &mut S) -> Result<(FrameBody, Vec<u8>), ProtoError> {
-    let body = crate::frame::read_body(io)?;
-    let wire_len = (body.len() as u32).to_be_bytes();
-    let mut wire = Vec::with_capacity(4 + body.len());
-    wire.extend_from_slice(&wire_len);
-    wire.extend_from_slice(&body);
-    Ok((FrameBody::parse(&body)?, wire))
-}
-
-// --- session state ------------------------------------------------------------
-
-pub(crate) struct Session<'a, S: ByteStream> {
-    pub(crate) io: &'a mut S,
-    pub(crate) version: ProtocolVersion,
-    pub(crate) peer_max: ProtocolVersion,
-    pub(crate) peer_flags: u64,
-    /// The authenticated peer identity (verified during handshake).
-    pub(crate) peer_id: DeviceId,
-    pub(crate) tx: Option<SessionCipher>,
-    pub(crate) rx: Option<SessionCipher>,
-}
-
-impl<S: ByteStream> Session<'_, S> {
-    fn send_frame(&mut self, msg_type: u8, payload: Vec<u8>) -> Result<(), ProtoError> {
-        self.send_frame_best_effort(msg_type, payload)
-    }
-
-    fn send_frame_best_effort(&mut self, msg_type: u8, payload: Vec<u8>) -> Result<(), ProtoError> {
-        let fb = FrameBody::new(msg_type, self.version, payload);
-        let body = fb.encode();
-        match self.tx.as_mut() {
-            Some(cipher) => {
-                let ct = cipher.seal_frame(body.len() as u32 + 16, &body)?;
-                crate::frame::write_body(self.io, &ct)
-            }
-            None => crate::frame::write_body(self.io, &body),
-        }
-    }
-
-    /// Receive one frame, applying the unknown-message-type rule:
-    ///
-    /// - Unknown types before auth completes are protocol violations (the
-    ///   pre-auth surface is frozen at four message types).
-    /// - Post-auth: an unknown type is SKIPPED silently iff the peer
-    ///   advertised a higher minor than ours AND carries feature flags we
-    ///   do not know (the ignore-if-flagged rule). Otherwise it is a
-    ///   protocol violation → clean disconnect.
-    ///
-    /// Returns `Ok(None)` for skipped frames so callers can loop.
-    pub(crate) fn recv_frame(&mut self) -> Result<Option<FrameBody>, ProtoError> {
-        loop {
-            let raw = crate::frame::read_body(self.io)?;
-            let plain = match self.rx.as_mut() {
-                Some(cipher) => cipher.open_frame(raw.len() as u32, &raw)?,
-                None => raw,
-            };
-            let fb = FrameBody::parse(&plain)?;
-            if !codec::KNOWN_TYPES.contains(&fb.msg_type) {
-                let higher = self.peer_max.major() == ProtocolVersion::V1_0.major()
-                    && self.peer_max.minor() > ProtocolVersion::V1_0.minor();
-                let flagged = (self.peer_flags & !FLAG_EXTENSION_AWARE) != 0;
-                if higher && flagged {
-                    continue; // skip-if-flagged
-                }
-                return Err(ProtoError::UnknownMessage {
-                    msg_type: fb.msg_type,
-                });
-            }
-            return Ok(Some(fb));
-        }
-    }
-
-    fn expect_frame(&mut self, msg_type: u8) -> Result<FrameBody, ProtoError> {
-        match self.recv_frame()? {
-            Some(fb) if fb.msg_type == msg_type => Ok(fb),
-            Some(other) => Err(unexpected(other.msg_type)),
-            None => unreachable!("recv_frame never returns None without looping"),
-        }
-    }
-
-    fn expect_frame_any(&mut self, types: &[u8]) -> Result<FrameBody, ProtoError> {
-        match self.recv_frame()? {
-            Some(fb) if types.contains(&fb.msg_type) => Ok(fb),
-            Some(other) => Err(unexpected(other.msg_type)),
-            None => unreachable!("recv_frame never returns None without looping"),
-        }
-    }
-
-    fn recv_expect_bye(&mut self) -> Result<(), ProtoError> {
-        let fb = self.expect_frame(codec::MSG_BYE)?;
-        let bye = Bye::parse(&fb.payload)?;
-        match bye.reason {
-            ByeReason::Normal => Ok(()),
-            other => Err(ProtoError::ByeReceived { reason: other }),
-        }
-    }
+fn store_err(e: ferry_store::store::StoreError) -> ProtoError {
+    ProtoError::Io(std::io::Error::other(e.to_string()))
 }
 
 fn unexpected(t: u8) -> ProtoError {
     let _ = t;
     ProtoError::ProtocolViolation("unexpected message in this state")
-}
-
-fn store_err(e: ferry_store::store::StoreError) -> ProtoError {
-    ProtoError::Io(std::io::Error::other(e.to_string()))
-}
-
-// --- handshake -----------------------------------------------------------------
-
-struct HandshakeResult {
-    agreed: ProtocolVersion,
-    peer_max: ProtocolVersion,
-    peer_flags: u64,
-    tx: Option<SessionCipher>,
-    rx: Option<SessionCipher>,
-}
-
-fn random32() -> [u8; 32] {
-    use rand::RngCore;
-    let mut b = [0u8; 32];
-    OsRng.fill_bytes(&mut b);
-    b
-}
-
-/// Drive hello + mutual authentication. Always active, even when session
-/// sealing is disabled — possession proofs are not optional.
-fn handshake<S: ByteStream>(
-    io: &mut S,
-    role: Role,
-    cfg: &EngineConfig,
-    our_max: ProtocolVersion,
-) -> Result<HandshakeResult, ProtoError> {
-    let flags = FLAG_EXTENSION_AWARE;
-    // StaticSecret (not EphemeralSecret) because its diffie_hellman BORROWS,
-    // letting one fresh scalar feed all three DH terms.
-    let esk = StaticSecret::random_from_rng(OsRng);
-    let my_epk = *PublicKey::from(&esk).as_bytes();
-    let my_nonce = random32();
-    let my_stat = *cfg.identity.device_id();
-
-    let my_hello = Hello {
-        version: our_max,
-        flags,
-        eph_pub: my_epk,
-        stat_pub: my_stat,
-        nonce: my_nonce,
-    };
-
-    // --- exchange hellos ---
-    let (peer_hello, hello_wires) = match role {
-        Role::Initiator => {
-            let my_wire = send_preauth(io, codec::MSG_HELLO, our_max, &my_hello.encode())?;
-            let (fb, _) = recv_preauth(io)?;
-            let ack = HelloAck::parse(&fb.payload)?;
-            check_identity(ack.stat_pub, cfg.expected_peer)?;
-            let expected_agreed = negotiate(our_max, ack.version)?;
-            if ack.agreed != expected_agreed {
-                return Err(ProtoError::ProtocolViolation(
-                    "responder chose an invalid session version",
-                ));
-            }
-            (
-                PeerHello::Ack(Box::new(ack)),
-                HelloWires {
-                    initiator: my_wire,
-                    responder: full_wire(&fb),
-                },
-            )
-        }
-        Role::Responder => {
-            let (fb, hello_wire) = recv_preauth(io)?;
-            let hello = Hello::parse(&fb.payload)?;
-            check_identity(hello.stat_pub, cfg.expected_peer)?;
-            let agreed = negotiate(our_max, hello.version)?;
-            let ack = HelloAck {
-                version: our_max,
-                agreed,
-                flags,
-                eph_pub: my_epk,
-                stat_pub: my_stat,
-                nonce: my_nonce,
-            };
-            let my_wire = send_preauth(io, codec::MSG_HELLO_ACK, agreed, &ack.encode())?;
-            (
-                PeerHello::Init(Box::new(hello)),
-                HelloWires {
-                    initiator: hello_wire,
-                    responder: my_wire,
-                },
-            )
-        }
-    };
-
-    let (agreed, peer_max, peer_flags, peer_eph, peer_stat) = match peer_hello {
-        PeerHello::Init(h) => (
-            negotiate(our_max, h.version)?,
-            h.version,
-            h.flags,
-            h.eph_pub,
-            h.stat_pub,
-        ),
-        PeerHello::Ack(a) => (a.agreed, a.version, a.flags, a.eph_pub, a.stat_pub),
-    };
-
-    let th_hello = transcript_hash(&[&hello_wires.initiator, &hello_wires.responder]);
-
-    // --- three DH terms ---
-    // EphemeralSecret::diffie_hellman is infallible (a fresh random scalar
-    // is never degenerate); identity.diffie_hellman checks contribution.
-    fn dh(sk: &StaticSecret, peer: [u8; 32]) -> Result<[u8; 32], ProtoError> {
-        let shared = sk.diffie_hellman(&PublicKey::from(peer));
-        if !shared.was_contributory() {
-            return Err(ProtoError::Auth("degenerate DH output"));
-        }
-        Ok(*shared.as_bytes())
-    }
-    let e1 = dh(&esk, peer_eph)?;
-    // m1 authenticates the INITIATOR's static key, m2 the RESPONDER's.
-    let (m1, m2): ([u8; 32], [u8; 32]) = match role {
-        Role::Initiator => (
-            *cfg.identity
-                .diffie_hellman(&peer_eph)
-                .map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // A.stat × B.eph
-            dh(&esk, peer_stat)?, // A.eph × B.stat
-        ),
-        Role::Responder => (
-            dh(&esk, peer_stat)?, // B.eph × A.stat == A.stat × B.eph
-            *cfg.identity
-                .diffie_hellman(&peer_eph)
-                .map_err(|_| ProtoError::Auth("degenerate peer static key"))?, // B.stat × A.eph
-        ),
-    };
-
-    let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
-
-    // --- mutual proofs: initiator first, then responder ---
-    let proof_a: AuthProof = seal_auth(&htk_i2r, &th_hello, cfg.identity.device_id())?;
-    let proof_b_key = htk_r2i.clone();
-
-    let auth_wires = match role {
-        Role::Initiator => {
-            let w_init = send_preauth(io, codec::MSG_AUTH_INIT, agreed, &proof_a.encode())?;
-            let (fb, _) = recv_preauth(io)?;
-            let proof_r = AuthProof::parse(&fb.payload)?;
-            let got = open_auth(&proof_b_key, &th_hello, &proof_r)
-                .map_err(|_| ProtoError::Auth("responder failed its possession proof"))?;
-            check_identity(got, cfg.expected_peer)?;
-            AuthWires {
-                initiator: w_init,
-                responder: full_wire(&fb),
-            }
-        }
-        Role::Responder => {
-            let (fb, w_init) = recv_preauth(io)?;
-            let proof_i = AuthProof::parse(&fb.payload)?;
-            let got = open_auth(&htk_i2r, &th_hello, &proof_i)
-                .map_err(|_| ProtoError::Auth("initiator failed its possession proof"))?;
-            check_identity(got, cfg.expected_peer)?;
-            let proof_b = seal_auth(&htk_r2i, &th_hello, cfg.identity.device_id())?;
-            let w_resp = send_preauth(io, codec::MSG_AUTH_CONFIRM, agreed, &proof_b.encode())?;
-            AuthWires {
-                initiator: w_init,
-                responder: w_resp,
-            }
-        }
-    };
-
-    let th_final = transcript_hash(&[
-        &hello_wires.initiator,
-        &hello_wires.responder,
-        &auth_wires.initiator,
-        &auth_wires.responder,
-    ]);
-    let (tk_i2r, tk_r2i) = traffic_keys(&prk, &th_final);
-
-    let (tx, rx) = if cfg.encryption {
-        let (mine, theirs) = match role {
-            Role::Initiator => (tk_i2r, tk_r2i),
-            Role::Responder => (tk_r2i, tk_i2r),
-        };
-        (Some(mine.cipher()), Some(theirs.cipher()))
-    } else {
-        (None, None)
-    };
-
-    Ok(HandshakeResult {
-        agreed,
-        peer_max,
-        peer_flags,
-        tx,
-        rx,
-    })
-}
-
-struct AuthWires {
-    initiator: Vec<u8>,
-    responder: Vec<u8>,
-}
-
-enum PeerHello {
-    Init(Box<Hello>),
-    Ack(Box<HelloAck>),
-}
-
-struct HelloWires {
-    initiator: Vec<u8>,
-    responder: Vec<u8>,
-}
-
-fn check_identity(got: DeviceId, expected: DeviceId) -> Result<(), ProtoError> {
-    if got == expected {
-        Ok(())
-    } else {
-        Err(ProtoError::IdentityMismatch {
-            expected: hex(&expected),
-            got: hex(&got),
-        })
-    }
 }
 
 // --- folder phases ---------------------------------------------------------------
@@ -654,7 +277,7 @@ fn now_secs_nsecs() -> (i64, u32) {
 }
 
 fn folder_phases<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     role: Role,
     cfg: &EngineConfig,
     outcomes: &mut [FolderOutcome],
@@ -744,7 +367,7 @@ fn pull_needed(mine: Option<BlobId>, theirs: Option<BlobId>) -> bool {
 /// One pull stage: fetch every listed folder, then send the empty
 /// `REQUEST_ITEMS` end-of-stage marker.
 fn run_stage<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
     idxs: &[usize],
     peer_folders: &BTreeMap<[u8; 16], PeerFolder>,
@@ -786,7 +409,7 @@ fn run_stage<S: ByteStream>(
 
 /// Serve the peer's pull stage until its end-of-stage marker arrives.
 fn serve_stage<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
 ) -> Result<(), ProtoError> {
     loop {
@@ -818,7 +441,7 @@ fn find_store(cfg: &EngineConfig, folder_id: [u8; 16]) -> Result<&Arc<Store>, Pr
 }
 
 fn serve_items<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
     r: RequestItems,
 ) -> Result<(), ProtoError> {
@@ -846,7 +469,7 @@ fn serve_items<S: ByteStream>(
 }
 
 fn serve_packs<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
     r: RequestPacks,
 ) -> Result<(), ProtoError> {
@@ -876,7 +499,7 @@ fn serve_packs<S: ByteStream>(
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
 fn exchange_offers<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     role: Role,
     cfg: &EngineConfig,
     outcomes: &[FolderOutcome],
@@ -912,7 +535,7 @@ fn exchange_offers<S: ByteStream>(
 
     // Announce one of OUR folders: offer (+adverts in round 1).
     fn announce<T: ByteStream>(
-        sess: &mut Session<'_, T>,
+        sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
         outcomes: &[FolderOutcome],
         f: &FolderState,
@@ -935,7 +558,7 @@ fn exchange_offers<S: ByteStream>(
 
     // As the MIRROR of an announced folder: reply with our state (+adverts).
     fn echo<T: ByteStream>(
-        sess: &mut Session<'_, T>,
+        sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
         outcomes: &[FolderOutcome],
         folder_id: [u8; 16],
@@ -968,7 +591,7 @@ fn exchange_offers<S: ByteStream>(
     // this records it plus its advert tail.
     fn consume_announcement<T: ByteStream>(
         po: FolderOffer,
-        sess: &mut Session<'_, T>,
+        sess: &mut SecureSession<T>,
         with_adverts: bool,
         peer_folders: &mut BTreeMap<[u8; 16], PeerFolder>,
         peer_adverts: &mut BTreeMap<[u8; 16], AdvertMap>,
@@ -993,7 +616,7 @@ fn exchange_offers<S: ByteStream>(
     // Announcer-side consumption after announcing: read the echo offer and
     // its advert tail.
     fn consume_echo<S: ByteStream>(
-        sess: &mut Session<'_, S>,
+        sess: &mut SecureSession<S>,
         with_adverts: bool,
         peer_folders: &mut BTreeMap<[u8; 16], PeerFolder>,
         peer_adverts: &mut BTreeMap<[u8; 16], AdvertMap>,
@@ -1016,7 +639,7 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    let send_sentinel = |sess: &mut Session<'_, S>| -> Result<(), ProtoError> {
+    let send_sentinel = |sess: &mut SecureSession<S>| -> Result<(), ProtoError> {
         sess.send_frame(
             codec::MSG_FOLDER_OFFER,
             FolderOffer {
@@ -1069,7 +692,7 @@ fn exchange_offers<S: ByteStream>(
     Ok((peer_folders, peer_adverts))
 }
 
-fn expect_offer<S: ByteStream>(sess: &mut Session<'_, S>) -> Result<FolderOffer, ProtoError> {
+fn expect_offer<S: ByteStream>(sess: &mut SecureSession<S>) -> Result<FolderOffer, ProtoError> {
     let fb = sess.expect_frame(codec::MSG_FOLDER_OFFER)?;
     FolderOffer::parse(&fb.payload)
 }
@@ -1086,7 +709,7 @@ fn nonzero_manifest(id: BlobId) -> Option<BlobId> {
 /// [`MAX_ADVERT_ROWS_TOTAL`] so a peer streaming endless more=1 frames fails
 /// with a typed resource limit instead of growing the map forever.
 pub(crate) fn recv_advert_map<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
 ) -> Result<AdvertMap, ProtoError> {
     let mut map = AdvertMap::new();
     let mut rows = 0usize;
@@ -1114,7 +737,7 @@ pub(crate) fn recv_advert_map<S: ByteStream>(
 /// Send our index entries for one folder, chunked; a `None` store means we
 /// hold nothing for this folder (one empty advert closes the sequence).
 fn send_my_adverts<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     store: Option<&Arc<Store>>,
 ) -> Result<(), ProtoError> {
     let entries = match store {
@@ -1155,7 +778,7 @@ fn send_my_adverts<S: ByteStream>(
 /// retried.
 #[allow(clippy::too_many_arguments)]
 fn fetch_blobs<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     folder_id: [u8; 16],
     kind: BlobKind,
     want: &[BlobId],
@@ -1193,7 +816,7 @@ fn fetch_blobs<S: ByteStream>(
 /// its claimed id AFTER decryption and store only verified bytes. Returns
 /// the ids accepted into the store.
 fn read_item_batches<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     store: &Arc<Store>,
     rejections: &mut usize,
 ) -> Result<BTreeSet<BlobId>, ProtoError> {
@@ -1229,7 +852,7 @@ fn read_item_batches<S: ByteStream>(
 /// granularity policy says they pay off. Returns the wanted ids satisfied
 /// through packs.
 fn fetch_via_packs<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     folder_id: [u8; 16],
     wanted: &[BlobId],
     adverts: &AdvertMap,
@@ -1327,7 +950,7 @@ pub(crate) fn ingest_pack(store: &Arc<Store>, bytes: &[u8]) -> Result<BlobId, Pr
 /// Full pull of one folder's content from the peer.
 #[allow(clippy::too_many_arguments)]
 fn pull_folder<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     folder_id: [u8; 16],
     store: &Arc<Store>,
     target: BlobId,
@@ -1428,7 +1051,7 @@ fn pull_folder<S: ByteStream>(
 /// manifest id for a folder, record the last-agreed pointer locally
 /// (ADR-0004 ancestor state).
 fn finish_after_sync<S: ByteStream>(
-    sess: &mut Session<'_, S>,
+    sess: &mut SecureSession<S>,
     role: Role,
     cfg: &EngineConfig,
     outcomes: &mut [FolderOutcome],
@@ -1449,7 +1072,7 @@ fn finish_after_sync<S: ByteStream>(
                     .record(
                         &out.folder_id,
                         &AgreedRecord {
-                            peer_device_id: sess.peer_id,
+                            peer_device_id: sess.peer_id(),
                             manifest_id: mine,
                             agreed_sec: sec,
                             agreed_nsec: nsec,
