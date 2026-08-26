@@ -1,7 +1,5 @@
 //! Terminal initialization, cleanup, RAII guards, and asynchronous input event streams.
 
-use std::io::{self, stdout, Stdout};
-use std::time::Duration;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -9,6 +7,8 @@ use crossterm::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use std::io::{self, stdout, Stdout};
+use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 /// RAII terminal session guard that configures raw mode and alternate screen,
@@ -108,7 +108,10 @@ impl TerminalEvents {
                 }
             }
         });
-        Self { rx, _worker: worker }
+        Self {
+            rx,
+            _worker: worker,
+        }
     }
 
     /// Receive next terminal event asynchronously.

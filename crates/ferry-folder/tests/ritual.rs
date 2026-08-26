@@ -70,7 +70,10 @@ fn full_ritual_two_devices_adopt_same_folder() {
     let pending_i: PendingOffer = initiate_begin(&opened_a, &id_a).expect("begin");
     assert!(pending_i.offer_bytes.starts_with(b"FRPO"));
     assert_eq!(pending_i.offer_path, dot_dir(&root_a).join(OFFER_SUFFIX));
-    assert!(!pending_i.offer_path.exists(), "no artifact before complete");
+    assert!(
+        !pending_i.offer_path.exists(),
+        "no artifact before complete"
+    );
     assert!(!pending_i.short_code.is_empty());
     let pub_a = *id_a.public();
     let root_for_thread = root_a.clone();
@@ -123,7 +126,10 @@ fn full_ritual_two_devices_adopt_same_folder() {
     // B's adopted folder opens with its own identity and matches the poly.
     let opened_b = open_folder(accepted.folder.as_path(), &id_b).unwrap();
     assert_eq!(opened_b.poly, POLY);
-    assert_eq!(opened_b.settings.folder_id, ferry_store::format::hex(&FOLDER_ID));
+    assert_eq!(
+        opened_b.settings.folder_id,
+        ferry_store::format::hex(&FOLDER_ID)
+    );
 
     // Adopted store flushed to disk: index snapshot readable via reopen.
     assert!(accepted.folder.join(".ferry/index").is_dir());

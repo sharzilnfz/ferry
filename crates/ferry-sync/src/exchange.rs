@@ -50,9 +50,14 @@ use ferry_store::index::IndexEntry;
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload, RootManifest};
 use ferry_store::store::Store;
 
-use ferry_materialize::Applier;
 use crate::engine::{IngestError, SessionError};
 use crate::session::{Established, SessionIo};
+
+/// Outcome of a pull stage execution.
+struct PullOutcome {
+    held: usize,
+    diverged: bool,
+}
 
 /// Zero `folder_id` marks "end of announcement list" in offer rounds.
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
@@ -415,28 +420,19 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         } else if theirs_empty && !mine_empty {
             // Bootstrap guard: never trade content for emptiness.
             self.status("SESSION skipping empty peer offer (bootstrap guard)");
-        } else if !mine_empty && !lineage_newer(&man, &self.cur.manifest) {
-            // Stale offer: the peer announced a manifest OLDER than what
-            // we already hold (it announced before it saw our latest, or
-            // it still runs our own earlier state). Adopting would
-            // REGRESS; skip and let the peer catch up from us instead —
-            // this is M0's single-direction flow, recovered through
-            // lineage instead of a donor message. A FRESH device (empty
-            // tree) bypasses this guard: bootstrap adoption ignores the
-            // clock, exactly like pick_donor's rule 1.
-            self.status("SESSION skipping stale peer offer (lineage guard)");
         } else {
-            let held = self.pull_content(&man, target)?;
-            if held == 0 {
+            let outcome = self.pull_content(&man, target)?;
+            if outcome.held == 0 && !outcome.diverged {
                 self.adopt(target, man_bytes, man)?;
-            } else {
+            } else if outcome.held > 0 {
                 // An active pin withheld part of the peer state: do NOT
                 // adopt (or locally agree to) a manifest whose tree we do
                 // not fully hold. Our next scan mints a child of OUR own
                 // lineage; the withheld decisions stay ledgered under
                 // `.ferry/held/<peer>.jsonl` until release reconciles them.
                 self.status(&format!(
-                    "pin: held {held} path(s) from peer {} (release with `ferry pin release`)",
+                    "pin: held {} path(s) from peer {} (release with `ferry pin release`)",
+                    outcome.held,
                     hex_short(&self.est.peer)
                 ));
             }
@@ -445,14 +441,15 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         self.close_stage()
     }
 
-    /// Tree walk + diff + packs-first data fetch + durable materialize.
-    /// Returns how many paths an active pin withheld from the tree.
+    /// Tree walk + three-way reconciliation + data fetch + execution.
+    /// Evaluates concurrent unpinned edits against last-agreed base, quarantines
+    /// losing versions alongside winners, and records entries into conflicts.jsonl.
     fn pull_content(
         &mut self,
         man: &RootManifest,
         remote_manifest_id: BlobId,
-    ) -> Result<usize, SessionError> {
-        // 2. Breadth-first walk of the peer's tree: fetch missing nodes.
+    ) -> Result<PullOutcome, SessionError> {
+        // 1. Breadth-first walk of the peer's tree: fetch missing nodes.
         let mut queue = vec![man.root_tree_id];
         let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
         let mut rounds = 0usize;
@@ -480,29 +477,54 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             }
         }
 
-        // 3. What we actually want: the diff's chunks, minus what we hold.
-        //    Entries outside the diff buckets are identical in both
-        //    manifests (same chunk lists), and anything in OUR manifest
-        //    was ingested locally, so diff coverage is sound.
-        let changes = ferry_store::diff::diff_manifests(self.store, &self.cur.manifest, man)?;
-        let wanted: Vec<BlobId> = crate::engine::collect_chunk_ids(&changes)
-            .into_iter()
-            .filter(|id| self.store.get(BlobKind::DataChunk, id).is_err())
-            .collect();
+        // 2. Read last-agreed base manifest from AgreementLedger if present.
+        let base_rec = ferry_store::agreement::AgreementLedger::new(self.store.store_dir())
+            .get(&self.folder_id, &self.est.peer)
+            .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
+        let base_manifest = match base_rec {
+            Some(rec) => match self.store.get(BlobKind::Manifest, &rec.manifest_id) {
+                Ok(bytes) => parse_manifest(&bytes).ok(),
+                Err(_) => None,
+            },
+            None => None,
+        };
+
+        // 3. Three-way reconciliation against base manifest.
+        let plan =
+            ferry_sync_engine::reconcile::reconcile(ferry_sync_engine::reconcile::ReconcileInput {
+                store: self.store,
+                local: &self.cur.manifest,
+                remote: man,
+                base: base_manifest.as_ref(),
+            })
+            .map_err(|e| SessionError::Apply(format!("reconciliation failed: {e}")))?;
+
+        // 4. Collect chunks wanted from plan.fetch
+        let mut wanted_set: BTreeSet<BlobId> = BTreeSet::new();
+        for (chunk_id, _) in &plan.fetch {
+            if self.store.get(BlobKind::DataChunk, chunk_id).is_err() {
+                wanted_set.insert(*chunk_id);
+            }
+        }
+
+        // Fallback to diff chunks for any unreferenced edge cases
+        let diff_changes = ferry_store::diff::diff_manifests(self.store, &self.cur.manifest, man)?;
+        for chunk_id in crate::engine::collect_chunk_ids(&diff_changes) {
+            if self.store.get(BlobKind::DataChunk, &chunk_id).is_err() {
+                wanted_set.insert(chunk_id);
+            }
+        }
+
+        let wanted: Vec<BlobId> = wanted_set.into_iter().collect();
         self.status(&format!(
-            "SESSION pulling: {} added / {} removed / {} modified / {} metadata, {} chunks wanted",
-            changes.added.len(),
-            changes.removed.len(),
-            changes.content_modified.len() + changes.type_changed.len(),
-            changes.metadata_modified.len(),
+            "SESSION pulling: {} ops, {} conflicts, {} chunks wanted",
+            plan.materialize.len(),
+            plan.conflicts.len(),
             wanted.len()
         ));
 
-        // 4. Packs first where the ADVERTISED grouping pays off (Auto
-        //    granularity: >= 2 wanted chunks share one pack).
+        // 5. Fetch packs / individual chunks
         let satisfied = self.fetch_via_packs(&wanted)?;
-
-        // 5. Remainder item-level.
         let leftover: Vec<BlobId> = wanted
             .iter()
             .filter(|id| !satisfied.contains(*id))
@@ -512,24 +534,65 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             self.fetch_blobs(BlobKind::DataChunk, &leftover)?;
         }
 
-        // 6. Materialize durably into the working tree BEFORE round 2.
-        //    Pin enforcement rides the shared applier boundary: the pin is
-        //    re-read here, after fetch completed and immediately before the
-        //    tree mutates (T-06).
-        let mut applier = Applier::new(self.store, self.host.tree_root());
-        if let Some(state_dir) = self.host.pin_state_dir() {
-            let gate = ferry_pin::SessionPinGate::new(
-                state_dir,
-                hex(&self.est.peer),
-                hex(&remote_manifest_id),
-            );
-            applier = applier.with_pin_gate(gate);
+        // 6. Partition plan if pin is active
+        let (plan_to_apply, held_count) = match self.host.pin_state_dir() {
+            Some(state_dir) => {
+                let now = crate::engine::now_parts();
+                match ferry_pin::hold_filter(
+                    state_dir,
+                    self.store,
+                    &plan,
+                    &self.cur.manifest,
+                    &hex(&self.est.peer),
+                    &hex(&remote_manifest_id),
+                    now,
+                )
+                .map_err(|e| SessionError::Apply(format!("hold filter: {e}")))?
+                {
+                    ferry_pin::HoldDecision::Pass => (plan, 0),
+                    ferry_pin::HoldDecision::Hold(split) => {
+                        let ledger = ferry_pin::HeldLedger::new(state_dir);
+                        ledger
+                            .append(&hex(&self.est.peer), &split.held)
+                            .map_err(|e| SessionError::Apply(format!("held ledger: {e}")))?;
+                        let count = split.held.len();
+                        (split.apply, count)
+                    }
+                }
+            }
+            None => (plan, 0),
+        };
+
+        // 7. Execute plan against working tree and conflict log
+        let now = crate::engine::now_parts();
+        let state_dir = self
+            .host
+            .pin_state_dir()
+            .unwrap_or_else(|| self.store.store_dir());
+        let stats = ferry_sync_engine::execute(
+            self.store,
+            self.host.tree_root(),
+            &plan_to_apply,
+            Some(state_dir),
+            now,
+        )
+        .map_err(|e| SessionError::Apply(format!("{e}")))?;
+
+        let has_mutations = stats.apply.mutations() > 0;
+        let has_quarantine = !stats.quarantined.is_empty();
+        let has_conflicts = !stats.conflicts.is_empty();
+        let has_local_send = !plan_to_apply.send.is_empty();
+
+        if has_mutations || has_quarantine || has_conflicts {
+            self.host.note_tree_mutation();
         }
-        let outcome = applier
-            .apply_session_change_set(&changes, &man.root_tree_id)
-            .map_err(|e| SessionError::Apply(format!("{e}")))?;
-        self.host.note_tree_mutation();
-        Ok(outcome.held)
+
+        let diverged = has_quarantine || has_conflicts || has_local_send;
+
+        Ok(PullOutcome {
+            held: held_count,
+            diverged,
+        })
     }
 
     /// Close MY stage: the empty `REQUEST_ITEMS` marker. Per the reference

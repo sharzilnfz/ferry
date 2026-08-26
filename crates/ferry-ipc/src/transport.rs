@@ -84,7 +84,9 @@ pub mod unix {
 
     impl IpcClient {
         /// Connect to a Unix Domain Socket at the specified path.
-        pub async fn connect(path: impl AsRef<Path>) -> Result<IpcConnection<UnixStream>, IpcError> {
+        pub async fn connect(
+            path: impl AsRef<Path>,
+        ) -> Result<IpcConnection<UnixStream>, IpcError> {
             let stream = UnixStream::connect(path).await?;
             Ok(IpcConnection::new(stream))
         }
@@ -95,7 +97,9 @@ pub mod unix {
 pub mod windows {
     use std::path::Path;
     use std::sync::Mutex;
-    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions};
+    use tokio::net::windows::named_pipe::{
+        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    };
 
     use crate::error::IpcError;
     use crate::framing::IpcConnection;
@@ -122,9 +126,10 @@ pub mod windows {
         /// Accept the next incoming client connection.
         pub async fn accept(&self) -> Result<IpcConnection<NamedPipeServer>, IpcError> {
             let current_server = {
-                let mut guard = self.server.lock().map_err(|e| {
-                    IpcError::Protocol(format!("Lock poisoned: {e}"))
-                })?;
+                let mut guard = self
+                    .server
+                    .lock()
+                    .map_err(|e| IpcError::Protocol(format!("Lock poisoned: {e}")))?;
                 guard.take().ok_or_else(|| {
                     IpcError::Protocol("Server instance uninitialized".to_string())
                 })?
@@ -135,9 +140,10 @@ pub mod windows {
             // Prepare next pipe instance for subsequent connections
             let next_server = ServerOptions::new().create(&self.pipe_name)?;
             {
-                let mut guard = self.server.lock().map_err(|e| {
-                    IpcError::Protocol(format!("Lock poisoned: {e}"))
-                })?;
+                let mut guard = self
+                    .server
+                    .lock()
+                    .map_err(|e| IpcError::Protocol(format!("Lock poisoned: {e}")))?;
                 *guard = Some(next_server);
             }
 
@@ -159,7 +165,9 @@ pub mod windows {
 
     impl IpcClient {
         /// Connect to a Windows Named Pipe at the specified path.
-        pub async fn connect(path: impl AsRef<Path>) -> Result<IpcConnection<NamedPipeClient>, IpcError> {
+        pub async fn connect(
+            path: impl AsRef<Path>,
+        ) -> Result<IpcConnection<NamedPipeClient>, IpcError> {
             let pipe_name = path.as_ref().to_string_lossy().to_string();
             let client = ClientOptions::new().open(&pipe_name)?;
             Ok(IpcConnection::new(client))

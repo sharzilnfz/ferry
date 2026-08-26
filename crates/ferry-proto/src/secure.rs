@@ -53,9 +53,7 @@ use zeroize::Zeroizing;
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_store::format::hex;
 
-use crate::codec::{
-    self, AuthProof, Bye, FrameBody, Hello, HelloAck, FLAG_EXTENSION_AWARE,
-};
+use crate::codec::{self, AuthProof, Bye, FrameBody, Hello, HelloAck, FLAG_EXTENSION_AWARE};
 use crate::engine::Role;
 use crate::error::{ByeReason, ProtoError};
 use crate::stream::ByteStream;
@@ -393,14 +391,8 @@ impl<S: ByteStream> SecureSession<S> {
         our_max: ProtocolVersion,
         encryption: bool,
     ) -> Result<Self, ProtoError> {
-        let res = Self::handshake_internal(
-            &mut io,
-            role,
-            identity,
-            expected_peer,
-            our_max,
-            encryption,
-        );
+        let res =
+            Self::handshake_internal(&mut io, role, identity, expected_peer, our_max, encryption);
         match res {
             Ok((agreed, peer_max, peer_flags, tx, rx)) => Ok(SecureSession {
                 io,
@@ -959,7 +951,8 @@ mod tests {
         assert_eq!(cli.peer_id(), *id_b.device_id());
         assert!(cli.is_encrypted());
 
-        cli.send_frame(crate::codec::MSG_ITEM_BATCH, vec![42, 43]).unwrap();
+        cli.send_frame(crate::codec::MSG_ITEM_BATCH, vec![42, 43])
+            .unwrap();
         let reply = cli.expect_frame(crate::codec::MSG_ITEM_BATCH).unwrap();
         assert_eq!(reply.payload, vec![99]);
 
@@ -1038,7 +1031,9 @@ mod tests {
         assert!(matches!(srv_res, Err(ProtoError::IdentityMismatch { .. })));
         assert!(matches!(
             cli_res,
-            Err(ProtoError::ByeReceived { reason: ByeReason::AuthFailed }) | Err(ProtoError::Io(_))
+            Err(ProtoError::ByeReceived {
+                reason: ByeReason::AuthFailed
+            } | ProtoError::Io(_))
         ));
     }
 
@@ -1105,7 +1100,9 @@ mod tests {
         assert!(
             matches!(
                 cli_res,
-                Err(ProtoError::ByeReceived { reason: ByeReason::AuthFailed }) | Err(ProtoError::Auth(_))
+                Err(ProtoError::ByeReceived {
+                    reason: ByeReason::AuthFailed
+                } | ProtoError::Auth(_))
             ),
             "{cli_res:?}"
         );
@@ -1204,12 +1201,16 @@ mod tests {
             true,
         );
         let srv_res = srv.join().unwrap();
-        assert!(matches!(srv_res, Err(ProtoError::VersionIncompatible { .. })));
+        assert!(matches!(
+            srv_res,
+            Err(ProtoError::VersionIncompatible { .. })
+        ));
         assert!(matches!(
             cli_res,
-            Err(ProtoError::ByeReceived { reason: ByeReason::VersionIncompatible })
-                | Err(ProtoError::VersionIncompatible { .. })
-                | Err(ProtoError::Io(_))
+            Err(ProtoError::ByeReceived {
+                reason: ByeReason::VersionIncompatible
+            } | ProtoError::VersionIncompatible { .. }
+                | ProtoError::Io(_))
         ));
     }
 }

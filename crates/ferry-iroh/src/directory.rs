@@ -98,7 +98,13 @@ impl RouteTable {
     /// Register a peer identity explicitly and return a synthesized route key.
     pub fn register_peer(&self, endpoint_id: [u8; 32], ip_hints: Vec<SocketAddr>) -> RouteKey {
         let key = self.next_synth_key(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-        self.register_explicit_route(key, Route { endpoint_id, ip_hints });
+        self.register_explicit_route(
+            key,
+            Route {
+                endpoint_id,
+                ip_hints,
+            },
+        );
         key
     }
 

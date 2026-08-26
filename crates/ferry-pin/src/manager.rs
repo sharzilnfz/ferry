@@ -110,7 +110,15 @@ impl PinManager {
     pub fn summary(&self) -> Result<HeldSummary, PinError> {
         let record = self.store.load()?;
         let (state, holding, paths, device_id, pid, started_sec, started_nsec) = match &record {
-            None => ("none".to_string(), false, Vec::new(), None, None, None, None),
+            None => (
+                "none".to_string(),
+                false,
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+            ),
             Some(rec) => {
                 let s = if rec.released {
                     "released"
@@ -249,13 +257,14 @@ impl PinManager {
             }
         };
         let effective_base = agreed_base.or(base_owned.as_ref());
-        let plan =
-            ferry_sync_engine::reconcile::reconcile(ferry_sync_engine::reconcile::ReconcileInput {
+        let plan = ferry_sync_engine::reconcile::reconcile(
+            ferry_sync_engine::reconcile::ReconcileInput {
                 store,
                 local: local_manifest,
                 remote: &remote,
                 base: effective_base,
-            })?;
+            },
+        )?;
         Ok(ReleasePeerPlan {
             device_id: peer_hex,
             remote_manifest_id: manifest_hex,
@@ -347,7 +356,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mgr = PinManager::new(dir.path());
         let err = mgr
-            .start_session(vec!["[z-a]".into()], std::process::id(), "dev", BTreeMap::new())
+            .start_session(
+                vec!["[z-a]".into()],
+                std::process::id(),
+                "dev",
+                BTreeMap::new(),
+            )
             .unwrap_err();
         assert!(matches!(err, PinError::BadPattern { .. }));
     }
@@ -375,8 +389,11 @@ mod tests {
         let p1 = "11".repeat(32);
         let p2 = "22".repeat(32);
 
-        mgr.append_held(&p1, &[held_entry_for("a.txt", p1.clone(), &"cc".repeat(32))])
-            .unwrap();
+        mgr.append_held(
+            &p1,
+            &[held_entry_for("a.txt", p1.clone(), &"cc".repeat(32))],
+        )
+        .unwrap();
         mgr.append_held(
             &p2,
             &[

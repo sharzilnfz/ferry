@@ -60,8 +60,10 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     };
 
     let transport: Arc<dyn ferry_sync::Transport> = Arc::new(ferry_sync::TcpTransport);
-    let device_id = current_device_id();
+    let identity = crate::ensure_identity()?;
+    let device_id = *identity.public();
     let mut handles = Vec::with_capacity(paths.len());
+    let mut ipc_handles = Vec::with_capacity(paths.len());
 
     for (idx, p) in paths.iter().enumerate() {
         let opened = folder::open_folder(p)?;
@@ -106,20 +108,46 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         })?;
         // Same as `ferry sync`: run sessions under the real FERRY_HOME
         // identity so CONFIG_HEAD-seeded allow-lists recognize this device.
-        if let Ok(identity) = crate::home::load_device_identity() {
-            engine.set_identity(identity);
-        }
+        engine.set_identity(identity.clone());
 
         if let Some(addr) = engine.listen_addr() {
             println!("LISTENING {addr}");
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
 
-        handles.push(engine.start());
+        let handle = engine.start();
+
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
+        let daemon_state = Arc::new(ferry_daemon::state::DaemonState::new(
+            handle.clone(),
+            opened.root.clone(),
+            opened.root.clone(),
+            opened.folder_id,
+            identity.clone(),
+            broadcast_tx,
+        ));
+
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&opened.root);
+        let ipc_handle =
+            ferry_daemon::ipc::spawn_ipc_server(socket_path, Arc::clone(&daemon_state)).map_err(
+                |e| {
+                    CliError::new(
+                        "ipc-server",
+                        format!("cannot bind IPC server for {}: {e}", opened.root.display()),
+                        "check socket permissions or remove stale socket",
+                    )
+                },
+            )?;
+        ipc_handles.push(ipc_handle);
+        handles.push(handle);
     }
 
     if let Some(first) = handles.first() {
         first.join_until_signal();
+    }
+
+    for h in ipc_handles {
+        h.shutdown();
     }
 
     Ok(Output::new(
@@ -136,15 +164,5 @@ fn check_transport(kind: &str) -> CliResult<()> {
             format!("transport {other:?} is not implemented yet"),
             "use --transport tcp today; iroh QUIC P2P lands with tickets T-009/T-014",
         )),
-    }
-}
-
-fn current_device_id() -> [u8; 32] {
-    let Ok(home) = crate::home::ferry_home() else {
-        return [0u8; 32];
-    };
-    match ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)) {
-        Ok(id) => *id.public(),
-        Err(_) => [0u8; 32],
     }
 }

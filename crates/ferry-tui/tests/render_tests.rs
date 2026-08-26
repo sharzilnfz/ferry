@@ -1,13 +1,19 @@
 //! Headless rendering and character grid tests using Ratatui's `TestBackend`.
 
-use ferry_ipc::protocol::{ConflictEntry, DeviceStamp, PeerStatusView, PinView, ScanStatsView, TransferDirection};
+use ferry_ipc::protocol::{
+    ConflictEntry, DeviceStamp, PeerStatusView, PinView, ScanStatsView, TransferDirection,
+};
 use ferry_tui::state::{SyncState, TransferProgressState, TuiState};
 use ferry_tui::TuiApp;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 fn setup_test_state(state: SyncState) -> TuiState {
-    let mut s = TuiState::new("/Users/dev/my-project", "folder_01abc", "device_fedcba9876543210");
+    let mut s = TuiState::new(
+        "/Users/dev/my-project",
+        "folder_01abc",
+        "device_fedcba9876543210",
+    );
     s.manifest_id = "manifest_0123456789abcdef".to_string();
     s.scanned = ScanStatsView::new(42, 8, 2, 1024 * 1024 * 5 + 500 * 1024); // ~5.5 MB
     s.is_connected = true;
@@ -54,25 +60,23 @@ fn setup_test_state(state: SyncState) -> TuiState {
         }
         SyncState::Conflict => {
             s.conflicts = 2;
-            s.conflict_entries = vec![
-                ConflictEntry {
-                    ts: "2026-08-26T12:05:00Z".to_string(),
-                    folder_id: "folder_01abc".to_string(),
-                    path: "docs/architecture.md".to_string(),
-                    kind: "content".to_string(),
-                    winner: DeviceStamp {
-                        device: "peer_node_1".to_string(),
-                        mtime_sec: Some(1787574896),
-                        mtime_nsec: Some(0),
-                    },
-                    loser: DeviceStamp {
-                        device: "device_fedcba9876543210".to_string(),
-                        mtime_sec: Some(1787574800),
-                        mtime_nsec: Some(0),
-                    },
-                    quarantined_as: Some("docs/architecture.sync-conflict-20260826.md".to_string()),
+            s.conflict_entries = vec![ConflictEntry {
+                ts: "2026-08-26T12:05:00Z".to_string(),
+                folder_id: "folder_01abc".to_string(),
+                path: "docs/architecture.md".to_string(),
+                kind: "content".to_string(),
+                winner: DeviceStamp {
+                    device: "peer_node_1".to_string(),
+                    mtime_sec: Some(1787574896),
+                    mtime_nsec: Some(0),
                 },
-            ];
+                loser: DeviceStamp {
+                    device: "device_fedcba9876543210".to_string(),
+                    mtime_sec: Some(1787574800),
+                    mtime_nsec: Some(0),
+                },
+                quarantined_as: Some("docs/architecture.sync-conflict-20260826.md".to_string()),
+            }];
         }
         SyncState::Pinned => {
             s.pin = PinView::active(vec!["src/main.rs".to_string(), "docs/spec.md".to_string()]);
@@ -82,7 +86,8 @@ fn setup_test_state(state: SyncState) -> TuiState {
     }
 
     s.update_cached_strings();
-    s.activity_log.push_info("12:00:00", format!("Initial state: {}", state.badge_text()));
+    s.activity_log
+        .push_info("12:00:00", format!("Initial state: {}", state.badge_text()));
     s
 }
 
@@ -113,9 +118,18 @@ fn test_render_80x24_synced() {
     assert!(rendered.contains("Ferry Sync Engine"), "Missing title");
     assert!(rendered.contains("SYNCED"), "Missing SYNCED badge");
     assert!(rendered.contains("folder_01abc"), "Missing folder ID");
-    assert!(rendered.contains("/Users/dev/my-project"), "Missing folder path");
-    assert!(rendered.contains("Storage & Sync State"), "Missing storage title");
-    assert!(rendered.contains("Connected Peers (2)"), "Missing peers count");
+    assert!(
+        rendered.contains("/Users/dev/my-project"),
+        "Missing folder path"
+    );
+    assert!(
+        rendered.contains("Storage & Sync State"),
+        "Missing storage title"
+    );
+    assert!(
+        rendered.contains("Connected Peers (2)"),
+        "Missing peers count"
+    );
     assert!(rendered.contains("Recent Activity"), "Missing activity log");
     assert!(rendered.contains("[P]"), "Missing [P] hotkey");
     assert!(rendered.contains("[R]"), "Missing [R] hotkey");
@@ -135,8 +149,14 @@ fn test_render_80x24_syncing() {
 
     let rendered = buffer_to_string(terminal.backend());
     assert!(rendered.contains("SYNCING"), "Missing SYNCING badge");
-    assert!(rendered.contains("Transfer Progress"), "Missing transfer title");
-    assert!(rendered.contains("Receiving 50%"), "Missing transfer percentage");
+    assert!(
+        rendered.contains("Transfer Progress"),
+        "Missing transfer title"
+    );
+    assert!(
+        rendered.contains("Receiving 50%"),
+        "Missing transfer percentage"
+    );
     assert!(rendered.contains("2.4 MB"), "Missing bytes transferred");
 }
 
@@ -168,7 +188,10 @@ fn test_render_80x24_pinned() {
 
     let rendered = buffer_to_string(terminal.backend());
     assert!(rendered.contains("PINNED"), "Missing PINNED badge");
-    assert!(rendered.contains("active (2 paths)"), "Missing active pin details");
+    assert!(
+        rendered.contains("active (2 paths)"),
+        "Missing active pin details"
+    );
 }
 
 #[test]
@@ -195,8 +218,14 @@ fn test_render_120x40_all_states() {
             "120x40 grid missing badge: {}",
             st.badge_text()
         );
-        assert!(rendered.contains("Ferry Sync Engine"), "120x40 missing header title");
-        assert!(rendered.contains("Recent Activity"), "120x40 missing activity log");
+        assert!(
+            rendered.contains("Ferry Sync Engine"),
+            "120x40 missing header title"
+        );
+        assert!(
+            rendered.contains("Recent Activity"),
+            "120x40 missing activity log"
+        );
         assert!(rendered.contains("[Q]"), "120x40 missing footer");
     }
 }
@@ -212,7 +241,10 @@ fn test_render_terminal_too_small() {
     terminal.draw(|f| app.render(f)).unwrap();
 
     let rendered = buffer_to_string(terminal.backend());
-    assert!(rendered.contains("Terminal too small"), "Should show too-small warning");
+    assert!(
+        rendered.contains("Terminal too small"),
+        "Should show too-small warning"
+    );
 }
 
 #[test]
@@ -227,11 +259,26 @@ fn test_render_conflicts_modal() {
     terminal.draw(|f| app.render(f)).unwrap();
 
     let rendered = buffer_to_string(terminal.backend());
-    assert!(rendered.contains("Quarantined Conflicts"), "Missing modal title");
-    assert!(rendered.contains("docs/architecture.md"), "Missing conflict path");
-    assert!(rendered.contains("2026-08-26T12:05:00Z"), "Missing conflict timestamp");
-    assert!(rendered.contains("docs/architecture.sync-conflict-20260826.md"), "Missing quarantined file");
-    assert!(rendered.contains("Press [Esc], [Q], or [C] to close"), "Missing close hint");
+    assert!(
+        rendered.contains("Quarantined Conflicts"),
+        "Missing modal title"
+    );
+    assert!(
+        rendered.contains("docs/architecture.md"),
+        "Missing conflict path"
+    );
+    assert!(
+        rendered.contains("2026-08-26T12:05:00Z"),
+        "Missing conflict timestamp"
+    );
+    assert!(
+        rendered.contains("docs/architecture.sync-conflict-20260826.md"),
+        "Missing quarantined file"
+    );
+    assert!(
+        rendered.contains("Press [Esc], [Q], or [C] to close"),
+        "Missing close hint"
+    );
 }
 
 #[test]
@@ -248,9 +295,18 @@ fn test_render_conflicts_modal_empty() {
     terminal.draw(|f| app.render(f)).unwrap();
 
     let rendered = buffer_to_string(terminal.backend());
-    assert!(rendered.contains("Quarantined Conflicts"), "Missing modal title");
-    assert!(rendered.contains("No quarantined conflict files detected"), "Missing empty message");
-    assert!(rendered.contains("Press [Esc], [Q], or [C] to return"), "Missing empty return hint");
+    assert!(
+        rendered.contains("Quarantined Conflicts"),
+        "Missing modal title"
+    );
+    assert!(
+        rendered.contains("No quarantined conflict files detected"),
+        "Missing empty message"
+    );
+    assert!(
+        rendered.contains("Press [Esc], [Q], or [C] to return"),
+        "Missing empty return hint"
+    );
 }
 
 #[test]
@@ -265,6 +321,12 @@ fn test_render_empty_peers() {
     terminal.draw(|f| app.render(f)).unwrap();
 
     let rendered = buffer_to_string(terminal.backend());
-    assert!(rendered.contains("Connected Peers (0)"), "Missing empty peers header");
-    assert!(rendered.contains("No peers connected"), "Missing empty peers placeholder");
+    assert!(
+        rendered.contains("Connected Peers (0)"),
+        "Missing empty peers header"
+    );
+    assert!(
+        rendered.contains("No peers connected"),
+        "Missing empty peers placeholder"
+    );
 }

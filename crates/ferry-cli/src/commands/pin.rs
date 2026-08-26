@@ -8,12 +8,10 @@
 //! ledgers: a later `release` still recovers them. Discarding held changes
 //! is never an implicit side effect.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use ferry_pin::PinManager;
-use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
 use ferry_sync_engine::list_conflicts;
 use serde_json::json;
@@ -51,40 +49,46 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
                 (std::process::id(), sec, 0)
             }
         }
-        Some(ferry_ipc::DaemonMessage::Error { code, message }) => {
-            if code == "pin_error" || code == "pin-active" {
+        Some(ferry_ipc::DaemonMessage::Error { code, message }) => match code.as_str() {
+            "bad-pattern" => {
+                return Err(CliError::new(
+                    "bad-pattern",
+                    message,
+                    "check the glob syntax (same rules as ferry.ignore)",
+                ));
+            }
+            "pin-active" => {
                 return Err(CliError::new(
                     "pin-active",
                     message,
                     "run `ferry pin stop` first (or `ferry pin status` to inspect)",
                 ));
             }
-            return Err(CliError::new("pin-error", message, "check pin state"));
-        }
-        _ => {
-            // Offline fallback: freeze base agreements and write PinRecord to disk
-            let mut base_agreements = BTreeMap::new();
-            for (dev, rec) in AgreementLedger::new(&state_dir)
-                .list_folder(&opened.folder_id)
-                .map_err(|e| {
-                    CliError::new(
-                        "agreement-state",
-                        e.to_string(),
-                        "check .ferry permissions",
-                    )
-                })?
-            {
-                base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
+            "pin_error" => {
+                if message.contains("pattern")
+                    || message.contains("syntax")
+                    || message.contains("invalid")
+                {
+                    return Err(CliError::new(
+                        "bad-pattern",
+                        message,
+                        "check the glob syntax (same rules as ferry.ignore)",
+                    ));
+                }
+                return Err(CliError::new(
+                    "pin-active",
+                    message,
+                    "run `ferry pin stop` first (or `ferry pin status` to inspect)",
+                ));
             }
-
-            let pin_mgr = PinManager::new(&state_dir);
-            let pid = std::process::id();
-            let base_peers_recorded = base_agreements.len();
-            let rec = pin_mgr
-                .start_session(scope.clone(), pid, &device_id, base_agreements)
-                .map_err(pin_error)?;
-
-            (pid, rec.started_sec, base_peers_recorded)
+            _ => return Err(CliError::new("pin-error", message, "check pin state")),
+        },
+        _ => {
+            return Err(CliError::new(
+                "daemon-not-running",
+                "no active background daemon is running for this folder",
+                "start the background daemon with `ferry daemon` to enable session protection",
+            ));
         }
     };
 
@@ -249,9 +253,7 @@ pub fn status(folder: &Path) -> CliResult<Output> {
     let pin_mgr = PinManager::new(&state_dir);
     let summary = pin_mgr.summary().map_err(pin_error)?;
 
-    let started_at = summary
-        .started_sec
-        .map(ferry_platform::time::fmt_rfc3339);
+    let started_at = summary.started_sec.map(ferry_platform::time::fmt_rfc3339);
 
     // Documented shape for `pin status`: peer → DISTINCT PATHS (the actual
     // held set), not counts.
@@ -281,11 +283,7 @@ pub fn status(folder: &Path) -> CliResult<Output> {
         s => format!("Pin        {s}\n"),
     };
     if !summary.paths.is_empty() {
-        let _ = writeln!(
-            human,
-            "Scope      {}",
-            summary.paths.join(", ")
-        );
+        let _ = writeln!(human, "Scope      {}", summary.paths.join(", "));
     }
     if summary.total_held_paths == 0 {
         human.push_str("Held       nothing\n");

@@ -21,7 +21,12 @@ fn main() {
         .count() as u32;
     let _ = root;
     for (dev, rec) in &records {
-        println!("rec dev={} man={} sec={}", hex(dev), hex(&rec.manifest_id), rec.agreed_sec);
+        println!(
+            "rec dev={} man={} sec={}",
+            hex(dev),
+            hex(&rec.manifest_id),
+            rec.agreed_sec
+        );
         match store.get(BlobKind::Manifest, &rec.manifest_id) {
             Ok(bytes) => match parse_manifest(&bytes) {
                 Ok(m) => {

@@ -37,3 +37,66 @@ impl Env {
         std::env::set_var("FERRY_HOME", dir);
     }
 }
+
+#[allow(dead_code)]
+pub struct RunningDaemon {
+    pub engine_handle: ferry_sync::EngineHandle,
+    pub state: std::sync::Arc<ferry_daemon::state::DaemonState>,
+    pub ipc_handle: Option<ferry_daemon::ipc::IpcServerHandle>,
+}
+
+#[allow(dead_code)]
+impl RunningDaemon {
+    pub fn start(proj: &std::path::Path) -> Self {
+        let opened = ferry_cli::folder::open_folder(proj).expect("open folder");
+        let identity = ferry_cli::ensure_identity().expect("device identity");
+
+        let mut cfg = ferry_sync::EngineConfig::default_for_test(12345);
+        cfg.tag = "ipc-test-daemon".to_string();
+        cfg.store_dir.clone_from(&opened.root);
+        cfg.tree_dir.clone_from(&opened.root);
+        cfg.folder_id = opened.folder_id;
+        cfg.pin_state_dir = Some(opened.state_dir());
+        cfg.poll_interval = std::time::Duration::from_millis(50);
+
+        let mut engine =
+            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
+                .expect("engine init");
+        engine.set_identity(identity.clone());
+        let handle = engine.start();
+
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
+        let daemon_state = std::sync::Arc::new(ferry_daemon::state::DaemonState::new(
+            handle.clone(),
+            opened.root.clone(),
+            opened.root.clone(),
+            opened.folder_id,
+            identity,
+            broadcast_tx,
+        ));
+
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&opened.root);
+        let ipc_handle =
+            ferry_daemon::ipc::spawn_ipc_server(socket_path, std::sync::Arc::clone(&daemon_state))
+                .expect("spawn ipc server");
+
+        Self {
+            engine_handle: handle,
+            state: daemon_state,
+            ipc_handle: Some(ipc_handle),
+        }
+    }
+
+    pub fn stop_ipc(&mut self) {
+        if let Some(h) = self.ipc_handle.take() {
+            h.shutdown();
+        }
+    }
+}
+
+impl Drop for RunningDaemon {
+    fn drop(&mut self) {
+        self.stop_ipc();
+        self.engine_handle.shutdown();
+    }
+}

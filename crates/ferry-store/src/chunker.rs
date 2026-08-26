@@ -253,7 +253,9 @@ fn derived_tables(p: u64) -> &'static DerivedTables {
     type Memo = std::collections::HashMap<u64, &'static DerivedTables>;
     static MEMO: std::sync::OnceLock<Mutex<Memo>> = std::sync::OnceLock::new();
     let memo = MEMO.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let mut guard = memo.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = memo
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.entry(p).or_insert_with(|| {
         let slide_out = gf_pow_x(SLIDE_OUT_X, p);
         let mut out_table = [0u64; 256];

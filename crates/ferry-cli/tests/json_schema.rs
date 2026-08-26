@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::Env;
+use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
 
@@ -193,6 +193,7 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
 
+    let _daemon = RunningDaemon::start(&proj);
     let started = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 

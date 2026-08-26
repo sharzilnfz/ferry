@@ -87,8 +87,7 @@ mod unix_tests {
         let dir = tempdir().unwrap();
         let sock_path = dir.path().join("daemon.sock");
 
-        let server = IpcServer::bind(&sock_path)
-            .expect("server bind failed");
+        let server = IpcServer::bind(&sock_path).expect("server bind failed");
         assert!(sock_path.exists(), "socket file must exist after bind");
 
         let server_task = tokio::spawn(async move {

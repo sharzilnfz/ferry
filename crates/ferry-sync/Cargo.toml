@@ -15,6 +15,7 @@ rand.workspace = true
 thiserror.workspace = true
 ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
+ferry-sync-engine = { path = "../ferry-sync-engine" }
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true
 hkdf.workspace = true
@@ -23,9 +24,10 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
-ferry-sync-engine = { path = "../ferry-sync-engine" }
 rand.workspace = true
 tempfile.workspace = true
+filetime.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

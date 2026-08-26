@@ -5,7 +5,10 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use ferry_folder::folder::{load_rules, open_folder};
-use ferry_folder::pairing::{accept_begin, accept_complete, initiate_begin, initiate_complete};
+use ferry_folder::pairing::{
+    accept_begin, accept_complete, initiate_begin, initiate_check, GRANT_SUFFIX, OFFER_SUFFIX,
+    RESPONSE_SUFFIX,
+};
 use ferry_pin::{PinError, PinManager};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
@@ -65,9 +68,8 @@ pub(crate) fn conflict_entries(state_dir: &Path) -> Result<Vec<Value>, OpError> 
         .map_err(log_err)?
         .iter()
         .map(|e| {
-            serde_json::to_value(e).map_err(|err| {
-                OpError::new("conflict-log", err.to_string(), "retry the request")
-            })
+            serde_json::to_value(e)
+                .map_err(|err| OpError::new("conflict-log", err.to_string(), "retry the request"))
         })
         .collect()
 }
@@ -76,11 +78,7 @@ pub(super) fn folder_err(e: ferry_folder::FolderError) -> OpError {
     OpError::new(e.code, e.message, e.hint)
 }
 
-pub(super) fn share(
-    st: &UiState,
-    folder: Option<&Path>,
-    i_know: bool,
-) -> Result<Value, OpError> {
+pub(super) fn share(st: &UiState, folder: Option<&Path>, i_know: bool) -> Result<Value, OpError> {
     let root = folder.unwrap_or(st.tree_dir());
     let opened = open_folder(root, st.identity()).map_err(folder_err)?;
     let rules = load_rules(&opened.root, &opened.settings).map_err(folder_err)?;
@@ -97,7 +95,10 @@ pub(super) fn share(
         })
         .collect();
     if !warnings.is_empty() && !i_know {
-        let mut msg = format!("{} secret risk(s) would SYNC to other devices:\n", warnings.len());
+        let mut msg = format!(
+            "{} secret risk(s) would SYNC to other devices:\n",
+            warnings.len()
+        );
         for w in warnings_raw.iter().take(20) {
             let loc = w.line.map(|n| format!(":{n}")).unwrap_or_default();
             let _ = writeln!(
@@ -122,20 +123,72 @@ pub(super) fn share(
     let pending = initiate_begin(&opened, st.identity()).map_err(folder_err)?;
     let warnings_reviewed = !warnings.is_empty();
     let short_code = pending.short_code.clone();
-    let completed = initiate_complete(pending, &opened, st.identity(), PAIR_TIMEOUT_SECS)
-        .map_err(folder_err)?;
+    let dot = ferry_folder::folder::dot_dir(&opened.root);
+    let _ = std::fs::remove_file(dot.join(RESPONSE_SUFFIX));
+    let _ = std::fs::remove_file(dot.join(GRANT_SUFFIX));
+    std::fs::write(&pending.offer_path, &pending.offer_bytes).map_err(OpError::from)?;
     Ok(json!({
         "command": "share",
         "role": "initiate",
-        "status": "completed",
+        "status": "pending",
         "folder": opened.root.display().to_string(),
         "folder_id": hex_str(&opened.folder_id),
-        "peer_device_id": hex_str(&completed.peer_device_id),
         "short_code": short_code,
-        "offer_file": completed.offer_path.display().to_string(),
+        "offer_file": pending.offer_path.display().to_string(),
         "warnings_reviewed": warnings_reviewed,
         "warnings": warnings,
     }))
+}
+
+pub(super) fn share_status(st: &UiState, folder: Option<&Path>) -> Result<Value, OpError> {
+    let root = folder.unwrap_or(st.tree_dir());
+    let opened = open_folder(root, st.identity()).map_err(folder_err)?;
+    let dot = ferry_folder::folder::dot_dir(&opened.root);
+    let offer_path = dot.join(OFFER_SUFFIX);
+    let response_path = dot.join(RESPONSE_SUFFIX);
+
+    let short_code = if let Ok(offer_bytes) = std::fs::read(&offer_path) {
+        ferry_crypto::pairing::PairingOffer::parse(&offer_bytes)
+            .ok()
+            .map(|o| o.short_code(ferry_crypto::pairing::TransportHints(0)))
+    } else {
+        None
+    };
+
+    if !response_path.exists() {
+        return Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "pending",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "short_code": short_code,
+            "offer_file": offer_path.display().to_string(),
+        }));
+    }
+
+    match initiate_check(&opened, st.identity()).map_err(folder_err)? {
+        Some(completed) => Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "completed",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "peer_device_id": hex_str(&completed.peer_device_id),
+            "short_code": completed.short_code,
+            "offer_file": completed.offer_path.display().to_string(),
+            "grant_file": completed.grant_path.display().to_string(),
+        })),
+        None => Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "pending",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "short_code": short_code,
+            "offer_file": offer_path.display().to_string(),
+        })),
+    }
 }
 
 pub(super) fn pair_accept(
@@ -145,7 +198,8 @@ pub(super) fn pair_accept(
 ) -> Result<Value, OpError> {
     let pending = accept_begin(st.identity(), payload_path, dir).map_err(folder_err)?;
     let expected_short_code = pending.expected_short_code.clone();
-    let accepted = accept_complete(pending, st.identity(), PAIR_TIMEOUT_SECS).map_err(folder_err)?;
+    let accepted =
+        accept_complete(pending, st.identity(), PAIR_TIMEOUT_SECS).map_err(folder_err)?;
     Ok(json!({
         "command": "pair",
         "role": "accept",
@@ -219,7 +273,10 @@ pub(super) fn pin_release(st: &UiState) -> Result<Value, OpError> {
     if summary.total_held_paths > 0 {
         return Err(OpError::new(
             "not-implemented",
-            format!("{} held change(s) need reconciliation via the CLI", summary.total_held_paths),
+            format!(
+                "{} held change(s) need reconciliation via the CLI",
+                summary.total_held_paths
+            ),
             "run `ferry pin release` in this folder on the command line",
         ));
     }

@@ -54,8 +54,8 @@ impl PinGate for SessionPinGate {
         if !rec.holding() {
             return Ok((changes.clone(), 0));
         }
-        let matcher = PathMatcher::new(&rec.paths)
-            .map_err(|e| MaterializeError::Pin(e.to_string()))?;
+        let matcher =
+            PathMatcher::new(&rec.paths).map_err(|e| MaterializeError::Pin(e.to_string()))?;
 
         enum Held {
             RemoteApply(Vec<HeldChunk>),
@@ -181,8 +181,5 @@ impl PinGate for SessionPinGate {
 }
 
 fn chunk(id: &BlobId, len: u64) -> HeldChunk {
-    HeldChunk {
-        id: hex(id),
-        len,
-    }
+    HeldChunk { id: hex(id), len }
 }

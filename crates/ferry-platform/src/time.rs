@@ -195,7 +195,8 @@ mod tests {
         for sec in [0, 86400, 1_700_000_000, 2_000_000_000] {
             let (y, mo, d, h, mi, s) = civil_utc(sec);
             let days = days_from_civil(y, mo, d);
-            let reconstructed = days * 86_400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s);
+            let reconstructed =
+                days * 86_400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s);
             assert_eq!(reconstructed, sec);
         }
     }

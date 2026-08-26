@@ -592,14 +592,8 @@ mod tests {
         assert!(pools.contains(BlobKind::DataChunk, &id2));
         assert!(!pools.contains(BlobKind::DataChunk, &id3));
 
-        assert_eq!(
-            pools.staged_bytes(BlobKind::DataChunk, &id1).unwrap(),
-            d1
-        );
-        assert_eq!(
-            pools.staged_bytes(BlobKind::DataChunk, &id2).unwrap(),
-            d2
-        );
+        assert_eq!(pools.staged_bytes(BlobKind::DataChunk, &id1).unwrap(), d1);
+        assert_eq!(pools.staged_bytes(BlobKind::DataChunk, &id2).unwrap(), d2);
 
         // Offer that triggers overflow/sealing
         let (id4, d4) = blob(4, 400, 804);
@@ -618,10 +612,7 @@ mod tests {
             }
         }
         assert!(pools.contains(BlobKind::DataChunk, &id4));
-        assert_eq!(
-            pools.staged_bytes(BlobKind::DataChunk, &id4).unwrap(),
-            d4
-        );
+        assert_eq!(pools.staged_bytes(BlobKind::DataChunk, &id4).unwrap(), d4);
 
         pools.drain_all();
         assert!(!pools.contains(BlobKind::DataChunk, &id4));
@@ -935,11 +926,7 @@ impl VerifiedPack {
     }
 
     /// Construct from already verified pack context and bytes.
-    pub fn from_parts(
-        pack_id: PackId,
-        bytes: Arc<Vec<u8>>,
-        ctx: PackContext,
-    ) -> Self {
+    pub fn from_parts(pack_id: PackId, bytes: Arc<Vec<u8>>, ctx: PackContext) -> Self {
         VerifiedPack {
             pack_id,
             bytes,
@@ -1002,7 +989,10 @@ impl PackCache {
     }
 
     pub fn get(&self, pack_id: &PackId) -> Option<VerifiedPack> {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(pack) = inner.entries.get(pack_id).cloned() {
             if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
                 inner.order.remove(pos);
@@ -1018,7 +1008,10 @@ impl PackCache {
         if pack.bytes.len() > MAX_CACHED_PACK_BYTES {
             return;
         }
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = pack.pack_id;
         if let std::collections::hash_map::Entry::Occupied(mut e) = inner.entries.entry(id) {
             e.insert(pack);
@@ -1042,7 +1035,10 @@ impl PackCache {
     }
 
     pub fn remove(&self, pack_id: &PackId) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.entries.remove(pack_id);
         if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
             inner.order.remove(pos);
@@ -1050,13 +1046,19 @@ impl PackCache {
     }
 
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.entries.clear();
         inner.order.clear();
     }
 
     pub fn len(&self) -> usize {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.entries.len()
     }
 
@@ -1153,14 +1155,7 @@ pub fn read_blob(
     index_loc: Option<(u64, u64)>,
 ) -> Result<Vec<u8>, PackError> {
     let ctx = open_pack(pack_bytes, expected_pack_id, fmk, cipher)?;
-    read_blob_from_ctx(
-        pack_bytes,
-        &ctx,
-        cipher,
-        want_kind,
-        want_id,
-        index_loc,
-    )
+    read_blob_from_ctx(pack_bytes, &ctx, cipher, want_kind, want_id, index_loc)
 }
 
 /// Spec procedure steps 3-6 for creating a pack atomically: unique temp name
@@ -1316,11 +1311,7 @@ impl StagingPools {
             };
             let idx = rng.gen_range(0..pool_len);
             let overflow = {
-                let pool = if is_meta {
-                    &self.meta
-                } else {
-                    &self.data
-                };
+                let pool = if is_meta { &self.meta } else { &self.data };
                 let sp = &pool[idx];
                 !sp.entries.is_empty() && sp.body.len() + bytes.len() > target
             };
@@ -1396,11 +1387,7 @@ impl StagingPools {
     /// a writer sees its own puts before any flush.
     pub fn staged_bytes(&self, kind: BlobKind, id: &BlobId) -> Option<Vec<u8>> {
         let &(is_meta, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
-        let pool = if is_meta {
-            &self.meta
-        } else {
-            &self.data
-        };
+        let pool = if is_meta { &self.meta } else { &self.data };
         let sp = pool.get(pack_idx)?;
         let start = plain_off as usize;
         let end = start + plain_len as usize;

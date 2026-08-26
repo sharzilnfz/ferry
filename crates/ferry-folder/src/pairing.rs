@@ -119,72 +119,106 @@ pub fn initiate_complete(
     identity: &DeviceIdentity,
     timeout_secs: u64,
 ) -> FolderResult<PairingCompleted> {
-    let fmk = unwrap_own_fmk(opened, identity)?;
-    let offer =
-        PairingOffer::parse(&pending.offer_bytes).map_err(|e| {
-            FolderError::new(
-                "bad-offer",
-                e.to_string(),
-                "internal inconsistency; retry the pairing",
-            )
-        })?;
+    std::fs::write(&pending.offer_path, &pending.offer_bytes).code(
+        "io",
+        format!("cannot write {}", pending.offer_path.display()),
+    )?;
 
-    std::fs::write(&pending.offer_path, &pending.offer_bytes)
-        .code("io", format!("cannot write {}", pending.offer_path.display()))?;
-
-    // Waiting phase: poll for the response file beside OUR offer.
-    let response_path = pending.offer_path.with_file_name(RESPONSE_SUFFIX);
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let response_bytes = loop {
-        match std::fs::read(&response_path) {
-            Ok(bytes) => break bytes,
-            Err(_) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(_) => {
-                return Err(FolderError::new(
-                    "pair-timeout",
-                    format!(
-                        "no response appeared within {timeout_secs}s at {}",
-                        response_path.display()
-                    ),
-                    "run the accepting step against this offer file on the other device, then retry",
-                ))
-            }
+    loop {
+        if let Some(completed) = initiate_check(opened, identity)? {
+            return Ok(completed);
+        }
+        if Instant::now() >= deadline {
+            let response_path = pending.offer_path.with_file_name(RESPONSE_SUFFIX);
+            return Err(FolderError::new(
+                "pair-timeout",
+                format!(
+                    "no response appeared within {timeout_secs}s at {}",
+                    response_path.display()
+                ),
+                "run the accepting step against this offer file on the other device, then retry",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Non-blocking check for a responder's reply to a pending offer.
+/// If no response exists at `<dot>/pair-response.ferry-pair`, returns Ok(None).
+/// If response exists, completes pairing, appends peer wrap to `CONFIG_HEAD`, writes
+/// the sealed grant, and returns Ok(Some(PairingCompleted)).
+pub fn initiate_check(
+    opened: &OpenFolder,
+    identity: &DeviceIdentity,
+) -> FolderResult<Option<PairingCompleted>> {
+    let dot = dot_dir(&opened.root);
+    let offer_path = artifact(&dot, OFFER_SUFFIX);
+    if !offer_path.exists() {
+        return Ok(None);
+    }
+    let offer_bytes =
+        std::fs::read(&offer_path).code("io", format!("cannot read {}", offer_path.display()))?;
+    let offer = PairingOffer::parse(&offer_bytes).map_err(|e| {
+        FolderError::new(
+            "bad-offer",
+            e.to_string(),
+            "internal inconsistency; retry the pairing",
+        )
+    })?;
+
+    let response_path = artifact(&dot, RESPONSE_SUFFIX);
+    if !response_path.exists() {
+        return Ok(None);
+    }
+    let Ok(response_bytes) = std::fs::read(&response_path) else {
+        return Ok(None);
+    };
+    if response_bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let response = match ferry_crypto::pairing::PairingResponse::parse(&response_bytes) {
+        Ok(r) => r,
+        Err(ferry_crypto::pairing::PairingError::Truncated { .. }) => return Ok(None),
+        Err(_) => {
+            return Err(FolderError::new(
+                "pair-bad-response",
+                "the response file is damaged; have the other device re-run accept",
+                "have the other device re-run accept",
+            ));
         }
     };
 
-    let response = ferry_crypto::pairing::PairingResponse::parse(&response_bytes).code(
-        "pair-bad-response",
-        "the response file is damaged; have the other device re-run accept",
-    )?;
-    let done = complete_pairing(&offer, &pending.offer_bytes, &response, &fmk, identity).map_err(
-        |e| {
-            FolderError::new(
-                "pair-verify",
-                e.to_string(),
-                "the response did not match this offer; start over with a fresh offer",
-            )
-        },
+    let fmk = unwrap_own_fmk(opened, identity)?;
+    let done = complete_pairing(&offer, &offer_bytes, &response, &fmk, identity).map_err(|e| {
+        FolderError::new(
+            "pair-verify",
+            e.to_string(),
+            "the response did not match this offer; start over with a fresh offer",
+        )
+    })?;
+
+    append_wrap_entry_for(
+        &opened.root,
+        opened.folder_id,
+        &done.peer_pub,
+        &done.wrapped_for_peer,
     )?;
 
-    // Grant access: append the peer's wrap to OUR config head so the folder
-    // records every authorized device.
-    append_wrap_entry_for(&opened.root, opened.folder_id, &done.peer_pub, &done.wrapped_for_peer)?;
-
-    // Sealed handoff for the acceptor: folder key wrap + chunker polynomial.
-    let grant = seal_grant(&pending.offer_bytes, &done.wrapped_for_peer, opened.poly)?;
-    let grant_path = artifact(&dot_dir(&opened.root), GRANT_SUFFIX);
+    let grant = seal_grant(&offer_bytes, &done.wrapped_for_peer, opened.poly)?;
+    let grant_path = artifact(&dot, GRANT_SUFFIX);
     std::fs::write(&grant_path, &grant)
         .code("io", format!("cannot write {}", grant_path.display()))?;
 
-    Ok(PairingCompleted {
+    let short_code = offer.short_code(TransportHints(0));
+    Ok(Some(PairingCompleted {
         peer_device_id: done.peer_pub,
         folder_id: opened.folder_id,
-        short_code: pending.short_code,
-        offer_path: pending.offer_path,
+        short_code,
+        offer_path,
         grant_path,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -294,14 +328,13 @@ pub fn accept_complete(
     };
 
     let (folder_id, poly, wrapped_for_peer) = open_grant(&pending.offer_bytes, &grant_bytes)?;
-    let fmk =
-        *unwrap_folder_key(&wrapped_for_peer, &folder_id, identity).map_err(|e| {
-            FolderError::new(
-                "key-unwrap",
-                e.to_string(),
-                "the grant did not address this device; re-run the pairing",
-            )
-        })?;
+    let fmk = *unwrap_folder_key(&wrapped_for_peer, &folder_id, identity).map_err(|e| {
+        FolderError::new(
+            "key-unwrap",
+            e.to_string(),
+            "the grant did not address this device; re-run the pairing",
+        )
+    })?;
 
     // Build the local store around the adopted key material.
     let store = adopt_folder(&pending.target, identity, folder_id, &fmk, poly)?;
@@ -341,7 +374,12 @@ pub fn accept_complete(
         "crypto",
         "identity keys are local; retry with a fresh identity if this repeats",
     )?;
-    append_wrap_entry_for(&pending.target, folder_id, &initiator, &wrapped_for_initiator)?;
+    append_wrap_entry_for(
+        &pending.target,
+        folder_id,
+        &initiator,
+        &wrapped_for_initiator,
+    )?;
 
     Ok(Accepted {
         folder: pending.target,
@@ -373,12 +411,12 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> FolderResult<([u8; 16], u64, [u
     let body = open_pair_grant(offer_bytes, raw).map_err(grant_error)?;
     let doc: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| FolderError::new("bad-grant", "grant body unreadable", "redo the pairing"))?;
-    let wrapped_hex = doc["wrapped_for_peer"]
-        .as_str()
-        .ok_or_else(|| FolderError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
-    let poly = doc["poly"]
-        .as_u64()
-        .ok_or_else(|| FolderError::new("bad-grant", "grant body incomplete", "redo the pairing"))?;
+    let wrapped_hex = doc["wrapped_for_peer"].as_str().ok_or_else(|| {
+        FolderError::new("bad-grant", "grant body incomplete", "redo the pairing")
+    })?;
+    let poly = doc["poly"].as_u64().ok_or_else(|| {
+        FolderError::new("bad-grant", "grant body incomplete", "redo the pairing")
+    })?;
     let wrapped = unhex_80(wrapped_hex)?;
     // folder_id rides in the offer itself (offsets pinned by ferry-crypto's
     // v1 offer layout); bounds-checked, no panic path.

@@ -95,10 +95,8 @@ impl ApplyStats {
 pub trait PinGate {
     /// Evaluates the change set against the pin gate before disk mutation.
     /// Returns the filtered change set to apply and how many paths were withheld.
-    fn evaluate_changes(
-        &self,
-        changes: &ChangeSet,
-    ) -> Result<(ChangeSet, usize), MaterializeError>;
+    fn evaluate_changes(&self, changes: &ChangeSet)
+        -> Result<(ChangeSet, usize), MaterializeError>;
 }
 
 /// What one apply actually did.

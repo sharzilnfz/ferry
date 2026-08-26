@@ -243,11 +243,43 @@ function parsePaths(raw) {
   return parts.length ? parts : null;
 }
 
+let sharePollTimer = null;
+
+function stopSharePolling() {
+  if (sharePollTimer) {
+    clearInterval(sharePollTimer);
+    sharePollTimer = null;
+  }
+}
+
+function renderSharePending(el, doc) {
+  const warnings = doc.warnings || [];
+  let html = "<b>pairing initiated</b> — status: <span class='badge badge-amber'>waiting for peer</span>" +
+    (doc.short_code ? "<br>short code: <code style='font-size:1.2em;font-weight:bold'>" + esc(doc.short_code) + "</code>" : "") +
+    "<br>offer file: <code>" + esc(doc.offer_file ?? "?") + "</code>" +
+    "<div class='dim' style='margin-top:6px'>Waiting for remote peer to accept offer payload…</div>" +
+    "<div style='margin-top:8px'><button id='share-cancel-btn' class='btn btn-sm' type='button'>cancel waiting</button></div>";
+  if (warnings.length) {
+    html += "<br>warnings carried into the share:";
+    html += warningsTable(warnings);
+  }
+  el.innerHTML = html;
+  const cancelBtn = $("share-cancel-btn");
+  if (cancelBtn) {
+    cancelBtn.onclick = () => {
+      stopSharePolling();
+      el.innerHTML = "<b>share cancelled</b> — stopped waiting for peer.";
+    };
+  }
+}
+
 function renderShareResult(el, doc) {
   const warnings = doc.warnings || [];
-  let html = "<b>" + esc(doc.command ?? "share") + "</b> payload written:" +
-    "<br><code>" + esc(doc.offer_file ?? "?") + "</code>" +
+  let html = "<b>" + esc(doc.command ?? "share") + "</b> " +
+    (doc.status === "completed" ? "<span class='badge badge-green'>completed ✓</span>" : "") +
+    "<br>offer file: <code>" + esc(doc.offer_file ?? "?") + "</code>" +
     "<br>peer device: <code>" + esc(doc.peer_device_id ?? "?") + "</code>" +
+    (doc.short_code ? "<br>short code: <code>" + esc(doc.short_code) + "</code>" : "") +
     "<br>warnings reviewed: " + esc(String(doc.warnings_reviewed ?? false));
   if (warnings.length) {
     html += "<br>warnings carried into the share:";
@@ -265,13 +297,32 @@ function warningsTable(warnings) {
 }
 
 async function doShare(iKnow) {
+  stopSharePolling();
   hideAll($("share-warn"), $("share-result"));
   $("share-anyway").hidden = true;
   $("share-btn").disabled = true;
   try {
     const doc = await api("/api/share", { folder: null, i_know: iKnow });
-    renderShareResult($("share-result"), doc);
-    $("share-result").hidden = false;
+    if (doc.status === "pending") {
+      renderSharePending($("share-result"), doc);
+      $("share-result").hidden = false;
+      sharePollTimer = setInterval(async () => {
+        try {
+          const s = await api("/api/share/status");
+          if (s.status === "completed") {
+            stopSharePolling();
+            renderShareResult($("share-result"), s);
+            loadStatus();
+          }
+        } catch {
+          // ignore transient poll errors while waiting
+        }
+      }, 1500);
+    } else {
+      renderShareResult($("share-result"), doc);
+      $("share-result").hidden = false;
+      loadStatus();
+    }
   } catch (err) {
     showErr($("share-warn"), err);
     if (Array.isArray(err.warnings) && err.warnings.length) {

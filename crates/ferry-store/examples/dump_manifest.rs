@@ -7,8 +7,12 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let store_dir = &args[1];
     let want = args.get(2);
-    let store =
-        Store::open(std::path::Path::new(store_dir), [0u8; 32], Box::new(PassthroughCipher)).unwrap();
+    let store = Store::open(
+        std::path::Path::new(store_dir),
+        [0u8; 32],
+        Box::new(PassthroughCipher),
+    )
+    .unwrap();
     for e in store.index_entries().unwrap() {
         if e.kind != BlobKind::Manifest {
             continue;

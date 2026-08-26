@@ -543,7 +543,9 @@ mod tests {
         store.flush().unwrap();
         assert_eq!(pack_count(folder.path()), 1);
 
-        let (bpl, entries) = store.pack_blob_list(&store.inner.lock().unwrap().locations.packs()[0]).unwrap();
+        let (bpl, entries) = store
+            .pack_blob_list(&store.inner.lock().unwrap().locations.packs()[0])
+            .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(bpl, payload.len() as u64);
     }

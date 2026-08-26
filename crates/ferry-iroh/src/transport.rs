@@ -177,7 +177,9 @@ impl IrohTransport {
             endpoint_id,
             ip_hints: Vec::new(),
         };
-        self.inner.routes.register_explicit_route(key, route.clone());
+        self.inner
+            .routes
+            .register_explicit_route(key, route.clone());
         crate::directory::register_explicit_route(key, route);
         self
     }

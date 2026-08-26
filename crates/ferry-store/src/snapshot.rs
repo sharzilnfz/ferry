@@ -180,7 +180,11 @@ pub fn snapshot_dir(
     source: &Path,
     identity: &SnapshotIdentity,
 ) -> Result<SnapshotOutput, SnapshotError> {
-    finish_snapshot(store, identity, walk_snapshot(store, poly, source, identity, false)?)
+    finish_snapshot(
+        store,
+        identity,
+        walk_snapshot(store, poly, source, identity, false)?,
+    )
 }
 
 /// Like [`snapshot_dir`], but when `identity.parent_manifest_id` names a
@@ -206,7 +210,11 @@ pub fn snapshot_dir_incremental(
     source: &Path,
     identity: &SnapshotIdentity,
 ) -> Result<SnapshotOutput, SnapshotError> {
-    finish_snapshot(store, identity, walk_snapshot(store, poly, source, identity, true)?)
+    finish_snapshot(
+        store,
+        identity,
+        walk_snapshot(store, poly, source, identity, true)?,
+    )
 }
 
 /// Shared tail: persist the walked root, hold the parent pointer when the
@@ -644,10 +652,11 @@ impl Walker<'_> {
                 // Recurse first so the child node exists to point at;
                 // identical listings dedup inside put_meta by content
                 // addressing.
-                let child_prev = Self::prev_entry(prev, &component).and_then(|e| match &e.payload {
-                    EntryPayload::Dir { child_tree_id } => Some(*child_tree_id),
-                    _ => None,
-                });
+                let child_prev =
+                    Self::prev_entry(prev, &component).and_then(|e| match &e.payload {
+                        EntryPayload::Dir { child_tree_id } => Some(*child_tree_id),
+                        _ => None,
+                    });
                 let child_prev = child_prev.and_then(|id| self.prev_node(&id));
                 let child = self.walk_dir(path, rel, child_prev.as_deref())?;
                 let child_tree_id = self.put_tree(&child)?;
@@ -1494,7 +1503,10 @@ mod tests {
 
         let inc = snapshot_dir_incremental(&store, poly_of(29), &tree, &mine).unwrap();
         assert_eq!(inc.manifest_id, pm.manifest_id);
-        assert_eq!(inc.stats.bytes_chunked, 0, "reuse against the peer's entries");
+        assert_eq!(
+            inc.stats.bytes_chunked, 0,
+            "reuse against the peer's entries"
+        );
 
         write_file(&tree.join("b.txt"), b"beta", false, (11, 0));
         let changed = snapshot_dir(&store, poly_of(29), &tree, &mine).unwrap();

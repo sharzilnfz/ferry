@@ -9,15 +9,10 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use common::Env;
+use common::{Env, RunningDaemon};
 use ferry_cli::commands;
-use ferry_daemon::ipc::spawn_ipc_server;
-use ferry_daemon::state::DaemonState;
-use ferry_ipc::paths::socket_path_for_dir;
-use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
 use serde_json::Value;
 
 /// Reduce a JSON value to a deterministic schema description (same as `json_schema.rs`).
@@ -65,62 +60,10 @@ fn schema_of(v: &Value) -> String {
 fn assert_matches_expected_schema(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));
-    let expected = std::fs::read_to_string(&file).unwrap_or_else(|_| {
-        panic!("missing expected schema {}", file.display())
-    });
+    let expected = std::fs::read_to_string(&file)
+        .unwrap_or_else(|_| panic!("missing expected schema {}", file.display()));
     let expected = expected.replace("\r\n", "\n");
     assert_eq!(expected, actual, "JSON schema for {name} drifted");
-}
-
-struct RunningDaemon {
-    _engine_handle: ferry_sync::EngineHandle,
-    state: Arc<DaemonState>,
-    ipc_handle: Option<ferry_daemon::ipc::IpcServerHandle>,
-}
-
-impl RunningDaemon {
-    fn start(proj: &std::path::Path) -> Self {
-        let opened = ferry_cli::folder::open_folder(proj).expect("open folder");
-        let identity = ferry_cli::ensure_identity().expect("device identity");
-
-        let mut cfg = EngineConfig::default_for_test(12345);
-        cfg.tag = "ipc-test-daemon".to_string();
-        cfg.store_dir.clone_from(&opened.root);
-        cfg.tree_dir.clone_from(&opened.root);
-        cfg.folder_id = opened.folder_id;
-        cfg.pin_state_dir = Some(opened.state_dir());
-        cfg.poll_interval = Duration::from_millis(50);
-
-        let mut engine = SyncEngine::new(cfg, Arc::new(TcpTransport)).expect("engine init");
-        engine.set_identity(identity.clone());
-        let handle = engine.start();
-
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
-        let daemon_state = Arc::new(DaemonState::new(
-            handle.clone(),
-            opened.root.clone(),
-            opened.root.clone(),
-            opened.folder_id,
-            identity,
-            broadcast_tx,
-        ));
-
-        let socket_path = socket_path_for_dir(&opened.root);
-        let ipc_handle = spawn_ipc_server(socket_path, Arc::clone(&daemon_state))
-            .expect("spawn ipc server");
-
-        Self {
-            _engine_handle: handle,
-            state: daemon_state,
-            ipc_handle: Some(ipc_handle),
-        }
-    }
-
-    fn stop_ipc(&mut self) {
-        if let Some(h) = self.ipc_handle.take() {
-            h.shutdown();
-        }
-    }
 }
 
 #[test]
@@ -216,16 +159,71 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     assert_eq!(release_out.json["action"], "release");
     assert_eq!(release_out.json["pin_ended"], true);
 
-    // 5. Stop daemon and verify offline pin lifecycle works identically
+    // 5. Stop daemon and verify offline pin start fails with daemon-not-running
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
-    let offline_start = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
-    assert_eq!(offline_start.json["command"], "pin");
-    assert_eq!(offline_start.json["action"], "start");
+    let err = commands::pin::start(&proj, &["src/**".to_string()]).unwrap_err();
+    assert_eq!(err.code, "daemon-not-running");
+    assert!(err.message.contains("no active background daemon"));
+    assert!(err.hint.contains("ferry daemon"));
+}
 
-    let offline_stop = commands::pin::stop(&proj).unwrap();
-    assert_eq!(offline_stop.json["was_pinned"], true);
+#[test]
+fn test_pin_start_fails_when_no_daemon_active() {
+    let env = Env::new("pin-no-daemon");
+    let proj = env.work().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    commands::init::run(&proj, "init").unwrap();
+
+    let err = commands::pin::start(&proj, &["src/**".to_string()]).unwrap_err();
+    assert_eq!(err.code, "daemon-not-running");
+    assert!(err.message.contains("no active background daemon"));
+    assert!(err.hint.contains("ferry daemon"));
+}
+
+#[test]
+fn test_pin_ownership_and_liveness_across_cli_queries() {
+    let env = Env::new("pin-liveness");
+    let proj = env.work().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    commands::init::run(&proj, "init").unwrap();
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("src/main.rs"), b"fn main() {}\n").unwrap();
+
+    // Start daemon
+    let daemon = RunningDaemon::start(&proj);
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Pin start over IPC: pin session is recorded under daemon process ID
+    let start_out = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    assert_eq!(start_out.json["command"], "pin");
+    assert_eq!(start_out.json["action"], "start");
+    let recorded_pid = start_out.json["pid"].as_u64().expect("pid recorded");
+    assert_eq!(recorded_pid, u64::from(std::process::id()));
+
+    // Verify pin-state.json record contains daemon's PID and proc_start_token
+    let pin_mgr = ferry_pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
+    let rec = pin_mgr.record().unwrap().expect("pin record exists");
+    assert_eq!(rec.pid, std::process::id());
+    assert!(rec.proc_start_token.is_some());
+    assert_eq!(rec.liveness(), ferry_pin::Liveness::Alive);
+    assert!(rec.holding());
+
+    // Verify snapshot in daemon reflects active pin
+    let snap = daemon.state.snapshot();
+    assert_eq!(snap.pin.state, "active");
+    assert!(snap.pin.holding);
+    assert_eq!(snap.pin.paths, vec!["src/**".to_string()]);
+
+    // Query status multiple times across subsequent CLI queries:
+    // status must remain active and holding without degrading to stale.
+    for _ in 0..5 {
+        let status_out = commands::pin::status(&proj).unwrap();
+        assert_eq!(status_out.json["state"], "active");
+        assert_eq!(status_out.json["holding"], true);
+        assert_eq!(status_out.json["pid"], recorded_pid);
+    }
 }
 
 #[test]
@@ -262,7 +260,10 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     // 1. Verify offline conflicts query
     let offline_conflicts = commands::conflicts::run(&proj).unwrap();
     assert_eq!(offline_conflicts.json["command"], "conflicts");
-    assert_eq!(offline_conflicts.json["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        offline_conflicts.json["entries"].as_array().unwrap().len(),
+        1
+    );
     assert_matches_expected_schema("conflicts", &schema_of(&offline_conflicts.json));
 
     // 2. Start daemon and query conflicts over IPC
@@ -281,5 +282,8 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     std::thread::sleep(Duration::from_millis(50));
 
     let fallback_conflicts = commands::conflicts::run(&proj).unwrap();
-    assert_eq!(fallback_conflicts.json["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        fallback_conflicts.json["entries"].as_array().unwrap().len(),
+        1
+    );
 }

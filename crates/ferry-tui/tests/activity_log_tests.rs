@@ -73,7 +73,12 @@ fn test_record_daemon_messages() {
         &DaemonMessage::Snapshot(EngineSnapshot::new("/path", "f1", "d1", "synced")),
     );
     assert_eq!(log.len(), 1);
-    assert!(log.entries().back().unwrap().message.contains("Loaded state snapshot"));
+    assert!(log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Loaded state snapshot"));
 
     log.record_daemon_message(
         "12:00:01",
@@ -86,7 +91,12 @@ fn test_record_daemon_messages() {
         },
     );
     assert_eq!(log.len(), 2);
-    assert!(log.entries().back().unwrap().message.contains("changed to syncing"));
+    assert!(log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("changed to syncing"));
 
     log.record_daemon_message(
         "12:00:02",
@@ -101,7 +111,12 @@ fn test_record_daemon_messages() {
         },
     );
     assert_eq!(log.len(), 3);
-    assert!(log.entries().back().unwrap().message.contains("Transfer complete"));
+    assert!(log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Transfer complete"));
 
     log.record_daemon_message(
         "12:00:03",
@@ -113,7 +128,12 @@ fn test_record_daemon_messages() {
         },
     );
     assert_eq!(log.len(), 4);
-    assert!(log.entries().back().unwrap().message.contains("Conflict recorded"));
+    assert!(log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Conflict recorded"));
 
     log.record_daemon_message(
         "12:00:04",
@@ -123,7 +143,12 @@ fn test_record_daemon_messages() {
         },
     );
     assert_eq!(log.len(), 5);
-    assert!(log.entries().back().unwrap().message.contains("Daemon error [ERR_IO]"));
+    assert!(log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Daemon error [ERR_IO]"));
 
     log.clear();
     assert!(log.is_empty());

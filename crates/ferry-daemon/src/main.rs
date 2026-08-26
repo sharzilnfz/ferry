@@ -34,9 +34,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use ferry_crypto::identity as crypto_identity;
+use ferry_daemon::ui;
 use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
-use ferry_daemon::ui;
 
 /// Port 0 makes the transport mint a unique alias.
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
@@ -176,8 +176,7 @@ fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String
         return Ok(None);
     }
     let raw = flag(args, "--ui").unwrap_or_else(|| "127.0.0.1:8098".to_string());
-    let addr =
-        std::net::SocketAddr::from_str(&raw).map_err(|e| format!("--ui {raw:?}: {e}"))?;
+    let addr = std::net::SocketAddr::from_str(&raw).map_err(|e| format!("--ui {raw:?}: {e}"))?;
     if !addr.ip().is_loopback() {
         return Err(format!(
             "--ui {addr}: refusing non-loopback bind; the dashboard serves localhost only"
@@ -240,7 +239,8 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
 }
 
 fn validate_tag(tag: &str) -> Result<(), String> {
-    if tag.is_empty() || tag.len() > 64 || tag.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if tag.is_empty() || tag.len() > 64 || tag.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
         return Err("tag must be 1..64 non-whitespace chars".to_string());
     }
     Ok(())
@@ -357,18 +357,13 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     let socket_path = d
         .socket_path
         .unwrap_or_else(|| ferry_ipc::paths::socket_path_for_dir(&d.store_dir));
-    let ipc_handle = ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state))
-        .map_err(|e| format!("ipc server: {e}"))?;
+    let ipc_handle =
+        ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state))
+            .map_err(|e| format!("ipc server: {e}"))?;
     println!("IPC LISTENING {}", socket_path.display());
 
     if let Some(addr) = d.ui_addr {
-        let state = ui::UiState::new(
-            handle.clone(),
-            d.store_dir,
-            d.tree_dir,
-            d.folder_id,
-            device,
-        );
+        let state = ui::UiState::new(handle.clone(), d.store_dir, d.tree_dir, d.folder_id, device);
         ui::spawn(addr, Arc::new(state)).map_err(|e| format!("--ui: {e}"))?;
     }
 

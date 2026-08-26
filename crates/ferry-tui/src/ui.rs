@@ -51,12 +51,10 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
 
 /// Render the header with folder path, folder ID, device ID, manifest, and engine state badge.
 fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " Ferry Sync Engine ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Ferry Sync Engine ",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
@@ -125,7 +123,10 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     let line2_spans = vec![
         Span::styled(" Device: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(short_device, Style::default().fg(Color::Cyan)),
-        Span::styled("  │  Manifest: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  │  Manifest: ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::styled(short_manifest, Style::default().fg(Color::DarkGray)),
     ];
 
@@ -159,17 +160,17 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
         .split(area);
 
     // Storage block
-    let storage_block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " Storage & Sync State ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    let storage_block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Storage & Sync State ",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     let inner_storage = storage_block.inner(left_chunks[0]);
     frame.render_widget(storage_block, left_chunks[0]);
 
     let pin_style = if state.pin.holding {
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -189,23 +190,38 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
 
     let metrics_lines = vec![
         Line::from(vec![
-            Span::styled(" Scanned:    ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Scanned:    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(&state.cached_metrics_line),
         ]),
         Line::from(vec![
-            Span::styled(" Manifest:   ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Manifest:   ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(&state.cached_manifest_line),
         ]),
         Line::from(vec![
-            Span::styled(" Pin Status: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Pin Status: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::styled(&state.cached_pin_line, pin_style),
         ]),
         Line::from(vec![
-            Span::styled(" Pending:    ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Pending:    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::raw(pending_str),
         ]),
         Line::from(vec![
-            Span::styled(" Conflicts:  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Conflicts:  ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("{}", state.conflicts), conflict_style),
         ]),
     ];
@@ -236,12 +252,10 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
 /// Render the right pane containing the peer connectivity table.
 fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     let title = format!(" Connected Peers ({}) ", state.peers.len());
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            title,
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        title,
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
 
     if state.peers.is_empty() {
         let empty_msg = Paragraph::new("  No peers connected\n  Run `ferry pair` to link a device")
@@ -252,7 +266,11 @@ fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     }
 
     let header = Row::new(vec!["Device ID", "Status", "Last Agreed", "Agreed At"])
-        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .bottom_margin(1);
 
     let rows: Vec<Row> = state
@@ -294,12 +312,10 @@ fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
 
 /// Render the bottom pane displaying recent activity log entries from the circular buffer.
 fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " Recent Activity ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Recent Activity ",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     let inner_area = block.inner(area);
     frame.render_widget(block, area);
 
@@ -340,7 +356,9 @@ fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
 
 /// Render the single-line footer containing hotkey shortcuts.
 fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
-    let hotkey_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let hotkey_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(Color::DarkGray);
 
     let spans = vec![
@@ -363,12 +381,10 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     let modal_area = centered_rect(75, 70, area);
     frame.render_widget(Clear, modal_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " Quarantined Conflicts ",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Quarantined Conflicts ",
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    ));
     let inner_area = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
@@ -391,7 +407,9 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     lines.push(Line::from(Span::styled(
         format!("Total Conflicts: {total_count}"),
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 

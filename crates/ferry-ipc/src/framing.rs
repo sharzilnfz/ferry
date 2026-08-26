@@ -2,7 +2,9 @@
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+};
 
 use crate::error::IpcError;
 use crate::protocol::{ClientCommand, DaemonMessage};

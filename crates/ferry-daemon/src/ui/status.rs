@@ -10,7 +10,7 @@ use super::{OpError, UiState};
 
 /// `GET /api/status` — `ferry status --json` shape from cached state.
 pub(super) fn status_doc(st: &UiState) -> Result<Value, OpError> {
-    let Some(root) = st.handle().root_id() else {
+    let Some(manifest_id) = st.handle().current_manifest_id() else {
         return Err(OpError::new(
             "warming-up",
             "the engine has not completed its first poll tick",
@@ -21,9 +21,7 @@ pub(super) fn status_doc(st: &UiState) -> Result<Value, OpError> {
     let counts = st.handle().scan_counts().unwrap_or_default();
     let records = AgreementLedger::new(st.state_dir())
         .list_folder(&st.folder_id())
-        .map_err(|e| {
-            OpError::new("agreement-state", e.to_string(), "check .ferry permissions")
-        })?;
+        .map_err(|e| OpError::new("agreement-state", e.to_string(), "check .ferry permissions"))?;
     let peers = peer_rows(st, &records)?;
     let pin = pin_view(st)?;
     let held = super::actions::held_by_peer(st)?;
@@ -40,7 +38,7 @@ pub(super) fn status_doc(st: &UiState) -> Result<Value, OpError> {
         "folder": st.tree_dir().display().to_string(),
         "folder_id": hex_str(&st.folder_id()),
         "device_id": st.device_hex(),
-        "manifest_id": hex_str(&root),
+        "manifest_id": hex_str(&manifest_id),
         "scanned": {
             "files": counts.files,
             "dirs": counts.dirs,
@@ -91,7 +89,9 @@ fn peer_rows(st: &UiState, records: &[([u8; 32], AgreedRecord)]) -> Result<Value
 /// proc-start-token evidence as the CLI (`ferry pin status` and this view
 /// can no longer disagree about staleness).
 fn pin_view(st: &UiState) -> Result<Value, OpError> {
-    let summary = super::actions::pin_manager(st).summary().map_err(super::actions::pin_err)?;
+    let summary = super::actions::pin_manager(st)
+        .summary()
+        .map_err(super::actions::pin_err)?;
     Ok(json!({
         "state": summary.state,
         "holding": summary.holding,

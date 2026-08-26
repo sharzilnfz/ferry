@@ -68,7 +68,7 @@ pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
 pub struct EngineFixture {
     pub _dir: tempfile::TempDir,
     listen_addr: std::net::SocketAddr,
-    poly: u64,
+    pub poly: u64,
     name: String,
     pub a: EngineHandle,
     pub b: EngineHandle,

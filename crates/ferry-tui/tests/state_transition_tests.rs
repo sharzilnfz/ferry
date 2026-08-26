@@ -1,6 +1,8 @@
 //! State machine transitions and IPC message handling tests.
 
-use ferry_ipc::protocol::{DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView, TransferDirection};
+use ferry_ipc::protocol::{
+    DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView, TransferDirection,
+};
 use ferry_tui::state::{SyncState, TuiState};
 use ferry_tui::TuiApp;
 
@@ -16,7 +18,8 @@ fn test_initial_state_defaults() {
 #[test]
 fn test_snapshot_transition() {
     let mut app = TuiApp::default();
-    let mut snapshot = EngineSnapshot::new("/home/user/ferry_sync", "f_12345", "dev_abcdef", "synced");
+    let mut snapshot =
+        EngineSnapshot::new("/home/user/ferry_sync", "f_12345", "dev_abcdef", "synced");
     snapshot.manifest_id = Some("manifest_987654321".to_string());
     snapshot.scanned = ScanStatsView::new(100, 15, 0, 10_000_000);
     snapshot.pending_changes = Some(0);
@@ -72,7 +75,10 @@ fn test_transfer_progress_and_completion() {
     assert!(app.state.active_transfer.is_some());
     assert_eq!(app.state.cached_progress_percent, 40);
     assert!(app.state.cached_progress_label.contains("Sending 40%"));
-    assert!(app.state.cached_progress_label.contains("assets/textures.pack"));
+    assert!(app
+        .state
+        .cached_progress_label
+        .contains("assets/textures.pack"));
     assert!(app.state.cached_progress_label.contains("[40/100 chunks]"));
 
     // Completed transfer

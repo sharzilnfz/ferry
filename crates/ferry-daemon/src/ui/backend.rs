@@ -22,8 +22,14 @@ pub trait DashboardBackend: Send + Sync + 'static {
     fn start_pin(&self, paths: Option<Vec<String>>) -> BoxFuture<'_, Result<Value, OpError>>;
     fn stop_pin(&self) -> BoxFuture<'_, Result<Value, OpError>>;
     fn release_pin(&self) -> BoxFuture<'_, Result<Value, OpError>>;
-    fn share(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<Value, OpError>>;
-    fn pair_accept(&self, payload_path: PathBuf, dir: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>>;
+    fn share(&self, folder: Option<PathBuf>, i_know: bool)
+        -> BoxFuture<'_, Result<Value, OpError>>;
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>>;
+    fn pair_accept(
+        &self,
+        payload_path: PathBuf,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<Value, OpError>>;
 }
 
 /// Direct backend adapter wrapping cached in-memory daemon state (`Arc<UiState>`).
@@ -49,7 +55,13 @@ impl DashboardBackend for DirectBackend {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || super::status::status_doc(&st))
                 .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+                .map_err(|e| {
+                    OpError::new(
+                        "internal",
+                        format!("ui worker: {e}"),
+                        "check the daemon's stderr log",
+                    )
+                })?
         })
     }
 
@@ -58,7 +70,13 @@ impl DashboardBackend for DirectBackend {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || super::status::conflicts_doc(&st))
                 .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+                .map_err(|e| {
+                    OpError::new(
+                        "internal",
+                        format!("ui worker: {e}"),
+                        "check the daemon's stderr log",
+                    )
+                })?
         })
     }
 
@@ -67,7 +85,13 @@ impl DashboardBackend for DirectBackend {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || super::actions::pin_start(&st, paths))
                 .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+                .map_err(|e| {
+                    OpError::new(
+                        "internal",
+                        format!("ui worker: {e}"),
+                        "check the daemon's stderr log",
+                    )
+                })?
         })
     }
 
@@ -76,7 +100,13 @@ impl DashboardBackend for DirectBackend {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || super::actions::pin_stop(&st))
                 .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+                .map_err(|e| {
+                    OpError::new(
+                        "internal",
+                        format!("ui worker: {e}"),
+                        "check the daemon's stderr log",
+                    )
+                })?
         })
     }
 
@@ -85,25 +115,72 @@ impl DashboardBackend for DirectBackend {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || super::actions::pin_release(&st))
                 .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+                .map_err(|e| {
+                    OpError::new(
+                        "internal",
+                        format!("ui worker: {e}"),
+                        "check the daemon's stderr log",
+                    )
+                })?
         })
     }
 
-    fn share(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<Value, OpError>> {
+    fn share(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<Value, OpError>> {
         let st = Arc::clone(&self.state);
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || super::actions::share(&st, folder.as_deref(), i_know))
-                .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+            tokio::task::spawn_blocking(move || {
+                super::actions::share(&st, folder.as_deref(), i_know)
+            })
+            .await
+            .map_err(|e| {
+                OpError::new(
+                    "internal",
+                    format!("ui worker: {e}"),
+                    "check the daemon's stderr log",
+                )
+            })?
         })
     }
 
-    fn pair_accept(&self, payload_path: PathBuf, dir: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
         let st = Arc::clone(&self.state);
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || super::actions::pair_accept(&st, &payload_path, dir.as_deref()))
-                .await
-                .map_err(|e| OpError::new("internal", format!("ui worker: {e}"), "check the daemon's stderr log"))?
+            tokio::task::spawn_blocking(move || {
+                super::actions::share_status(&st, folder.as_deref())
+            })
+            .await
+            .map_err(|e| {
+                OpError::new(
+                    "internal",
+                    format!("ui worker: {e}"),
+                    "check the daemon's stderr log",
+                )
+            })?
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        payload_path: PathBuf,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<Value, OpError>> {
+        let st = Arc::clone(&self.state);
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                super::actions::pair_accept(&st, &payload_path, dir.as_deref())
+            })
+            .await
+            .map_err(|e| {
+                OpError::new(
+                    "internal",
+                    format!("ui worker: {e}"),
+                    "check the daemon's stderr log",
+                )
+            })?
         })
     }
 }
@@ -141,13 +218,16 @@ impl IpcBackend {
     }
 }
 
-async fn query_daemon_status(socket_path: &Path) -> Result<ferry_ipc::EngineSnapshot, ferry_ipc::IpcError> {
+async fn query_daemon_status(
+    socket_path: &Path,
+) -> Result<ferry_ipc::EngineSnapshot, ferry_ipc::IpcError> {
     let mut conn = ferry_ipc::IpcClient::connect(socket_path).await?;
     let initial = conn.recv_message().await?;
     match initial {
         Some(ferry_ipc::DaemonMessage::Snapshot(snap)) => Ok(snap),
         _ => {
-            conn.send_command(&ferry_ipc::ClientCommand::GetStatus).await?;
+            conn.send_command(&ferry_ipc::ClientCommand::GetStatus)
+                .await?;
             let resp = conn.recv_message().await?.ok_or_else(|| {
                 ferry_ipc::IpcError::Io(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
@@ -159,7 +239,9 @@ async fn query_daemon_status(socket_path: &Path) -> Result<ferry_ipc::EngineSnap
                 ferry_ipc::DaemonMessage::Error { code, message } => {
                     Err(ferry_ipc::IpcError::Protocol(format!("{code}: {message}")))
                 }
-                other => Err(ferry_ipc::IpcError::Protocol(format!("unexpected response: {other:?}"))),
+                other => Err(ferry_ipc::IpcError::Protocol(format!(
+                    "unexpected response: {other:?}"
+                ))),
             }
         }
     }
@@ -168,7 +250,8 @@ async fn query_daemon_status(socket_path: &Path) -> Result<ferry_ipc::EngineSnap
 async fn query_daemon_conflicts(socket_path: &Path) -> Result<Vec<Value>, ferry_ipc::IpcError> {
     let mut conn = ferry_ipc::IpcClient::connect(socket_path).await?;
     let _initial = conn.recv_message().await?;
-    conn.send_command(&ferry_ipc::ClientCommand::ListConflicts).await?;
+    conn.send_command(&ferry_ipc::ClientCommand::ListConflicts)
+        .await?;
     let resp = conn.recv_message().await?.ok_or_else(|| {
         ferry_ipc::IpcError::Io(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
@@ -187,7 +270,9 @@ async fn query_daemon_conflicts(socket_path: &Path) -> Result<Vec<Value>, ferry_
         ferry_ipc::DaemonMessage::Error { code, message } => {
             Err(ferry_ipc::IpcError::Protocol(format!("{code}: {message}")))
         }
-        other => Err(ferry_ipc::IpcError::Protocol(format!("unexpected response: {other:?}"))),
+        other => Err(ferry_ipc::IpcError::Protocol(format!(
+            "unexpected response: {other:?}"
+        ))),
     }
 }
 
@@ -257,7 +342,13 @@ impl DashboardBackend for IpcBackend {
             if let Some(dir) = fallback_dir {
                 tokio::task::spawn_blocking(move || read_status_from_disk(&dir))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("disk status worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("disk status worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
             } else {
                 Err(OpError::new(
                     "not-found",
@@ -287,7 +378,13 @@ impl DashboardBackend for IpcBackend {
             if let Some(dir) = fallback_dir {
                 tokio::task::spawn_blocking(move || read_conflicts_from_disk(&dir))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("disk conflicts worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("disk conflicts worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
             } else {
                 Err(OpError::new(
                     "not-found",
@@ -335,7 +432,13 @@ impl DashboardBackend for IpcBackend {
             if let Some(dir) = fallback_dir {
                 tokio::task::spawn_blocking(move || pin_start_disk(&dir, paths))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("disk pin start worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("disk pin start worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
             } else {
                 Err(OpError::new(
                     "not-found",
@@ -352,7 +455,13 @@ impl DashboardBackend for IpcBackend {
             if let Some(dir) = fallback_dir {
                 tokio::task::spawn_blocking(move || pin_stop_disk(&dir))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("disk pin stop worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("disk pin stop worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
             } else {
                 Err(OpError::new(
                     "not-found",
@@ -397,7 +506,13 @@ impl DashboardBackend for IpcBackend {
             if let Some(dir) = fallback_dir {
                 tokio::task::spawn_blocking(move || pin_release_disk(&dir))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("disk pin release worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("disk pin release worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
             } else {
                 Err(OpError::new(
                     "not-found",
@@ -408,13 +523,19 @@ impl DashboardBackend for IpcBackend {
         })
     }
 
-    fn share(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<Value, OpError>> {
+    fn share(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<Value, OpError>> {
         let target = folder.or_else(|| self.fallback_dir.clone());
         Box::pin(async move {
             if let Some(dir) = target {
                 tokio::task::spawn_blocking(move || share_folder_disk(&dir, i_know))
                     .await
-                    .map_err(|e| OpError::new("internal", format!("share worker: {e}"), "check stderr"))?
+                    .map_err(|e| {
+                        OpError::new("internal", format!("share worker: {e}"), "check stderr")
+                    })?
             } else {
                 Err(OpError::new(
                     "bad-request",
@@ -425,12 +546,41 @@ impl DashboardBackend for IpcBackend {
         })
     }
 
-    fn pair_accept(&self, payload_path: PathBuf, dir: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
+        let target = folder.or_else(|| self.fallback_dir.clone());
+        Box::pin(async move {
+            if let Some(dir) = target {
+                tokio::task::spawn_blocking(move || share_status_disk(&dir))
+                    .await
+                    .map_err(|e| {
+                        OpError::new(
+                            "internal",
+                            format!("share status worker: {e}"),
+                            "check stderr",
+                        )
+                    })?
+            } else {
+                Err(OpError::new(
+                    "bad-request",
+                    "folder path is required",
+                    "specify a folder to check share status",
+                ))
+            }
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        payload_path: PathBuf,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<Value, OpError>> {
         let target_dir = dir.or_else(|| self.fallback_dir.clone());
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || pair_accept_disk(&payload_path, target_dir.as_deref()))
-                .await
-                .map_err(|e| OpError::new("internal", format!("pair worker: {e}"), "check stderr"))?
+            tokio::task::spawn_blocking(move || {
+                pair_accept_disk(&payload_path, target_dir.as_deref())
+            })
+            .await
+            .map_err(|e| OpError::new("internal", format!("pair worker: {e}"), "check stderr"))?
         })
     }
 }
@@ -495,9 +645,19 @@ fn one_shot_scan(
         ferry_scan::ScanConfig::default(),
         rules,
     )
-    .map_err(|e| OpError::new("scan", e.to_string(), "check the folder exists and is readable"))?;
+    .map_err(|e| {
+        OpError::new(
+            "scan",
+            e.to_string(),
+            "check the folder exists and is readable",
+        )
+    })?;
     let current = engine.current().ok_or_else(|| {
-        OpError::new("scan", "scanner produced no initial state", "retry the command")
+        OpError::new(
+            "scan",
+            "scanner produced no initial state",
+            "retry the command",
+        )
     })?;
     let manifest_id = hex_str(&current.manifest_id);
     let stats = current.stats.clone();
@@ -507,8 +667,8 @@ fn one_shot_scan(
 
 fn read_status_from_disk(folder: &Path) -> Result<Value, OpError> {
     let identity = load_device_identity()?;
-    let opened = ferry_folder::folder::open_folder(folder, &identity)
-        .map_err(super::actions::folder_err)?;
+    let opened =
+        ferry_folder::folder::open_folder(folder, &identity).map_err(super::actions::folder_err)?;
     let (manifest_id, stats) = one_shot_scan(&opened, *identity.public())?;
     let device_id = hex_str(identity.public());
     let folder_id = hex_str(&opened.folder_id);
@@ -600,8 +760,8 @@ fn read_conflicts_from_disk(folder: &Path) -> Result<Value, OpError> {
 
 fn share_folder_disk(target: &Path, i_know: bool) -> Result<Value, OpError> {
     let identity = load_device_identity()?;
-    let opened = ferry_folder::folder::open_folder(target, &identity)
-        .map_err(super::actions::folder_err)?;
+    let opened =
+        ferry_folder::folder::open_folder(target, &identity).map_err(super::actions::folder_err)?;
     let rules = ferry_folder::folder::load_rules(&opened.root, &opened.settings)
         .map_err(super::actions::folder_err)?;
     let warnings_raw = ferry_ignore::secrets::scan_for_secrets(&rules, &opened.root);
@@ -648,26 +808,76 @@ fn share_folder_disk(target: &Path, i_know: bool) -> Result<Value, OpError> {
         .map_err(super::actions::folder_err)?;
     let warnings_reviewed = !warnings.is_empty();
     let short_code = pending.short_code.clone();
-    let completed = ferry_folder::pairing::initiate_complete(
-        pending,
-        &opened,
-        &identity,
-        PAIR_TIMEOUT_SECS,
-    )
-    .map_err(super::actions::folder_err)?;
+    let dot = ferry_folder::folder::dot_dir(&opened.root);
+    let _ = std::fs::remove_file(dot.join(ferry_folder::pairing::RESPONSE_SUFFIX));
+    let _ = std::fs::remove_file(dot.join(ferry_folder::pairing::GRANT_SUFFIX));
+    std::fs::write(&pending.offer_path, &pending.offer_bytes).map_err(OpError::from)?;
 
     Ok(json!({
         "command": "share",
         "role": "initiate",
-        "status": "completed",
+        "status": "pending",
         "folder": opened.root.display().to_string(),
         "folder_id": hex_str(&opened.folder_id),
-        "peer_device_id": hex_str(&completed.peer_device_id),
         "short_code": short_code,
-        "offer_file": completed.offer_path.display().to_string(),
+        "offer_file": pending.offer_path.display().to_string(),
         "warnings_reviewed": warnings_reviewed,
         "warnings": warnings,
     }))
+}
+
+fn share_status_disk(target: &Path) -> Result<Value, OpError> {
+    let identity = load_device_identity()?;
+    let opened =
+        ferry_folder::folder::open_folder(target, &identity).map_err(super::actions::folder_err)?;
+    let dot = ferry_folder::folder::dot_dir(&opened.root);
+    let offer_path = dot.join(ferry_folder::pairing::OFFER_SUFFIX);
+    let response_path = dot.join(ferry_folder::pairing::RESPONSE_SUFFIX);
+
+    let short_code = if let Ok(offer_bytes) = std::fs::read(&offer_path) {
+        ferry_crypto::pairing::PairingOffer::parse(&offer_bytes)
+            .ok()
+            .map(|o| o.short_code(ferry_crypto::pairing::TransportHints(0)))
+    } else {
+        None
+    };
+
+    if !response_path.exists() {
+        return Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "pending",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "short_code": short_code,
+            "offer_file": offer_path.display().to_string(),
+        }));
+    }
+
+    match ferry_folder::pairing::initiate_check(&opened, &identity)
+        .map_err(super::actions::folder_err)?
+    {
+        Some(completed) => Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "completed",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "peer_device_id": hex_str(&completed.peer_device_id),
+            "short_code": completed.short_code,
+            "offer_file": completed.offer_path.display().to_string(),
+            "grant_file": completed.grant_path.display().to_string(),
+        })),
+        None => Ok(json!({
+            "command": "share",
+            "role": "initiate",
+            "status": "pending",
+            "folder": opened.root.display().to_string(),
+            "folder_id": hex_str(&opened.folder_id),
+            "short_code": short_code,
+            "offer_file": offer_path.display().to_string(),
+        })),
+    }
 }
 
 fn pair_accept_disk(payload_path: &Path, dir: Option<&Path>) -> Result<Value, OpError> {
@@ -691,8 +901,8 @@ fn pair_accept_disk(payload_path: &Path, dir: Option<&Path>) -> Result<Value, Op
 
 fn pin_start_disk(folder: &Path, paths: Option<Vec<String>>) -> Result<Value, OpError> {
     let identity = load_device_identity()?;
-    let opened = ferry_folder::folder::open_folder(folder, &identity)
-        .map_err(super::actions::folder_err)?;
+    let opened =
+        ferry_folder::folder::open_folder(folder, &identity).map_err(super::actions::folder_err)?;
 
     let mut base_agreements = BTreeMap::new();
     for (dev, rec) in AgreementLedger::new(opened.state_dir())
@@ -728,8 +938,8 @@ fn pin_start_disk(folder: &Path, paths: Option<Vec<String>>) -> Result<Value, Op
 
 fn pin_stop_disk(folder: &Path) -> Result<Value, OpError> {
     let identity = load_device_identity()?;
-    let opened = ferry_folder::folder::open_folder(folder, &identity)
-        .map_err(super::actions::folder_err)?;
+    let opened =
+        ferry_folder::folder::open_folder(folder, &identity).map_err(super::actions::folder_err)?;
     let pin_mgr = PinManager::new(opened.state_dir());
     let summary = pin_mgr.summary().map_err(super::actions::pin_err)?;
     let was_pinned = summary.holding || summary.state == "active" || summary.state == "stale";
@@ -752,15 +962,18 @@ fn pin_stop_disk(folder: &Path) -> Result<Value, OpError> {
 
 fn pin_release_disk(folder: &Path) -> Result<Value, OpError> {
     let identity = load_device_identity()?;
-    let opened = ferry_folder::folder::open_folder(folder, &identity)
-        .map_err(super::actions::folder_err)?;
+    let opened =
+        ferry_folder::folder::open_folder(folder, &identity).map_err(super::actions::folder_err)?;
     let pin_mgr = PinManager::new(opened.state_dir());
     let summary = pin_mgr.summary().map_err(super::actions::pin_err)?;
 
     if summary.total_held_paths > 0 {
         return Err(OpError::new(
             "not-implemented",
-            format!("{} held change(s) need reconciliation via the CLI", summary.total_held_paths),
+            format!(
+                "{} held change(s) need reconciliation via the CLI",
+                summary.total_held_paths
+            ),
             "run `ferry pin release` in this folder on the command line",
         ));
     }

@@ -19,7 +19,9 @@ pub fn default_socket_path() -> PathBuf {
     #[cfg(not(windows))]
     {
         if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".ferry").join(DEFAULT_SOCKET_FILENAME)
+            PathBuf::from(home)
+                .join(".ferry")
+                .join(DEFAULT_SOCKET_FILENAME)
         } else {
             PathBuf::from("/tmp/.ferry").join(DEFAULT_SOCKET_FILENAME)
         }

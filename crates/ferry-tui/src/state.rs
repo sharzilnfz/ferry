@@ -1,12 +1,12 @@
 //! UI State model and transitions for Ferry TUI.
 
-use std::collections::HashMap;
+use crate::activity_log::ActivityLog;
 use ferry_ipc::protocol::{
     ConflictEntry, DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
     TransferDirection,
 };
-use crate::activity_log::ActivityLog;
 use ferry_platform::time::current_time_str;
+use std::collections::HashMap;
 
 /// Core synchronization state badge displayed in the TUI header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -337,13 +337,8 @@ impl TuiState {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
         self.update_cached_strings();
-        self.activity_log.record_daemon_message(
-            current_time_str(),
-            &DaemonMessage::Error {
-                code,
-                message,
-            },
-        );
+        self.activity_log
+            .record_daemon_message(current_time_str(), &DaemonMessage::Error { code, message });
     }
 
     /// Apply an acknowledgement notification.
@@ -359,13 +354,8 @@ impl TuiState {
         }
         self.engine_state = self.resolve_sync_state();
         self.update_cached_strings();
-        self.activity_log.record_daemon_message(
-            current_time_str(),
-            &DaemonMessage::Ack {
-                command,
-                message,
-            },
-        );
+        self.activity_log
+            .record_daemon_message(current_time_str(), &DaemonMessage::Ack { command, message });
     }
 
     /// Apply a heartbeat pong notification.

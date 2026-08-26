@@ -196,7 +196,10 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
             }
         };
 
-        if let Err(e) = server.serve_with_graceful_shutdown(listener, graceful_signal).await {
+        if let Err(e) = server
+            .serve_with_graceful_shutdown(listener, graceful_signal)
+            .await
+        {
             monitor_handle.abort();
             return Err(CliError::new(
                 "server-error",

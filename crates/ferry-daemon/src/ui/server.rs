@@ -94,6 +94,7 @@ impl DashboardServer {
             .route("/api/status", get(api_status))
             .route("/api/conflicts", get(api_conflicts))
             .route("/api/share", post(api_share))
+            .route("/api/share/status", get(api_share_status))
             .route("/api/pair/accept", post(api_pair_accept))
             .route("/api/pin/start", post(api_pin_start))
             .route("/api/pin/stop", post(api_pin_stop))
@@ -316,16 +317,12 @@ fn extract_paths(body: &Value) -> Option<Vec<String>> {
     })
 }
 
-async fn api_status(
-    State(server): State<DashboardServer>,
-) -> Result<Json<Value>, ApiError> {
+async fn api_status(State(server): State<DashboardServer>) -> Result<Json<Value>, ApiError> {
     let doc = server.backend.get_status().await?;
     Ok(Json(doc))
 }
 
-async fn api_conflicts(
-    State(server): State<DashboardServer>,
-) -> Result<Json<Value>, ApiError> {
+async fn api_conflicts(State(server): State<DashboardServer>) -> Result<Json<Value>, ApiError> {
     let doc = server.backend.list_conflicts().await?;
     Ok(Json(doc))
 }
@@ -341,6 +338,25 @@ async fn api_share(
         .map(PathBuf::from);
     let i_know = body.get("i_know").and_then(Value::as_bool).unwrap_or(false);
     let doc = server.backend.share(folder, i_know).await?;
+    Ok(Json(doc))
+}
+
+async fn api_share_status(
+    State(server): State<DashboardServer>,
+    req: axum::extract::Request,
+) -> Result<Json<Value>, ApiError> {
+    let mut folder = None;
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            let mut parts = pair.splitn(2, '=');
+            if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+                if k == "folder" && !v.is_empty() {
+                    folder = Some(PathBuf::from(v));
+                }
+            }
+        }
+    }
+    let doc = server.backend.share_status(folder).await?;
     Ok(Json(doc))
 }
 
@@ -416,6 +432,7 @@ mod tests {
         pin_stop_res: Result<Value, OpError>,
         pin_release_res: Result<Value, OpError>,
         share_res: Result<Value, OpError>,
+        share_status_res: Result<Value, OpError>,
         pair_accept_res: Result<Value, OpError>,
     }
 
@@ -427,7 +444,8 @@ mod tests {
                 pin_start_res: Ok(json!({ "command": "pin", "action": "start" })),
                 pin_stop_res: Ok(json!({ "command": "pin", "action": "stop" })),
                 pin_release_res: Ok(json!({ "command": "pin", "action": "release" })),
-                share_res: Ok(json!({ "command": "share", "status": "completed" })),
+                share_res: Ok(json!({ "command": "share", "status": "pending" })),
+                share_status_res: Ok(json!({ "command": "share", "status": "pending" })),
                 pair_accept_res: Ok(json!({ "command": "pair", "status": "completed" })),
             }
         }
@@ -435,37 +453,82 @@ mod tests {
 
     impl DashboardBackend for FakeBackend {
         fn get_status(&self) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.status_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            let res = self
+                .status_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
         fn list_conflicts(&self) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.conflicts_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            let res = self
+                .conflicts_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
         fn start_pin(&self, _paths: Option<Vec<String>>) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.pin_start_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            let res = self
+                .pin_start_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
         fn stop_pin(&self) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.pin_stop_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            let res = self
+                .pin_stop_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
         fn release_pin(&self) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.pin_release_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            let res = self
+                .pin_release_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
-        fn share(&self, _folder: Option<PathBuf>, _i_know: bool) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.share_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+        fn share(
+            &self,
+            _folder: Option<PathBuf>,
+            _i_know: bool,
+        ) -> BoxFuture<'_, Result<Value, OpError>> {
+            let res = self
+                .share_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
 
-        fn pair_accept(&self, _payload_path: PathBuf, _dir: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
-            let res = self.pair_accept_res.as_ref().map(Clone::clone).map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+        fn share_status(&self, _folder: Option<PathBuf>) -> BoxFuture<'_, Result<Value, OpError>> {
+            let res = self
+                .share_status_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
+            Box::pin(async move { res })
+        }
+
+        fn pair_accept(
+            &self,
+            _payload_path: PathBuf,
+            _dir: Option<PathBuf>,
+        ) -> BoxFuture<'_, Result<Value, OpError>> {
+            let res = self
+                .pair_accept_res
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|e| OpError::new(e.code, &e.message, &e.hint));
             Box::pin(async move { res })
         }
     }
@@ -480,9 +543,7 @@ mod tests {
         use std::fmt::Write as _;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let mut stream = tokio::net::TcpStream::connect(addr)
-            .await
-            .expect("connect");
+        let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
 
         let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n");
         for (k, v) in headers {
@@ -523,7 +584,9 @@ mod tests {
         let backend = Arc::new(FakeBackend::default());
         let server = DashboardServer::new(backend).with_token("test-token-1234567890123456");
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server_task = tokio::spawn(async move {
             server.serve(listener).await.expect("serve");
@@ -554,7 +617,9 @@ mod tests {
         let backend = Arc::new(FakeBackend::default());
         let server = DashboardServer::new(backend).with_token(token.clone());
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server_task = tokio::spawn(async move {
             server.serve(listener).await.expect("serve");
@@ -676,7 +741,9 @@ mod tests {
         let backend = Arc::new(FakeBackend::default());
         let server = DashboardServer::new(backend).with_token(token.clone());
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server_task = tokio::spawn(async move {
             server.serve(listener).await.expect("serve");

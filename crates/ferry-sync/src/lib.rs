@@ -77,13 +77,13 @@ pub mod transport;
 
 // Re-exports so tests, bins, and future crates reach the vocabulary through
 // one facade.
-pub use ferry_materialize::{ApplyOutcome, MaterializeError as ApplyError};
 pub use engine::{
     pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError, PeerState,
     SessionError, SyncEngine,
 };
 pub use exchange::{ingest_pack_verified, run_v1_session, CurrentState, ExchangeHost};
 pub use ferry_crypto::identity::DeviceIdentity;
+pub use ferry_materialize::{ApplyOutcome, MaterializeError as ApplyError};
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
 pub use session::{Established, ExpectPeer};

@@ -1,7 +1,7 @@
 //! Fixed circular buffer for activity log entries in the Ferry TUI.
 
-use std::collections::VecDeque;
 use ferry_ipc::protocol::DaemonMessage;
+use std::collections::VecDeque;
 
 /// Severity level for log items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,13 +90,14 @@ impl ActivityLog {
             DaemonMessage::Snapshot(s) => {
                 self.push_info(
                     ts,
-                    format!("Loaded state snapshot (state: {}, folder: {})", s.state, s.folder),
+                    format!(
+                        "Loaded state snapshot (state: {}, folder: {})",
+                        s.state, s.folder
+                    ),
                 );
             }
             DaemonMessage::StateChanged {
-                state,
-                manifest_id,
-                ..
+                state, manifest_id, ..
             } => {
                 let short_id = if manifest_id.len() > 12 {
                     &manifest_id[..12]

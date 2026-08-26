@@ -21,7 +21,10 @@ fn test_client_command_variants_serialization() {
         ),
         (ClientCommand::ReleasePin, r#"{"command":"release_pin"}"#),
         (ClientCommand::TriggerScan, r#"{"command":"trigger_scan"}"#),
-        (ClientCommand::ListConflicts, r#"{"command":"list_conflicts"}"#),
+        (
+            ClientCommand::ListConflicts,
+            r#"{"command":"list_conflicts"}"#,
+        ),
         (ClientCommand::Ping, r#"{"command":"ping"}"#),
     ];
 
@@ -41,7 +44,8 @@ fn test_daemon_message_pong() {
     let serialized = serde_json::to_string(&msg).expect("serialization failed");
     assert_eq!(serialized, r#"{"type":"pong"}"#);
 
-    let deserialized: DaemonMessage = serde_json::from_str(&serialized).expect("deserialization failed");
+    let deserialized: DaemonMessage =
+        serde_json::from_str(&serialized).expect("deserialization failed");
     assert_eq!(deserialized, msg);
 }
 
@@ -80,7 +84,9 @@ fn test_daemon_message_state_changed() {
     let msg = DaemonMessage::StateChanged {
         state: "syncing".to_string(),
         manifest_id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
-        agreed_id: Some("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_string()),
+        agreed_id: Some(
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_string(),
+        ),
         pending_changes: Some(3),
         stats: Some(ScanStatsView::new(10, 2, 1, 4096)),
     };
@@ -90,7 +96,8 @@ fn test_daemon_message_state_changed() {
     assert_eq!(deserialized, msg);
 
     // Test minimal state_changed payload without optional fields
-    let minimal_json = r#"{"type":"state_changed","payload":{"state":"synced","manifest_id":"abc"}}"#;
+    let minimal_json =
+        r#"{"type":"state_changed","payload":{"state":"synced","manifest_id":"abc"}}"#;
     let deserialized_minimal: DaemonMessage = serde_json::from_str(minimal_json).unwrap();
     match deserialized_minimal {
         DaemonMessage::StateChanged {
@@ -170,7 +177,8 @@ fn test_daemon_message_snapshot() {
     let mut held_by_peer = HashMap::new();
     held_by_peer.insert("peer1".to_string(), vec!["doc1.txt".to_string()]);
 
-    let mut snapshot = EngineSnapshot::new("/home/user/project", "folder123", "device456", "synced");
+    let mut snapshot =
+        EngineSnapshot::new("/home/user/project", "folder123", "device456", "synced");
     snapshot.manifest_id = Some("root_manifest_hash_64_hex".to_string());
     snapshot.scanned = ScanStatsView::new(42, 5, 0, 1024 * 1024);
     snapshot.pending_changes = Some(0);

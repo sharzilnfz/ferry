@@ -488,6 +488,10 @@ impl FolderState {
             .map(|s| s.manifest.root_tree_id)
     }
 
+    pub fn current_manifest_id(&self) -> Option<BlobId> {
+        self.lock().current.as_ref().map(|s| s.manifest_id)
+    }
+
     fn scan_counts(&self) -> Option<ScanStats> {
         self.lock().scan_stats.clone()
     }
@@ -831,7 +835,29 @@ impl Ctx {
                 },
             )
             .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
-        let manifest = parse_manifest(manifest_bytes)?;
+        let manifest = if manifest_bytes.is_empty() {
+            match self
+                .store
+                .get(ferry_store::format::BlobKind::Manifest, &manifest_id)
+            {
+                Ok(b) => parse_manifest(&b)?,
+                Err(_) => {
+                    self.status(&format!(
+                        "STATE agreed={} recorded vs {} (manifest body not in store)",
+                        hex(&manifest_id),
+                        hex_short(&peer)
+                    ));
+                    return Ok(());
+                }
+            }
+        } else {
+            let _ = self
+                .store
+                .put_meta(ferry_store::format::BlobKind::Manifest, manifest_bytes);
+            let _ = self.store.flush();
+            let _ = self.store.write_index_snapshot();
+            parse_manifest(manifest_bytes)?
+        };
         self.folder.record_agreed(manifest, manifest_id);
         self.status(&format!(
             "STATE agreed={} recorded vs {}",
@@ -869,7 +895,8 @@ impl Ctx {
             (true, Some(audit)) => Arc::clone(audit),
             _ => Arc::clone(&self.snapshot_source),
         };
-        let out: SnapshotOutput = (scan)(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
+        let out: SnapshotOutput =
+            (scan)(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
         let manifest_bytes = serialize_manifest(&out.manifest);
         let data = Arc::new(SnapshotData {
             manifest_id: out.manifest_id,
@@ -890,9 +917,13 @@ impl Ctx {
         }
 
         let base_root = self.folder.baseline_root();
+        let current_manifest = self
+            .folder
+            .current_manifest_id()
+            .unwrap_or(out.root_tree_id);
         self.status(&format!(
             "STATE root={} agreed={}",
-            hex(&out.root_tree_id),
+            hex(&current_manifest),
             self.folder.agreed_id().map_or("none".into(), |i| hex(&i))
         ));
 
@@ -1073,7 +1104,10 @@ impl ExchangeHost for EngineHost<'_> {
             manifest: manifest.clone(),
             manifest_bytes: bytes.to_vec(),
         });
-        self.ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
+        self.ctx
+            .shared
+            .force_full_scan
+            .store(true, Ordering::Relaxed);
         self.ctx.folder.adopt_peer(data);
         self.ctx.status(&format!(
             "STATE root={} adopted",
@@ -1083,7 +1117,10 @@ impl ExchangeHost for EngineHost<'_> {
     }
 
     fn note_tree_mutation(&self) {
-        self.ctx.shared.force_full_scan.store(true, Ordering::Relaxed);
+        self.ctx
+            .shared
+            .force_full_scan
+            .store(true, Ordering::Relaxed);
     }
 
     fn agree(&self, peer: BlobId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError> {
@@ -1095,7 +1132,7 @@ fn hex_short(b: &BlobId) -> String {
     hex(b)[..12].to_string()
 }
 
-fn now_parts() -> (i64, u32) {
+pub(crate) fn now_parts() -> (i64, u32) {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -1219,8 +1256,13 @@ impl SyncEngine {
         let listen_addr = listener.as_ref().and_then(|l| l.local_addr().ok());
         let shared = Arc::new(SharedState::new());
         let folder = Arc::new(FolderState::new());
-        if let Ok(records) = AgreementLedger::new(self.store.store_dir()).list_folder(&self.cfg.folder_id) {
-            if let Some((_, rec)) = records.iter().max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec)) {
+        if let Ok(records) =
+            AgreementLedger::new(self.store.store_dir()).list_folder(&self.cfg.folder_id)
+        {
+            if let Some((_, rec)) = records
+                .iter()
+                .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec))
+            {
                 if let Ok(bytes) = self.store.get(BlobKind::Manifest, &rec.manifest_id) {
                     if let Ok(manifest) = parse_manifest(&bytes) {
                         folder.record_agreed(manifest, rec.manifest_id);
@@ -1248,7 +1290,10 @@ impl SyncEngine {
             .take()
             .unwrap_or_else(|| device_identity_for_tag(&self.cfg.tag));
         let injected_scan = self.snapshot_source.is_some();
-        let snapshot_source = self.snapshot_source.take().unwrap_or_else(real_snapshot_source);
+        let snapshot_source = self
+            .snapshot_source
+            .take()
+            .unwrap_or_else(real_snapshot_source);
         let audit_source = (!injected_scan).then(audit_snapshot_source);
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
@@ -1437,6 +1482,10 @@ impl EngineHandle {
 
     pub fn root_id(&self) -> Option<BlobId> {
         self.folder.current_root()
+    }
+
+    pub fn current_manifest_id(&self) -> Option<BlobId> {
+        self.folder.current_manifest_id()
     }
 
     pub fn scan_counts(&self) -> Option<ScanStats> {
@@ -2068,7 +2117,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        let counts = handle.scan_counts().expect("scan counts should be available after tick");
+        let counts = handle
+            .scan_counts()
+            .expect("scan counts should be available after tick");
         assert_eq!(counts.files, 1);
         assert_eq!(counts.dirs, 0);
 

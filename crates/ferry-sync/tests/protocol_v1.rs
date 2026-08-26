@@ -30,9 +30,7 @@ use ferry_proto::{duplex_pair, EngineConfig as RefConfig, FolderState as RefFold
 use ferry_store::manifest::RootManifest;
 use ferry_store::store::Store;
 use ferry_sync::session::{establish, RawLink};
-use ferry_sync::{
-    run_v1_session, CurrentState, Established, ExchangeHost, DEFAULT_FOLDER_ID,
-};
+use ferry_sync::{run_v1_session, CurrentState, Established, ExchangeHost, DEFAULT_FOLDER_ID};
 
 const POLY_SEED: u64 = 20260824;
 

@@ -12,9 +12,15 @@ fn test_restore_terminal_writer_emits_expected_escapes() {
     // disable mouse capture, and show cursor.
     let output = String::from_utf8_lossy(&buffer);
     // Alternate screen leave sequence: \x1b[?1049l
-    assert!(output.contains("\x1b[?1049l"), "Should contain LeaveAlternateScreen escape");
+    assert!(
+        output.contains("\x1b[?1049l"),
+        "Should contain LeaveAlternateScreen escape"
+    );
     // Show cursor sequence: \x1b[?25h
-    assert!(output.contains("\x1b[?25h"), "Should contain ShowCursor escape");
+    assert!(
+        output.contains("\x1b[?25h"),
+        "Should contain ShowCursor escape"
+    );
 }
 
 #[test]

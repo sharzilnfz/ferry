@@ -26,7 +26,11 @@ impl FolderError {
 
 impl std::fmt::Display for FolderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (code={})\nhint: {}", self.message, self.code, self.hint)
+        write!(
+            f,
+            "{} (code={})\nhint: {}",
+            self.message, self.code, self.hint
+        )
     }
 }
 

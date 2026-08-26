@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_ipc::{
-    DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
-};
+use ferry_ipc::{DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView};
 use ferry_pin::{HeldSummary, PinError, PinManager, PinRecord};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
@@ -85,9 +83,9 @@ impl DaemonState {
 
     /// Generate an `EngineSnapshot` capturing the current state of the folder and engine.
     pub fn snapshot(&self) -> EngineSnapshot {
-        let root = self.handle.root_id();
-        let manifest_id_hex = root.map(|r| hex_str(&r));
-        let state = if root.is_some() {
+        let manifest = self.handle.current_manifest_id();
+        let manifest_id_hex = manifest.map(|m| hex_str(&m));
+        let state = if manifest.is_some() {
             "idle".to_string()
         } else {
             "initializing".to_string()
@@ -139,8 +137,7 @@ impl DaemonState {
             Err(_) => Vec::new(),
         };
 
-        let conflicts = ferry_sync_engine::list_conflicts(&self.state_dir())
-            .map_or(0, |c| c.len());
+        let conflicts = ferry_sync_engine::list_conflicts(&self.state_dir()).map_or(0, |c| c.len());
 
         EngineSnapshot {
             folder: self.tree_dir.display().to_string(),
@@ -186,7 +183,9 @@ impl DaemonState {
     }
 
     /// List recorded conflicts.
-    pub fn list_conflicts(&self) -> Result<Vec<ferry_sync_engine::ConflictEntry>, ferry_sync_engine::LogError> {
+    pub fn list_conflicts(
+        &self,
+    ) -> Result<Vec<ferry_sync_engine::ConflictEntry>, ferry_sync_engine::LogError> {
         ferry_sync_engine::list_conflicts(&self.state_dir())
     }
 }

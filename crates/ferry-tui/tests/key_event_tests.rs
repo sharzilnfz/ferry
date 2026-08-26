@@ -189,25 +189,23 @@ fn test_apply_ack_list_conflicts_populates_entries() {
     use ferry_ipc::protocol::{ConflictEntry, DaemonMessage, DeviceStamp};
 
     let mut app = TuiApp::default();
-    let sample_entries = vec![
-        ConflictEntry {
-            ts: "2026-08-26T12:00:00Z".to_string(),
-            folder_id: "fid_123".to_string(),
-            path: "docs/spec.md".to_string(),
-            kind: "content".to_string(),
-            winner: DeviceStamp {
-                device: "device_a".to_string(),
-                mtime_sec: Some(100),
-                mtime_nsec: Some(0),
-            },
-            loser: DeviceStamp {
-                device: "device_b".to_string(),
-                mtime_sec: Some(90),
-                mtime_nsec: Some(0),
-            },
-            quarantined_as: Some("docs/spec.sync-conflict.md".to_string()),
+    let sample_entries = vec![ConflictEntry {
+        ts: "2026-08-26T12:00:00Z".to_string(),
+        folder_id: "fid_123".to_string(),
+        path: "docs/spec.md".to_string(),
+        kind: "content".to_string(),
+        winner: DeviceStamp {
+            device: "device_a".to_string(),
+            mtime_sec: Some(100),
+            mtime_nsec: Some(0),
         },
-    ];
+        loser: DeviceStamp {
+            device: "device_b".to_string(),
+            mtime_sec: Some(90),
+            mtime_nsec: Some(0),
+        },
+        quarantined_as: Some("docs/spec.sync-conflict.md".to_string()),
+    }];
     let payload = serde_json::to_string(&sample_entries).unwrap();
 
     app.handle_message(DaemonMessage::Ack {

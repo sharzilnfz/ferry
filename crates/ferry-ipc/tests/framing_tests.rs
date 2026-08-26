@@ -1,6 +1,4 @@
-use ferry_ipc::{
-    create_in_memory_pair, ClientCommand, DaemonMessage, IpcConnection, IpcError,
-};
+use ferry_ipc::{create_in_memory_pair, ClientCommand, DaemonMessage, IpcConnection, IpcError};
 use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
@@ -122,7 +120,10 @@ async fn test_clean_eof_detection() {
     // Drop client to simulate connection close
     drop(client);
 
-    let res = server.recv_command().await.expect("recv should succeed with None on EOF");
+    let res = server
+        .recv_command()
+        .await
+        .expect("recv should succeed with None on EOF");
     assert!(res.is_none(), "expected None on EOF");
 }
 

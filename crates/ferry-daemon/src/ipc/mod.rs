@@ -17,9 +17,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use ferry_ipc::error::IpcError;
 use ferry_ipc::framing::IpcConnection;
-use ferry_ipc::protocol::{
-    ClientCommand, DaemonMessage, ScanStatsView,
-};
+use ferry_ipc::protocol::{ClientCommand, DaemonMessage, ScanStatsView};
 use ferry_ipc::IpcServer;
 use ferry_store::format::hex as hex_str;
 
@@ -82,45 +80,46 @@ pub fn spawn_ipc_server(
 ) -> Result<IpcServerHandle, IpcError> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let (server_task, watcher_task, runtime) = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        let server = IpcServer::bind(&socket_path)?;
-        let st_clone = Arc::clone(&state);
-        let s_rx = shutdown_rx.clone();
-        let server_task = handle.spawn(async move {
-            run_server_loop(server, st_clone, s_rx).await;
-        });
+    let (server_task, watcher_task, runtime) =
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let server = IpcServer::bind(&socket_path)?;
+            let st_clone = Arc::clone(&state);
+            let s_rx = shutdown_rx.clone();
+            let server_task = handle.spawn(async move {
+                run_server_loop(server, st_clone, s_rx).await;
+            });
 
-        let w_rx = shutdown_rx;
-        let watcher_task = handle.spawn(async move {
-            run_state_watcher(state, w_rx).await;
-        });
+            let w_rx = shutdown_rx;
+            let watcher_task = handle.spawn(async move {
+                run_state_watcher(state, w_rx).await;
+            });
 
-        (Some(server_task), Some(watcher_task), None)
-    } else {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(IpcError::Io)?;
+            (Some(server_task), Some(watcher_task), None)
+        } else {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .map_err(IpcError::Io)?;
 
-        let server = {
-            let _guard = rt.enter();
-            IpcServer::bind(&socket_path)?
+            let server = {
+                let _guard = rt.enter();
+                IpcServer::bind(&socket_path)?
+            };
+
+            let st_clone = Arc::clone(&state);
+            let s_rx = shutdown_rx.clone();
+            let server_task = rt.spawn(async move {
+                run_server_loop(server, st_clone, s_rx).await;
+            });
+
+            let w_rx = shutdown_rx;
+            let watcher_task = rt.spawn(async move {
+                run_state_watcher(state, w_rx).await;
+            });
+
+            (Some(server_task), Some(watcher_task), Some(rt))
         };
-
-        let st_clone = Arc::clone(&state);
-        let s_rx = shutdown_rx.clone();
-        let server_task = rt.spawn(async move {
-            run_server_loop(server, st_clone, s_rx).await;
-        });
-
-        let w_rx = shutdown_rx;
-        let watcher_task = rt.spawn(async move {
-            run_state_watcher(state, w_rx).await;
-        });
-
-        (Some(server_task), Some(watcher_task), Some(rt))
-    };
 
     Ok(IpcServerHandle {
         socket_path,
@@ -168,15 +167,16 @@ async fn run_server_loop(
 }
 
 /// Handle a single connected client over an arbitrary async duplex stream.
-pub async fn handle_client_connection<S>(
-    mut conn: IpcConnection<S>,
-    state: Arc<DaemonState>,
-) where
+pub async fn handle_client_connection<S>(mut conn: IpcConnection<S>, state: Arc<DaemonState>)
+where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     // 1. Send initial snapshot immediately upon connection
     let initial_snapshot = state.snapshot();
-    if let Err(e) = conn.send_message(&DaemonMessage::Snapshot(initial_snapshot)).await {
+    if let Err(e) = conn
+        .send_message(&DaemonMessage::Snapshot(initial_snapshot))
+        .await
+    {
         eprintln!("[ferry-ipc] failed to send initial snapshot: {e}");
         return;
     }
@@ -234,60 +234,66 @@ pub async fn handle_client_connection<S>(
 /// Process a single client command and return the immediate response message.
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
-        ClientCommand::GetStatus => {
-            DaemonMessage::Snapshot(state.snapshot())
-        }
-        ClientCommand::StartPin { paths } => {
-            match state.start_pin(paths) {
-                Ok(rec) => {
-                    let snap = state.snapshot();
-                    state.broadcast(DaemonMessage::StateChanged {
-                        state: snap.state.clone(),
-                        manifest_id: snap.manifest_id.unwrap_or_default(),
-                        agreed_id: None,
-                        pending_changes: snap.pending_changes,
-                        stats: Some(snap.scanned),
-                    });
-                    DaemonMessage::Ack {
-                        command: "start_pin".to_string(),
-                        message: Some(format!("pinned {} path(s)", rec.paths.len())),
-                    }
+        ClientCommand::GetStatus => DaemonMessage::Snapshot(state.snapshot()),
+        ClientCommand::StartPin { paths } => match state.start_pin(paths) {
+            Ok(rec) => {
+                let snap = state.snapshot();
+                state.broadcast(DaemonMessage::StateChanged {
+                    state: snap.state.clone(),
+                    manifest_id: snap.manifest_id.unwrap_or_default(),
+                    agreed_id: None,
+                    pending_changes: snap.pending_changes,
+                    stats: Some(snap.scanned),
+                });
+                DaemonMessage::Ack {
+                    command: "start_pin".to_string(),
+                    message: Some(format!("pinned {} path(s)", rec.paths.len())),
                 }
-                Err(e) => DaemonMessage::Error {
-                    code: "pin_error".to_string(),
-                    message: e.to_string(),
-                },
             }
-        }
-        ClientCommand::ReleasePin => {
-            match state.release_pin() {
-                Ok(was_active) => {
-                    let snap = state.snapshot();
-                    state.broadcast(DaemonMessage::StateChanged {
-                        state: snap.state.clone(),
-                        manifest_id: snap.manifest_id.unwrap_or_default(),
-                        agreed_id: None,
-                        pending_changes: snap.pending_changes,
-                        stats: Some(snap.scanned),
-                    });
-                    DaemonMessage::Ack {
-                        command: "release_pin".to_string(),
-                        message: Some(
-                            if was_active {
-                                "pin released"
-                            } else {
-                                "no active pin"
-                            }
-                            .to_string(),
-                        ),
-                    }
+            Err(e) => {
+                let code = match &e {
+                    ferry_pin::PinError::PinActive { .. } => "pin-active",
+                    ferry_pin::PinError::BadPattern { .. } => "bad-pattern",
+                    ferry_pin::PinError::Corrupt { .. } => "pin-state-corrupt",
+                    ferry_pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
+                    ferry_pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
+                    ferry_pin::PinError::StructuralSplit { .. } => "structural-split",
+                    ferry_pin::PinError::Reconcile(_) => "pin-release-reconcile",
+                    _ => "pin_error",
+                };
+                DaemonMessage::Error {
+                    code: code.to_string(),
+                    message: e.to_string(),
                 }
-                Err(e) => DaemonMessage::Error {
-                    code: "pin_error".to_string(),
-                    message: e.to_string(),
-                },
             }
-        }
+        },
+        ClientCommand::ReleasePin => match state.release_pin() {
+            Ok(was_active) => {
+                let snap = state.snapshot();
+                state.broadcast(DaemonMessage::StateChanged {
+                    state: snap.state.clone(),
+                    manifest_id: snap.manifest_id.unwrap_or_default(),
+                    agreed_id: None,
+                    pending_changes: snap.pending_changes,
+                    stats: Some(snap.scanned),
+                });
+                DaemonMessage::Ack {
+                    command: "release_pin".to_string(),
+                    message: Some(
+                        if was_active {
+                            "pin released"
+                        } else {
+                            "no active pin"
+                        }
+                        .to_string(),
+                    ),
+                }
+            }
+            Err(e) => DaemonMessage::Error {
+                code: "pin_error".to_string(),
+                message: e.to_string(),
+            },
+        },
         ClientCommand::TriggerScan => {
             state.trigger_scan();
             DaemonMessage::Ack {
@@ -295,20 +301,18 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 message: Some("scan triggered".to_string()),
             }
         }
-        ClientCommand::ListConflicts => {
-            match state.list_conflicts() {
-                Ok(conflicts) => DaemonMessage::Ack {
-                    command: "list_conflicts".to_string(),
-                    message: Some(
-                        serde_json::to_string(&conflicts).unwrap_or_else(|_| "[]".to_string()),
-                    ),
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: "conflict_log".to_string(),
-                    message: e.to_string(),
-                },
-            }
-        }
+        ClientCommand::ListConflicts => match state.list_conflicts() {
+            Ok(conflicts) => DaemonMessage::Ack {
+                command: "list_conflicts".to_string(),
+                message: Some(
+                    serde_json::to_string(&conflicts).unwrap_or_else(|_| "[]".to_string()),
+                ),
+            },
+            Err(e) => DaemonMessage::Error {
+                code: "conflict_log".to_string(),
+                message: e.to_string(),
+            },
+        },
         ClientCommand::Ping => DaemonMessage::Pong,
     }
 }
@@ -318,16 +322,22 @@ async fn run_state_watcher(
     state: Arc<DaemonState>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut last_manifest = state.handle().root_id();
+    let mut last_manifest = state.handle().current_manifest_id();
     let mut last_agreed = state.handle().agreed_id();
-    let mut last_scanned = state
-        .handle()
-        .scan_counts()
-        .map(|s| ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked));
+    let mut last_scanned = state.handle().scan_counts().map(|s| {
+        ScanStatsView::new(
+            s.files as u64,
+            s.dirs as u64,
+            s.symlinks as u64,
+            s.bytes_chunked,
+        )
+    });
     let mut last_pending = state.handle().pending_changes();
 
     let conflicts_file = state.state_dir().join("conflicts.jsonl");
-    let mut last_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
+    let mut last_meta = std::fs::metadata(&conflicts_file)
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()));
     let mut last_conflicts_count = if last_meta.is_some() {
         state.list_conflicts().map_or(0, |c| c.len())
     } else {
@@ -348,27 +358,27 @@ async fn run_state_watcher(
                     break;
                 }
 
-                let cur_root = state.handle().root_id();
+                let cur_manifest = state.handle().current_manifest_id();
                 let cur_agreed = state.handle().agreed_id();
                 let cur_scan = state.handle().scan_counts().map(|s| {
                     ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked)
                 });
                 let cur_pending = state.handle().pending_changes();
 
-                let changed = cur_root != last_manifest
+                let changed = cur_manifest != last_manifest
                     || cur_agreed != last_agreed
                     || cur_scan != last_scanned
                     || cur_pending != last_pending;
 
                 if changed {
-                    last_manifest = cur_root;
+                    last_manifest = cur_manifest;
                     last_agreed = cur_agreed;
                     last_scanned = cur_scan;
                     last_pending = cur_pending;
 
-                    let manifest_hex = cur_root.map(|r| hex_str(&r)).unwrap_or_default();
+                    let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
                     let agreed_hex = cur_agreed.map(|a| hex_str(&a));
-                    let state_str = if cur_root.is_some() {
+                    let state_str = if cur_manifest.is_some() {
                         "idle".to_string()
                     } else {
                         "initializing".to_string()

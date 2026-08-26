@@ -57,10 +57,7 @@ pub enum DaemonMessage {
     Pong,
 
     /// Error notification or command failure response.
-    Error {
-        code: String,
-        message: String,
-    },
+    Error { code: String, message: String },
 }
 
 /// Commands sent from a client (CLI / TUI / Web proxy) to the sync daemon.

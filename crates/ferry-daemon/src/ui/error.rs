@@ -89,7 +89,11 @@ impl OpError {
 
 impl From<std::io::Error> for OpError {
     fn from(e: std::io::Error) -> Self {
-        Self::new("io", e.to_string(), "check folder permissions and disk space")
+        Self::new(
+            "io",
+            e.to_string(),
+            "check folder permissions and disk space",
+        )
     }
 }
 
@@ -125,8 +129,16 @@ pub fn status_for_code(code: &str) -> StatusCode {
         "secrets-found" | "pin-active" | "already-initialized" | "pair-timeout" => {
             StatusCode::CONFLICT
         }
-        "io" | "store" | "store-open" | "internal" | "config-corrupt" | "key-unwrap"
-        | "identity-corrupt" | "pin-state-corrupt" | "held-ledger-corrupt" | "conflict-log"
+        "io"
+        | "store"
+        | "store-open"
+        | "internal"
+        | "config-corrupt"
+        | "key-unwrap"
+        | "identity-corrupt"
+        | "pin-state-corrupt"
+        | "held-ledger-corrupt"
+        | "conflict-log"
         | "agreement-state" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
     }

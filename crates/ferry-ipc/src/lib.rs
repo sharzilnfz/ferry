@@ -12,8 +12,7 @@ pub mod transport;
 pub use error::IpcError;
 pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZE};
 pub use paths::{
-    default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME,
-    DEFAULT_WINDOWS_PIPE_PREFIX,
+    default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX,
 };
 pub use protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,

@@ -354,9 +354,16 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
     let mut received_conflict = false;
     for _ in 0..20 {
         match tokio::time::timeout(Duration::from_millis(200), client.recv_message()).await {
-            Ok(Ok(Some(DaemonMessage::ConflictRecorded { path, conflict_path, .. }))) => {
+            Ok(Ok(Some(DaemonMessage::ConflictRecorded {
+                path,
+                conflict_path,
+                ..
+            }))) => {
                 assert_eq!(path, "important.txt");
-                assert_eq!(conflict_path, "important.txt.ferry-conflict.bbbb-20260826-120000");
+                assert_eq!(
+                    conflict_path,
+                    "important.txt.ferry-conflict.bbbb-20260826-120000"
+                );
                 received_conflict = true;
                 break;
             }
@@ -367,7 +374,10 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
         }
     }
 
-    assert!(received_conflict, "expected to receive DaemonMessage::ConflictRecorded");
+    assert!(
+        received_conflict,
+        "expected to receive DaemonMessage::ConflictRecorded"
+    );
 
     ipc_handle.shutdown();
     handle.shutdown();
@@ -405,7 +415,10 @@ async fn test_in_memory_connection_handling() {
     }
 
     // 2. Ping -> Pong
-    client_conn.send_command(&ClientCommand::Ping).await.unwrap();
+    client_conn
+        .send_command(&ClientCommand::Ping)
+        .await
+        .unwrap();
     let pong = client_conn.recv_message().await.unwrap().unwrap();
     assert_eq!(pong, DaemonMessage::Pong);
 

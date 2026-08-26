@@ -75,8 +75,7 @@ pub fn accept(
         pending.expected_short_code
     );
     let expected_short_code = pending.expected_short_code.clone();
-    let accepted =
-        ferry_folder::pairing::accept_complete(pending, identity, timeout_secs)?;
+    let accepted = ferry_folder::pairing::accept_complete(pending, identity, timeout_secs)?;
 
     let json_doc = json!({
         "command": "pair",

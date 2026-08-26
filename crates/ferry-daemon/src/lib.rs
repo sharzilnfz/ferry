@@ -4,7 +4,9 @@ pub mod ipc;
 pub mod state;
 pub mod ui;
 
-pub use ipc::{dispatch_client_command, handle_client_connection, spawn_ipc_server, IpcServerHandle};
+pub use ipc::{
+    dispatch_client_command, handle_client_connection, spawn_ipc_server, IpcServerHandle,
+};
 pub use state::DaemonState;
 
 pub mod timefmt {

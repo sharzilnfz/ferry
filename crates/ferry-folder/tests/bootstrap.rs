@@ -80,7 +80,10 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
 fn open_without_ferry_directory_is_not_a_folder() {
     let work = tempfile::tempdir().unwrap();
     let (_home, id) = identity_at("identity");
-    assert_eq!(code_of(open_folder(&work.path().join("empty"), &id)), "not-a-folder");
+    assert_eq!(
+        code_of(open_folder(&work.path().join("empty"), &id)),
+        "not-a-folder"
+    );
 }
 
 #[test]
@@ -93,7 +96,7 @@ fn open_rejects_a_device_the_folder_was_never_shared_with() {
 
     make_folder(&root, &owner);
     let err = open_folder(&root, &stranger).err().unwrap();
-    assert_eq!(err.code, "not-shared-with-device");    // The display shorthand names the refused device.
+    assert_eq!(err.code, "not-shared-with-device"); // The display shorthand names the refused device.
     assert!(
         err.message.contains(&short_device(stranger.public())),
         "{}",

@@ -23,12 +23,20 @@ pub fn query_status(folder: &Path) -> Option<EngineSnapshot> {
         let mut conn = IpcClient::connect(&socket_path).await.ok()?;
 
         // On connection, the daemon sends an initial Snapshot message immediately.
-        match tokio::time::timeout(IPC_TIMEOUT, conn.recv_message()).await.ok()?.ok()? {
+        match tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
+            .await
+            .ok()?
+            .ok()?
+        {
             Some(DaemonMessage::Snapshot(snap)) => Some(snap),
             _ => {
                 // If initial was not a snapshot, explicitly send GetStatus
                 conn.send_command(&ClientCommand::GetStatus).await.ok()?;
-                match tokio::time::timeout(IPC_TIMEOUT, conn.recv_message()).await.ok()?.ok()? {
+                match tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
+                    .await
+                    .ok()?
+                    .ok()?
+                {
                     Some(DaemonMessage::Snapshot(snap)) => Some(snap),
                     _ => None,
                 }
@@ -49,7 +57,10 @@ pub fn send_command(folder: &Path, cmd: ClientCommand) -> Option<DaemonMessage> 
         let _ = tokio::time::timeout(Duration::from_millis(20), conn.recv_message()).await;
 
         conn.send_command(&cmd).await.ok()?;
-        let resp = tokio::time::timeout(IPC_TIMEOUT, conn.recv_message()).await.ok()?.ok()?;
+        let resp = tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
+            .await
+            .ok()?
+            .ok()?;
         resp
     })
 }
@@ -65,8 +76,13 @@ pub fn query_conflicts(folder: &Path) -> Option<Vec<ferry_sync_engine::ConflictE
         // Drain initial snapshot
         let _ = tokio::time::timeout(Duration::from_millis(20), conn.recv_message()).await;
 
-        conn.send_command(&ClientCommand::ListConflicts).await.ok()?;
-        let resp = tokio::time::timeout(IPC_TIMEOUT, conn.recv_message()).await.ok()?.ok()??;
+        conn.send_command(&ClientCommand::ListConflicts)
+            .await
+            .ok()?;
+        let resp = tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
+            .await
+            .ok()?
+            .ok()??;
         match resp {
             DaemonMessage::Ack {
                 message: Some(msg), ..

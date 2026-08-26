@@ -4,13 +4,13 @@
 
 mod common;
 
-use common::Env;
+use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use ferry_pin::{HeldEntry, HeldLedger};
 use ferry_store::format::BlobKind;
 use std::collections::BTreeMap;
 
-fn setup() -> (Env, std::path::PathBuf) {
+fn setup() -> (Env, std::path::PathBuf, RunningDaemon) {
     let env = Env::new("pin-cli");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
@@ -18,7 +18,8 @@ fn setup() -> (Env, std::path::PathBuf) {
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
     std::fs::write(proj.join("README.md"), b"hi\n").unwrap();
-    (env, proj)
+    let daemon = RunningDaemon::start(&proj);
+    (env, proj, daemon)
 }
 
 /// Put one real held entry on the ledger, backed by a manifest that IS in
@@ -53,7 +54,7 @@ fn hold_one_real_change(proj: &std::path::Path, peer_hex: &str, path: &str) {
 
 #[test]
 fn full_lifecycle_with_json_shapes() {
-    let (_e, proj) = setup();
+    let (_e, proj, _daemon) = setup();
 
     // Nothing pinned yet.
     let st = commands::pin::status(&proj).unwrap();
@@ -121,7 +122,7 @@ fn full_lifecycle_with_json_shapes() {
 
 #[test]
 fn release_with_no_ledgers_is_a_noop_document() {
-    let (_e, proj) = setup();
+    let (_e, proj, _daemon) = setup();
     commands::pin::start(&proj, &[]).unwrap();
     let rel = commands::pin::release(&proj).unwrap();
     assert_eq!(rel.json["peers"].as_array().unwrap().len(), 0);
@@ -131,7 +132,7 @@ fn release_with_no_ledgers_is_a_noop_document() {
 
 #[test]
 fn bad_glob_refused_before_any_state_is_written() {
-    let (_e, proj) = setup();
+    let (_e, proj, _daemon) = setup();
     let err = commands::pin::start(&proj, &["[z-a]".to_string()]).unwrap_err();
     assert_eq!(err.code, "bad-pattern");
     assert!(
@@ -144,7 +145,7 @@ fn bad_glob_refused_before_any_state_is_written() {
 
 #[test]
 fn stale_pin_surfaces_then_a_new_start_replaces_it() {
-    let (_e, proj) = setup();
+    let (_e, proj, _daemon) = setup();
 
     // Orphaned writer: kill a child, keep its pid.
     let mut child = std::process::Command::new("sleep")
@@ -185,7 +186,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
 
 #[test]
 fn status_command_shows_the_held_set_too() {
-    let (_e, proj) = setup();
+    let (_e, proj, _daemon) = setup();
     commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
     let peer = "c".repeat(32);
     hold_one_real_change(&proj, &peer, "src/a.rs");
@@ -194,4 +195,17 @@ fn status_command_shows_the_held_set_too() {
     assert_eq!(out.json["pin"]["state"], "active");
     assert_eq!(out.json["held_changes"], 1);
     assert_eq!(out.json["held_by_peer"][&peer][0], "src/a.rs");
+}
+
+#[test]
+fn pin_start_fails_when_daemon_not_running() {
+    let env = Env::new("pin-no-daemon");
+    let proj = env.work().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    commands::init::run(&proj, "init").unwrap();
+
+    let err = commands::pin::start(&proj, &[]).unwrap_err();
+    assert_eq!(err.code, "daemon-not-running");
+    assert!(err.message.contains("no active background daemon"));
+    assert!(err.hint.contains("ferry daemon"));
 }
