@@ -33,12 +33,13 @@ ignore = "0.4"
 libc = "0.2"
 filetime = "0.2"
 iroh = "=1.0.3"
-tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time", "net", "macros", "sync"] }
+tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time", "net", "macros", "sync", "io-util"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 
 # internal crates
 ferry-platform = { path = "crates/ferry-platform" }
 ferry-folder = { path = "crates/ferry-folder" }
+ferry-ipc = { path = "crates/ferry-ipc" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

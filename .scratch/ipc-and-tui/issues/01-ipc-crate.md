@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 ## Implementation Notes for Agent
 - Use `codebase-memory-mcp` to index project `ferry-sync` and inspect existing protocol definitions in `crates/ferry-proto`.
@@ -13,7 +13,7 @@
 - Provide in-memory duplex transport support for testing.
 
 ## Acceptance Criteria
-- [ ] New crate `crates/ferry-ipc` compiles within the workspace.
-- [ ] Serialization and deserialization unit tests pass for all `DaemonMessage` and `ClientCommand` variants.
-- [ ] In-memory duplex transport tests verify clean framing, message ordering, and reconnection behavior.
-- [ ] Platform socket path helper resolves to `~/.ferry/daemon.sock` or `<store>/.ferry/daemon.sock` on Unix and a named pipe on Windows.
+- [x] New crate `crates/ferry-ipc` compiles within the workspace.
+- [x] Serialization and deserialization unit tests pass for all `DaemonMessage` and `ClientCommand` variants.
+- [x] In-memory duplex transport tests verify clean framing, message ordering, and reconnection behavior.
+- [x] Platform socket path helper resolves to `~/.ferry/daemon.sock` or `<store>/.ferry/daemon.sock` on Unix and a named pipe on Windows.
