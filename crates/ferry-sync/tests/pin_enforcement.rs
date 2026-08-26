@@ -130,6 +130,13 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     }
 
     // --- phase 4: pin ends -------------------------------------------------
+    // Drain the post-hold reconciliation round first: converged() is true
+    // exactly when pointers AND agreement match on both sides, i.e. B has
+    // fully adopted A's post-apply manifest and no session can still carry
+    // a changeset touching docs/other.txt while the test writes d4 below.
+    // Without this, an in-flight session applying a recency-winning
+    // manifest can land AFTER the fresh write and revert tree_b (WIN-2).
+    wait_until("hold-exit convergence", || fx.converged());
     PinStore::new(&a_ferry).mark_released().unwrap();
 
     // Ordinary flow resumes: fresh peer edits apply again without ceremony.

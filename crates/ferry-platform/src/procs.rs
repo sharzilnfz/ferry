@@ -183,7 +183,11 @@ pub fn spawn_sleeper(secs: u64) -> std::io::Result<std::process::Child> {
     #[cfg(windows)]
     let mut command = {
         let mut c = std::process::Command::new("powershell");
-        c.args(["-NoProfile", "-Command", &format!("Start-Sleep -Seconds {secs}")]);
+        c.args([
+            "-NoProfile",
+            "-Command",
+            &format!("Start-Sleep -Seconds {secs}"),
+        ]);
         c
     };
     #[cfg(not(windows))]
