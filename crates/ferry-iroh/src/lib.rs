@@ -7,21 +7,17 @@
 //! where an iroh type is allowed to appear: the engine keeps speaking plain
 //! framed byte pipes over [`ferry_sync::Transport`], unchanged.
 //!
-//! ## How addressing works (and the one honest wart)
+//! ## How addressing works
 //!
 //! The real dial target is always an **`EndpointId`** — an ed25519 public key
-//! derived from the device's X25519 identity key ([`identity`]). But the M0
-//! trait's currency is `SocketAddr`, and widening that would have touched
-//! engine signatures for zero behavioral gain. So `SocketAddr` values act as
-//! opaque *route keys*: a route maps route-key → `EndpointId` (+ optional
-//! address hints). Routes come from two sources:
+//! derived from the device's X25519 identity key ([`identity`]). Routes come
+//! from two sources:
 //!
-//! 1. [`IrohTransport::with_route`] / the CLI (`--peer <hex id>`): explicit,
-//!    cross-process. The listener prints its `EndpointId`; the connector dials
-//!    by that public key.
-//! 2. The process-local [`directory`], populated automatically by
-//!    `listen()` with the endpoint's own id and bound addresses: two engines
-//!    in one process (the whole integration suite) interop with no wiring.
+//! 1. [`IrohTransport::with_route`] / [`IrohTransport::register_peer`] / [`RouteTable`]:
+//!    explicit, cross-process or per-instance routing. The listener announces its
+//!    `EndpointId`; the connector dials by that public key.
+//! 2. The local [`RouteTable`] / directory populated automatically by
+//!    `listen()` with the endpoint's own id and bound addresses.
 //!
 //! Dialing resolves the route to an `EndpointId`, then lets iroh find the path
 //! (relay, hole punch, or mDNS-discovered LAN address). The wire-level peer
@@ -35,6 +31,7 @@
 //! - `force_relay` — strips all IP transports so even same-host peers must
 //!   traverse the relay; this is the local stand-in for "two NATs" in tests.
 //! - device identity → stable `EndpointId` derivation ([`identity`])
+//! - route table ([`RouteTable`]) — explicit instance-isolated routing
 //!
 //! Versions are pinned exactly in Cargo.toml (SPEC risk: iroh API churn);
 //! every iroh type stays inside this crate.
@@ -47,7 +44,9 @@ pub mod transport;
 mod lock;
 
 pub use config::{IrohConfig, IrohConfigBuilder, MdnsSetting, RelaySetting};
-pub use directory::{publish_route, register_explicit_route, resolve_route, Route, RouteScope};
+pub use directory::{
+    publish_route, register_explicit_route, resolve_route, Route, RouteScope, RouteTable,
+};
 pub use transport::{DialFailure, IrohTransport, PathObservation};
 
 /// ALPN for ferry-sync M0 sessions. Bump when the protocol changes.

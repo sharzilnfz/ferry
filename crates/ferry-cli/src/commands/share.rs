@@ -58,15 +58,19 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
             msg.trim_end().to_string(),
             "review each path: exclude it (`ferry ignore '<pattern>'`) or accept the risk with --i-know",
         );
-        err.detail = Some(json!(findings
-            .iter()
-            .map(|f| json!({
-                "path": f.path,
-                "line": f.line,
-                "class": f.class,
-                "preview": f.preview,
-            }))
-            .collect::<Vec<_>>()));
+        // Object, not bare array: main.rs merges object details into the
+        // stderr error document as { "warnings": [...] } per docs/cli-json.md.
+        err.detail = Some(json!({
+            "warnings": findings
+                .iter()
+                .map(|f| json!({
+                    "path": f.path,
+                    "line": f.line,
+                    "class": f.class,
+                    "preview": f.preview,
+                }))
+                .collect::<Vec<_>>()
+        }));
         return Err(err);
     }
 

@@ -37,11 +37,9 @@ use ferry_crypto::identity as crypto_identity;
 use ferry_store::format::unhex;
 use ferry_sync::{EngineConfig, SyncEngine};
 
-/// Fixed route-key label for iroh-mode dialing: `--addr` is meaningless on
-/// the wire there, so the connector uses one reserved alias registered to
-/// `--peer`'s public key before the engine starts.
-const IROH_DIAL_ALIAS: &str = "127.0.0.1:65534";
-/// Same for listeners: port 0 makes the transport mint a unique alias.
+mod ui;
+
+/// Port 0 makes the transport mint a unique alias.
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
 
 const USAGE: &str = "\
@@ -68,6 +66,12 @@ IROH TRANSPORT (default):
 TCP TRANSPORT (--transport tcp; M0 throwaway, tests only):
     ferry-sync daemon --role listen  --addr HOST:PORT
     ferry-sync daemon --role connect --addr HOST:PORT
+
+WEB DASHBOARD:
+    ferry-sync daemon ... [--ui [HOST:PORT]]   (default 127.0.0.1:8098)
+    Loopback binds only, no auth (v0 stance); serves the embedded UI plus
+    /api/status, /api/conflicts, /api/share, /api/pair/accept and
+    /api/pin/start|stop|release per .scratch/web-dashboard/spec.md.
 
 Roles: exactly one side runs `listen`; the other runs `connect` and drives
 all sessions.";
@@ -157,6 +161,24 @@ struct DaemonArgs {
     folder_id: [u8; 16],
     poll_ms: u64,
     opportunistic_every: u32,
+    ui_addr: Option<std::net::SocketAddr>,
+}
+
+/// `--ui [ADDR]`: bare flag means the documented default; any non-loopback
+/// address is refused at startup (v0 auth stance: localhost only).
+fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String> {
+    if !has_flag(args, "--ui") {
+        return Ok(None);
+    }
+    let raw = flag(args, "--ui").unwrap_or_else(|| "127.0.0.1:8098".to_string());
+    let addr =
+        std::net::SocketAddr::from_str(&raw).map_err(|e| format!("--ui {raw:?}: {e}"))?;
+    if !addr.ip().is_loopback() {
+        return Err(format!(
+            "--ui {addr}: refusing non-loopback bind; the dashboard serves localhost only"
+        ));
+    }
+    Ok(Some(addr))
 }
 
 fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
@@ -206,6 +228,7 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
         opportunistic_every: flag(args, "--opportunistic-every")
             .and_then(|s| s.parse().ok())
             .unwrap_or(ferry_sync::engine::DEFAULT_OPPORTUNISTIC_EVERY),
+        ui_addr: parse_ui_addr(args)?,
     };
     run_daemon(parsed)
 }
@@ -242,6 +265,15 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         quiet: false,
     };
 
+    // ONE device-identity source for every transport (ticket 12): a real
+    // keypair persisted under `<store>/.device-identity`, loaded or created
+    // exactly once. Tag-derived ids are test-only and unreachable here.
+    // NOTE: the file lives in a SIBLING of the store's `.ferry/` — that
+    // directory belongs to the store layout, and creating it early would
+    // flip Store::create into Store::open on first run.
+    let device = crypto_identity::load_or_create(&d.store_dir.join(".device-identity"))
+        .map_err(|e| format!("device identity: {e}"))?;
+
     let transport: Arc<dyn ferry_sync::Transport> = match d.kind {
         TransportKind::Tcp => {
             let addr = d.addr.ok_or("--addr is required in --transport tcp mode")?;
@@ -255,13 +287,6 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         TransportKind::Iroh => {
             // Stable endpoint identity derived from THIS store's device
             // identity (ferry-crypto): restart-safe public addressing.
-            // NOTE: lives in a SIBLING of the store's `.ferry/` — that
-            // directory belongs to the store layout, and creating it early
-            // would flip Store::create into Store::open on first run.
-            let identity_root = d.store_dir.join(".device-identity");
-            let device = crypto_identity::load_or_create(&identity_root)
-                .map_err(|e| format!("device identity: {e}"))?;
-
             let mut builder = ferry_iroh::IrohConfig::builder().device_identity(&device);
             if !d.relays.is_empty() {
                 builder = builder.relays(ferry_iroh::RelaySetting::Custom(d.relays.clone()));
@@ -289,8 +314,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
                         "--peer HEX64 is required to connect (it is \
                         the listener's ENDPOINT id)",
                     )?;
-                    let alias = std::net::SocketAddr::from_str(IROH_DIAL_ALIAS).expect("constant");
-                    t.with_route(alias, peer);
+                    let alias = t.register_peer(peer);
                     cfg.connect_to = Some(alias);
                 }
                 _ => unreachable!("validated above"),
@@ -302,12 +326,23 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         }
     };
 
-    let engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    let mut engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    engine.set_identity(device.clone());
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");
     }
     // Run until killed; EngineHandle shutdown happens on drop.
     let handle = engine.start();
+    if let Some(addr) = d.ui_addr {
+        let state = ui::UiState::new(
+            handle.clone(),
+            d.store_dir,
+            d.tree_dir,
+            d.folder_id,
+            device,
+        );
+        ui::spawn(addr, Arc::new(state)).map_err(|e| format!("--ui: {e}"))?;
+    }
     handle.join_until_signal();
     Ok(())
 }

@@ -125,6 +125,10 @@ pub(crate) struct Walker<'a> {
     refused: Vec<RefusedPath>,
     /// rel -> freshly rebuilt node id for this pass.
     rebuilt: HashMap<RelPath, BlobId>,
+    /// Read buffer and current-chunk scratch reused across files instead of
+    /// a fresh 256 KiB allocation per rehashed file.
+    read_buf: Vec<u8>,
+    chunk_scratch: Vec<u8>,
 }
 
 impl<'a> Walker<'a> {
@@ -165,6 +169,8 @@ impl<'a> Walker<'a> {
             },
             refused: Vec::new(),
             rebuilt: HashMap::new(),
+            read_buf: vec![0u8; REHASH_READ_BUF],
+            chunk_scratch: Vec::with_capacity(ferry_store::chunker::MIN_SIZE * 2),
         };
 
         for d in order {
@@ -272,7 +278,15 @@ impl<'a> Walker<'a> {
         }
         names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
-        let old_node: Option<TreeNode> = self.cache.node(rel).map(|c| c.node.clone());
+        // Take the old node out for the duration of the rebuild: the mutably
+        // borrowed cache must stay alive across the walk, but cloning the
+        // whole listing (chunk lists included) per rebuilt directory was
+        // pure waste. Re-inserted below.
+        let old_node = self.cache.take(rel).map(|c| c.node);
+        let old_entries: HashMap<&str, &TreeEntry> = old_node
+            .as_ref()
+            .map(|n| n.entries.iter().map(|e| (e.name.as_str(), e)).collect())
+            .unwrap_or_default();
         let mut entries: Vec<TreeEntry> = Vec::with_capacity(names.len());
         let mut listed_dirs: Vec<RelPath> = Vec::new();
 
@@ -379,7 +393,7 @@ impl<'a> Walker<'a> {
                     let exec = live_exec(&meta.permissions());
                     self.stats.files += 1;
 
-                    let chunks = match old_node.as_ref().and_then(|n| find_entry(n, &component)) {
+                    let chunks = match old_entries.get(component.as_str()) {
                         Some(prev) if reusable(prev, size, mt, exec) => {
                             match &prev.payload {
                                 EntryPayload::File { chunks, .. } => chunks.clone(),
@@ -435,24 +449,27 @@ impl<'a> Walker<'a> {
     /// Stream one file through the CDC chunker with a bounded read buffer,
     /// storing each chunk as its boundary completes (T-09). Peak memory is
     /// one chunk (`MAX_SIZE`) plus the read buffer — never the file size;
-    /// GB-scale assets no longer spike RSS during rehash.
+    /// GB-scale assets no longer spike RSS during rehash. Both buffers are
+    /// Walker-owned scratch, reused across files in one pass.
     fn stream_file_chunks(&mut self, path: &Path) -> Result<Vec<(BlobId, u64)>, ScanError> {
-        const REHASH_READ_BUF: usize = 256 * 1024;
-
         let store = self.store;
         // `poly` is a ValidatedPoly from the store handle; rejection is
         // unreachable but stays typed, never a panic.
         let mut chunker = ferry_store::chunker::Chunker::new(self.poly.get())?;
 
         let mut file = std::fs::File::open(path).map_err(Self::io_err(path))?;
-        let mut buf = vec![0u8; REHASH_READ_BUF];
+        let buf: &mut Vec<u8> = &mut self.read_buf;
+        if buf.len() != REHASH_READ_BUF {
+            buf.resize(REHASH_READ_BUF, 0);
+        }
         // Current unterminated chunk only; never exceeds MAX_SIZE because a
         // boundary fires there unconditionally.
-        let mut cur: Vec<u8> = Vec::with_capacity(ferry_store::chunker::MIN_SIZE * 2);
+        let cur: &mut Vec<u8> = &mut self.chunk_scratch;
+        cur.clear();
         let mut chunks: Vec<(BlobId, u64)> = Vec::new();
 
         loop {
-            let n = file.read(&mut buf).map_err(Self::io_err(path))?;
+            let n = file.read(buf).map_err(Self::io_err(path))?;
             if n == 0 {
                 break;
             }
@@ -463,18 +480,19 @@ impl<'a> Walker<'a> {
                 let fresh = len - cur.len();
                 cur.extend_from_slice(&buf[eaten..eaten + fresh]);
                 eaten += fresh;
-                let id = store.put_data(&cur)?;
+                let id = store.put_data(cur)?;
                 self.stats.bytes_chunked += cur.len() as u64;
                 chunks.push((id, cur.len() as u64));
                 cur.clear();
             }
-            cur.extend_from_slice(&buf[eaten..n]);
+            let tail_bytes = &buf[eaten..n];
+            cur.extend_from_slice(tail_bytes);
         }
 
         let tail = chunker.finish();
         debug_assert_eq!(tail, cur.len(), "streamed tail must match retained bytes");
         if tail > 0 {
-            let id = store.put_data(&cur)?;
+            let id = store.put_data(cur)?;
             self.stats.bytes_chunked += tail as u64;
             chunks.push((id, tail as u64));
         }
@@ -515,9 +533,8 @@ impl<'a> Walker<'a> {
     }
 }
 
-fn find_entry<'n>(node: &'n TreeNode, name: &str) -> Option<&'n TreeEntry> {
-    node.entries.iter().find(|e| e.name == name)
-}
+/// Read-buffer size for streamed rehashing; one allocation per pass.
+const REHASH_READ_BUF: usize = 256 * 1024;
 
 /// The short-circuit predicate: same size, mtime, exec bit, and file-ness
 /// means the bytes on disk are assumed identical to the recorded chunk list.

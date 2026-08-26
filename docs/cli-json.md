@@ -71,7 +71,11 @@ Accept (`ferry pair --accept <file> [dir]`):
 
 Error codes: `pair-timeout` (response/grant file never appeared),
 `pair-bad-response`, `pair-verify`, `bad-offer`, `bad-grant`,
-`already-initialized`, `not-found`.
+`already-initialized`, `not-found`. These paths can also fail with
+`config-corrupt` (folder key envelope missing/damaged),
+`not-shared-with-device`, `key-unwrap`, `store`; `share` additionally
+emits `identity-corrupt`, and both may emit the generic `io`, `crypto`,
+and `qr` codes.
 
 ## `ferry share <folder> [--i-know]`
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ferry · daemon</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>ferry<span class="dim">·daemon</span></h1>
+  <div class="header-right">
+    <span id="conn" class="conn conn-off"><i></i><span id="conn-label">connecting…</span></span>
+    <span id="agree-badge" class="badge badge-amber" hidden></span>
+  </div>
+</header>
+
+<div id="live-state" class="live-state dim" hidden>
+  STATE root=<code id="state-root"></code> agreed=<code id="state-agreed"></code>
+</div>
+
+<main>
+
+<section>
+  <h2>folder</h2>
+  <div id="status-error" class="errbox" hidden></div>
+  <div id="overview" class="grid" hidden>
+    <div class="kv"><span class="k">device id</span><code id="ov-device">—</code></div>
+    <div class="kv"><span class="k">folder</span><code id="ov-folder">—</code></div>
+    <div class="kv"><span class="k">folder id</span><code id="ov-folder-id">—</code></div>
+    <div class="kv"><span class="k">manifest root</span><code id="ov-manifest">—</code></div>
+    <div class="kv"><span class="k">pending changes</span><code id="ov-pending">—</code></div>
+    <div class="kv"><span class="k">held changes</span><code id="ov-held">—</code></div>
+    <div class="kv"><span class="k">scanned</span><code id="ov-scanned">—</code></div>
+    <div class="kv"><span class="k">pinning</span><span id="ov-pin" class="badge">—</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>peers</h2>
+  <ul id="peers" class="rows"></ul>
+  <p id="peers-empty" class="empty" hidden>No peers paired. Share this folder or accept a payload to add one.</p>
+</section>
+
+<section>
+  <h2>conflicts <button id="conflicts-refresh" class="btn btn-sm" type="button">refresh</button></h2>
+  <ul id="conflicts" class="rows"></ul>
+  <p id="conflicts-empty" class="empty" hidden>No conflicts recorded — tree is clean.</p>
+</section>
+
+<section>
+  <h2>share</h2>
+  <p class="desc">Publish a pairing payload for this folder. Scans for secrets first.</p>
+  <button id="share-btn" class="btn" type="button">share folder</button>
+  <button id="share-anyway" class="btn btn-danger" type="button" hidden>share anyway (i_know)</button>
+  <div id="share-out" class="out" hidden></div>
+  <div id="share-warn" class="warnbox" hidden></div>
+  <div id="share-result" class="okbox" hidden></div>
+</section>
+
+<section>
+  <h2>pair accept</h2>
+  <p class="desc">Accept a payload file from another device into a local directory.</p>
+  <form id="pair-form">
+    <label>payload path <input id="pair-payload" type="text" placeholder="/path/to/ferry-pair.json" autocomplete="off"></label>
+    <label>directory <input id="pair-dir" type="text" placeholder="(optional) target dir" autocomplete="off"></label>
+    <button class="btn" type="submit">accept pair</button>
+  </form>
+  <div id="pair-result" class="okbox" hidden></div>
+  <div id="pair-err" class="errbox" hidden></div>
+</section>
+
+<section>
+  <h2>pinning</h2>
+  <p class="desc">Hold incoming edits from peers while an agent works here. Leave paths blank to pin the whole folder.</p>
+  <form id="pin-form">
+    <label>paths (one per line or space-separated)
+      <textarea id="pin-paths" rows="2" placeholder="src/&#10;*.rs"></textarea>
+    </label>
+    <div class="btnrow">
+      <button id="pin-start" class="btn" type="submit">start</button>
+      <button id="pin-stop" class="btn" type="button">stop</button>
+      <button id="pin-release" class="btn" type="button">release</button>
+    </div>
+  </form>
+  <div id="pin-result" class="okbox" hidden></div>
+  <div id="pin-err" class="errbox" hidden></div>
+</section>
+
+<footer class="dim">ferry-sync daemon UI · localhost only · no auth by design</footer>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>

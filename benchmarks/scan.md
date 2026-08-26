@@ -41,6 +41,27 @@ Correctness assertions inside the same runs:
 **Verdict: both gates PASS with ≥2× headroom on the initial scan and >5×
 on the incremental rescan.**
 
+## Results — Apple M1 (2026-08-26, after chunker memoization)
+
+Same machine and fixture. Changes since the 2026-08-24 table: the chunker
+derives its slide-out power + fold table once per polynomial for the life
+of the process instead of once per chunked file (ticket 06 / C3), and the
+incremental walker reuses one read buffer + one chunk scratch buffer
+across files instead of allocating 256 KiB per rehashed file.
+
+| Metric                                        | Run 1   | Run 2   | Gate    |
+|-----------------------------------------------|---------|---------|---------|
+| Initial full scan                             | 21.40 s | 23.37 s | < 60 s  |
+| Incremental rescan after 100 changed files    | 0.427 s | 0.368 s | < 2 s   |
+
+Initial full-scan throughput improves ~15–20% (25.7–27.5 s → 21.4–23.4 s);
+the per-file warm-up elimination dominates because every one of the 100k
+files previously paid irreducibility + `x^504` + a 256-entry table build.
+Incremental rescan stays well inside the gate (noise-band overlap with the
+old numbers; the 163 rebuilt dirs are dominated by IO, not setup).
+Correctness assertions identical to the previous run (exact mutation set,
+zero-change pass hashes 0 bytes).
+
 ## Methodology
 
 - **Fixture**: generated fresh by the bench binary into

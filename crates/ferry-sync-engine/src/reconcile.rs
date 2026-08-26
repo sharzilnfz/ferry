@@ -449,7 +449,7 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         final_state.insert(key.clone(), s);
     }
 
-    let removal_keys: Vec<String> = materialize
+    let removal_keys: std::collections::HashSet<String> = materialize
         .iter()
         .filter(|op| op.result.is_none())
         .map(|op| join(&op.path))

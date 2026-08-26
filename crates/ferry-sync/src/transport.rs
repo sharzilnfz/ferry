@@ -11,9 +11,13 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Arc;
 
 /// Hard cap on one frame's payload.
 pub const MAX_FRAME_BYTES: u32 = 512 * 1024 * 1024;
+
+/// An opaque 32-byte peer identity (the wire-level device public key / endpoint identity per ADR-0003).
+pub type PeerId = [u8; 32];
 
 pub trait Transport: Send + Sync {
     /// Open an outgoing connection to `addr`.
@@ -21,14 +25,23 @@ pub trait Transport: Send + Sync {
     /// Bind a listener on `addr` (`:0` picks a free port;
     /// [`Listener::local_addr`] reports the choice).
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>>;
+
+    /// Dial a peer by identity. Default implementation maps the peer id to an address.
+    fn dial_peer(&self, peer: &PeerId) -> io::Result<Box<dyn Connection>> {
+        self.dial(peer_id_to_addr(peer))
+    }
 }
 
-pub trait Listener: Send {
+pub trait Listener: Send + Sync {
     /// The bound address, after port resolution.
     fn local_addr(&self) -> io::Result<SocketAddr>;
     /// Block until a peer connects. Errors are per-accept; callers keep
     /// accepting until shutdown.
     fn accept(&self) -> io::Result<Box<dyn Connection>>;
+    /// Explicitly close the listener to unblock pending `accept()` calls cleanly.
+    fn close(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 pub trait Connection: Send {
@@ -37,6 +50,29 @@ pub trait Connection: Send {
     /// Receive exactly one frame payload. `Err(UnexpectedEof)` at a frame
     /// boundary means the peer closed cleanly.
     fn recv_frame(&mut self) -> io::Result<Vec<u8>>;
+}
+
+/// Convert a `SocketAddr` into an opaque `PeerId` representation for transport routing.
+pub fn addr_to_peer_id(addr: &SocketAddr) -> PeerId {
+    let mut out = [0u8; 32];
+    match addr {
+        SocketAddr::V4(v4) => {
+            out[0..4].copy_from_slice(&v4.ip().octets());
+            out[4..6].copy_from_slice(&v4.port().to_be_bytes());
+        }
+        SocketAddr::V6(v6) => {
+            out[0..16].copy_from_slice(&v6.ip().octets());
+            out[16..18].copy_from_slice(&v6.port().to_be_bytes());
+        }
+    }
+    out
+}
+
+/// Convert an opaque `PeerId` back into a `SocketAddr` if it encodes one.
+pub fn peer_id_to_addr(peer: &PeerId) -> SocketAddr {
+    let ip = std::net::Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
+    let port = u16::from_be_bytes([peer[4], peer[5]]);
+    SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
 }
 
 /// The M0 throwaway: std-only TCP with hand-rolled framing.
@@ -63,6 +99,41 @@ impl Listener for TcpLst {
     fn accept(&self) -> io::Result<Box<dyn Connection>> {
         let (stream, _) = self.0.accept()?;
         Ok(Box::new(TcpConn(stream)))
+    }
+
+    fn close(&self) -> io::Result<()> {
+        if let Ok(addr) = self.0.local_addr() {
+            let _ = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50));
+        }
+        Ok(())
+    }
+}
+
+impl Listener for Box<dyn Listener> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        (**self).local_addr()
+    }
+
+    fn accept(&self) -> io::Result<Box<dyn Connection>> {
+        (**self).accept()
+    }
+
+    fn close(&self) -> io::Result<()> {
+        (**self).close()
+    }
+}
+
+impl<T: ?Sized + Listener + Send + Sync> Listener for Arc<T> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        (**self).local_addr()
+    }
+
+    fn accept(&self) -> io::Result<Box<dyn Connection>> {
+        (**self).accept()
+    }
+
+    fn close(&self) -> io::Result<()> {
+        (**self).close()
     }
 }
 
@@ -168,5 +239,19 @@ mod tests {
             Err(e) => assert!(matches!(e.kind(), io::ErrorKind::ConnectionRefused)),
             Ok(_) => panic!("dial to a closed port must fail"),
         }
+    }
+
+    #[test]
+    fn listener_close_unblocks_cleanly() {
+        let lst = TcpTransport.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+        assert!(lst.close().is_ok());
+    }
+
+    #[test]
+    fn peer_id_conversion_round_trips() {
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let peer = addr_to_peer_id(&addr);
+        let back = peer_id_to_addr(&peer);
+        assert_eq!(addr, back);
     }
 }

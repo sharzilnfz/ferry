@@ -1,8 +1,10 @@
-//! Injectable endpoint configuration: relays, discovery, identity, forcing.
+//! Injectable endpoint configuration: relays, discovery, identity, forcing, routing.
 
 use std::time::Duration;
 
 use ferry_crypto::identity::DeviceIdentity;
+
+use crate::directory::RouteTable;
 
 /// Which relay servers endpoints may use (ADR-0003: relay-first, fallback).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -60,6 +62,8 @@ pub struct IrohConfig {
     /// How long a dial may take before failing typed (`TimedOut`). iroh has
     /// its own ~10s QUIC connect budget underneath this.
     pub dial_timeout: Duration,
+    /// Explicit route table. If None, a fresh isolated `RouteTable` is created.
+    pub routes: Option<RouteTable>,
 }
 
 impl Default for IrohConfig {
@@ -71,6 +75,7 @@ impl Default for IrohConfig {
             mdns: None,
             force_relay: false,
             dial_timeout: Duration::from_secs(10),
+            routes: None,
         }
     }
 }
@@ -125,6 +130,11 @@ impl IrohConfigBuilder {
 
     pub fn dial_timeout(mut self, d: Duration) -> Self {
         self.0.dial_timeout = d;
+        self
+    }
+
+    pub fn routes(mut self, routes: RouteTable) -> Self {
+        self.0.routes = Some(routes);
         self
     }
 

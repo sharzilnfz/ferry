@@ -9,6 +9,9 @@ ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-ignore = { path = "../ferry-ignore" }
+# One owner for folder bootstrap + the pairing ritual (ticket 08); this
+# crate is only a presentation adapter over it.
+ferry-folder.workspace = true
 # Ferry engine: daemon and sync commands run SyncEngine directly (T-14).
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }

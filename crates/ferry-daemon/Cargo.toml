@@ -14,7 +14,16 @@ ferry-sync = { path = "../ferry-sync" }
 ferry-iroh = { path = "../ferry-iroh" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
+ferry-folder = { workspace = true }
+ferry-ignore = { path = "../ferry-ignore" }
+# Dashboard state reads go through the typed owners instead of hand-parsing
+# .ferry/pin-state.json, held/*.jsonl and conflicts.jsonl.
+ferry-pin = { path = "../ferry-pin" }
+ferry-sync-engine = { path = "../ferry-sync-engine" }
 rand.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum.workspace = true
 
 [[bin]]
 name = "ferry-sync"

@@ -3,6 +3,7 @@
 //! constants and MUST NOT change without bumping the store format version.
 
 use std::fmt;
+use std::sync::Mutex;
 
 use rand::Rng;
 use thiserror::Error;
@@ -236,7 +237,34 @@ pub struct Chunker {
     filled: usize,
     fp: u64,
     len: usize,
+    tables: &'static DerivedTables,
+}
+
+/// Per-polynomial constants derived from `p`: the slide-out power and the
+/// byte fold-down table. Computed once per polynomial for the life of the
+/// process (memoized behind a mutex) instead of once per chunker instance —
+/// a walk builds one chunker per file, and the derivation alone costs more
+/// than chunking a small file.
+struct DerivedTables {
     out_table: [u64; 256],
+}
+
+fn derived_tables(p: u64) -> &'static DerivedTables {
+    type Memo = std::collections::HashMap<u64, &'static DerivedTables>;
+    static MEMO: std::sync::OnceLock<Mutex<Memo>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = memo.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.entry(p).or_insert_with(|| {
+        let slide_out = gf_pow_x(SLIDE_OUT_X, p);
+        let mut out_table = [0u64; 256];
+        for (i, slot) in out_table.iter_mut().enumerate() {
+            // The raw product reaches degree <= 60; it MUST be reduced back
+            // under degree 53 or every later fold inherits garbage high
+            // terms and the fingerprint stops being window-local.
+            *slot = gf_mod(gf_mul(i as u64, slide_out), p);
+        }
+        Box::leak(Box::new(DerivedTables { out_table }))
+    })
 }
 
 impl Chunker {
@@ -247,14 +275,6 @@ impl Chunker {
         if !is_irreducible(p) {
             return Err(PolynomialError(p));
         }
-        let slide_out = gf_pow_x(SLIDE_OUT_X, p);
-        let mut out_table = [0u64; 256];
-        for (i, slot) in out_table.iter_mut().enumerate() {
-            // The raw product reaches degree <= 60; it MUST be reduced back
-            // under degree 53 or every later fold inherits garbage high
-            // terms and the fingerprint stops being window-local.
-            *slot = gf_mod(gf_mul(i as u64, slide_out), p);
-        }
         Ok(Chunker {
             poly: p,
             win: [0; WINDOW_SIZE],
@@ -262,7 +282,7 @@ impl Chunker {
             filled: 0,
             fp: 0,
             len: 0,
-            out_table,
+            tables: derived_tables(p),
         })
     }
 
@@ -344,7 +364,7 @@ impl Chunker {
             let out = self.win[self.wpos];
             self.win[self.wpos] = b;
             self.wpos = (self.wpos + 1) % WINDOW_SIZE;
-            self.fp ^= self.out_table[out as usize];
+            self.fp ^= self.tables.out_table[out as usize];
             self.fp = gf_mod((self.fp << 8) | u64::from(b), self.poly);
         }
     }

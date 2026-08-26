@@ -19,6 +19,15 @@ Five-minute path:
 Every command accepts --json for stable machine-readable output
 (schemas: docs/cli-json.md).";
 
+/// Long-form help shown by `ferry daemon --help`.
+pub const DAEMON_AFTER_HELP: &str = "\
+Web dashboard (v0):
+  ferry daemon --ui [HOST:PORT]        (default 127.0.0.1:8098)
+--ui serves the local web dashboard over HTTP while syncing runs.
+v0 stance: LOOPBACK BIND ONLY and no auth token — anyone who can reach
+the port can read folder state, so keep the default 127.0.0.1 address.
+Design notes: .scratch/web-dashboard/spec.md.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "ferry",
@@ -119,6 +128,7 @@ pub enum Command {
         action: StoreAction,
     },
     /// Watch folders and continuously exchange with one peer over TCP.
+    #[command(after_help = DAEMON_AFTER_HELP)]
     Daemon {
         /// Folders to watch (default: current directory).
         folders: Vec<PathBuf>,

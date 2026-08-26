@@ -84,6 +84,11 @@ pub trait ExchangeHost {
     }
     /// Adopt `manifest` as our current folder state (no agreement yet).
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError>;
+    /// The session mutated the local tree (remote entries applied, possibly
+    /// partially under a pin). Implementations must force one audit-grade
+    /// scan next tick: apply restores recorded mtimes, so stat-based reuse
+    /// cannot be trusted against the post-apply tree.
+    fn note_tree_mutation(&self) {}
     /// Record the last-agreed pointer against `peer`, locally.
     fn agree(&self, peer: DeviceId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError>;
 }
@@ -519,6 +524,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         let outcome = applier
             .apply(man, &changes)
             .map_err(|e| SessionError::Apply(format!("{e}")))?;
+        self.host.note_tree_mutation();
         Ok(outcome.held)
     }
 

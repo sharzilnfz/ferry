@@ -477,6 +477,7 @@ pub fn collect_garbage(
         let elapsed = now.duration_since(first_unref).unwrap_or(Duration::ZERO);
         if elapsed >= grace {
             std::fs::remove_file(&path)?;
+            store.invalidate_pack(&claimed);
             ledger.remove(&claimed);
             ledger_dirty = true;
             report.deleted.push(claimed);

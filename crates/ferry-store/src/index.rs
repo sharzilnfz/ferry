@@ -477,6 +477,14 @@ pub struct LocationTable {
     /// Membership mirror of `entries` so `merge` stays O(1) per row instead
     /// of O(n) `Vec::contains` scans over the whole union.
     seen: std::collections::HashSet<IndexEntry>,
+    /// `(kind, id)` -> row indices into `entries`, in insertion order.
+    /// Rows are append-only, so indices stay valid for the life of the
+    /// table; `candidates()` is a hash lookup + gather instead of a full
+    /// table scan per blob. Order matters: a pack body may legitimately
+    /// carry the same id more than once (double-staged before sealing),
+    /// and the normative read compares the index row against the FIRST
+    /// matching footer entry — so the earliest row must win.
+    by_blob: std::collections::HashMap<(BlobKind, BlobId), Vec<usize>>,
 }
 
 impl LocationTable {
@@ -486,6 +494,10 @@ impl LocationTable {
     pub fn merge<I: IntoIterator<Item = IndexEntry>>(&mut self, incoming: I) {
         for e in incoming {
             if self.seen.insert(e.clone()) {
+                self.by_blob
+                    .entry((e.kind, e.id))
+                    .or_default()
+                    .push(self.entries.len());
                 self.entries.push(e);
             }
         }
@@ -501,11 +513,14 @@ impl LocationTable {
 
     /// All known locations for one blob.
     pub fn candidates(&self, kind: BlobKind, id: &BlobId) -> Vec<IndexEntry> {
-        self.entries
-            .iter()
-            .filter(|e| e.kind == kind && &e.id == id)
-            .cloned()
-            .collect()
+        match self.by_blob.get(&(kind, *id)) {
+            Some(rows) => rows
+                .iter()
+                .filter_map(|i| self.entries.get(*i))
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
     }
 
     /// Resolve a blob to its best location: any entry whose pack file still

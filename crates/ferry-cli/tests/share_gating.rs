@@ -27,7 +27,7 @@ fn share_refuses_and_redacts_until_i_know() {
         "never leak the secret itself"
     );
     let detail = err.detail.expect("structured findings");
-    let findings = detail.as_array().unwrap();
+    let findings = detail["warnings"].as_array().unwrap();
     assert!(!findings.is_empty());
     // First finding is the path-level class for .env itself.
     assert_eq!(findings[0]["path"], ".env");

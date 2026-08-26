@@ -34,6 +34,13 @@ impl DirCache {
         self.dirs.get(rel)
     }
 
+    /// Remove and return the cached record for exactly `rel` (children
+    /// untouched). Lets a rebuild consult prior entries without cloning the
+    /// whole listing; the caller re-inserts the rebuilt record.
+    pub(crate) fn take(&mut self, rel: &RelPath) -> Option<CachedDir> {
+        self.dirs.remove(rel)
+    }
+
     pub(crate) fn insert(&mut self, rel: RelPath, dir: CachedDir) {
         self.dirs.insert(rel, dir);
     }
