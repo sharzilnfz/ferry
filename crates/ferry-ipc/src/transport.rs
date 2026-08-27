@@ -165,6 +165,7 @@ pub mod windows {
 
     impl IpcClient {
         /// Connect to a Windows Named Pipe at the specified path.
+        #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
         pub async fn connect(
             path: impl AsRef<Path>,
         ) -> Result<IpcConnection<NamedPipeClient>, IpcError> {

@@ -29,7 +29,7 @@ if [ -z "$BIN" ]; then
     BIN="$REPO_ROOT/target/debug/ferry-sync"
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/ferry-dashboard.XXXXXX")"
+TMP="$(mktemp -d "/tmp/ferry-dashboard.XXXXXX")"
 STORE_A="$TMP/node-a/store"; TREE_A="$TMP/node-a/tree"
 STORE_B="$TMP/node-b/store"; TREE_B="$TMP/node-b/tree"
 mkdir -p "$STORE_A" "$TREE_A" "$STORE_B" "$TREE_B"

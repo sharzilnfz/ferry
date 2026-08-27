@@ -56,7 +56,7 @@ echo "ferry-sync binary: $DAEMON_BIN"
 # ---------------------------------------------------------------------------
 # Setup test workspace and trap cleanup
 # ---------------------------------------------------------------------------
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/ferry-ipc-e2e.XXXXXX")"
+TMP="$(mktemp -d "/tmp/ferry-ipc-e2e.XXXXXX")"
 HOME_DIR="$TMP/home"
 TEST_TREE="$TMP/project"
 mkdir -p "$HOME_DIR" "$TEST_TREE"

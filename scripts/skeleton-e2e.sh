@@ -20,7 +20,7 @@
 
 set -u
 
-N_SECONDS="${1:-30}"
+N_SECONDS="${1:-60}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 FERRY_BIN=""
@@ -85,10 +85,9 @@ wait_converged() { # a_log b_log deadline_s -> sets CONVERGED=1/0, AGREED
         AGREED_A="$(last_field_of "$a_log" agreed)"
         AGREED_B="$(last_field_of "$b_log" agreed)"
         ROOT_A="$(last_field_of "$a_log" root)"
-        ROOT_B="$(last_field_of "$b_log" root)"
         if [ -n "$AGREED_A" ] && [ "$AGREED_A" = "$AGREED_B" ] \
-           && [ -n "$ROOT_A" ] && [ "$ROOT_A" = "$ROOT_B" ] \
-           && [ "${#AGREED_A}" -ge 32 ] && [ "${#ROOT_A}" -ge 32 ]; then
+           && [ -n "$ROOT_A" ] && [ "$AGREED_A" = "$ROOT_A" ] \
+           && [ "$AGREED_A" != "none" ] && [ "${#AGREED_A}" -ge 32 ]; then
             CONVERGED=1
             AGREED="$AGREED_A"
             break

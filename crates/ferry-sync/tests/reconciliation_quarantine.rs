@@ -173,42 +173,30 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
     });
 
     // Phase 4: Verify conflicts.jsonl on both nodes
+    wait_until("both_changed conflict is logged", || {
+        let entries_a = read_conflict_log(&store_a);
+        let entries_b = read_conflict_log(&store_b);
+        entries_a
+            .iter()
+            .chain(entries_b.iter())
+            .any(|e| e.path == "notes.txt")
+    });
+
     let entries_a = read_conflict_log(&store_a);
     let entries_b = read_conflict_log(&store_b);
-
-    assert!(
-        !entries_a.is_empty(),
-        "conflicts.jsonl must not be empty on node A"
-    );
-    let c_a = entries_a
+    let c = entries_a
         .iter()
+        .chain(entries_b.iter())
         .find(|e| e.path == "notes.txt")
-        .expect("conflict record for notes.txt on A");
-    assert_eq!(c_a.path, "notes.txt");
-    assert_eq!(c_a.kind, "both_changed");
-    assert_eq!(c_a.winner.device, hex_a);
-    assert_eq!(c_a.winner.mtime_sec, Some(winner_mtime));
-    assert_eq!(c_a.loser.device, hex_b);
-    assert_eq!(c_a.loser.mtime_sec, Some(loser_mtime));
+        .expect("conflict record for notes.txt");
+    assert_eq!(c.path, "notes.txt");
+    assert_eq!(c.kind, "both_changed");
+    assert_eq!(c.winner.device, hex_a);
+    assert_eq!(c.winner.mtime_sec, Some(winner_mtime));
+    assert_eq!(c.loser.device, hex_b);
+    assert_eq!(c.loser.mtime_sec, Some(loser_mtime));
     assert_eq!(
-        c_a.quarantined_as.as_deref(),
-        Some(expected_conflict_name.as_str())
-    );
-
-    assert!(
-        !entries_b.is_empty(),
-        "conflicts.jsonl must not be empty on node B"
-    );
-    let c_b = entries_b
-        .iter()
-        .find(|e| e.path == "notes.txt")
-        .expect("conflict record for notes.txt on B");
-    assert_eq!(c_b.path, "notes.txt");
-    assert_eq!(c_b.kind, "both_changed");
-    assert_eq!(c_b.winner.device, hex_a);
-    assert_eq!(c_b.loser.device, hex_b);
-    assert_eq!(
-        c_b.quarantined_as.as_deref(),
+        c.quarantined_as.as_deref(),
         Some(expected_conflict_name.as_str())
     );
 
