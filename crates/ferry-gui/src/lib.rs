@@ -3,12 +3,19 @@
 //! Provides the Obsidian Dark fluid-glass graphical interface for real-time folder sync
 //! monitoring, session pinning, conflict management, and device pairing.
 
+pub mod activity;
 pub mod app;
+pub mod beacon;
+pub mod fleet;
+pub mod modals;
+pub mod telemetry;
 pub mod theme;
 
 use std::sync::Arc;
 
+pub use activity::ActivityEntry;
 pub use app::{format_bytes, BackendAction, GuiApp, GuiTransferState};
+pub use beacon::BeaconState;
 use eframe::NativeOptions;
 use ferry_ipc::backend::UiBackend;
 pub use theme::{colors, Theme};
@@ -21,8 +28,8 @@ pub fn run_gui(
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Ferry")
-            .with_inner_size([720.0, 560.0])
-            .with_min_inner_size([500.0, 400.0])
+            .with_inner_size([760.0, 600.0])
+            .with_min_inner_size([540.0, 440.0])
             .with_transparent(false),
         ..Default::default()
     };

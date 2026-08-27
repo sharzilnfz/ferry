@@ -4,9 +4,9 @@
 
 **Blocked by:** 09 (Native GUI Crate Bootstrap), 03 (Daemon IPC Adapter)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] "Pair Device" modal allows initiating a share or accepting an incoming offer payload.
-- [ ] If unignored secrets (e.g. `.env` files) are detected, a warning banner displays the offending paths and requires an explicit confirmation before proceeding.
-- [ ] Successful share generation displays the 32-character pairing token / short code with a one-click copy button.
-- [ ] Accepting a valid offer payload completes the key exchange and updates the connected device fleet list in real-time.
+- [x] "Pair Device" modal allows initiating a share or accepting an incoming offer payload.
+- [x] If unignored secrets (e.g. `.env` files) are detected, a warning banner displays the offending paths and requires an explicit confirmation before proceeding.
+- [x] Successful share generation displays the 32-character pairing token / short code with a one-click copy button.
+- [x] Accepting a valid offer payload completes the key exchange and updates the connected device fleet list in real-time.

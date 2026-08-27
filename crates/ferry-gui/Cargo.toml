@@ -10,6 +10,7 @@ eframe.workspace = true
 ferry-ipc.workspace = true
 ferry-platform.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+qrcode.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

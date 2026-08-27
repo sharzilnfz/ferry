@@ -1693,6 +1693,7 @@ dependencies = [
  "egui",
  "ferry-ipc",
  "ferry-platform",
+ "qrcode",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

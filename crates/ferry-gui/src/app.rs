@@ -5,12 +5,19 @@ use std::time::Instant;
 
 use eframe::App;
 use egui::{
-    epaint::Shadow, vec2, Align, Align2, Area, CentralPanel, Color32, Frame, Key, Layout, Margin,
-    Order, RichText, Rounding, ScrollArea, Stroke, TopBottomPanel,
+    Align, CentralPanel, Color32, Frame, Key, Layout, Margin, RichText, Rounding, ScrollArea,
+    Stroke, TopBottomPanel,
 };
 use ferry_ipc::backend::{PinRecord, ShareOffer, ShareStatus, UiBackend, UiEvent};
 use ferry_ipc::protocol::{ConflictEntry, EngineSnapshot, TransferDirection};
 
+use crate::activity::{render_activity_stream, ActivityEntry};
+use crate::beacon::{status_beacon_ui, BeaconState};
+use crate::fleet::render_fleet_table;
+use crate::modals::{
+    render_conflicts_modal, render_pair_modal, render_pin_modal, render_share_modal,
+};
+use crate::telemetry::render_telemetry_hairline;
 use crate::theme::{colors, Theme};
 
 /// User actions sent asynchronously to the backend worker task.
@@ -63,8 +70,11 @@ pub struct GuiApp {
     pub active_pin: Option<PinRecord>,
     pub active_share: Option<ShareOffer>,
     pub share_status: Option<ShareStatus>,
+    pub share_secret_warnings: Vec<String>,
+    pub share_override_secrets: bool,
     pub active_transfer: Option<GuiTransferState>,
-    pub activity_log: Vec<(String, String, Color32)>,
+    pub activity_log: Vec<ActivityEntry>,
+    pub auto_scroll_activity: bool,
 
     pub show_conflicts_modal: bool,
     pub show_pin_modal: bool,
@@ -93,8 +103,11 @@ impl GuiApp {
             active_pin: None,
             active_share: None,
             share_status: None,
+            share_secret_warnings: Vec::new(),
+            share_override_secrets: false,
             active_transfer: None,
             activity_log: Vec::new(),
+            auto_scroll_activity: true,
             show_conflicts_modal: false,
             show_pin_modal: false,
             show_share_modal: false,
@@ -119,7 +132,7 @@ impl GuiApp {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = tokio::sync::mpsc::unbounded_channel::<BackendAction>();
 
-        // 1. Initial snapshot & conflict queries
+        // 1. Initial queries
         let b_clone = backend.clone();
         let ev_tx_clone = event_tx.clone();
         let ctx_clone = ctx.clone();
@@ -188,10 +201,39 @@ impl GuiApp {
                         }
                     }
                     BackendAction::InitiateShare { i_know } => {
-                        let _ = b_actions.share_initiate(None, i_know).await;
+                        match b_actions.share_initiate(None, i_know).await {
+                            Ok(offer) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: "share_offer".to_string(),
+                                    message: serde_json::to_string(&offer).unwrap_or_default(),
+                                });
+                            }
+                            Err(e) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: e.code,
+                                    message: e.message,
+                                });
+                            }
+                        }
                     }
                     BackendAction::AcceptPair { payload_path } => {
-                        let _ = b_actions.pair_accept(payload_path, None).await;
+                        match b_actions.pair_accept(payload_path, None).await {
+                            Ok(res) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: "pair_success".to_string(),
+                                    message: format!("Successfully paired with device {}", res.device_id),
+                                });
+                                if let Ok(snap) = b_actions.get_status().await {
+                                    let _ = ev_tx_actions.send(UiEvent::State(snap));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: e.code,
+                                    message: e.message,
+                                });
+                            }
+                        }
                     }
                     BackendAction::FetchStatus => {
                         if let Ok(snap) = b_actions.get_status().await {
@@ -222,8 +264,11 @@ impl GuiApp {
             active_pin: None,
             active_share: None,
             share_status: None,
+            share_secret_warnings: Vec::new(),
+            share_override_secrets: false,
             active_transfer: None,
             activity_log: Vec::new(),
+            auto_scroll_activity: true,
             show_conflicts_modal: false,
             show_pin_modal: false,
             show_share_modal: false,
@@ -245,11 +290,52 @@ impl GuiApp {
         }
     }
 
+    /// Authoritative Beacon operational state resolver.
+    #[must_use]
+    pub fn beacon_state(&self) -> BeaconState {
+        if !self.is_connected {
+            return BeaconState::Offline;
+        }
+        let Some(ref snap) = self.snapshot else {
+            return BeaconState::Offline;
+        };
+
+        if snap.pin.holding || snap.state.eq_ignore_ascii_case("pinned") {
+            BeaconState::Holding
+        } else if snap.conflicts > 0 || !self.conflicts.is_empty() || snap.state.eq_ignore_ascii_case("conflict") {
+            BeaconState::Conflict
+        } else if snap.state.eq_ignore_ascii_case("syncing") || self.active_transfer.is_some() {
+            BeaconState::Syncing
+        } else if snap.state.eq_ignore_ascii_case("synced") {
+            BeaconState::Synced
+        } else if snap.state.eq_ignore_ascii_case("idle") {
+            BeaconState::Idle
+        } else {
+            BeaconState::Offline
+        }
+    }
+
+    /// Authoritative state badge resolver.
+    #[must_use]
+    pub fn current_badge(&self) -> (&'static str, Color32, Color32) {
+        let b_state = self.beacon_state();
+        let bg = b_state.color();
+        let fg = match b_state {
+            BeaconState::Synced => Color32::BLACK,
+            BeaconState::Idle => colors::TEXT_PRIMARY,
+            BeaconState::Offline => colors::TEXT_MUTED,
+            _ => Color32::WHITE,
+        };
+        (b_state.label(), bg, fg)
+    }
+
     /// Process a typed `UiEvent` into internal UI models.
     pub fn handle_event(&mut self, event: UiEvent) {
         self.is_connected = true;
         match event {
             UiEvent::State(snap) => {
+                let msg = format!("State: {} (files: {}, size: {})", snap.state, snap.scanned.files, format_bytes(snap.scanned.bytes_chunked));
+                self.activity_log.push(ActivityEntry::new("Snapshot", msg, colors::FERRY_GREEN));
                 self.snapshot = Some(snap);
             }
             UiEvent::StateChanged {
@@ -259,6 +345,8 @@ impl GuiApp {
                 stats,
                 ..
             } => {
+                let msg = format!("Transitioned to {state} (manifest: {manifest_id})");
+                self.activity_log.push(ActivityEntry::new("State", msg, colors::BLUE_SYNCING));
                 if let Some(ref mut snap) = self.snapshot {
                     snap.state = state;
                     snap.manifest_id = Some(manifest_id);
@@ -280,8 +368,19 @@ impl GuiApp {
                 direction,
             } => {
                 if total_bytes > 0 && bytes_transferred >= total_bytes {
+                    let msg = format!("Completed transfer of {current_path} ({})", format_bytes(total_bytes));
+                    self.activity_log.push(ActivityEntry::new("Transfer", msg, colors::FERRY_GREEN));
                     self.active_transfer = None;
                 } else {
+                    let dir_label = match direction {
+                        Some(TransferDirection::Sending) => "Sending",
+                        Some(TransferDirection::Receiving) => "Receiving",
+                        None => "Transferring",
+                    };
+                    let msg = format!("{dir_label} {current_path} ({bytes_transferred}/{total_bytes} bytes)");
+                    if self.active_transfer.is_none() {
+                        self.activity_log.push(ActivityEntry::new("Transfer", msg, colors::BLUE_SYNCING));
+                    }
                     self.active_transfer = Some(GuiTransferState {
                         bytes_transferred,
                         total_bytes,
@@ -298,6 +397,8 @@ impl GuiApp {
                 conflict_path,
                 ..
             } => {
+                let msg = format!("Quarantined conflict: {path} -> {conflict_path}");
+                self.activity_log.push(ActivityEntry::new("Conflict", msg, colors::RED_CONFLICT));
                 if !self.conflicts.iter().any(|c| c.path == path) {
                     self.conflicts.push(ConflictEntry {
                         ts: ferry_platform::time::current_time_str(),
@@ -319,11 +420,30 @@ impl GuiApp {
                 }
             }
             UiEvent::Error { code, message } => {
-                self.status_message = Some((
-                    format!("{code}: {message}"),
-                    Instant::now(),
-                    colors::RED_CONFLICT,
-                ));
+                if code == "share_offer" {
+                    if let Ok(offer) = serde_json::from_str::<ShareOffer>(&message) {
+                        self.active_share = Some(offer);
+                        self.share_secret_warnings.clear();
+                    }
+                } else if code == "secrets-found" || code == "secret-detected" {
+                    self.share_secret_warnings = vec![message.clone()];
+                    self.status_message = Some((
+                        format!("{code}: {message}"),
+                        Instant::now(),
+                        colors::AMBER_WARN,
+                    ));
+                    self.activity_log.push(ActivityEntry::new("Security", message, colors::AMBER_WARN));
+                } else if code == "pair_success" {
+                    self.status_message = Some((message.clone(), Instant::now(), colors::FERRY_GREEN));
+                    self.activity_log.push(ActivityEntry::new("Pairing", message, colors::FERRY_GREEN));
+                } else {
+                    self.status_message = Some((
+                        format!("{code}: {message}"),
+                        Instant::now(),
+                        colors::RED_CONFLICT,
+                    ));
+                    self.activity_log.push(ActivityEntry::new("Error", format!("{code}: {message}"), colors::RED_CONFLICT));
+                }
             }
         }
     }
@@ -344,7 +464,7 @@ impl GuiApp {
     /// Process keyboard hotkeys.
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
-            // Close modal with Escape or 'q'
+            // Close modal with Escape
             if i.key_pressed(Key::Escape) {
                 if self.show_conflicts_modal || self.show_pin_modal || self.show_share_modal || self.show_pair_modal {
                     self.show_conflicts_modal = false;
@@ -360,6 +480,7 @@ impl GuiApp {
             if i.key_pressed(Key::R) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.dispatch(BackendAction::TriggerScan);
                 self.status_message = Some(("Rescan triggered".to_string(), Instant::now(), colors::FERRY_GREEN));
+                self.activity_log.push(ActivityEntry::new("Scan", "Manual rescan triggered by user", colors::FERRY_GREEN));
             }
 
             // Pin toggle 'p'
@@ -372,6 +493,7 @@ impl GuiApp {
                 if is_pinned {
                     self.dispatch(BackendAction::ReleasePin);
                     self.status_message = Some(("Releasing pin...".to_string(), Instant::now(), colors::FERRY_GREEN));
+                    self.activity_log.push(ActivityEntry::new("Pin", "Session pin release requested", colors::PURPLE_PINNED));
                 } else {
                     self.show_pin_modal = !self.show_pin_modal;
                 }
@@ -392,34 +514,8 @@ impl GuiApp {
         });
     }
 
-    /// Authoritative state badge resolver.
-    #[must_use]
-    pub fn current_badge(&self) -> (&'static str, Color32, Color32) {
-        if !self.is_connected {
-            return ("OFFLINE", colors::GRAY_OFFLINE, colors::TEXT_MUTED);
-        }
-        let Some(ref snap) = self.snapshot else {
-            return ("CONNECTING", colors::GRAY_MUTED, colors::TEXT_PRIMARY);
-        };
-
-        if snap.pin.holding || snap.state.eq_ignore_ascii_case("pinned") {
-            ("PINNED", colors::PURPLE_PINNED, Color32::WHITE)
-        } else if snap.conflicts > 0 || !self.conflicts.is_empty() || snap.state.eq_ignore_ascii_case("conflict") {
-            ("CONFLICT", colors::RED_CONFLICT, Color32::WHITE)
-        } else if snap.state.eq_ignore_ascii_case("syncing") || self.active_transfer.is_some() {
-            ("SYNCING", colors::BLUE_SYNCING, Color32::WHITE)
-        } else if snap.state.eq_ignore_ascii_case("synced") {
-            ("SYNCED", colors::FERRY_GREEN, Color32::BLACK)
-        } else if snap.state.eq_ignore_ascii_case("idle") {
-            ("IDLE", colors::CARD_BG, colors::TEXT_PRIMARY)
-        } else {
-            ("OFFLINE", colors::GRAY_OFFLINE, colors::TEXT_MUTED)
-        }
-    }
-}
-
-impl App for GuiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// Render a single frame of the GUI into the given egui context.
+    pub fn update_ui(&mut self, ctx: &egui::Context) {
         Theme::apply(ctx);
         self.drain_events();
         self.handle_shortcuts(ctx);
@@ -428,7 +524,10 @@ impl App for GuiApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        // Top Navigation Header
+        let time = ctx.input(|i| i.time);
+        let b_state = self.beacon_state();
+
+        // 1. Top Navigation & Hero Action Header
         TopBottomPanel::top("top_panel")
             .frame(
                 Frame::none()
@@ -438,34 +537,85 @@ impl App for GuiApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    // App Logo & Status Beacon with expanding animated aura
                     ui.heading(RichText::new("⛵ Ferry").strong().color(colors::TEXT_PRIMARY));
                     ui.add_space(8.0);
 
-                    let (badge_text, bg, fg) = self.current_badge();
-                    Theme::render_status_badge(ui, badge_text, bg, fg);
+                    status_beacon_ui(ui, b_state, time);
 
+                    // Hero Action Buttons
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button(RichText::new("Pair").size(12.5)).clicked() {
+                        // Pair Device button
+                        if ui.button(RichText::new("+ Pair Device").size(12.0).color(colors::FERRY_GREEN)).clicked() {
                             self.show_pair_modal = true;
                         }
-                        if ui.button(RichText::new("Share").size(12.5)).clicked() {
+
+                        // Share Folder button
+                        if ui.button(RichText::new("Share Folder").size(12.0)).clicked() {
                             self.show_share_modal = true;
                         }
-                        if ui.button(RichText::new("Conflicts [C]").size(12.5)).clicked() {
+
+                        // Conflicts Drawer button
+                        let conf_btn_text = if self.conflicts.is_empty() {
+                            "Conflicts [C]".to_string()
+                        } else {
+                            format!("Conflicts ({}) [C]", self.conflicts.len())
+                        };
+                        let conf_color = if self.conflicts.is_empty() {
+                            colors::TEXT_PRIMARY
+                        } else {
+                            colors::RED_CONFLICT
+                        };
+                        if ui.button(RichText::new(conf_btn_text).color(conf_color).size(12.0)).clicked() {
                             self.show_conflicts_modal = true;
                             self.dispatch(BackendAction::FetchConflicts);
                         }
-                        if ui.button(RichText::new("Pin [P]").size(12.5)).clicked() {
+
+                        // Hold Edits / Release Pin toggle hero button
+                        let is_pinned = self
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|s| s.pin.holding || s.state.eq_ignore_ascii_case("pinned"));
+
+                        if is_pinned {
+                            if ui.button(RichText::new("Release Pin").color(colors::PURPLE_PINNED).strong().size(12.0)).clicked() {
+                                self.dispatch(BackendAction::ReleasePin);
+                                self.status_message = Some(("Releasing session pin...".to_string(), Instant::now(), colors::PURPLE_PINNED));
+                            }
+                        } else if ui.button(RichText::new("Hold Edits [P]").size(12.0)).clicked() {
                             self.show_pin_modal = true;
                         }
-                        if ui.button(RichText::new("Rescan [R]").size(12.5)).clicked() {
+
+                        // Sync Now / Rescan hero action button
+                        if ui.button(RichText::new("↻ Sync Now [R]").color(colors::BLUE_SYNCING).strong().size(12.0)).clicked() {
                             self.dispatch(BackendAction::TriggerScan);
+                            self.status_message = Some(("Rescan triggered".to_string(), Instant::now(), colors::FERRY_GREEN));
                         }
                     });
                 });
             });
 
-        // Bottom Shortcut Footer
+        // 2. Hairline Telemetry Strip
+        let mut telemetry_conflicts_clicked = false;
+        TopBottomPanel::top("telemetry_panel")
+            .frame(
+                Frame::none()
+                    .fill(colors::OBSIDIAN_BG)
+                    .stroke(Stroke::new(1.0f32, colors::GLASS_BORDER))
+                    .inner_margin(Margin::symmetric(16.0f32, 6.0f32)),
+            )
+            .show(ctx, |ui| {
+                let conf_count = self.conflicts.len();
+                render_telemetry_hairline(ui, self.snapshot.as_ref(), conf_count, || {
+                    telemetry_conflicts_clicked = true;
+                });
+            });
+        if telemetry_conflicts_clicked {
+            self.show_conflicts_modal = true;
+            self.dispatch(BackendAction::FetchConflicts);
+        }
+
+        // 3. Bottom Hotkey Shortcut Footer
         TopBottomPanel::bottom("bottom_panel")
             .frame(
                 Frame::none()
@@ -477,7 +627,7 @@ impl App for GuiApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("[R] Rescan").size(11.0).color(colors::TEXT_MUTED));
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
-                    ui.label(RichText::new("[P] Pin").size(11.0).color(colors::TEXT_MUTED));
+                    ui.label(RichText::new("[P] Hold / Pin").size(11.0).color(colors::TEXT_MUTED));
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
                     ui.label(RichText::new("[C] Conflicts").size(11.0).color(colors::TEXT_MUTED));
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
@@ -493,7 +643,11 @@ impl App for GuiApp {
                 });
             });
 
-        // Central Content Area
+        // 4. Central Content Area
+        let mut fleet_open_pair = false;
+        let mut fleet_open_share = false;
+        let mut clear_activity = false;
+
         CentralPanel::default()
             .frame(Frame::none().fill(colors::OBSIDIAN_BG).inner_margin(16.0f32))
             .show(ctx, |ui| {
@@ -520,7 +674,7 @@ impl App for GuiApp {
 
                         ui.add_space(12.0);
 
-                        // Storage Metrics Grid
+                        // Storage & Tree Metrics Grid
                         render_card(ui, "Storage & Tree Metrics", |ui| {
                             ui.columns(4, |cols| {
                                 cols[0].label(RichText::new("Files").color(colors::TEXT_MUTED).size(11.0));
@@ -560,22 +714,23 @@ impl App for GuiApp {
                             ui.add_space(12.0);
                         }
 
-                        // Connected Peers
-                        render_card(ui, &format!("Connected Peers ({})", snap.peers.len()), |ui| {
-                            if snap.peers.is_empty() {
-                                ui.label(RichText::new("No peer devices connected").color(colors::TEXT_MUTED));
-                            } else {
-                                for p in &snap.peers {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace(RichText::new(&p.device_id).color(colors::TEXT_PRIMARY));
-                                        ui.label(RichText::new(format!("• {}", p.connectivity)).color(colors::TEXT_SECONDARY));
-                                        if let Some(ref m) = p.last_agreed_manifest_id {
-                                            ui.monospace(RichText::new(format!("agreed: {m}")).color(colors::GRAY_MUTED));
-                                        }
-                                    });
-                                }
-                            }
-                        });
+                        // Connected Device Fleet Table
+                        render_fleet_table(
+                            ui,
+                            &snap.peers,
+                            || fleet_open_pair = true,
+                            || fleet_open_share = true,
+                        );
+
+                        ui.add_space(12.0);
+
+                        // Real-Time Activity Stream Log
+                        render_activity_stream(
+                            ui,
+                            &self.activity_log,
+                            &mut self.auto_scroll_activity,
+                            || clear_activity = true,
+                        );
                     } else {
                         ui.centered_and_justified(|ui| {
                             ui.label(RichText::new("Connecting to Ferry Sync Engine...").color(colors::TEXT_MUTED).size(16.0));
@@ -584,46 +739,41 @@ impl App for GuiApp {
                 });
             });
 
-        // Modals
+        if fleet_open_pair {
+            self.show_pair_modal = true;
+        }
+        if fleet_open_share {
+            self.show_share_modal = true;
+        }
+        if clear_activity {
+            self.activity_log.clear();
+        }
+
+        // 5. Modals & Drawers
         if self.show_conflicts_modal {
-            render_modal(ctx, "Quarantined Conflicts", &mut self.show_conflicts_modal, |ui, _open| {
-                if self.conflicts.is_empty() {
-                    ui.label(RichText::new("No quarantined conflicts detected.").color(colors::TEXT_MUTED));
-                } else {
-                    for c in &self.conflicts {
-                        ui.group(|ui| {
-                            ui.label(RichText::new(&c.path).color(colors::RED_CONFLICT).strong());
-                            if let Some(ref q) = c.quarantined_as {
-                                ui.label(RichText::new(format!("Quarantined as: {q}")).color(colors::TEXT_SECONDARY).size(12.0));
-                            }
-                            ui.label(RichText::new(format!("Winner: {}", c.winner.device)).color(colors::TEXT_MUTED).size(11.0));
-                        });
-                        ui.add_space(4.0);
-                    }
-                }
-            });
+            let mut refresh_conflicts = false;
+            render_conflicts_modal(
+                ctx,
+                &mut self.show_conflicts_modal,
+                &self.conflicts,
+                || refresh_conflicts = true,
+            );
+            if refresh_conflicts {
+                self.dispatch(BackendAction::FetchConflicts);
+            }
         }
 
         if self.show_pin_modal {
             let mut start_pin_action = None;
             let mut paths_input = self.pin_paths_input.clone();
-            render_modal(ctx, "Session Pinning", &mut self.show_pin_modal, |ui, open| {
-                ui.label(RichText::new("Declare this device the exclusive writer for selected paths:").color(colors::TEXT_SECONDARY));
-                ui.add_space(4.0);
-                ui.text_edit_singleline(&mut paths_input);
-                ui.label(RichText::new("e.g. src/**, tests/** (leave blank for entire folder)").color(colors::TEXT_MUTED).size(11.0));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Start Pin").color(colors::FERRY_GREEN)).clicked() {
-                        let paths: Vec<String> = paths_input.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
-                        start_pin_action = Some(BackendAction::StartPin { paths, hours: Some(8) });
-                        *open = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        *open = false;
-                    }
-                });
-            });
+            render_pin_modal(
+                ctx,
+                &mut self.show_pin_modal,
+                &mut paths_input,
+                |paths, hours| {
+                    start_pin_action = Some(BackendAction::StartPin { paths, hours });
+                },
+            );
             self.pin_paths_input = paths_input;
             if let Some(act) = start_pin_action {
                 self.dispatch(act);
@@ -632,19 +782,19 @@ impl App for GuiApp {
 
         if self.show_share_modal {
             let mut share_action = None;
-            render_modal(ctx, "Share Folder", &mut self.show_share_modal, |ui, open| {
-                ui.label(RichText::new("Generate pairing payload and short code for another device:").color(colors::TEXT_SECONDARY));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Generate Offer").color(colors::FERRY_GREEN)).clicked() {
-                        share_action = Some(BackendAction::InitiateShare { i_know: true });
-                        *open = false;
-                    }
-                    if ui.button("Close").clicked() {
-                        *open = false;
-                    }
-                });
-            });
+            let mut override_secrets = self.share_override_secrets;
+            let warnings = self.share_secret_warnings.clone();
+            render_share_modal(
+                ctx,
+                &mut self.show_share_modal,
+                self.active_share.as_ref(),
+                &warnings,
+                &mut override_secrets,
+                |i_know| {
+                    share_action = Some(BackendAction::InitiateShare { i_know });
+                },
+            );
+            self.share_override_secrets = override_secrets;
             if let Some(act) = share_action {
                 self.dispatch(act);
             }
@@ -653,31 +803,25 @@ impl App for GuiApp {
         if self.show_pair_modal {
             let mut pair_action = None;
             let mut pair_input = self.pair_path_input.clone();
-            render_modal(ctx, "Pair Devices", &mut self.show_pair_modal, |ui, open| {
-                ui.label(RichText::new("Accept incoming pairing payload file:").color(colors::TEXT_SECONDARY));
-                ui.add_space(4.0);
-                ui.text_edit_singleline(&mut pair_input);
-                ui.label(RichText::new("Path to .ferry-pair offer file").color(colors::TEXT_MUTED).size(11.0));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Accept Pair").color(colors::FERRY_GREEN)).clicked() {
-                        if !pair_input.trim().is_empty() {
-                            pair_action = Some(BackendAction::AcceptPair {
-                                payload_path: std::path::PathBuf::from(pair_input.trim()),
-                            });
-                        }
-                        *open = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        *open = false;
-                    }
-                });
-            });
+            render_pair_modal(
+                ctx,
+                &mut self.show_pair_modal,
+                &mut pair_input,
+                |path| {
+                    pair_action = Some(BackendAction::AcceptPair { payload_path: path });
+                },
+            );
             self.pair_path_input = pair_input;
             if let Some(act) = pair_action {
                 self.dispatch(act);
             }
         }
+    }
+}
+
+impl App for GuiApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_ui(ctx);
     }
 }
 
@@ -692,47 +836,4 @@ fn render_card(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::U
             ui.add_space(8.0);
             content(ui);
         });
-}
-
-fn render_modal(
-    ctx: &egui::Context,
-    title: &str,
-    is_open: &mut bool,
-    content: impl FnOnce(&mut egui::Ui, &mut bool),
-) {
-    if !*is_open {
-        return;
-    }
-    let mut open = true;
-    Area::new(egui::Id::new(title))
-        .anchor(Align2::CENTER_CENTER, vec2(0.0f32, 0.0f32))
-        .order(Order::Foreground)
-        .show(ctx, |ui| {
-            Frame::none()
-                .fill(colors::CARD_BG)
-                .stroke(Stroke::new(1.5f32, colors::GLASS_BORDER_STRONG))
-                .rounding(Rounding::same(12.0f32))
-                .shadow(Shadow {
-                    offset: vec2(0.0f32, 10.0f32),
-                    blur: 30.0f32,
-                    spread: 0.0f32,
-                    color: Color32::from_black_alpha(200),
-                })
-                .inner_margin(Margin::same(20.0f32))
-                .show(ui, |ui| {
-                    ui.set_max_width(450.0f32);
-                    ui.horizontal(|ui| {
-                        ui.heading(RichText::new(title).strong().color(colors::TEXT_PRIMARY));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("✕").clicked() {
-                                open = false;
-                            }
-                        });
-                    });
-                    ui.separator();
-                    ui.add_space(8.0);
-                    content(ui, &mut open);
-                });
-        });
-    *is_open = open;
 }
