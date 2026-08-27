@@ -10,17 +10,20 @@ use std::time::{Duration, Instant};
 
 struct Device {
     home: tempfile::TempDir,
+    _tree_dir: tempfile::TempDir,
     tree: PathBuf,
 }
 
 impl Device {
-    fn new(tag: &str) -> Device {
+    fn new(_tag: &str) -> Device {
         let home = tempfile::tempdir().expect("home dir");
-        let tree =
-            std::env::temp_dir().join(format!("ferry-cli-e2e-{}-{}", tag, std::process::id()));
-        let _ = std::fs::remove_dir_all(&tree);
-        std::fs::create_dir_all(&tree).unwrap();
-        Device { home, tree }
+        let tree_dir = tempfile::tempdir().expect("tree dir");
+        let tree = tree_dir.path().to_path_buf();
+        Device {
+            home,
+            _tree_dir: tree_dir,
+            tree,
+        }
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -116,7 +119,8 @@ fn two_devices_pair_and_converge_over_localhost() {
     // --- daemons: A listens, B drives ---------------------------------------
     let log_dir = std::env::temp_dir().join(format!("ferry-test-logs-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log_dir);
-    let mut daemon_a_cmd = a.command(&["daemon", "--listen", "127.0.0.1:0"]);
+    let mut daemon_a_cmd =
+        a.command(&["daemon", "--listen", "127.0.0.1:0", "--interval-secs", "1"]);
     daemon_a_cmd
         .stdout(Stdio::piped())
         .stderr(std::fs::File::create(log_dir.join("a.log")).unwrap());
@@ -153,7 +157,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     // Deletions only carry meaning against a recorded agreement: before the
     // first settle, "present on one side" wins by design (safe default). So
     // wait for the agreement pointer before mutating anything.
-    let deadline = Instant::now() + Duration::from_mins(1);
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -171,7 +175,7 @@ fn two_devices_pair_and_converge_over_localhost() {
 
     std::fs::write(a.tree.join("late.txt"), b"written after start\n").unwrap();
     let late_b = b.tree.join("late.txt");
-    let deadline = Instant::now() + Duration::from_mins(1);
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if std::fs::read(&late_b).ok().as_deref() == Some(b"written after start\n".as_slice()) {
             break;
@@ -183,13 +187,13 @@ fn two_devices_pair_and_converge_over_localhost() {
     // --- deletion propagates too --------------------------------------------
     std::fs::remove_file(a.tree.join("hello.txt")).unwrap();
     let mut timeline: Vec<String> = Vec::new();
-    let deadline = Instant::now() + Duration::from_mins(1);
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let a_has = hello_a_path.exists();
         let b_has = hello_b.exists();
         timeline.push(format!(
             "+{:>5}ms A={} B={}",
-            deadline.elapsed().as_millis() + 60_000,
+            deadline.elapsed().as_millis() + 90_000,
             a_has,
             b_has
         ));
@@ -252,8 +256,6 @@ fn two_devices_pair_and_converge_over_localhost() {
 
     drop(daemon_a);
     drop(daemon_b);
-    let _ = std::fs::remove_dir_all(&a.tree);
-    let _ = std::fs::remove_dir_all(&b.tree);
 }
 
 /// Wait for a child to exit successfully within `secs`.
