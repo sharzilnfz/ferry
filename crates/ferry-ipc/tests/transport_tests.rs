@@ -13,6 +13,7 @@ async fn test_in_memory_high_throughput_ordering() {
             client
                 .send_command(&ClientCommand::StartPin {
                     paths: vec![format!("path_{}", i)],
+                    duration_hours: None,
                 })
                 .await
                 .expect("send failed");
@@ -27,7 +28,7 @@ async fn test_in_memory_high_throughput_ordering() {
                 .expect("recv failed")
                 .expect("expected msg");
             match msg {
-                ClientCommand::StartPin { paths } => {
+                ClientCommand::StartPin { paths, .. } => {
                     assert_eq!(paths, vec![format!("path_{i}")]);
                 }
                 _ => panic!("unexpected command"),

@@ -163,15 +163,16 @@ impl PinManager {
         })
     }
 
-    /// Start a session pin for the given writer and path patterns.
+    /// Start a session pin for the given writer and path patterns with optional duration in seconds.
     ///
     /// Validates path patterns before writing; empty paths default to `["*"]`.
-    pub fn start_session(
+    pub fn start_session_with_duration(
         &self,
         paths: Vec<String>,
         pid: u32,
         identity: &str,
         base_agreements: BTreeMap<String, String>,
+        duration_secs: Option<u64>,
     ) -> Result<PinRecord, PinError> {
         let scope = if paths.is_empty() {
             vec!["*".to_string()]
@@ -183,12 +184,14 @@ impl PinManager {
         PathMatcher::new(&scope)?;
 
         let (sec, nsec) = ferry_platform::now_unix();
+        let expires_sec = duration_secs.map(|d| sec + d as i64);
         let record = PinRecord {
             format_version: PIN_FORMAT_VERSION,
             device_id: identity.to_string(),
             pid,
             started_sec: sec,
             started_nsec: nsec,
+            expires_sec,
             paths: scope,
             released: false,
             base_agreements,
@@ -197,6 +200,19 @@ impl PinManager {
 
         self.store.start(&record)?;
         Ok(record)
+    }
+
+    /// Start a session pin for the given writer and path patterns.
+    ///
+    /// Validates path patterns before writing; empty paths default to `["*"]`.
+    pub fn start_session(
+        &self,
+        paths: Vec<String>,
+        pid: u32,
+        identity: &str,
+        base_agreements: BTreeMap<String, String>,
+    ) -> Result<PinRecord, PinError> {
+        self.start_session_with_duration(paths, pid, identity, base_agreements, None)
     }
 
     /// End the active session pin by marking it released.
@@ -426,5 +442,25 @@ mod tests {
 
         let plans = mgr.plan_release(&rig.a.store, &rig.local_manifest).unwrap();
         assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn start_session_with_duration_records_expiration() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = PinManager::new(dir.path());
+        let pid = std::process::id();
+        let dev = "aa".repeat(32);
+
+        let rec = mgr
+            .start_session_with_duration(
+                vec!["src/**".into()],
+                pid,
+                &dev,
+                BTreeMap::new(),
+                Some(3600),
+            )
+            .unwrap();
+        assert_eq!(rec.expires_sec, Some(rec.started_sec + 3600));
+        assert!(mgr.is_holding().unwrap());
     }
 }

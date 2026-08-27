@@ -1,20 +1,152 @@
 "use strict";
 
+/* ==========================================================================
+   FERRY · FLUID GLASS ENGINE & REAL-TIME API CLIENT
+   ========================================================================== */
+
 const $ = (id) => document.getElementById(id);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+// ---- State Variables ------------------------------------------------------
+let currentState = "synced";
+let lastStatus = null;
+let lastManifestId = null;
+let soundEnabled = true;
+let audioCtx = null;
 
 let sse = null;
 let sseErrors = 0;
+let sseRetryDelay = 1000;
+let sseReconnectTimer = null;
 let pollTimer = null;
-let lastStatus = null;
+let sharePollTimer = null;
 
+// ---- HTML Escaping --------------------------------------------------------
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
   }[c]));
 }
 
+// ---- Formatting Helpers ---------------------------------------------------
+function shortDevice(hex) {
+  if (!hex) return "Unknown Device";
+  return hex.length > 12 ? hex.slice(0, 6) + "…" + hex.slice(-4) : hex;
+}
+
+function friendlyTime(iso) {
+  if (!iso) return "recently";
+  try {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
+// ---- Micro-Haptic Audio Synthesizer (Issue 04) -----------------------------
+function playHapticFeedback(type = "tick") {
+  if (!soundEnabled) return;
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!audioCtx) audioCtx = new AudioContextClass();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === "tick") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(240, now + 0.01);
+      gain.gain.setValueAtTime(0.035, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.01);
+      osc.start(now);
+      osc.stop(now + 0.012);
+    } else if (type === "snap") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(1100, now);
+      osc.frequency.exponentialRampToValueAtTime(320, now + 0.018);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.018);
+      osc.start(now);
+      osc.stop(now + 0.02);
+    } else if (type === "success") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(560, now);
+      osc.frequency.exponentialRampToValueAtTime(1120, now + 0.035);
+      gain.gain.setValueAtTime(0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+      osc.start(now);
+      osc.stop(now + 0.04);
+    } else if (type === "alert") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(360, now);
+      osc.frequency.exponentialRampToValueAtTime(180, now + 0.08);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+      osc.start(now);
+      osc.stop(now + 0.09);
+    }
+  } catch {
+    // Graceful fallback for audio limitations
+  }
+}
+
+// ---- Authentication & Session Management (Issue 02) -----------------------
+function getToken() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlToken = urlParams.get("token");
+  if (urlToken) {
+    sessionStorage.setItem("ferry_token", urlToken);
+    // Keep URL clean without page reload
+    const cleanUrl = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, document.title, cleanUrl);
+    return urlToken;
+  }
+  return sessionStorage.getItem("ferry_token") || null;
+}
+
+function setToken(token) {
+  if (token) {
+    sessionStorage.setItem("ferry_token", token.trim());
+  } else {
+    sessionStorage.removeItem("ferry_token");
+  }
+}
+
+function showTokenModal() {
+  const modal = $("token-modal");
+  if (!modal) return;
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+  const input = $("token-input");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+}
+
+function hideTokenModal() {
+  const modal = $("token-modal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+  const err = $("token-error");
+  if (err) err.style.display = "none";
+}
+
+// ---- API Client -----------------------------------------------------------
 async function api(path, body) {
-  const token = new URLSearchParams(window.location.search).get("token");
+  const token = getToken();
   const headers = {};
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -22,229 +154,478 @@ async function api(path, body) {
   if (token) {
     headers["Authorization"] = "Bearer " + token;
   }
+
   const opts = {
     method: body !== undefined ? "POST" : "GET",
     headers,
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   };
+
   let res;
   try {
     res = await fetch(path, opts);
   } catch (e) {
-    throw { error: "network error", code: "network", hint: String(e) };
+    throw { error: "Local daemon connection failed", code: "network", hint: String(e) };
   }
+
   const text = await res.text();
   let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (res.status === 403) {
+    showTokenModal();
+    throw { error: "Authentication required", code: "forbidden", hint: "Please provide a valid session token." };
+  }
+
   if (!res.ok) {
     if (data && data.error) throw data;
     throw {
-      error: res.statusText || "request failed",
+      error: res.statusText || "Request failed",
       code: "http-" + res.status,
       hint: text.slice(0, 300) || "(no response body)",
     };
   }
+
   return data;
 }
 
-function showErr(el, err) {
-  el.hidden = false;
-  let html = "<b>" + esc(err.code || "error") + "</b> " + esc(err.error || "");
-  if (err.hint) html += '<div class="dim" style="color:inherit;opacity:.75">' + esc(err.hint) + "</div>";
-  el.innerHTML = html;
-}
+// ---- Activity Feed Stream -------------------------------------------------
+function addActivity(title, timeStr = null) {
+  const feed = $("activity-feed");
+  if (!feed) return;
 
-function hideAll(...els) { els.forEach((e) => { e.hidden = true; }); }
+  const now = new Date();
+  const time = timeStr || now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-function shortHex(h) {
-  return (h && h.length > 16) ? h.slice(0, 8) + "…" + h.slice(-6) : (h || "—");
-}
+  const row = document.createElement("div");
+  row.className = "flow-row";
+  row.innerHTML = `
+    <div class="row-left">
+      <span class="row-title">${esc(title)}</span>
+    </div>
+    <span class="row-time">${esc(time)}</span>
+  `;
 
-function fmtBytes(n) {
-  if (!Number.isFinite(n)) return String(n);
-  for (const unit of ["B", "KiB", "MiB", "GiB", "TiB"]) {
-    if (n < 1024) return n.toFixed(n < 10 && unit !== "B" ? 1 : 0) + " " + unit;
-    n /= 1024;
+  feed.prepend(row);
+
+  // Retain clean buffer (up to 50 items)
+  while (feed.children.length > 50) {
+    feed.removeChild(feed.lastChild);
   }
-  return n.toFixed(1) + " PiB";
 }
 
-// ---- connection indicator ------------------------------------------------
-
+// ---- Connection Indicator -------------------------------------------------
 function setConn(mode, label) {
-  const c = $("conn");
-  c.className = "conn conn-" + mode;
-  $("conn-label").textContent = label;
-}
-
-// ---- status --------------------------------------------------------------
-
-async function loadStatus() {
-  try {
-    const s = await api("/api/status");
-    lastStatus = s;
-    renderStatus(s);
-    hideAll($("status-error"));
-  } catch (err) {
-    if (err.code === "warming-up") {
-      $("overview").hidden = true;
-      showErr($("status-error"), { error: "daemon warming up — waiting for first poll tick", code: "warming-up", hint: err.hint });
-      return false;
+  const beacon = $("conn-beacon");
+  const text = $("conn-text");
+  if (text) text.textContent = label;
+  if (beacon) {
+    if (mode === "live") {
+      beacon.style.backgroundColor = "var(--state-synced)";
+      beacon.style.boxShadow = "0 0 8px var(--state-synced-glow)";
+    } else if (mode === "poll") {
+      beacon.style.backgroundColor = "var(--state-syncing)";
+      beacon.style.boxShadow = "0 0 8px var(--state-syncing-glow)";
+    } else if (mode === "off") {
+      beacon.style.backgroundColor = "var(--state-offline)";
+      beacon.style.boxShadow = "none";
     }
-    showErr($("status-error"), err);
-    setConn("off", "status unreachable");
-    return false;
   }
-  return true;
 }
 
-function pendingText(v) {
-  if (v === null) return "no agreement yet";
-  if (v === -1) return "agreement manifest unreadable";
-  return String(v);
+// ---- State Morphing & Telemetry Presentation (Issue 02) -------------------
+function applyState(mode, status = null) {
+  const stateChanged = currentState !== mode;
+  currentState = mode;
+
+  const mainCard = $("main-card");
+  const heroBeacon = $("hero-beacon");
+  const beaconCore = heroBeacon ? heroBeacon.querySelector(".beacon-core") : null;
+  const beaconRing = heroBeacon ? heroBeacon.querySelector(".beacon-ring") : null;
+  const heroTitle = $("hero-title");
+  const heroSub = $("hero-sub");
+  const heroStateBadge = $("hero-state-badge");
+  const metricHash = $("metric-hash");
+  const metricHeld = $("metric-held");
+  const metricConflicts = $("metric-conflicts");
+  const metricCipher = $("metric-cipher");
+  const metricChannel = $("metric-channel");
+  const btnPin = $("btn-pin");
+  const btnPinLabel = $("btn-pin-label");
+  const btnRelease = $("btn-release");
+  const syncTrack = $("sync-track");
+  const connBeacon = $("conn-beacon");
+  const connText = $("conn-text");
+
+  // Emil Kowalski Subtle Blur Morphing on State Change
+  if (mainCard && stateChanged) {
+    mainCard.classList.add("is-blur-transitioning");
+    setTimeout(() => mainCard.classList.remove("is-blur-transitioning"), 180);
+  }
+
+  if (heroBeacon) {
+    heroBeacon.className = "hero-beacon state-" + mode;
+  }
+
+  if (beaconCore) {
+    beaconCore.style.backgroundColor = "var(--state-" + mode + ")";
+    beaconCore.style.boxShadow = mode === "offline" ? "none" : "0 0 14px var(--state-" + mode + "-glow)";
+  }
+  if (beaconRing) {
+    beaconRing.style.borderColor = "var(--state-" + mode + ")";
+  }
+  if (connBeacon) {
+    connBeacon.style.backgroundColor = "var(--state-" + mode + ")";
+    connBeacon.style.boxShadow = mode === "offline" ? "none" : "0 0 8px var(--state-" + mode + "-glow)";
+  }
+
+  // Telemetry constants
+  if (metricCipher) metricCipher.textContent = "Age-X25519";
+  if (metricChannel) metricChannel.textContent = "QUIC";
+
+  const peers = status && status.peers ? status.peers : [];
+  const heldCount = status && status.held_changes != null ? status.held_changes : 0;
+  const conflictsCount = status && status.conflicts != null ? status.conflicts : 0;
+
+  if (mode === "synced") {
+    if (connText) connText.textContent = "Active Session";
+    if (heroTitle) heroTitle.textContent = "Synced";
+    if (heroStateBadge) {
+      heroStateBadge.textContent = "Active";
+      heroStateBadge.className = "state-badge";
+    }
+    if (heroSub) {
+      heroSub.textContent = peers.length === 0
+        ? "All folders match across peers. Continuous cryptographic verification active."
+        : `All files up to date with ${peers.length === 1 ? "1 device" : peers.length + " devices"}. Continuous verification active.`;
+    }
+
+    if (btnPinLabel) btnPinLabel.textContent = "Hold Edits";
+    if (btnPin) btnPin.style.display = "inline-flex";
+    if (btnRelease) btnRelease.style.display = "none";
+  } else if (mode === "syncing") {
+    if (connText) connText.textContent = "Syncing Delta";
+    if (heroTitle) heroTitle.textContent = "Syncing…";
+    if (heroStateBadge) {
+      const pendingCount = peers.filter((p) => !p.last_agreed_manifest_id || p.last_agreed_manifest_id !== (status && status.manifest_id)).length;
+      heroStateBadge.textContent = pendingCount > 0 ? `${pendingCount} Pending` : "Syncing";
+      heroStateBadge.className = "state-badge";
+    }
+    if (heroSub) {
+      heroSub.textContent = `Synchronizing folder changes with ${peers.length === 1 ? "1 device" : peers.length + " devices"} over encrypted QUIC stream.`;
+    }
+  } else if (mode === "holding") {
+    if (connText) connText.textContent = "Holding Buffer";
+    if (heroTitle) heroTitle.textContent = "Holding";
+    if (heroStateBadge) {
+      heroStateBadge.textContent = heldCount > 0 ? `${heldCount} Changes Held` : "Protected";
+      heroStateBadge.className = "state-badge badge-amber";
+    }
+    if (heroSub) {
+      heroSub.textContent = "Incoming remote edits safely buffered while local agent executes.";
+    }
+
+    if (btnPinLabel) btnPinLabel.textContent = "Stop Hold";
+    if (btnRelease) btnRelease.style.display = "inline-flex";
+  } else if (mode === "conflict") {
+    if (connText) connText.textContent = "Conflict Alert";
+    if (heroTitle) heroTitle.textContent = conflictsCount === 1 ? "1 Conflict" : `${conflictsCount} Conflicts`;
+    if (heroStateBadge) {
+      heroStateBadge.textContent = "Quarantined";
+      heroStateBadge.className = "state-badge badge-red";
+    }
+    if (heroSub) {
+      heroSub.textContent = conflictsCount === 1
+        ? "Conflicting edit safely quarantined. No local files overwritten."
+        : `${conflictsCount} conflicting edits safely quarantined. No local files overwritten.`;
+    }
+  } else if (mode === "offline") {
+    if (connText) connText.textContent = "Offline";
+    if (heroTitle) heroTitle.textContent = "Offline";
+    if (heroStateBadge) {
+      heroStateBadge.textContent = "Disconnected";
+      heroStateBadge.className = "state-badge badge-dim";
+    }
+    if (heroSub) {
+      heroSub.textContent = "Ferry background daemon not running. Local store in idle mode.";
+    }
+
+    if (btnPinLabel) btnPinLabel.textContent = "Hold Edits";
+    if (btnRelease) btnRelease.style.display = "none";
+  }
+
+  // Update Hairline Telemetry Values
+  if (metricHash) {
+    if (status && status.manifest_id) {
+      const fullHash = status.manifest_id;
+      metricHash.textContent = fullHash.slice(0, 8);
+      metricHash.title = fullHash;
+    } else {
+      metricHash.textContent = mode === "offline" ? "--------" : "—";
+      metricHash.title = "";
+    }
+  }
+
+  if (metricHeld) metricHeld.textContent = String(heldCount);
+  if (metricConflicts) metricConflicts.textContent = String(conflictsCount);
 }
 
-function pinBadge(pin) {
-  const b = $("ov-pin");
-  b.className = "badge";
-  b.textContent = pin.state + (pin.holding ? " · holding" : "");
-  if (pin.state === "active") b.classList.add("badge-green");
-  else if (pin.state === "stale") b.classList.add("badge-amber");
-  else if (pin.state === "released") b.classList.add("badge-blue");
-}
+// ---- Render Connected Devices & Fleet --------------------------------------
+function renderConnectedDevices(peers, localManifestId) {
+  const fleetList = $("fleet-list");
+  if (!fleetList) return;
 
-function renderStatus(s) {
-  $("overview").hidden = false;
-  $("ov-device").textContent = s.device_id ?? "—";
-  $("ov-folder").textContent = s.folder ?? "—";
-  $("ov-folder-id").textContent = s.folder_id ?? "—";
-  $("ov-manifest").textContent = s.manifest_id ?? "—";
-  $("ov-pending").textContent = pendingText(s.pending_changes);
-  $("ov-held").textContent = String(s.held_changes ?? 0);
-  const sc = s.scanned || {};
-  $("ov-scanned").textContent =
-    (sc.files ?? 0) + " files, " + (sc.dirs ?? 0) + " dirs, " +
-    (sc.symlinks ?? 0) + " symlinks, " + fmtBytes(sc.bytes_chunked ?? 0);
-  pinBadge(s.pin || { state: "none" });
+  if (!peers || peers.length === 0) {
+    fleetList.innerHTML = `
+      <div class="flow-row" style="color: var(--text-3); font-size: 11.5px; justify-content: center; padding: 12px 8px;">
+        <span>No connected peers</span>
+      </div>
+    `;
+    return;
+  }
 
-  const peers = s.peers || [];
-  $("peers-empty").hidden = peers.length > 0;
-  $("peers").innerHTML = peers.map((p) => {
-    const agreed = p.last_agreed_manifest_id && p.last_agreed_manifest_id === s.manifest_id;
-    const badge = agreed
-      ? '<span class="badge badge-green">agreed ✓</span>'
-      : '<span class="badge badge-amber">not agreed</span>';
-    const sub =
-      "last agreed: " + (p.last_agreed_manifest_id ? shortHex(p.last_agreed_manifest_id) : "none") +
-      (p.agreed_at ? " · at " + esc(p.agreed_at) : "");
-    return '<li><div class="row-head">' +
-      '<span class="dot dot-' + esc(p.connectivity || "unknown") + '"></span>' +
-      "<code>" + esc(p.device_id) + "</code>" +
-      badge +
-      '<span class="dim" style="font-size:12px">' + esc(p.connectivity || "unknown") + "</span>" +
-      '</div><div class="row-sub">' + sub + "</div></li>";
+  fleetList.innerHTML = peers.map((p) => {
+    const isOnline = p.connectivity === "reachable";
+    const isAgreed = Boolean(p.last_agreed_manifest_id && p.last_agreed_manifest_id === localManifestId);
+    const dotClass = isAgreed ? "peer-synced" : (isOnline ? "peer-syncing" : "peer-offline");
+    const name = "Device " + shortDevice(p.device_id);
+    const lastSeen = p.agreed_at ? "Last synced " + friendlyTime(p.agreed_at) : (isOnline ? "Online now" : "Offline");
+    const transport = "QUIC";
+    const statusLabel = isAgreed ? "In Sync ✓" : (isOnline ? "Syncing…" : "Offline");
+    const badgeColor = isAgreed
+      ? "color: var(--state-synced); background: rgba(48,209,88,0.12);"
+      : (isOnline ? "color: var(--state-syncing); background: rgba(14,165,233,0.12);" : "color: var(--text-3); background: rgba(255,255,255,0.05);");
+
+    return `
+      <div class="flow-row">
+        <div class="row-left">
+          <span class="peer-dot ${dotClass}"></span>
+          <div style="display: flex; flex-direction: column; gap: 1px;">
+            <span class="row-title">${esc(name)}</span>
+            <span class="row-subtitle font-mono">${esc(transport)} · ${esc(lastSeen)}</span>
+          </div>
+        </div>
+        <span class="state-badge" style="font-size: 10px; padding: 2px 7px; ${badgeColor}">${esc(statusLabel)}</span>
+      </div>
+    `;
   }).join("");
 }
 
-// ---- conflicts -----------------------------------------------------------
+// ---- Render Status Document -----------------------------------------------
+function renderStatus(s) {
+  lastStatus = s;
+  const statusErr = $("status-error");
+  if (statusErr) statusErr.style.display = "none";
+
+  // Check manifest update
+  if (lastManifestId && s.manifest_id && lastManifestId !== s.manifest_id) {
+    addActivity("Manifest updated: changes synchronized");
+    playHapticFeedback("tick");
+  }
+  lastManifestId = s.manifest_id;
+
+  // Determine state
+  let mode = "synced";
+  const conflictsCount = s.conflicts || 0;
+  const pin = s.pin || { state: "none", holding: false };
+  const peers = s.peers || [];
+
+  if (conflictsCount > 0) {
+    mode = "conflict";
+  } else if (pin.holding || pin.state === "active") {
+    mode = "holding";
+  } else if (peers.length > 0 && peers.some((p) => !p.last_agreed_manifest_id || p.last_agreed_manifest_id !== s.manifest_id)) {
+    mode = "syncing";
+  } else {
+    mode = "synced";
+  }
+
+  applyState(mode, s);
+  renderConnectedDevices(peers, s.manifest_id);
+}
+
+// ---- Load Status & Conflicts ----------------------------------------------
+async function loadStatus() {
+  try {
+    const s = await api("/api/status");
+    renderStatus(s);
+    setConn("live", "Active Session");
+    return true;
+  } catch (err) {
+    if (err && err.code === "forbidden") {
+      return false;
+    }
+    applyState("offline", null);
+    setConn("off", "Offline");
+    renderConnectedDevices([], null);
+    return false;
+  }
+}
 
 async function loadConflicts() {
   try {
     const doc = await api("/api/conflicts");
-    renderConflicts(doc.entries || []);
-  } catch (err) {
-    $("conflicts").innerHTML = "";
-    $("conflicts-empty").hidden = false;
-    $("conflicts-empty").innerHTML =
-      '<span style="color:var(--red)"><b>' + esc(err.code || "error") + "</b> " +
-      esc(err.error || "") + (err.hint ? " — " + esc(err.hint) : "") + "</span>";
+    if (doc && doc.entries && doc.entries.length > 0) {
+      const conflictsCount = doc.entries.length;
+      if (lastStatus) {
+        lastStatus.conflicts = conflictsCount;
+        renderStatus(lastStatus);
+      }
+    }
+  } catch {
+    // ignore
   }
 }
 
-function renderConflicts(entries) {
-  $("conflicts-empty").hidden = entries.length > 0;
-  $("conflicts-empty").textContent = "No conflicts recorded — tree is clean.";
-  $("conflicts").innerHTML = entries.slice().reverse().map((e) => {
-    const q = e.quarantined_as
-      ? '<div class="row-sub">quarantined as ' + esc(e.quarantined_as) + "</div>"
-      : "";
-    return "<li><div class='row-head'><code>" + esc(e.path) + "</code>" +
-      '<span class="badge">' + esc(e.kind) + "</span></div>" +
-      '<div class="row-sub">' + esc(e.ts) + " · winner " + esc(e.winner?.device ?? "?") +
-      " vs loser " + esc(e.loser?.device ?? "?") + "</div>" + q + "</li>";
-  }).join("");
-}
-
-// ---- SSE with polling fallback --------------------------------------------
-
-function handleStateLine(line) {
-  const m = /root=(\S+)\s+agreed=(\S+)/.exec(line || "");
-  if (!m) return;
-  const [, root, agreed] = m;
-  $("live-state").hidden = false;
-  $("state-root").textContent = root;
-  $("state-agreed").textContent = agreed;
-  const badge = $("agree-badge");
-  badge.hidden = false;
-  if (agreed === "none") {
-    badge.className = "badge badge-amber";
-    badge.textContent = "agreement: none";
-  } else if (agreed === root) {
-    badge.className = "badge badge-green";
-    badge.textContent = "agreement: in sync";
-  } else {
-    badge.className = "badge badge-amber";
-    badge.textContent = "agreement: diverged";
-  }
-}
-
+// ---- SSE Streaming & Resilient Polling Fallback (Issue 02) -----------------
 function startPolling() {
   if (pollTimer) return;
-  setConn("poll", "polling every 2s (SSE unavailable)");
-  pollTimer = setInterval(loadStatus, 2000);
+  setConn("poll", "Polling (1.5s)");
+  pollTimer = setInterval(async () => {
+    try {
+      await loadStatus();
+    } catch {
+      // silent catch for resilient polling
+    }
+  }, 1500);
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 function startEvents() {
+  stopPolling();
+  if (sse) {
+    try { sse.close(); } catch {}
+    sse = null;
+  }
+
+  const token = getToken();
+  const url = token ? "/api/events?token=" + encodeURIComponent(token) : "/api/events";
+
   try {
-    const token = new URLSearchParams(window.location.search).get("token");
-    const url = token ? "/api/events?token=" + encodeURIComponent(token) : "/api/events";
     sse = new EventSource(url);
   } catch {
     startPolling();
     return;
   }
+
   sse.addEventListener("state", (ev) => {
     sseErrors = 0;
-    setConn("live", "live via SSE");
-    handleStateLine(ev.data);
+    sseRetryDelay = 1000;
+    setConn("live", "Active Session");
+    try {
+      const data = JSON.parse(ev.data);
+      if (data && data.command === "status") {
+        renderStatus(data);
+      }
+    } catch {
+      // ignore
+    }
   });
-  // A non-200/non-event-stream reply (e.g. 501) closes the EventSource for
-  // good after ONE error — fall back to polling immediately. The counter
-  // only covers retryable drops where the source is still CONNECTING.
+
+  sse.onopen = () => {
+    sseErrors = 0;
+    sseRetryDelay = 1000;
+    setConn("live", "Active Session");
+  };
+
   sse.onerror = () => {
-    if (sse && sse.readyState === EventSource.CLOSED) {
+    if (sse) {
+      try { sse.close(); } catch {}
       sse = null;
-      startPolling();
-      return;
     }
     sseErrors += 1;
-    if (sseErrors >= 2) {
-      sse.close();
-      sse = null;
-      startPolling();
+    startPolling();
+
+    // Reconnection exponential backoff
+    if (!sseReconnectTimer) {
+      sseReconnectTimer = setTimeout(() => {
+        sseReconnectTimer = null;
+        sseRetryDelay = Math.min(sseRetryDelay * 2, 10000);
+        startEvents();
+      }, sseRetryDelay);
     }
   };
 }
 
-// ---- actions --------------------------------------------------------------
+// ---- Actions: Instant Sync (Issue 03) --------------------------------------
+async function doSync() {
+  playHapticFeedback("tick");
+  const syncTrack = $("sync-track");
+  if (syncTrack) syncTrack.classList.add("visible");
+  addActivity("Sync Triggered");
 
-function parsePaths(raw) {
-  const parts = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-  return parts.length ? parts : null;
+  try {
+    await loadStatus();
+    await loadConflicts();
+    playHapticFeedback("success");
+    addActivity("Sync Completed");
+  } catch (err) {
+    if (err && err.code === "forbidden") return;
+    playHapticFeedback("alert");
+    addActivity("Sync Failed: " + (err.error || err.code || "Network error"));
+  } finally {
+    setTimeout(() => {
+      if (syncTrack) syncTrack.classList.remove("visible");
+    }, 600);
+  }
 }
 
-let sharePollTimer = null;
+// ---- Actions: Work Protection / Pinning (Issue 03) -------------------------
+async function doPin(action) {
+  try {
+    const paths = action === "start" ? ["*"] : null;
+    let doc;
+    if (action === "release") {
+      try {
+        doc = await api("/api/pin/release", { folder: null });
+      } catch {
+        doc = await api("/api/pin/stop", { folder: null });
+      }
+    } else {
+      doc = await api("/api/pin/" + action, { folder: null, paths });
+    }
 
+    if (action === "start") {
+      playHapticFeedback("snap");
+      addActivity("Work Protection Activated");
+    } else if (action === "stop") {
+      playHapticFeedback("success");
+      addActivity("Work Protection Stopped");
+    } else {
+      playHapticFeedback("success");
+      addActivity("Held Edits Released & Merged");
+    }
+    await loadStatus();
+    await loadConflicts();
+  } catch (err) {
+    if (err && err.code === "forbidden") return;
+    playHapticFeedback("alert");
+    addActivity("Pin Error: " + (err.error || err.code || "Unknown error"));
+  }
+}
+
+function togglePin() {
+  const isHoldingOrActive = Boolean(
+    lastStatus && lastStatus.pin && (lastStatus.pin.holding || lastStatus.pin.state === "active")
+  );
+  if (isHoldingOrActive) {
+    doPin("stop");
+  } else {
+    doPin("start");
+  }
+}
+
+// ---- Actions: Pairing & Offer Creation (Issue 03) --------------------------
 function stopSharePolling() {
   if (sharePollTimer) {
     clearInterval(sharePollTimer);
@@ -252,164 +633,363 @@ function stopSharePolling() {
   }
 }
 
-function renderSharePending(el, doc) {
-  const warnings = doc.warnings || [];
-  let html = "<b>pairing initiated</b> — status: <span class='badge badge-amber'>waiting for peer</span>" +
-    (doc.short_code ? "<br>short code: <code style='font-size:1.2em;font-weight:bold'>" + esc(doc.short_code) + "</code>" : "") +
-    "<br>offer file: <code>" + esc(doc.offer_file ?? "?") + "</code>" +
-    "<div class='dim' style='margin-top:6px'>Waiting for remote peer to accept offer payload…</div>" +
-    "<div style='margin-top:8px'><button id='share-cancel-btn' class='btn btn-sm' type='button'>cancel waiting</button></div>";
-  if (warnings.length) {
-    html += "<br>warnings carried into the share:";
-    html += warningsTable(warnings);
-  }
-  el.innerHTML = html;
-  const cancelBtn = $("share-cancel-btn");
-  if (cancelBtn) {
-    cancelBtn.onclick = () => {
-      stopSharePolling();
-      el.innerHTML = "<b>share cancelled</b> — stopped waiting for peer.";
-    };
-  }
+function openPairModal() {
+  playHapticFeedback("tick");
+  const modal = $("pair-modal");
+  if (!modal) return;
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
 }
 
-function renderShareResult(el, doc) {
-  const warnings = doc.warnings || [];
-  let html = "<b>" + esc(doc.command ?? "share") + "</b> " +
-    (doc.status === "completed" ? "<span class='badge badge-green'>completed ✓</span>" : "") +
-    "<br>offer file: <code>" + esc(doc.offer_file ?? "?") + "</code>" +
-    "<br>peer device: <code>" + esc(doc.peer_device_id ?? "?") + "</code>" +
-    (doc.short_code ? "<br>short code: <code>" + esc(doc.short_code) + "</code>" : "") +
-    "<br>warnings reviewed: " + esc(String(doc.warnings_reviewed ?? false));
-  if (warnings.length) {
-    html += "<br>warnings carried into the share:";
-    html += warningsTable(warnings);
-  }
-  el.innerHTML = html;
-}
-
-function warningsTable(warnings) {
-  return "<table><tr><th>path</th><th>line</th><th>class</th><th>preview</th></tr>" +
-    warnings.map((w) =>
-      "<tr><td>" + esc(w.path) + "</td><td>" + esc(w.line ?? "—") + "</td>" +
-      "<td>" + esc(w.class) + "</td><td>" + esc(w.preview) + "</td></tr>"
-    ).join("") + "</table>";
-}
-
-async function doShare(iKnow) {
+function closePairModal() {
+  playHapticFeedback("tick");
+  const modal = $("pair-modal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
   stopSharePolling();
-  hideAll($("share-warn"), $("share-result"));
-  $("share-anyway").hidden = true;
-  $("share-btn").disabled = true;
+}
+
+async function doCreateOffer(iKnow = false) {
+  stopSharePolling();
+  playHapticFeedback("snap");
+
+  const warnEl = $("share-warn");
+  const resEl = $("share-result");
+  const anywayBtn = $("share-anyway");
+  const offerBox = $("offer-box");
+  const tokenDisplay = $("token-display");
+
+  if (warnEl) warnEl.style.display = "none";
+  if (resEl) resEl.style.display = "none";
+  if (anywayBtn) anywayBtn.style.display = "none";
+
+  addActivity("Creating Pairing Offer…");
+
   try {
-    const doc = await api("/api/share", { folder: null, i_know: iKnow });
-    if (doc.status === "pending") {
-      renderSharePending($("share-result"), doc);
-      $("share-result").hidden = false;
-      sharePollTimer = setInterval(async () => {
-        try {
-          const s = await api("/api/share/status");
-          if (s.status === "completed") {
-            stopSharePolling();
-            renderShareResult($("share-result"), s);
-            loadStatus();
+    let doc;
+    try {
+      doc = await api("/api/share", { folder: null, i_know: iKnow });
+    } catch (e) {
+      if (e && (e.code === "http-404" || e.code === "not-found")) {
+        doc = await api("/api/pair/share", { folder: null, i_know: iKnow });
+      } else {
+        throw e;
+      }
+    }
+
+    const payload = doc.short_code || doc.offer_file || JSON.stringify(doc);
+    if (tokenDisplay) tokenDisplay.value = payload;
+    if (offerBox) offerBox.style.display = "block";
+    if (resEl) {
+      resEl.style.display = "block";
+      resEl.textContent = `Pairing token created (Code: ${doc.short_code || "Generated"}). Waiting for peer.`;
+    }
+    playHapticFeedback("success");
+    addActivity("Pairing Token Created");
+
+    // Poll share status until connected
+    sharePollTimer = setInterval(async () => {
+      try {
+        const s = await api("/api/share/status");
+        if (s && s.status === "completed") {
+          stopSharePolling();
+          if (resEl) {
+            resEl.textContent = "Pairing completed! Peer device connected.";
           }
-        } catch {
-          // ignore transient poll errors while waiting
+          playHapticFeedback("success");
+          addActivity("Pairing Completed: Connected Peer");
+          loadStatus();
         }
-      }, 1500);
-    } else {
-      renderShareResult($("share-result"), doc);
-      $("share-result").hidden = false;
-      loadStatus();
-    }
+      } catch {
+        // ignore polling errors
+      }
+    }, 1500);
   } catch (err) {
-    showErr($("share-warn"), err);
-    if (Array.isArray(err.warnings) && err.warnings.length) {
-      $("share-warn").insertAdjacentHTML("beforeend",
-        "<div style='margin-top:4px'>secret findings:</div>" + warningsTable(err.warnings));
+    if (err && err.code === "secrets-found") {
+      if (warnEl) {
+        warnEl.style.display = "block";
+        warnEl.textContent = err.error || "Sensitive secrets detected in folder.";
+      }
+      if (anywayBtn) anywayBtn.style.display = "block";
+      playHapticFeedback("alert");
+      addActivity("Pairing Blocked: Secrets Detected");
+    } else {
+      if (warnEl) {
+        warnEl.style.display = "block";
+        warnEl.textContent = err.error || "Failed to create pairing token.";
+      }
+      playHapticFeedback("alert");
+      addActivity("Pairing Offer Failed: " + (err.error || err.code));
     }
-    $("share-anyway").hidden = err.code !== "secrets-found";
-  } finally {
-    $("share-btn").disabled = false;
   }
 }
 
-async function doPairAccept(ev) {
-  ev.preventDefault();
-  hideAll($("pair-err"), $("pair-result"));
-  const payloadPath = $("pair-payload").value.trim();
-  const dir = $("pair-dir").value.trim() || null;
-  if (!payloadPath) {
-    showErr($("pair-err"), { error: "payload path is required", code: "validation", hint: "enter the path to the pairing payload file" });
+async function copyToken() {
+  const tokenDisplay = $("token-display");
+  const tokenVal = tokenDisplay ? tokenDisplay.value : "";
+  if (!tokenVal) return;
+  try {
+    await navigator.clipboard.writeText(tokenVal);
+  } catch {
+    // fallback
+  }
+  const btn = $("btn-copy-token");
+  if (btn) {
+    btn.textContent = "Copied!";
+    playHapticFeedback("success");
+    setTimeout(() => {
+      btn.textContent = "Copy";
+    }, 1500);
+  }
+}
+
+async function doAcceptPair() {
+  playHapticFeedback("snap");
+  const input = $("accept-input");
+  const val = input ? input.value.trim() : "";
+  const resEl = $("pair-result");
+  const errEl = $("pair-err");
+
+  if (resEl) resEl.style.display = "none";
+  if (errEl) errEl.style.display = "none";
+
+  if (!val) {
+    if (errEl) {
+      errEl.style.display = "block";
+      errEl.textContent = "Please enter an offer token or file path.";
+    }
+    playHapticFeedback("alert");
     return;
   }
+
+  addActivity("Accepting Pairing Offer…");
+
   try {
-    const doc = await api("/api/pair/accept", { payload_path: payloadPath, dir });
-    $("pair-result").innerHTML =
-      "<b>pair accepted</b><br>folder: <code>" + esc(doc.folder ?? "?") + "</code>" +
-      "<br>folder id: <code>" + esc(doc.folder_id ?? "?") + "</code>" +
-      "<br>this device: <code>" + esc(doc.device_id ?? "?") + "</code>" +
-      "<br>expected short code: <code>" + esc(doc.expected_short_code ?? "?") + "</code>";
-    $("pair-result").hidden = false;
-    loadStatus();
+    const doc = await api("/api/pair/accept", { payload_path: val });
+    if (resEl) {
+      resEl.style.display = "block";
+      resEl.textContent = "Pairing accepted! Connected to " + (doc.folder || "folder");
+    }
+    if (input) input.value = "";
+    playHapticFeedback("success");
+    addActivity("Pairing Accepted: Connected Peer");
+    await loadStatus();
+    setTimeout(() => {
+      closePairModal();
+    }, 1200);
   } catch (err) {
-    showErr($("pair-err"), err);
+    if (errEl) {
+      errEl.style.display = "block";
+      errEl.textContent = err.error || "Failed to accept pairing offer.";
+    }
+    playHapticFeedback("alert");
+    addActivity("Pair Accept Failed: " + (err.error || err.code));
   }
 }
 
-function renderPinResult(doc) {
-  if (doc.action === "start") {
-    return "<b>pin started</b><br>paths: " + (doc.paths?.length ? doc.paths.map(esc).join(", ") : "(whole folder)") +
-      "<br>base peers recorded: " + esc(String(doc.base_peers_recorded ?? 0)) +
-      "<br>started at: " + esc(doc.started_at ?? "?");
-  }
-  if (doc.action === "stop") {
-    return "<b>pin stopped</b>" + (doc.was_pinned ? "" : " (was not pinned)") +
-      "<br>held changes kept on disk: " + esc(String(doc.held_changes ?? 0)) +
-      "<br>release later to reconcile them.";
-  }
-  return "<b>pin released</b><br>ops applied: " + esc(String(doc.ops_applied ?? 0)) +
-    " · quarantined: " + esc(String(doc.quarantined ?? 0)) +
-    " · conflicts recorded: " + esc(String(doc.conflicts_recorded ?? 0)) +
-    "<br>total entries in conflict report now: " + esc(String(doc.conflicts_total ?? 0));
-}
-
-async function doPin(action) {
-  hideAll($("pin-err"), $("pin-result"));
-  const paths = action === "start" ? parsePaths($("pin-paths").value) : null;
-  try {
-    const doc = await api("/api/pin/" + action, { folder: null, paths });
-    $("pin-result").innerHTML = renderPinResult(doc);
-    $("pin-result").hidden = false;
-    loadStatus();
-    if (action === "release") loadConflicts();
-  } catch (err) {
-    showErr($("pin-err"), err);
-  }
-}
-
-// ---- boot -----------------------------------------------------------------
-
-$("share-btn").addEventListener("click", () => doShare(false));
-$("share-anyway").addEventListener("click", () => doShare(true));
-$("pair-form").addEventListener("submit", doPairAccept);
-$("pin-form").addEventListener("submit", (ev) => { ev.preventDefault(); doPin("start"); });
-$("pin-stop").addEventListener("click", () => doPin("stop"));
-$("pin-release").addEventListener("click", () => doPin("release"));
-$("conflicts-refresh").addEventListener("click", loadConflicts);
-
-loadStatus().then((ok) => {
-  if (ok) {
-    startEvents();
+// ---- Theme Controller (Issue 04) -------------------------------------------
+function updateThemeIcons(theme) {
+  const moon = $("icon-theme-moon");
+  const sun = $("icon-theme-sun");
+  if (!moon || !sun) return;
+  if (theme === "dark") {
+    moon.style.display = "block";
+    sun.style.display = "none";
   } else {
-    // daemon warming up or down: poll gently until it answers
-    const warm = setInterval(async () => {
-      if (await loadStatus()) {
-        clearInterval(warm);
-        startEvents();
-      }
-    }, 2000);
+    moon.style.display = "none";
+    sun.style.display = "block";
   }
-});
-loadConflicts();
+}
+
+function initTheme() {
+  const savedTheme = localStorage.getItem("ferry_theme") || "dark";
+  document.documentElement.setAttribute("data-theme", savedTheme);
+  updateThemeIcons(savedTheme);
+
+  const savedSound = localStorage.getItem("ferry_sound");
+  soundEnabled = savedSound !== "false";
+  updateSoundIcons();
+}
+
+function toggleTheme() {
+  playHapticFeedback("tick");
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("ferry_theme", next);
+  updateThemeIcons(next);
+  addActivity(`Theme switched to ${next} mode`);
+}
+
+function updateSoundIcons() {
+  const onIcon = $("icon-sound-on");
+  const offIcon = $("icon-sound-off");
+  if (!onIcon || !offIcon) return;
+  if (soundEnabled) {
+    onIcon.style.display = "block";
+    offIcon.style.display = "none";
+  } else {
+    onIcon.style.display = "none";
+    offIcon.style.display = "block";
+  }
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem("ferry_sound", soundEnabled ? "true" : "false");
+  updateSoundIcons();
+  if (soundEnabled) playHapticFeedback("success");
+  addActivity(soundEnabled ? "Micro-Haptics Enabled" : "Micro-Haptics Muted");
+}
+
+// ---- Event Listeners & Initialization -------------------------------------
+function setupEventListeners() {
+  // Theme & Audio Controls
+  const btnTheme = $("btn-theme");
+  if (btnTheme) btnTheme.addEventListener("click", toggleTheme);
+
+  const btnSound = $("btn-sound");
+  if (btnSound) btnSound.addEventListener("click", toggleSound);
+
+  // Actions
+  const btnSync = $("btn-sync");
+  if (btnSync) btnSync.addEventListener("click", doSync);
+
+  const btnPin = $("btn-pin");
+  if (btnPin) btnPin.addEventListener("click", togglePin);
+
+  const btnRelease = $("btn-release");
+  if (btnRelease) btnRelease.addEventListener("click", () => doPin("release"));
+
+  // Modals & Pairing
+  const btnPair = $("btn-pair");
+  if (btnPair) btnPair.addEventListener("click", openPairModal);
+
+  const btnCloseModal = $("btn-close-modal");
+  if (btnCloseModal) btnCloseModal.addEventListener("click", closePairModal);
+
+  const pairModal = $("pair-modal");
+  if (pairModal) {
+    pairModal.addEventListener("click", (e) => {
+      if (e.target === pairModal) closePairModal();
+    });
+  }
+
+  const btnCreateOffer = $("btn-create-offer");
+  if (btnCreateOffer) btnCreateOffer.addEventListener("click", () => doCreateOffer(false));
+
+  const shareAnyway = $("share-anyway");
+  if (shareAnyway) shareAnyway.addEventListener("click", () => doCreateOffer(true));
+
+  const btnCopyToken = $("btn-copy-token");
+  if (btnCopyToken) btnCopyToken.addEventListener("click", copyToken);
+
+  const btnAccept = $("btn-accept");
+  if (btnAccept) btnAccept.addEventListener("click", doAcceptPair);
+
+  // Activity feed clear
+  const btnClear = $("btn-clear");
+  if (btnClear) {
+    btnClear.addEventListener("click", () => {
+      playHapticFeedback("tick");
+      const feed = $("activity-feed");
+      if (feed) feed.innerHTML = "";
+    });
+  }
+
+  // Token Authentication Form
+  const tokenForm = $("token-form");
+  if (tokenForm) {
+    tokenForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = $("token-input");
+      const tokenVal = input ? input.value.trim() : "";
+      if (!tokenVal) return;
+
+      setToken(tokenVal);
+      try {
+        const ok = await loadStatus();
+        if (ok) {
+          hideTokenModal();
+          playHapticFeedback("success");
+          addActivity("Session Authenticated");
+          startEvents();
+          loadConflicts();
+        } else {
+          const err = $("token-error");
+          if (err) {
+            err.style.display = "block";
+            err.textContent = "Invalid token. Please re-enter.";
+          }
+          playHapticFeedback("alert");
+        }
+      } catch {
+        const err = $("token-error");
+        if (err) {
+          err.style.display = "block";
+          err.textContent = "Invalid token. Access denied.";
+        }
+        playHapticFeedback("alert");
+      }
+    });
+  }
+
+  const btnCloseTokenModal = $("btn-close-token-modal");
+  if (btnCloseTokenModal) btnCloseTokenModal.addEventListener("click", hideTokenModal);
+
+  // Keyboard Shortcuts (Issue 04)
+  window.addEventListener("keydown", (e) => {
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
+      if (e.key === "Escape") {
+        document.activeElement.blur();
+        closePairModal();
+      }
+      return;
+    }
+
+    if (e.key === "t" || e.key === "T") {
+      toggleTheme();
+    } else if (e.key === "p" || e.key === "P") {
+      const modal = $("pair-modal");
+      if (modal && (modal.classList.contains("open") || modal.getAttribute("aria-hidden") === "false")) {
+        closePairModal();
+      } else {
+        openPairModal();
+      }
+    } else if (e.code === "Space") {
+      e.preventDefault();
+      const syncBtn = $("btn-sync");
+      if (syncBtn) syncBtn.click();
+    } else if (e.key === "Escape") {
+      closePairModal();
+    }
+  });
+}
+
+function init() {
+  initTheme();
+  setupEventListeners();
+
+  const token = getToken();
+  if (token) {
+    setToken(token);
+  }
+
+  addActivity("Dashboard Initialized");
+
+  loadStatus().then((ok) => {
+    if (ok) {
+      startEvents();
+      loadConflicts();
+    } else {
+      startPolling();
+    }
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

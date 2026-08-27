@@ -401,6 +401,7 @@ impl DashboardBackend for IpcBackend {
         Box::pin(async move {
             let cmd = ferry_ipc::ClientCommand::StartPin {
                 paths: paths.clone().unwrap_or_default(),
+                duration_hours: None,
             };
             if let Ok(resp) = query_daemon_command(&socket_path, cmd).await {
                 match resp {

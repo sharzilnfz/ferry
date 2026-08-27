@@ -8,10 +8,12 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::middleware::Next;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::Value;
+use std::convert::Infallible;
 
 use super::backend::DashboardBackend;
 use super::error::ApiError;
@@ -409,13 +411,66 @@ async fn api_pin_release(
     Ok(Json(doc))
 }
 
-async fn api_events() -> ApiError {
-    ApiError::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "not-implemented",
-        "SSE streaming is deferred in this build",
-        "poll /api/status instead (the bundled UI falls back to 2s polling)",
-    )
+async fn api_events(
+    State(server): State<DashboardServer>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>> + Send + 'static> {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+
+    tokio::spawn(async move {
+        // 1. Send initial status snapshot on connection
+        let initial_status = match server.backend.get_status().await {
+            Ok(doc) => serde_json::to_string(&doc).unwrap_or_default(),
+            Err(e) => serde_json::json!({
+                "code": e.code,
+                "error": e.message,
+                "hint": e.hint,
+            })
+            .to_string(),
+        };
+
+        if tx
+            .send(Ok(Event::default().event("state").data(initial_status.clone())))
+            .await
+            .is_err()
+        {
+            return;
+        }
+
+        let mut last_emitted = initial_status;
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+            if tx.is_closed() {
+                break;
+            }
+
+            let current_status = match server.backend.get_status().await {
+                Ok(doc) => serde_json::to_string(&doc).unwrap_or_default(),
+                Err(e) => serde_json::json!({
+                    "code": e.code,
+                    "error": e.message,
+                    "hint": e.hint,
+                })
+                .to_string(),
+            };
+
+            if current_status != last_emitted {
+                last_emitted = current_status.clone();
+                if tx
+                    .send(Ok(Event::default().event("state").data(current_status)))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[cfg(test)]
@@ -736,6 +791,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_api_events_stream_and_disconnect() {
+        let token = generate_token();
+        let backend = Arc::new(FakeBackend::default());
+        let server = DashboardServer::new(backend).with_token(token.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server_task = tokio::spawn(async move {
+            server.serve(listener).await.expect("serve");
+        });
+
+        // 1. Without token -> 403 Forbidden
+        let (status, json, _) = send_http(addr, "GET", "/api/events", &[], None).await;
+        assert_eq!(status, 403);
+        assert_eq!(json["code"], "forbidden");
+
+        // 2. With token -> 200 text/event-stream with initial event: state
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let req = format!("GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\n\r\n");
+        stream.write_all(req.as_bytes()).await.expect("write");
+
+        let mut total_str = String::new();
+        let mut buf = vec![0u8; 1024];
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            let n = tokio::time::timeout(std::time::Duration::from_millis(500), stream.read(&mut buf))
+                .await
+                .expect("read timeout")
+                .expect("read chunk");
+            if n == 0 {
+                break;
+            }
+            total_str.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if total_str.contains("event: state") {
+                break;
+            }
+        }
+
+        assert!(total_str.starts_with("HTTP/1.1 200 OK"));
+        assert!(total_str.contains("content-type: text/event-stream"));
+        assert!(total_str.contains("event: state"));
+        assert!(total_str.contains(r#""command":"status""#));
+
+        // 3. Client disconnects cleanly
+        drop(stream);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
     async fn test_fallback_routes() {
         let token = generate_token();
         let backend = Arc::new(FakeBackend::default());
@@ -765,18 +874,6 @@ mod tests {
         let (status, _, body) = send_http(addr, "GET", "/unknown/spa/path", &[], None).await;
         assert_eq!(status, 200);
         assert!(body.contains("<!doctype html>"));
-
-        // 3. /api/events -> 501
-        let (status, json, _) = send_http(
-            addr,
-            "GET",
-            &format!("/api/events?token={token}"),
-            &[],
-            None,
-        )
-        .await;
-        assert_eq!(status, 501);
-        assert_eq!(json["code"], "not-implemented");
 
         server_task.abort();
     }

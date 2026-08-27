@@ -20,7 +20,7 @@ use crate::error::{CliError, CliResult};
 use crate::folder;
 use crate::out::Output;
 
-pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
+pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let device_id = device_hex()?;
     let state_dir = opened.state_dir();
@@ -36,6 +36,7 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
         folder,
         ferry_ipc::ClientCommand::StartPin {
             paths: scope.clone(),
+            duration_hours: Some(hours),
         },
     );
 

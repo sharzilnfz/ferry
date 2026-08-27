@@ -1,6 +1,6 @@
 # 07: Minimalist, Zero-Jargon Web Interface Overhaul (Captive Portal Style)
 
-Status: ready-for-agent
+Status: done
 Depends on: 04-api-status-peer-agreement-alignment.md, 05-async-pairing-workflow.md, 06-resilient-sse-streaming-polling-fallback.md
 Blocks: 08-honest-token-auth-session-storage.md, 09-e2e-live-process-and-browser-verification.md
 

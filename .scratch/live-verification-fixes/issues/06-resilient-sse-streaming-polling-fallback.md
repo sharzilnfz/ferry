@@ -1,6 +1,6 @@
 # 06: Resilient SSE Event Streaming with Silent Polling Fallback
 
-Status: ready-for-agent
+Status: done
 Depends on: 04-api-status-peer-agreement-alignment.md
 Blocks: 07-minimalist-web-ui-overhaul.md, 09-e2e-live-process-and-browser-verification.md
 

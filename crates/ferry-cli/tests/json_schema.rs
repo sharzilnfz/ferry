@@ -194,7 +194,7 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
 
     let _daemon = RunningDaemon::start(&proj);
-    let started = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    let started = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 
     // While pinned with held changes absent, status still pins the shape.

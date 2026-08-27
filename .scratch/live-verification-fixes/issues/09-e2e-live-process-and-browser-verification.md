@@ -1,6 +1,6 @@
 # 09: End-to-End Live Process & Playwright Browser Verification
 
-Status: ready-for-agent
+Status: done
 Depends on: 01-core-sync-three-way-reconciliation.md, 02-daemon-ipc-server-pin-liveness.md, 03-cli-pin-hours-and-ignore-folder.md, 04-api-status-peer-agreement-alignment.md, 05-async-pairing-workflow.md, 06-resilient-sse-streaming-polling-fallback.md, 07-minimalist-web-ui-overhaul.md, 08-honest-token-auth-session-storage.md
 Blocks: None
 
@@ -19,14 +19,14 @@ Comprehensive end-to-end integration and verification suites across the entire f
 
 ### Acceptance Criteria
 
-- [ ] Dual-node live synchronization test demonstrates unpinned concurrent file modifications result in one winner and one quarantined conflict file (`*.ferry-conflict.*`), with an entry appended to `.ferry/conflicts.jsonl`.
-- [ ] Live daemon test asserts `ferry pin start --hours 8` keeps the pin session active across multiple subsequent CLI commands and verifies holds against incoming peer writes.
-- [ ] CLI regression tests assert `ferry ignore --list <folder>` successfully reads rule layers from the specified directory path.
-- [ ] Automated Playwright browser tests verify:
+- [x] Dual-node live synchronization test demonstrates unpinned concurrent file modifications result in one winner and one quarantined conflict file (`*.ferry-conflict.*`), with an entry appended to `.ferry/conflicts.jsonl`.
+- [x] Live daemon test asserts `ferry pin start --hours 8` keeps the pin session active across multiple subsequent CLI commands and verifies holds against incoming peer writes.
+- [x] CLI regression tests assert `ferry ignore --list <folder>` successfully reads rule layers from the specified directory path.
+- [x] Automated Playwright browser tests verify:
   - Hero status banner displays correct text (`SYNCED`, `HOLDING`, `CONFLICTS`) and color dot.
   - Connected devices display green agreed badges when synchronized.
   - Theme toggle switches between dark and light modes cleanly and persists across page reloads.
   - Asynchronous share flow displays short code immediately without blocking the browser interface.
   - Responsive design renders cleanly on mobile viewport (390 × 844 px) without overflow.
   - Token authentication persists across page navigation via session storage.
-- [ ] Full workspace test suites (`cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`) pass cleanly.
+- [x] Full workspace test suites (`cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`) pass cleanly.

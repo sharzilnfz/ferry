@@ -61,7 +61,13 @@ fn test_key_pin_toggle() {
 
     // Toggle on (StartPin) with lowercase 'p'
     let cmd = app.handle_key(make_key_event(KeyCode::Char('p'), KeyModifiers::NONE));
-    assert_eq!(cmd, Some(ClientCommand::StartPin { paths: Vec::new() }));
+    assert_eq!(
+        cmd,
+        Some(ClientCommand::StartPin {
+            paths: Vec::new(),
+            duration_hours: None
+        })
+    );
 
     // Simulate pinned state
     app.state.engine_state = SyncState::Pinned;

@@ -126,7 +126,7 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     std::thread::sleep(Duration::from_millis(150));
 
     // 1. Pin start over IPC
-    let start_out = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    let start_out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(start_out.json["command"], "pin");
     assert_eq!(start_out.json["action"], "start");
     assert_eq!(start_out.json["paths"][0], "src/**");
@@ -163,7 +163,7 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
-    let err = commands::pin::start(&proj, &["src/**".to_string()]).unwrap_err();
+    let err = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap_err();
     assert_eq!(err.code, "daemon-not-running");
     assert!(err.message.contains("no active background daemon"));
     assert!(err.hint.contains("ferry daemon"));
@@ -176,7 +176,7 @@ fn test_pin_start_fails_when_no_daemon_active() {
     std::fs::create_dir_all(&proj).unwrap();
     commands::init::run(&proj, "init").unwrap();
 
-    let err = commands::pin::start(&proj, &["src/**".to_string()]).unwrap_err();
+    let err = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap_err();
     assert_eq!(err.code, "daemon-not-running");
     assert!(err.message.contains("no active background daemon"));
     assert!(err.hint.contains("ferry daemon"));
@@ -196,7 +196,7 @@ fn test_pin_ownership_and_liveness_across_cli_queries() {
     std::thread::sleep(Duration::from_millis(150));
 
     // Pin start over IPC: pin session is recorded under daemon process ID
-    let start_out = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    let start_out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(start_out.json["command"], "pin");
     assert_eq!(start_out.json["action"], "start");
     let recorded_pid = start_out.json["pid"].as_u64().expect("pid recorded");
@@ -286,4 +286,29 @@ fn test_conflicts_query_over_ipc_and_fallback() {
         fallback_conflicts.json["entries"].as_array().unwrap().len(),
         1
     );
+}
+
+#[test]
+fn test_pin_duration_hours_and_expiration() {
+    let env = Env::new("pin-hours");
+    let proj = env.work().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    commands::init::run(&proj, "init").unwrap();
+
+    let _daemon = RunningDaemon::start(&proj);
+    std::thread::sleep(Duration::from_millis(150));
+
+    // Start a pin with 12 hours duration
+    let start_out = commands::pin::start(&proj, &["src/**".to_string()], 12).unwrap();
+    assert_eq!(start_out.json["command"], "pin");
+
+    let pin_mgr = ferry_pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
+    let rec = pin_mgr.record().unwrap().expect("pin record exists");
+    assert_eq!(rec.expires_sec, Some(rec.started_sec + 12 * 3600));
+    assert!(rec.holding());
+
+    // Expired pin stops holding
+    let mut expired = rec.clone();
+    expired.expires_sec = Some(rec.started_sec - 100);
+    assert!(!expired.holding());
 }

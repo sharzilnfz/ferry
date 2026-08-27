@@ -93,9 +93,13 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             ferry_cli::commands::status::run(&f)
         }
         Command::Pin { action } => match action {
-            ferry_cli::cli::PinAction::Start { paths, folder } => {
+            ferry_cli::cli::PinAction::Start {
+                paths,
+                hours,
+                folder,
+            } => {
                 let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
-                ferry_cli::commands::pin::start(&f, paths)
+                ferry_cli::commands::pin::start(&f, paths, *hours)
             }
             ferry_cli::cli::PinAction::Stop { folder } => {
                 let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
@@ -119,12 +123,28 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             pattern,
             preset,
             list,
-        } => ferry_cli::commands::ignore_cmd::run(
-            &PathBuf::from("."),
-            pattern.as_deref(),
-            preset.as_deref(),
-            *list,
-        ),
+            folder,
+        } => {
+            let (target_folder, target_pattern) = if *list || preset.is_some() {
+                if let Some(f) = folder {
+                    (f.clone(), None)
+                } else if let Some(p) = pattern {
+                    (PathBuf::from(p), None)
+                } else {
+                    (PathBuf::from("."), None)
+                }
+            } else if let Some(f) = folder {
+                (f.clone(), pattern.as_deref())
+            } else {
+                (PathBuf::from("."), pattern.as_deref())
+            };
+            ferry_cli::commands::ignore_cmd::run(
+                &target_folder,
+                target_pattern,
+                preset.as_deref(),
+                *list,
+            )
+        }
         Command::Store { action } => match action {
             ferry_cli::cli::StoreAction::Gc {
                 dry_run,

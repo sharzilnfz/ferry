@@ -1,6 +1,6 @@
 # 03: CLI Flag & Argument Parity (`--hours` & `ignore` folder targeting)
 
-Status: ready-for-agent
+Status: done
 Depends on: 02-daemon-ipc-server-pin-liveness.md
 Blocks: 09-e2e-live-process-and-browser-verification.md
 
@@ -11,9 +11,9 @@ Bring CLI argument handling into parity with documented interfaces. Support the 
 
 ### Acceptance Criteria
 
-- [ ] `ferry pin start --hours <N>` successfully parses duration in hours (defaulting to 8 hours when omitted).
-- [ ] Pinned session metadata records the calculated expiration timestamp based on the supplied duration.
-- [ ] The background daemon evaluates pin expiration during scan cycles, automatically releasing holds once the duration has elapsed.
-- [ ] `ferry ignore` accepts an optional folder argument across pattern additions, preset applications, and list operations (e.g. `ferry ignore --list /path/to/project`).
-- [ ] Running ignore commands against an external directory resolves rules and displays active layers relative to the specified folder root.
-- [ ] CLI tests verify parsing and behavior of `--hours` and target directory arguments without regressions.
+- [x] `ferry pin start --hours <N>` successfully parses duration in hours (defaulting to 8 hours when omitted).
+- [x] Pinned session metadata records the calculated expiration timestamp based on the supplied duration.
+- [x] The background daemon evaluates pin expiration during scan cycles, automatically releasing holds once the duration has elapsed.
+- [x] `ferry ignore` accepts an optional folder argument across pattern additions, preset applications, and list operations (e.g. `ferry ignore --list /path/to/project`).
+- [x] Running ignore commands against an external directory resolves rules and displays active layers relative to the specified folder root.
+- [x] CLI tests verify parsing and behavior of `--hours` and target directory arguments without regressions.

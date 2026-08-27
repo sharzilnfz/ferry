@@ -198,17 +198,40 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 404);
     assert_eq!(json["code"], "not-found");
 
-    // 7. /api/events -> 501 Not Implemented
-    let (status, json, _) = send_http(
-        addr,
-        "GET",
-        &format!("/api/events?token={token}"),
-        &[],
-        None,
-    )
-    .await;
-    assert_eq!(status, 501);
-    assert_eq!(json["code"], "not-implemented");
+    // 7. /api/events -> 200 text/event-stream with initial event: state
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut sse_stream = tokio::net::TcpStream::connect(addr)
+        .await
+        .expect("tcp connect for sse");
+    let sse_req = format!("GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\n\r\n");
+    sse_stream
+        .write_all(sse_req.as_bytes())
+        .await
+        .expect("write sse req");
+    let mut total_str = String::new();
+    let mut buf = vec![0u8; 1024];
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        let n = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            sse_stream.read(&mut buf),
+        )
+        .await
+        .expect("read timeout")
+        .expect("read chunk");
+        if n == 0 {
+            break;
+        }
+        total_str.push_str(&String::from_utf8_lossy(&buf[..n]));
+        if total_str.contains("event: state") {
+            break;
+        }
+    }
+    assert!(total_str.starts_with("HTTP/1.1 200 OK"));
+    assert!(total_str.contains("content-type: text/event-stream"));
+    assert!(total_str.contains("event: state"));
+    assert!(total_str.contains(r#""command":"status""#));
+    drop(sse_stream);
 
     server_task.abort();
 }
@@ -272,7 +295,7 @@ async fn test_endpoint_proxying_over_ipc() {
                                 })
                                 .await;
                         }
-                        ferry_ipc::protocol::ClientCommand::StartPin { paths } => {
+                        ferry_ipc::protocol::ClientCommand::StartPin { paths, .. } => {
                             let _ = conn
                                 .send_message(&DaemonMessage::Ack {
                                     command: "start_pin".to_string(),

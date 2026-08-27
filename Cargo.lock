@@ -1166,6 +1166,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

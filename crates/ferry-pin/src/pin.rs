@@ -57,6 +57,9 @@ pub struct PinRecord {
     pub pid: u32,
     pub started_sec: i64,
     pub started_nsec: u32,
+    /// Unix timestamp in seconds after which the pin expires and ceases holding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_sec: Option<i64>,
     /// Gitignore-style glob(s) scoping the hold; `["*"]` matches everything.
     pub paths: Vec<String>,
     /// True once stop/release ended the session.
@@ -107,10 +110,18 @@ impl PinRecord {
     }
 
     /// True while this record actually holds changes: unreleased AND its
-    /// writer looks alive. Stale pins expire (nothing is held) but stay on
+    /// writer looks alive AND it has not expired. Stale pins expire (nothing is held) but stay on
     /// disk until an explicit release/stop recovers or discards them.
     pub fn holding(&self) -> bool {
-        !self.released && self.liveness() == Liveness::Alive
+        if self.released {
+            return false;
+        }
+        if let Some(exp) = self.expires_sec {
+            if ferry_platform::time::now_unix().0 >= exp {
+                return false;
+            }
+        }
+        self.liveness() == Liveness::Alive
     }
 }
 
@@ -299,11 +310,25 @@ mod tests {
             pid,
             started_sec: 1_787_574_000,
             started_nsec: 0,
+            expires_sec: None,
             paths: vec!["src/**".into()],
             released: false,
             base_agreements: BTreeMap::new(),
             proc_start_token: None,
         }
+    }
+
+    #[test]
+    fn pin_expiration_stops_holding() {
+        let mut rec = record(std::process::id());
+        rec.proc_start_token = ferry_platform::process_start_token(rec.pid);
+        let now = ferry_platform::time::now_unix().0;
+
+        rec.expires_sec = Some(now + 3600);
+        assert!(rec.holding());
+
+        rec.expires_sec = Some(now - 10);
+        assert!(!rec.holding());
     }
 
     #[test]

@@ -41,6 +41,7 @@ async fn test_multiple_messages_in_sequence() {
         ClientCommand::Ping,
         ClientCommand::StartPin {
             paths: vec!["foo/bar".to_string()],
+            duration_hours: None,
         },
         ClientCommand::TriggerScan,
         ClientCommand::ReleasePin,
@@ -140,6 +141,7 @@ async fn test_split_concurrent_tasks() {
             client_tx
                 .send_command(&ClientCommand::StartPin {
                     paths: vec![format!("file_{}.txt", i)],
+                    duration_hours: None,
                 })
                 .await
                 .unwrap();
@@ -162,7 +164,7 @@ async fn test_split_concurrent_tasks() {
     let server_task = tokio::spawn(async move {
         let mut processed = 0;
         while let Some(cmd) = server_rx.recv_command().await.unwrap() {
-            if let ClientCommand::StartPin { paths } = cmd {
+            if let ClientCommand::StartPin { paths, .. } = cmd {
                 assert_eq!(paths.len(), 1);
                 server_tx
                     .send_message(&DaemonMessage::Ack {

@@ -235,7 +235,10 @@ where
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
         ClientCommand::GetStatus => DaemonMessage::Snapshot(state.snapshot()),
-        ClientCommand::StartPin { paths } => match state.start_pin(paths) {
+        ClientCommand::StartPin {
+            paths,
+            duration_hours,
+        } => match state.start_pin(paths, duration_hours) {
             Ok(rec) => {
                 let snap = state.snapshot();
                 state.broadcast(DaemonMessage::StateChanged {
@@ -333,6 +336,9 @@ async fn run_state_watcher(
         )
     });
     let mut last_pending = state.handle().pending_changes();
+    let mut last_pin_holding = ferry_pin::PinManager::new(state.state_dir())
+        .is_holding()
+        .unwrap_or(false);
 
     let conflicts_file = state.state_dir().join("conflicts.jsonl");
     let mut last_meta = std::fs::metadata(&conflicts_file)
@@ -364,17 +370,22 @@ async fn run_state_watcher(
                     ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked)
                 });
                 let cur_pending = state.handle().pending_changes();
+                let cur_pin_holding = ferry_pin::PinManager::new(state.state_dir())
+                    .is_holding()
+                    .unwrap_or(false);
 
                 let changed = cur_manifest != last_manifest
                     || cur_agreed != last_agreed
                     || cur_scan != last_scanned
-                    || cur_pending != last_pending;
+                    || cur_pending != last_pending
+                    || cur_pin_holding != last_pin_holding;
 
                 if changed {
                     last_manifest = cur_manifest;
                     last_agreed = cur_agreed;
                     last_scanned = cur_scan;
                     last_pending = cur_pending;
+                    last_pin_holding = cur_pin_holding;
 
                     let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
                     let agreed_hex = cur_agreed.map(|a| hex_str(&a));

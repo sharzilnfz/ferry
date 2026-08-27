@@ -125,6 +125,7 @@ fn ignore_pattern_preset_and_list() {
             pattern,
             preset: _,
             list,
+            ..
         } => {
             assert_eq!(pattern, None);
             assert!(list);
@@ -133,6 +134,28 @@ fn ignore_pattern_preset_and_list() {
     }
     match parse(&["ignore", "--preset", "claude"]).command {
         Command::Ignore { preset, .. } => assert_eq!(preset.as_deref(), Some("claude")),
+        other => panic!("{other:?}"),
+    }
+    match parse(&["ignore", "--list", "/tmp/proj"]).command {
+        Command::Ignore {
+            pattern,
+            list,
+            folder,
+            ..
+        } => {
+            assert_eq!(pattern.as_deref(), Some("/tmp/proj"));
+            assert_eq!(folder, None);
+            assert!(list);
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse(&["ignore", "--preset", "claude", "/tmp/proj"]).command {
+        Command::Ignore {
+            preset, pattern, ..
+        } => {
+            assert_eq!(preset.as_deref(), Some("claude"));
+            assert_eq!(pattern.as_deref(), Some("/tmp/proj"));
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -217,15 +240,30 @@ fn version_flag_is_wired() {
 
 #[test]
 fn pin_has_four_actions_and_repeatable_paths() {
-    // Bare start: no globs = whole folder.
+    // Bare start: no globs = whole folder, default hours = 8.
     match parse(&["pin", "start"]).command {
         Command::Pin {
             action:
                 ferry_cli::cli::PinAction::Start {
                     paths,
+                    hours,
                     folder: None,
                 },
-        } => assert!(paths.is_empty(), "no --paths means whole-folder"),
+        } => {
+            assert!(paths.is_empty(), "no --paths means whole-folder");
+            assert_eq!(hours, 8);
+        }
+        other => panic!("{other:?}"),
+    }
+    // Custom --hours flag.
+    match parse(&["pin", "start", "--hours", "24"]).command {
+        Command::Pin {
+            action:
+                ferry_cli::cli::PinAction::Start {
+                    hours,
+                    ..
+                },
+        } => assert_eq!(hours, 24),
         other => panic!("{other:?}"),
     }
     // Repeatable --paths plus positional folder.
@@ -238,10 +276,12 @@ fn pin_has_four_actions_and_repeatable_paths() {
             action:
                 ferry_cli::cli::PinAction::Start {
                     paths,
+                    hours,
                     folder: Some(folder),
                 },
         } => {
             assert_eq!(paths, vec!["src/**".to_string(), "docs/*".to_string()]);
+            assert_eq!(hours, 8);
             assert_eq!(folder, PathBuf::from("sub"));
         }
         other => panic!("{other:?}"),

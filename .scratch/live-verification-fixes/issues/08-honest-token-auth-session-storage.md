@@ -1,6 +1,6 @@
 # 08: Honest Token Authentication & Session Storage Flow
 
-Status: ready-for-agent
+Status: done
 Depends on: 07-minimalist-web-ui-overhaul.md
 Blocks: 09-e2e-live-process-and-browser-verification.md
 

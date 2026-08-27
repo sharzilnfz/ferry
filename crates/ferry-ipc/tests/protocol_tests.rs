@@ -12,11 +12,15 @@ fn test_client_command_variants_serialization() {
         (
             ClientCommand::StartPin {
                 paths: vec!["src/**/*.rs".to_string(), "docs/*.md".to_string()],
+                duration_hours: None,
             },
             r#"{"command":"start_pin","args":{"paths":["src/**/*.rs","docs/*.md"]}}"#,
         ),
         (
-            ClientCommand::StartPin { paths: vec![] },
+            ClientCommand::StartPin {
+                paths: vec![],
+                duration_hours: None,
+            },
             r#"{"command":"start_pin","args":{"paths":[]}}"#,
         ),
         (ClientCommand::ReleasePin, r#"{"command":"release_pin"}"#),

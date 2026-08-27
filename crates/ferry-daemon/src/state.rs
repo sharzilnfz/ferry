@@ -155,8 +155,12 @@ impl DaemonState {
         }
     }
 
-    /// Start a session pin on the specified paths.
-    pub fn start_pin(&self, paths: Vec<String>) -> Result<PinRecord, PinError> {
+    /// Start a session pin on the specified paths with an optional duration in hours.
+    pub fn start_pin(
+        &self,
+        paths: Vec<String>,
+        duration_hours: Option<u64>,
+    ) -> Result<PinRecord, PinError> {
         let mut base_agreements = BTreeMap::new();
         if let Ok(records) = AgreementLedger::new(self.state_dir()).list_folder(&self.folder_id) {
             for (dev, rec) in records {
@@ -164,11 +168,13 @@ impl DaemonState {
             }
         }
 
-        PinManager::new(self.state_dir()).start_session(
+        let duration_secs = duration_hours.map(|h| h * 3600);
+        PinManager::new(self.state_dir()).start_session_with_duration(
             paths,
             std::process::id(),
             &self.device_hex,
             base_agreements,
+            duration_secs,
         )
     }
 

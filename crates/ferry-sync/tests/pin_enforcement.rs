@@ -79,6 +79,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
             pid: std::process::id(),
             started_sec: sec,
             started_nsec: nsec,
+            expires_sec: None,
             paths: vec!["notes.txt".to_string()],
             released: false,
             base_agreements: bases.clone(),

@@ -255,6 +255,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
             pid: std::process::id(), // this test process: alive => holding
             started_sec: NOW.0,
             started_nsec: NOW.1,
+            expires_sec: None,
             paths: vec!["src/**".into()],
             released: false,
             base_agreements: base_agreements.clone(),
@@ -468,6 +469,7 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
             pid: dead,
             started_sec: NOW.0,
             started_nsec: 0,
+            expires_sec: None,
             paths: vec!["*".into()],
             released: false,
             base_agreements: BTreeMap::new(),

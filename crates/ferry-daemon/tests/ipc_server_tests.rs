@@ -164,6 +164,7 @@ async fn test_daemon_ipc_command_dispatch() {
     client
         .send_command(&ClientCommand::StartPin {
             paths: vec!["src/main.rs".to_string()],
+            duration_hours: None,
         })
         .await
         .unwrap();
@@ -284,6 +285,7 @@ async fn test_daemon_broadcast_on_state_change() {
     client_a
         .send_command(&ClientCommand::StartPin {
             paths: vec!["file.txt".to_string()],
+            duration_hours: None,
         })
         .await
         .unwrap();

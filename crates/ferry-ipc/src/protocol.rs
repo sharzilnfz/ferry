@@ -71,6 +71,8 @@ pub enum ClientCommand {
     StartPin {
         #[serde(default)]
         paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_hours: Option<u64>,
     },
 
     /// Release any active session pin and reconcile held changes.

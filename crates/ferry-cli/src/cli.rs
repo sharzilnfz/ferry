@@ -121,6 +121,9 @@ pub enum Command {
         /// Show the effective rule layers with precedence annotations.
         #[arg(long)]
         list: bool,
+        /// Folder to target (default: current directory).
+        #[arg(value_name = "FOLDER")]
+        folder: Option<PathBuf>,
     },
     /// Store maintenance: garbage-collect unreferenced packs (T-20).
     Store {
@@ -223,6 +226,9 @@ pub enum PinAction {
         /// (equivalent to `--paths '*'`).
         #[arg(long = "paths", value_name = "GLOB")]
         paths: Vec<String>,
+        /// Duration of the protection window in hours.
+        #[arg(long, default_value_t = 8, value_name = "HOURS")]
+        hours: u64,
         /// Folder to pin (default: current directory).
         folder: Option<PathBuf>,
     },

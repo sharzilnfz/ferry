@@ -83,7 +83,10 @@ impl TuiApp {
                 if self.state.pin.holding || self.state.engine_state == SyncState::Pinned {
                     Some(ClientCommand::ReleasePin)
                 } else {
-                    Some(ClientCommand::StartPin { paths: Vec::new() })
+                    Some(ClientCommand::StartPin {
+                        paths: Vec::new(),
+                        duration_hours: None,
+                    })
                 }
             }
             KeyCode::Char('r' | 'R') => Some(ClientCommand::TriggerScan),

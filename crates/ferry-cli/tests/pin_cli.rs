@@ -65,7 +65,7 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(st.json["held_changes"], 0);
 
     // Start scoped to src/**.
-    let out = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    let out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(out.json["action"], "start");
     assert_eq!(out.json["paths"][0], "src/**");
     assert!(out.json["pid"].as_u64().is_some());
@@ -73,7 +73,7 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(device.len(), 64);
 
     // A second start is refused while the first holds.
-    let err = commands::pin::start(&proj, &[]).unwrap_err();
+    let err = commands::pin::start(&proj, &[], 8).unwrap_err();
     assert_eq!(err.code, "pin-active");
 
     // Status reflects an active, holding pin.
@@ -114,7 +114,7 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(st.json["held_changes"], 0);
 
     // And a fresh session may begin.
-    commands::pin::start(&proj, &[]).unwrap(); // whole-folder default ("*")
+    commands::pin::start(&proj, &[], 8).unwrap(); // whole-folder default ("*")
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
     assert_eq!(st.json["paths"][0], "*");
@@ -123,7 +123,7 @@ fn full_lifecycle_with_json_shapes() {
 #[test]
 fn release_with_no_ledgers_is_a_noop_document() {
     let (_e, proj, _daemon) = setup();
-    commands::pin::start(&proj, &[]).unwrap();
+    commands::pin::start(&proj, &[], 8).unwrap();
     let rel = commands::pin::release(&proj).unwrap();
     assert_eq!(rel.json["peers"].as_array().unwrap().len(), 0);
     assert_eq!(rel.json["quarantined"], 0);
@@ -133,7 +133,7 @@ fn release_with_no_ledgers_is_a_noop_document() {
 #[test]
 fn bad_glob_refused_before_any_state_is_written() {
     let (_e, proj, _daemon) = setup();
-    let err = commands::pin::start(&proj, &["[z-a]".to_string()]).unwrap_err();
+    let err = commands::pin::start(&proj, &["[z-a]".to_string()], 8).unwrap_err();
     assert_eq!(err.code, "bad-pattern");
     assert!(
         !ferry_cli::folder::state_dir(&proj)
@@ -166,6 +166,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
             pid: dead_pid,
             started_sec: 1_787_574_000,
             started_nsec: 0,
+            expires_sec: None,
             paths: vec!["*".into()],
             released: false,
             base_agreements: BTreeMap::new(),
@@ -179,7 +180,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
     assert_eq!(st.json["holding"], false);
 
     // Replacement is the recovery path and must not hit pin-active.
-    commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
 }
@@ -187,7 +188,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
 #[test]
 fn status_command_shows_the_held_set_too() {
     let (_e, proj, _daemon) = setup();
-    commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     let peer = "c".repeat(32);
     hold_one_real_change(&proj, &peer, "src/a.rs");
 
@@ -204,7 +205,7 @@ fn pin_start_fails_when_daemon_not_running() {
     std::fs::create_dir_all(&proj).unwrap();
     commands::init::run(&proj, "init").unwrap();
 
-    let err = commands::pin::start(&proj, &[]).unwrap_err();
+    let err = commands::pin::start(&proj, &[], 8).unwrap_err();
     assert_eq!(err.code, "daemon-not-running");
     assert!(err.message.contains("no active background daemon"));
     assert!(err.hint.contains("ferry daemon"));
