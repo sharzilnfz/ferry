@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 (Core `UiBackend` Trait)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] Cargo features `web-ui`, `tui`, and `gui` are defined in `Cargo.toml` and default-enabled for full developer builds.
-- [ ] Compiling with `--no-default-features --features lean` successfully compiles the headless daemon and CLI binary without `axum`, `ratatui`, `crossterm`, or `eframe`.
-- [ ] The stripped lean binary size is measurably reduced (from ~18 MB down to under 5 MB).
-- [ ] CI configuration or local tests verify successful compilation across all feature combinations (`default`, `lean`, `tui`, `web-ui`, `gui`).
+- [x] Cargo features `web-ui`, `tui`, and `gui` are defined in `Cargo.toml` and default-enabled for full developer builds.
+- [x] Compiling with `--no-default-features --features lean` successfully compiles the headless daemon and CLI binary without `axum`, `ratatui`, `crossterm`, or `eframe`.
+- [x] The stripped lean binary size is measurably reduced (from ~18 MB down to under 5 MB).
+- [x] CI configuration or local tests verify successful compilation across all feature combinations (`default`, `lean`, `tui`, `web-ui`, `gui`).

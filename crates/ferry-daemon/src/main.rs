@@ -34,6 +34,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use ferry_crypto::identity as crypto_identity;
+#[cfg(feature = "web-ui")]
 use ferry_daemon::ui;
 use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
@@ -360,11 +361,14 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     let ipc_handle =
         ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state))
             .map_err(|e| format!("ipc server: {e}"))?;
-    println!("IPC LISTENING {}", socket_path.display());
-
+    #[cfg(feature = "web-ui")]
     if let Some(addr) = d.ui_addr {
         let state = ui::UiState::new(handle.clone(), d.store_dir, d.tree_dir, d.folder_id, device);
         ui::spawn(addr, Arc::new(state)).map_err(|e| format!("--ui: {e}"))?;
+    }
+    #[cfg(not(feature = "web-ui"))]
+    if d.ui_addr.is_some() {
+        return Err("web dashboard disabled in this build (compiled with --features lean)".to_string());
     }
 
     handle.join_until_signal();

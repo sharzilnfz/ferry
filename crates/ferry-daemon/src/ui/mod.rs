@@ -8,11 +8,13 @@
 //! 501 `not-implemented` and the UI degrades to polling.
 
 pub mod backend;
+#[cfg(feature = "web-ui")]
 pub mod error;
+#[cfg(feature = "web-ui")]
 pub mod server;
 
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "web-ui")]
 use std::sync::Arc;
 
 use ferry_crypto::identity::DeviceIdentity;
@@ -20,10 +22,14 @@ use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
 pub use backend::{
-    snapshot_to_status_doc, BoxFuture, DashboardBackend, DirectBackend, InProcessAdapter,
-    IpcBackend,
+    snapshot_to_status_doc, AutoBackend, BoxFuture, DaemonIpcAdapter, DashboardBackend,
+    DirectBackend, InProcessAdapter, IpcBackend,
 };
+#[cfg(feature = "web-ui")]
 pub use error::{status_for_code, ApiError, OpError};
+#[cfg(not(feature = "web-ui"))]
+pub use ferry_ipc::backend::OpError;
+#[cfg(feature = "web-ui")]
 pub use server::{
     asset, extract_token, generate_token, is_token_valid, DashboardServer, APP_JS, INDEX_HTML,
     STYLE_CSS,
@@ -86,11 +92,12 @@ impl UiState {
 
 /// Bind failure surfaces synchronously so `--ui` typos fail startup loudly;
 /// the server itself runs detached and dies with the process.
-pub fn spawn(addr: SocketAddr, state: Arc<UiState>) -> Result<(), String> {
+#[cfg(feature = "web-ui")]
+pub fn spawn(addr: std::net::SocketAddr, state: Arc<UiState>) -> Result<(), String> {
     DashboardServer::new(Arc::new(DirectBackend::new(state))).spawn(addr)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "web-ui"))]
 mod tests {
     use super::*;
     use axum::http::StatusCode;

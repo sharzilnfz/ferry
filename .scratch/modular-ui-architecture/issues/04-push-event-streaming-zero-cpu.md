@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 (Core `UiBackend` Trait)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] `UiBackend::subscribe_events()` returns a typed `UiEventStream` emitting live `UiEvent` items (state changes, transfer progress, and new conflict alerts).
-- [ ] The 1-second interval polling loop and JSON string diffing in `DashboardServer::api_events` is deleted.
-- [ ] The Axum `/api/events` endpoint streams SSE directly from the `UiEventStream`.
-- [ ] When no filesystem changes or sync exchanges occur, the event stream sleeps on OS socket selectors with 0.00% CPU utilization and zero wakeups.
+- [x] `UiBackend::subscribe_events()` returns a typed `UiEventStream` emitting live `UiEvent` items (state changes, transfer progress, and new conflict alerts).
+- [x] The 1-second interval polling loop and JSON string diffing in `DashboardServer::api_events` is deleted.
+- [x] The Axum `/api/events` endpoint streams SSE directly from the `UiEventStream`.
+- [x] When no filesystem changes or sync exchanges occur, the event stream sleeps on OS socket selectors with 0.00% CPU utilization and zero wakeups.

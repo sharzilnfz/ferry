@@ -165,11 +165,13 @@ pub enum Command {
         #[arg(long, default_value = "tcp", value_name = "KIND")]
         transport: String,
     },
+    #[cfg(feature = "tui")]
     /// Launch the interactive terminal user interface dashboard.
     Tui {
         /// Folder to monitor (default: current directory).
         folder: Option<PathBuf>,
     },
+    #[cfg(feature = "web-ui")]
     /// Launch on-demand local web dashboard in your browser.
     Ui {
         /// Folder to serve (default: current directory).

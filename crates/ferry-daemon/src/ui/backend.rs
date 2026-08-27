@@ -114,14 +114,17 @@ fn log_err(e: ferry_sync_engine::LogError) -> OpError {
 pub struct InProcessAdapter {
     folder: PathBuf,
     identity: Option<DeviceIdentity>,
+    event_tx: tokio::sync::broadcast::Sender<UiEvent>,
 }
 
 impl InProcessAdapter {
     #[must_use]
     pub fn new(folder: impl Into<PathBuf>) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(64);
         Self {
             folder: folder.into(),
             identity: None,
+            event_tx,
         }
     }
 
@@ -555,7 +558,7 @@ impl UiBackend for InProcessAdapter {
     }
 
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
-        let (_tx, rx) = tokio::sync::broadcast::channel(16);
+        let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
     }
 }
@@ -771,6 +774,12 @@ impl AutoBackend {
     #[must_use]
     pub fn with_fallback(mut self, dir: PathBuf) -> Self {
         self.in_process = self.in_process.with_fallback(dir);
+        self
+    }
+
+    #[must_use]
+    pub fn with_identity(mut self, identity: DeviceIdentity) -> Self {
+        self.in_process = self.in_process.with_identity(identity);
         self
     }
 }

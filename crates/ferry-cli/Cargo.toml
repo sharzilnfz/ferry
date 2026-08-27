@@ -15,15 +15,13 @@ ferry-folder.workspace = true
 # Ferry engine: daemon and sync commands run SyncEngine directly (T-14).
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
-# Session pinning: the exchange loop consults the hold filter pre-apply and
-# `ferry pin` drives start/stop/release/status on top of its ledgers.
 ferry-pin = { path = "../ferry-pin" }
 ferry-ipc = { path = "../ferry-ipc" }
-ferry-tui = { path = "../ferry-tui" }
-ferry-daemon = { path = "../ferry-daemon" }
+ferry-tui = { path = "../ferry-tui", optional = true }
+ferry-daemon = { path = "../ferry-daemon", default-features = false }
 ferry-platform.workspace = true
 tokio = { workspace = true, features = ["signal"] }
-axum.workspace = true
+axum = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -34,10 +32,19 @@ thiserror.workspace = true
 qrcode.workspace = true
 subtle.workspace = true
 
+[features]
+default = ["web-ui", "tui", "gui"]
+web-ui = ["dep:axum", "ferry-daemon/web-ui"]
+tui = ["dep:ferry-tui"]
+gui = []
+lean = []
+
 [dev-dependencies]
 tempfile.workspace = true
 # Test fixtures spawn a cross-platform sleeper child (see ferry-platform).
 ferry-platform = { path = "../ferry-platform" }
+axum = { workspace = true }
+ferry-tui = { path = "../ferry-tui" }
 
 [lints]
 workspace = true

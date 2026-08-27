@@ -290,9 +290,14 @@ async fn test_daemon_broadcast_on_state_change() {
         .await
         .unwrap();
 
-    // Client A receives its command Ack
-    let ack = client_a.recv_message().await.unwrap().unwrap();
-    assert!(matches!(ack, DaemonMessage::Ack { .. }));
+    // Client A receives its command Ack (and may also receive broadcasted StateChanged)
+    let msg1 = client_a.recv_message().await.unwrap().unwrap();
+    let is_ack_first = matches!(msg1, DaemonMessage::Ack { .. });
+    if !is_ack_first {
+        assert!(matches!(msg1, DaemonMessage::StateChanged { .. }));
+        let msg2 = client_a.recv_message().await.unwrap().unwrap();
+        assert!(matches!(msg2, DaemonMessage::Ack { .. }));
+    }
 
     // Client B receives the broadcasted StateChanged event
     let event = client_b.recv_message().await.unwrap().unwrap();
