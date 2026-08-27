@@ -17,6 +17,11 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+ferry-tui = { path = "../ferry-tui" }
+ferry-daemon = { path = "../ferry-daemon", features = ["web-ui"] }
+ferry-platform = { path = "../ferry-platform" }
+axum = { workspace = true }
 
 [lints]
 workspace = true
+

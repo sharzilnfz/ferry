@@ -7,6 +7,7 @@
 //! with `feature-disabled` code and actionable recompilation hints.
 
 use std::path::{Path, PathBuf};
+#[cfg(feature = "web-ui")]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,7 @@ use axum::Router;
 pub use ferry_daemon::ui::{
     extract_token, generate_token, is_token_valid, ApiError, DashboardServer, IpcBackend, OpError,
 };
+#[cfg(any(feature = "web-ui", feature = "gui", feature = "tui"))]
 use serde_json::json;
 
 use crate::error::{CliError, CliResult};
@@ -303,7 +305,7 @@ fn run_web_mode(
 }
 
 pub fn run(args: UiArgs) -> CliResult<Output> {
-    let folder_path = match args.folder {
+    let _folder_path = match args.folder {
         Some(p) => p.to_path_buf(),
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
@@ -312,7 +314,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
     if args.gui {
         #[cfg(feature = "gui")]
         {
-            return run_gui_mode(&folder_path, args.test);
+            return run_gui_mode(&_folder_path, args.test);
         }
         #[cfg(not(feature = "gui"))]
         {
@@ -328,7 +330,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
     if args.web {
         #[cfg(feature = "web-ui")]
         {
-            return run_web_mode(&folder_path, args.host, args.port, args.no_open, args.test);
+            return run_web_mode(&_folder_path, args.host, args.port, args.no_open, args.test);
         }
         #[cfg(not(feature = "web-ui"))]
         {
@@ -344,7 +346,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
     if args.tui {
         #[cfg(feature = "tui")]
         {
-            return run_tui_mode(&folder_path, args.test);
+            return run_tui_mode(&_folder_path, args.test);
         }
         #[cfg(not(feature = "tui"))]
         {
@@ -359,17 +361,17 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
     // 4. Default frontend selection (GUI -> Web -> TUI)
     #[cfg(feature = "gui")]
     {
-        run_gui_mode(&folder_path, args.test)
+        run_gui_mode(&_folder_path, args.test)
     }
 
     #[cfg(all(not(feature = "gui"), feature = "web-ui"))]
     {
-        run_web_mode(&folder_path, args.host, args.port, args.no_open, args.test)
+        run_web_mode(&_folder_path, args.host, args.port, args.no_open, args.test)
     }
 
     #[cfg(all(not(feature = "gui"), not(feature = "web-ui"), feature = "tui"))]
     {
-        run_tui_mode(&folder_path, args.test)
+        run_tui_mode(&_folder_path, args.test)
     }
 
     #[cfg(all(not(feature = "gui"), not(feature = "web-ui"), not(feature = "tui")))]

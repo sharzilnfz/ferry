@@ -1689,10 +1689,13 @@ dependencies = [
 name = "ferry-gui"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "eframe",
  "egui",
+ "ferry-daemon",
  "ferry-ipc",
  "ferry-platform",
+ "ferry-tui",
  "qrcode",
  "serde",
  "serde_json",
