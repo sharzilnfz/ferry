@@ -34,6 +34,7 @@ libc = "0.2"
 filetime = "0.2"
 iroh = "=1.0.3"
 tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time", "net", "macros", "sync", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 
 ratatui = "0.29"

@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] The `UiBackend` trait is defined with asynchronous methods for `get_status()`, `list_conflicts()`, `start_pin()`, `stop_pin()`, `release_pin()`, `share_initiate()`, `share_status()`, `pair_accept()`, `trigger_scan()`, and `subscribe_events()`.
-- [ ] All method return types use strongly-typed domain structs rather than raw `serde_json::Value` objects.
-- [ ] An in-memory fake backend implementing `UiBackend` is available for deterministic unit and integration testing without network or filesystem dependencies.
-- [ ] Domain error taxonomy (`OpError`) cleanly categorizes errors with error codes, human messages, and actionable user hints.
+- [x] The `UiBackend` trait is defined with asynchronous methods for `get_status()`, `list_conflicts()`, `start_pin()`, `stop_pin()`, `release_pin()`, `share_initiate()`, `share_status()`, `pair_accept()`, `trigger_scan()`, and `subscribe_events()`.
+- [x] All method return types use strongly-typed domain structs rather than raw `serde_json::Value` objects.
+- [x] An in-memory fake backend implementing `UiBackend` is available for deterministic unit and integration testing without network or filesystem dependencies.
+- [x] Domain error taxonomy (`OpError`) cleanly categorizes errors with error codes, human messages, and actionable user hints.

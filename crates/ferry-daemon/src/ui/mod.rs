@@ -7,11 +7,9 @@
 //! `.ferry/` metadata files. `/api/events` (SSE) is deferred; it answers
 //! 501 `not-implemented` and the UI degrades to polling.
 
-mod actions;
 pub mod backend;
 pub mod error;
 pub mod server;
-mod status;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -21,7 +19,10 @@ use ferry_crypto::identity::DeviceIdentity;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
-pub use backend::{snapshot_to_status_doc, BoxFuture, DashboardBackend, DirectBackend, IpcBackend};
+pub use backend::{
+    snapshot_to_status_doc, BoxFuture, DashboardBackend, DirectBackend, InProcessAdapter,
+    IpcBackend,
+};
 pub use error::{status_for_code, ApiError, OpError};
 pub use server::{
     asset, extract_token, generate_token, is_token_valid, DashboardServer, APP_JS, INDEX_HTML,
