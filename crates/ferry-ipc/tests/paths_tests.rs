@@ -1,13 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use ferry_ipc::{default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME};
+use ferry_ipc::{default_socket_path, socket_path_for_dir};
 
 #[test]
 fn test_default_socket_path() {
     let path = default_socket_path();
     #[cfg(unix)]
     {
-        assert!(path.ends_with(DEFAULT_SOCKET_FILENAME));
+        assert!(path.ends_with(ferry_ipc::DEFAULT_SOCKET_FILENAME));
         assert!(path.to_string_lossy().contains(".ferry"));
     }
     #[cfg(windows)]
@@ -23,7 +23,10 @@ fn test_socket_path_for_dir() {
 
     #[cfg(unix)]
     {
-        assert_eq!(path, PathBuf::from("/custom/project/.ferry/daemon.sock"));
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/custom/project/.ferry/daemon.sock")
+        );
     }
     #[cfg(windows)]
     {
@@ -35,6 +38,13 @@ fn test_socket_path_for_dir() {
     let path2 = socket_path_for_dir(ferry_dir);
     #[cfg(unix)]
     {
-        assert_eq!(path2, PathBuf::from("/custom/project/.ferry/daemon.sock"));
+        assert_eq!(
+            path2,
+            std::path::PathBuf::from("/custom/project/.ferry/daemon.sock")
+        );
+    }
+    #[cfg(windows)]
+    {
+        assert!(path2.to_string_lossy().starts_with(r"\\.\pipe\ferry-"));
     }
 }
