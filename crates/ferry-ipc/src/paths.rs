@@ -46,9 +46,7 @@ pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
 
         let abs = std::fs::canonicalize(root).unwrap_or_else(|_| {
             if root.is_relative() {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(root))
-                    .unwrap_or_else(|_| root.to_path_buf())
+                std::env::current_dir().map_or_else(|_| root.to_path_buf(), |cwd| cwd.join(root))
             } else {
                 root.to_path_buf()
             }
