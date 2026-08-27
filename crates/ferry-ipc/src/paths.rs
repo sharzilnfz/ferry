@@ -37,9 +37,30 @@ pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let canonical = dir.to_string_lossy();
+        // If dir ends in .ferry, strip it so the root and .ferry map to the same pipe
+        let root = if dir.file_name().and_then(|n| n.to_str()) == Some(".ferry") {
+            dir.parent().unwrap_or(dir)
+        } else {
+            dir
+        };
+
+        let abs = std::fs::canonicalize(root).unwrap_or_else(|_| {
+            if root.is_relative() {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(root))
+                    .unwrap_or_else(|_| root.to_path_buf())
+            } else {
+                root.to_path_buf()
+            }
+        });
+
+        let mut norm = abs.to_string_lossy().replace('/', "\\").to_lowercase();
+        if let Some(stripped) = norm.strip_prefix(r"\\?\") {
+            norm = stripped.to_string();
+        }
+
         let mut hasher = DefaultHasher::new();
-        canonical.hash(&mut hasher);
+        norm.hash(&mut hasher);
         let h = hasher.finish();
         PathBuf::from(format!(r"{DEFAULT_WINDOWS_PIPE_PREFIX}-{h:016x}"))
     }

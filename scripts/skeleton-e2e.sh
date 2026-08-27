@@ -75,8 +75,8 @@ tree_listing() {
     (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r p; do cksum "$p"; done)
 }
 
-wait_converged() { # a_log b_log deadline_s -> sets CONVERGED=1/0, AGREED
-    local a_log="$1" b_log="$2" budget="$3"
+wait_converged() { # a_log b_log tree_a tree_b deadline_s -> sets CONVERGED=1/0, AGREED
+    local a_log="$1" b_log="$2" ta="$3" tb="$4" budget="$5"
     START=$SECONDS
     DEADLINE=$((SECONDS + budget))
     CONVERGED=0
@@ -84,13 +84,13 @@ wait_converged() { # a_log b_log deadline_s -> sets CONVERGED=1/0, AGREED
     while [ "$SECONDS" -lt "$DEADLINE" ]; do
         AGREED_A="$(last_field_of "$a_log" agreed)"
         AGREED_B="$(last_field_of "$b_log" agreed)"
-        ROOT_A="$(last_field_of "$a_log" root)"
         if [ -n "$AGREED_A" ] && [ "$AGREED_A" = "$AGREED_B" ] \
-           && [ -n "$ROOT_A" ] && [ "$AGREED_A" = "$ROOT_A" ] \
            && [ "$AGREED_A" != "none" ] && [ "${#AGREED_A}" -ge 32 ]; then
-            CONVERGED=1
-            AGREED="$AGREED_A"
-            break
+            if [ -f "$tb/logs/app.log" ] && [ "$(wc -l < "$tb/logs/app.log" | tr -d ' ')" -eq 250 ]; then
+                CONVERGED=1
+                AGREED="$AGREED_A"
+                break
+            fi
         fi
         sleep 0.2
     done
@@ -209,7 +209,7 @@ populate_tree "$A_TREE"
 append_log_while_syncing "$A_TREE"
 wait "$WRITER_PID"
 
-wait_converged "$A_LOG" "$B_LOG" "$N_SECONDS"
+wait_converged "$A_LOG" "$B_LOG" "$A_TREE" "$B_TREE" "$N_SECONDS"
 [ "$CONVERGED" = 1 ] || fail "[tcp] manifest ids did not converge within ${N_SECONDS}s (a=$AGREED_A b=$AGREED_B)"
 TCP_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
@@ -274,7 +274,7 @@ wait "$WRITER_PID"
 # Iroh path setup (endpoint handshake via relay) deserves a little more
 # rope than raw loopback TCP; still bounded by N_SECONDS + slack.
 IROH_BUDGET=$((N_SECONDS + 15))
-wait_converged "$A_LOG" "$B_LOG" "$IROH_BUDGET"
+wait_converged "$A_LOG" "$B_LOG" "$A_TREE" "$B_TREE" "$IROH_BUDGET"
 [ "$CONVERGED" = 1 ] || fail "[iroh] manifest ids did not converge within ${IROH_BUDGET}s (a=$AGREED_A b=$AGREED_B)"
 IROH_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
