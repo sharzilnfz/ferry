@@ -18,6 +18,7 @@ ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-pin = { path = "../ferry-pin" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-tui = { path = "../ferry-tui", optional = true }
+ferry-gui = { path = "../ferry-gui", optional = true }
 ferry-daemon = { path = "../ferry-daemon", default-features = false }
 ferry-platform.workspace = true
 tokio = { workspace = true, features = ["signal"] }
@@ -36,7 +37,7 @@ subtle.workspace = true
 default = ["web-ui", "tui", "gui"]
 web-ui = ["dep:axum", "ferry-daemon/web-ui"]
 tui = ["dep:ferry-tui"]
-gui = []
+gui = ["dep:ferry-gui"]
 lean = []
 
 [dev-dependencies]

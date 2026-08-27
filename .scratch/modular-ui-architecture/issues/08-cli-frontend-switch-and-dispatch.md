@@ -4,9 +4,9 @@
 
 **Blocked by:** 05 (Cargo Feature Flags)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] `ferry ui` accepts `--web`, `--gui`, and `--tui` flags in `clap` parsing.
-- [ ] If `ferry ui --gui` is run on a binary built without `--features gui`, it fails gracefully with exit code `feature-disabled` and prints: `"Feature 'gui' is not enabled in this build. Rebuild with: cargo build --features gui"`.
-- [ ] Running `ferry ui` without explicit flags selects the preferred compiled frontend (GUI if enabled, falling back to Web, falling back to TUI).
-- [ ] CLI test fixtures verify dispatch behavior and error messages across all feature combinations.
+- [x] `ferry ui` accepts `--web`, `--gui`, and `--tui` flags in `clap` parsing.
+- [x] If `ferry ui --gui` is run on a binary built without `--features gui`, it fails gracefully with exit code `feature-disabled` and prints: `"Feature 'gui' is not enabled in this build. Rebuild with: cargo build --features gui"`.
+- [x] Running `ferry ui` without explicit flags selects the preferred compiled frontend (GUI if enabled, falling back to Web, falling back to TUI).
+- [x] CLI test fixtures verify dispatch behavior and error messages across all feature combinations.

@@ -171,21 +171,29 @@ pub enum Command {
         /// Folder to monitor (default: current directory).
         folder: Option<PathBuf>,
     },
-    #[cfg(feature = "web-ui")]
-    /// Launch on-demand local web dashboard in your browser.
+    /// Launch Ferry graphical, web, or terminal user interface.
     Ui {
-        /// Folder to serve (default: current directory).
+        /// Folder to monitor/serve (default: current directory).
         folder: Option<PathBuf>,
-        /// Bind host (default: 127.0.0.1).
+        /// Launch native desktop graphical interface.
+        #[arg(long)]
+        gui: bool,
+        /// Launch ephemeral web dashboard in browser.
+        #[arg(long)]
+        web: bool,
+        /// Launch interactive terminal dashboard.
+        #[arg(long)]
+        tui: bool,
+        /// Bind host for web UI (default: 127.0.0.1).
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
-        /// Port to bind (default: 0 for random ephemeral port).
+        /// Port to bind for web UI (default: 0 for random ephemeral port).
         #[arg(short, long, default_value_t = 0)]
         port: u16,
         /// Do not open the browser automatically.
         #[arg(long)]
         no_open: bool,
-        /// Test mode: start server, verify startup, and exit immediately.
+        /// Test mode: start server/frontend, verify startup, and exit immediately.
         #[arg(long, hide = true)]
         test: bool,
     },

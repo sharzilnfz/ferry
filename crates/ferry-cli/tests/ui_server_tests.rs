@@ -72,6 +72,9 @@ fn test_ui_test_flag_and_random_port() {
 
     let out = ui::run(UiArgs {
         folder: Some(&work),
+        gui: false,
+        web: true,
+        tui: false,
         host: "127.0.0.1",
         port: 0,
         no_open: true,
@@ -805,3 +808,61 @@ async fn test_async_pairing_workflow_and_status_polling() {
 
     server_task.abort();
 }
+
+#[test]
+fn test_ui_gui_and_tui_dispatch_modes() {
+    let env = common::Env::new("gui_tui_dispatch");
+    let work = env.work();
+    ferry_cli::commands::init::run(&work, "init").expect("init");
+
+    // 1. Dispatch --gui in test mode
+    let out_gui = ui::run(UiArgs {
+        folder: Some(&work),
+        gui: true,
+        web: false,
+        tui: false,
+        host: "127.0.0.1",
+        port: 0,
+        no_open: true,
+        test: true,
+    })
+    .expect("ui --gui --test");
+    assert_eq!(out_gui.json["command"], "ui");
+    assert_eq!(out_gui.json["frontend"], "gui");
+    assert_eq!(out_gui.json["status"], "ok");
+
+    // 2. Dispatch --tui in test mode
+    let out_tui = ui::run(UiArgs {
+        folder: Some(&work),
+        gui: false,
+        web: false,
+        tui: true,
+        host: "127.0.0.1",
+        port: 0,
+        no_open: true,
+        test: true,
+    })
+    .expect("ui --tui --test");
+    assert_eq!(out_tui.json["command"], "ui");
+    assert_eq!(out_tui.json["frontend"], "tui");
+    assert_eq!(out_tui.json["status"], "ok");
+
+    // 3. Default frontend dispatch in test mode (preferred = gui)
+    let out_default = ui::run(UiArgs {
+        folder: Some(&work),
+        gui: false,
+        web: false,
+        tui: false,
+        host: "127.0.0.1",
+        port: 0,
+        no_open: true,
+        test: true,
+    })
+    .expect("ui --test (default)");
+    assert_eq!(out_default.json["command"], "ui");
+    #[cfg(feature = "gui")]
+    assert_eq!(out_default.json["frontend"], "gui");
+    #[cfg(all(not(feature = "gui"), feature = "web-ui"))]
+    assert_eq!(out_default.json["frontend"], "web");
+}
+

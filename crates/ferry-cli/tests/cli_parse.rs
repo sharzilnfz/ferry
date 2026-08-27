@@ -296,7 +296,84 @@ fn pin_has_four_actions_and_repeatable_paths() {
 }
 
 #[test]
+fn ui_flags_parse_web_gui_tui() {
+    match parse(&["ui"]).command {
+        Command::Ui {
+            folder,
+            gui,
+            web,
+            tui,
+            host,
+            port,
+            no_open,
+            test,
+        } => {
+            assert_eq!(folder, None);
+            assert!(!gui);
+            assert!(!web);
+            assert!(!tui);
+            assert_eq!(host, "127.0.0.1");
+            assert_eq!(port, 0);
+            assert!(!no_open);
+            assert!(!test);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    match parse(&["ui", "--gui", "my_folder"]).command {
+        Command::Ui {
+            folder,
+            gui,
+            web,
+            tui,
+            ..
+        } => {
+            assert_eq!(folder, Some(PathBuf::from("my_folder")));
+            assert!(gui);
+            assert!(!web);
+            assert!(!tui);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    match parse(&["ui", "--web", "--host", "0.0.0.0", "-p", "8080", "--no-open"]).command {
+        Command::Ui {
+            gui,
+            web,
+            tui,
+            host,
+            port,
+            no_open,
+            ..
+        } => {
+            assert!(!gui);
+            assert!(web);
+            assert!(!tui);
+            assert_eq!(host, "0.0.0.0");
+            assert_eq!(port, 8080);
+            assert!(no_open);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    match parse(&["ui", "--tui"]).command {
+        Command::Ui {
+            gui,
+            web,
+            tui,
+            ..
+        } => {
+            assert!(!gui);
+            assert!(!web);
+            assert!(tui);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn help_mentions_the_five_minute_path() {
     let err = Cli::try_parse_from(["ferry", "--help"]).unwrap_err();
     assert!(err.to_string().contains("Five-minute path"));
 }
+

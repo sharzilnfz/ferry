@@ -4,9 +4,9 @@
 
 **Blocked by:** 03 (Daemon IPC Adapter), 04 (Push Event Streaming), 05 (Cargo Feature Flags)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] `DashboardServer` holds `Arc<dyn UiBackend>` and delegates all API requests (`/api/status`, `/api/conflicts`, `/api/pin/*`, `/api/share/*`, `/api/pair/*`) through the trait.
-- [ ] Legacy `DashboardBackend` trait and duplicate backend structs in `ferry-daemon/src/ui/backend.rs` are deleted in favor of the shared `UiBackend` interface.
-- [ ] Existing SPA static assets (`index.html`, `style.css`, `app.js`) and token authentication middleware continue to function with 100% backward compatibility.
-- [ ] Web UI integration tests (`tests/server_tests.rs`) pass cleanly when backed by either `FakeBackend` or `AutoBackend`.
+- [x] `DashboardServer` holds `Arc<dyn UiBackend>` and delegates all API requests (`/api/status`, `/api/conflicts`, `/api/pin/*`, `/api/share/*`, `/api/pair/*`) through the trait.
+- [x] Legacy `DashboardBackend` trait and duplicate backend structs in `ferry-daemon/src/ui/backend.rs` are deleted in favor of the shared `UiBackend` interface.
+- [x] Existing SPA static assets (`index.html`, `style.css`, `app.js`) and token authentication middleware continue to function with 100% backward compatibility.
+- [x] Web UI integration tests (`tests/server_tests.rs`) pass cleanly when backed by either `FakeBackend` or `AutoBackend`.

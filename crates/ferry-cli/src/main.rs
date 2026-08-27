@@ -186,15 +186,20 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
         }),
         #[cfg(feature = "tui")]
         Command::Tui { folder } => ferry_cli::commands::tui::run(folder.as_deref()),
-        #[cfg(feature = "web-ui")]
         Command::Ui {
             folder,
+            gui,
+            web,
+            tui,
             host,
             port,
             no_open,
             test,
         } => ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
             folder: folder.as_deref(),
+            gui: *gui,
+            web: *web,
+            tui: *tui,
             host,
             port: *port,
             no_open: *no_open,

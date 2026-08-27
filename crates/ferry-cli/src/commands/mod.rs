@@ -13,5 +13,4 @@ pub mod store;
 pub mod sync;
 #[cfg(feature = "tui")]
 pub mod tui;
-#[cfg(feature = "web-ui")]
 pub mod ui;

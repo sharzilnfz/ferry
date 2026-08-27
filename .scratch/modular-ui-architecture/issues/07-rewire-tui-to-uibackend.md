@@ -4,9 +4,9 @@
 
 **Blocked by:** 03 (Daemon IPC Adapter), 04 (Push Event Streaming), 05 (Cargo Feature Flags)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] `TuiApp` accepts `Arc<dyn UiBackend>` and subscribes to its `UiEventStream` for state rendering and conflict alerts.
-- [ ] Keyboard events (`r` for scan rescan, `p` for pin toggle, `c` for conflict view) call corresponding `UiBackend` methods.
-- [ ] Terminal guard and rendering loops continue to wake reactively on incoming events with zero polling overhead.
-- [ ] TUI test suite in `crates/ferry-tui/tests/` passes cleanly using the test `UiBackend` fake.
+- [x] `TuiApp` accepts `Arc<dyn UiBackend>` and subscribes to its `UiEventStream` for state rendering and conflict alerts.
+- [x] Keyboard events (`r` for scan rescan, `p` for pin toggle, `c` for conflict view) call corresponding `UiBackend` methods.
+- [x] Terminal guard and rendering loops continue to wake reactively on incoming events with zero polling overhead.
+- [x] TUI test suite in `crates/ferry-tui/tests/` passes cleanly using the test `UiBackend` fake.
