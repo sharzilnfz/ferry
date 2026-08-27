@@ -35,7 +35,7 @@ pub mod winpath;
 
 pub use casefold::{find_case_conflict, fold_key, host_folds_case, CaseConflict, CaseFoldIndex};
 pub use links::{allow_windows_dir_links, classify_link, LinkDecision, LinkRefusal};
-pub use procs::process_start_token;
+pub use procs::{process_start_token, spawn_sleeper};
 pub use reserved::is_reserved_device_name;
 pub use time::{
     civil_from_days, civil_utc, current_time_str, days_from_civil, fmt_compact, fmt_rfc3339,

@@ -451,10 +451,7 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
 
     // An orphaned daemon: a real process, killed, its pid stranded in the
     // pin record.
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .expect("spawn sleeper");
+    let mut child = ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
     let dead = {
         child.kill().expect("kill -9 equivalent");
         child.wait().expect("reap");

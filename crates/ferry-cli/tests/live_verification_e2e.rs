@@ -3,12 +3,12 @@
 
 mod common;
 
+use common::{Env, RunningDaemon};
+use ferry_cli::commands;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use common::{Env, RunningDaemon};
-use ferry_cli::commands;
 
 fn ferry_bin() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_ferry").map_or_else(
@@ -108,7 +108,10 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         .spawn()
         .unwrap();
     let offer = a.tree.join(".ferry/pair-offer.ferry-pair");
-    assert!(wait_for_file(&offer, 15), "device A offer file never appeared");
+    assert!(
+        wait_for_file(&offer, 15),
+        "device A offer file never appeared"
+    );
 
     let out = b
         .command(&[
@@ -120,7 +123,11 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         ])
         .output()
         .expect("pair accept");
-    assert!(out.status.success(), "accept failed: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "accept failed: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(wait_for_child(&mut pair_a, 30), "pair a failed to finish");
 
     // 3. Start daemons: A listens, B dials
@@ -145,7 +152,10 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         assert!(Instant::now() < deadline, "shared.txt never reached B");
         std::thread::sleep(Duration::from_millis(150));
     }
-    assert_eq!(fs::read_to_string(&shared_b).unwrap(), "initial base line\n");
+    assert_eq!(
+        fs::read_to_string(&shared_b).unwrap(),
+        "initial base line\n"
+    );
 
     // Wait for agreement status to settle
     let agree_deadline = Instant::now() + Duration::from_secs(20);
@@ -160,14 +170,21 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         if agreed {
             break;
         }
-        assert!(Instant::now() < agree_deadline, "agreement never settled: {doc}");
+        assert!(
+            Instant::now() < agree_deadline,
+            "agreement never settled: {doc}"
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
 
     // 5. Concurrently edit shared.txt on both sides while UNPINNED
     fs::write(a.tree.join("shared.txt"), b"mod from device A (newer)\n").unwrap();
     std::thread::sleep(Duration::from_millis(100));
-    fs::write(b.tree.join("shared.txt"), b"mod from device B (concurrent)\n").unwrap();
+    fs::write(
+        b.tree.join("shared.txt"),
+        b"mod from device B (concurrent)\n",
+    )
+    .unwrap();
 
     // Give daemons time to exchange, reconcile, and quarantine the loser
     let reconcile_deadline = Instant::now() + Duration::from_secs(20);
@@ -194,11 +211,17 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     }
 
     // Also check conflicts list via CLI
-    let conflicts_out_a = a.command(&["conflicts", "list", "--json"]).output().unwrap();
+    let conflicts_out_a = a
+        .command(&["conflicts", "list", "--json"])
+        .output()
+        .unwrap();
     let doc_a: serde_json::Value = serde_json::from_slice(&conflicts_out_a.stdout).unwrap();
     let entries_a = doc_a["entries"].as_array().map_or(0, Vec::len);
 
-    let conflicts_out_b = b.command(&["conflicts", "list", "--json"]).output().unwrap();
+    let conflicts_out_b = b
+        .command(&["conflicts", "list", "--json"])
+        .output()
+        .unwrap();
     let doc_b: serde_json::Value = serde_json::from_slice(&conflicts_out_b.stdout).unwrap();
     let entries_b = doc_b["entries"].as_array().map_or(0, Vec::len);
 
@@ -237,7 +260,10 @@ fn test_cli_pin_hours_persists_across_cli_invocations() {
     let state_file = proj.join(".ferry/pin-state.json");
     let content = fs::read_to_string(&state_file).expect("read pin state");
     let json_val: serde_json::Value = serde_json::from_str(&content).expect("parse pin state");
-    assert!(json_val.get("expires_sec").is_some(), "expires_sec must be recorded in pin state");
+    assert!(
+        json_val.get("expires_sec").is_some(),
+        "expires_sec must be recorded in pin state"
+    );
 
     drop(daemon);
 }
@@ -257,7 +283,8 @@ fn test_cli_ignore_external_folder_targeting() {
     assert!(list_out.json.get("layers").is_some());
 
     // Apply a pattern to external folder
-    let add_out = commands::ignore_cmd::run(&proj, Some("*.log"), None, false).expect("add pattern");
+    let add_out =
+        commands::ignore_cmd::run(&proj, Some("*.log"), None, false).expect("add pattern");
     assert_eq!(add_out.json["action"], "added-line");
 
     // Verify ferry.ignore in the external directory contains the rule
@@ -267,18 +294,22 @@ fn test_cli_ignore_external_folder_targeting() {
     assert!(ignore_text.contains("*.log"));
 
     // Apply a preset to external folder
-    let preset_out = commands::ignore_cmd::run(&proj, None, Some("claude"), false).expect("apply preset");
+    let preset_out =
+        commands::ignore_cmd::run(&proj, None, Some("claude"), false).expect("apply preset");
     assert_eq!(preset_out.json["preset"], "claude");
 
     // Verify listing layers includes presets
     let list_after = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list after");
-    assert_eq!(list_after.json["applied_presets"], serde_json::json!(["claude"]));
+    assert_eq!(
+        list_after.json["applied_presets"],
+        serde_json::json!(["claude"])
+    );
 }
 
 #[test]
 fn test_ui_events_and_token_auth_flow() {
-    use ferry_daemon::ui::server::{generate_token, DashboardServer};
     use ferry_daemon::ui::backend::IpcBackend;
+    use ferry_daemon::ui::server::{generate_token, DashboardServer};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -292,7 +323,10 @@ fn test_ui_events_and_token_auth_flow() {
     let backend = Arc::new(IpcBackend::new(socket_path).with_fallback(proj.clone()));
     let server = DashboardServer::new(backend).with_token(token.clone());
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -307,17 +341,28 @@ fn test_ui_events_and_token_auth_flow() {
         let mut resp = Vec::new();
         stream.read_to_end(&mut resp).await.unwrap();
         let resp_str = String::from_utf8_lossy(&resp);
-        assert!(resp_str.contains("403 Forbidden"), "Unauthenticated SSE should return 403, got {resp_str}");
+        assert!(
+            resp_str.contains("403 Forbidden"),
+            "Unauthenticated SSE should return 403, got {resp_str}"
+        );
 
         // 2. With token query param, GET /api/events returns 200 text/event-stream
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let req = format!("GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        let req = format!(
+            "GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
         stream.write_all(req.as_bytes()).await.unwrap();
         let mut buf = [0u8; 1024];
         let n = stream.read(&mut buf).await.unwrap();
         let resp_str = String::from_utf8_lossy(&buf[..n]);
-        assert!(resp_str.contains("200 OK"), "Authenticated SSE should return 200 OK, got {resp_str}");
-        assert!(resp_str.contains("text/event-stream"), "Content-type should be text/event-stream");
+        assert!(
+            resp_str.contains("200 OK"),
+            "Authenticated SSE should return 200 OK, got {resp_str}"
+        );
+        assert!(
+            resp_str.contains("text/event-stream"),
+            "Content-type should be text/event-stream"
+        );
 
         // 3. Root index.html serves with 200 without token (public SPA entry)
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();

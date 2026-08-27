@@ -1910,10 +1910,13 @@ pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), Materia
     Ok(())
 }
 
-/// Non-unix builds cannot set link times (no std API without following);
-/// callers record the drift and the next full apply repairs it by link
-/// recreation on hosts that support it. Documented platform deviation.
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
+    let ft = filetime::FileTime::from_unix_time(sec, nsec);
+    filetime::set_symlink_file_times(path, ft, ft).map_err(|e| io_at(path, e))
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn set_symlink_times(_path: &Path, _sec: i64, _nsec: u32) -> Result<(), MaterializeError> {
     Ok(())
 }

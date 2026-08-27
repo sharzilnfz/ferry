@@ -429,7 +429,9 @@ async fn api_events(
         };
 
         if tx
-            .send(Ok(Event::default().event("state").data(initial_status.clone())))
+            .send(Ok(Event::default()
+                .event("state")
+                .data(initial_status.clone())))
             .await
             .is_err()
         {
@@ -819,10 +821,11 @@ mod tests {
         let mut buf = vec![0u8; 1024];
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         while tokio::time::Instant::now() < deadline {
-            let n = tokio::time::timeout(std::time::Duration::from_millis(500), stream.read(&mut buf))
-                .await
-                .expect("read timeout")
-                .expect("read chunk");
+            let n =
+                tokio::time::timeout(std::time::Duration::from_millis(500), stream.read(&mut buf))
+                    .await
+                    .expect("read timeout")
+                    .expect("read chunk");
             if n == 0 {
                 break;
             }

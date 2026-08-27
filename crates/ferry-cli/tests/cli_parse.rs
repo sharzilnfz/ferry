@@ -258,11 +258,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
     // Custom --hours flag.
     match parse(&["pin", "start", "--hours", "24"]).command {
         Command::Pin {
-            action:
-                ferry_cli::cli::PinAction::Start {
-                    hours,
-                    ..
-                },
+            action: ferry_cli::cli::PinAction::Start { hours, .. },
         } => assert_eq!(hours, 24),
         other => panic!("{other:?}"),
     }

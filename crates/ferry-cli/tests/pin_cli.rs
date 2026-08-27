@@ -148,10 +148,7 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
     let (_e, proj, _daemon) = setup();
 
     // Orphaned writer: kill a child, keep its pid.
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
+    let mut child = ferry_platform::spawn_sleeper(30).unwrap();
     let dead_pid = {
         child.kill().unwrap();
         child.wait().unwrap();

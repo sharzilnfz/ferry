@@ -26,7 +26,7 @@
     "worker": {
       "description": "Implementation worker: executes one ticket end-to-end with TDD discipline (red-green-refactor), commits with the ticket ID referenced, reports what was built and what remains.",
       "mode": "subagent",
-      "model": "opencode/ox-alpha-free-unlimited#high",
+      "model": "openrouter/stealth/ox-alpha#high",
       "color": "#59c98f"
     }
   }
