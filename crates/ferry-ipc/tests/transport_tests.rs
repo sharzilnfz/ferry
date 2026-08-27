@@ -1,6 +1,4 @@
-use ferry_ipc::{
-    create_in_memory_pair, ClientCommand, DaemonMessage, EngineSnapshot, ScanStatsView,
-};
+use ferry_ipc::{create_in_memory_pair, ClientCommand, DaemonMessage, EngineSnapshot};
 
 #[tokio::test]
 async fn test_in_memory_high_throughput_ordering() {
@@ -80,7 +78,7 @@ async fn test_in_memory_reconnect_simulation() {
 #[cfg(unix)]
 mod unix_tests {
     use super::*;
-    use ferry_ipc::{IpcClient, IpcServer};
+    use ferry_ipc::{IpcClient, IpcServer, ScanStatsView};
     use tempfile::tempdir;
 
     #[tokio::test]

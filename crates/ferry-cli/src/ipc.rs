@@ -11,7 +11,7 @@ use ferry_ipc::protocol::{ClientCommand, DaemonMessage, EngineSnapshot};
 use ferry_ipc::IpcClient;
 
 /// Short timeout for local IPC socket operations (connect, query, command).
-pub const IPC_TIMEOUT: Duration = Duration::from_millis(80);
+pub const IPC_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Query the running daemon for an instant engine snapshot over IPC.
 ///
@@ -54,7 +54,7 @@ pub fn send_command(folder: &Path, cmd: ClientCommand) -> Option<DaemonMessage> 
         let mut conn = IpcClient::connect(&socket_path).await.ok()?;
 
         // Drain initial snapshot if present (with a very short timeout)
-        let _ = tokio::time::timeout(Duration::from_millis(20), conn.recv_message()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), conn.recv_message()).await;
 
         conn.send_command(&cmd).await.ok()?;
         let resp = tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
