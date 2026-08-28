@@ -8,6 +8,7 @@ pub mod app;
 pub mod beacon;
 pub mod fleet;
 pub mod modals;
+pub mod picker;
 pub mod telemetry;
 pub mod theme;
 

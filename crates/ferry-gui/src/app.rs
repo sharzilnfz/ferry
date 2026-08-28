@@ -37,6 +37,9 @@ pub enum BackendAction {
     },
     FetchStatus,
     FetchConflicts,
+    RegisterFolder {
+        path: std::path::PathBuf,
+    },
 }
 
 /// Active chunk or file transfer state.
@@ -97,6 +100,7 @@ pub struct GuiApp {
 
     pub event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<UiEvent>>,
     pub action_tx: Option<tokio::sync::mpsc::UnboundedSender<BackendAction>>,
+    pub rt_handle: Option<tokio::runtime::Handle>,
 }
 
 impl GuiApp {
@@ -126,6 +130,7 @@ impl GuiApp {
             should_quit: false,
             event_rx: None,
             action_tx: None,
+            rt_handle: None,
         }
     }
 
@@ -262,6 +267,25 @@ impl GuiApp {
                             }
                         }
                     }
+                    BackendAction::RegisterFolder { path } => {
+                        match b_actions.register_folder(path.clone()).await {
+                            Ok(record) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: "folder_registered".to_string(),
+                                    message: record.path.display().to_string(),
+                                });
+                                if let Ok(snap) = b_actions.get_status().await {
+                                    let _ = ev_tx_actions.send(UiEvent::State(snap));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: e.code,
+                                    message: e.message,
+                                });
+                            }
+                        }
+                    }
                 }
                 ctx_actions.request_repaint();
             }
@@ -290,6 +314,7 @@ impl GuiApp {
             should_quit: false,
             event_rx: Some(event_rx),
             action_tx: Some(action_tx),
+            rt_handle: Some(rt_handle),
         }
     }
 
@@ -483,6 +508,14 @@ impl GuiApp {
                         message,
                         colors::FERRY_GREEN,
                     ));
+                } else if code == "folder_registered" {
+                    let msg = format!("Folder added: {message}");
+                    self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
+                    self.activity_log.push(ActivityEntry::new(
+                        "Folder",
+                        msg,
+                        colors::FERRY_GREEN,
+                    ));
                 } else {
                     self.status_message = Some((
                         format!("{code}: {message}"),
@@ -626,6 +659,46 @@ impl GuiApp {
 
                     // Hero Action Buttons
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        // Select Folder (native OS dialog)
+                        if ui
+                            .button(
+                                RichText::new("Select Folder")
+                                    .size(12.0)
+                                    .color(colors::FERRY_GREEN),
+                            )
+                            .clicked()
+                        {
+                            if crate::picker::is_headless_env() {
+                                self.status_message = Some((
+                                    "No display available for folder picker".to_string(),
+                                    Instant::now(),
+                                    colors::RED_CONFLICT,
+                                ));
+                                self.activity_log.push(ActivityEntry::new(
+                                    "Folder",
+                                    "No display available for folder picker".to_string(),
+                                    colors::RED_CONFLICT,
+                                ));
+                            } else if let Some(handle) = self.rt_handle.clone() {
+                                let action_tx = self.action_tx.clone();
+                                let ctx_clone = ctx.clone();
+                                handle.spawn(async move {
+                                    if let Some(path) = crate::picker::pick_folder_async().await {
+                                        if let Some(tx) = action_tx {
+                                            let _ = tx.send(BackendAction::RegisterFolder { path });
+                                        }
+                                        ctx_clone.request_repaint();
+                                    }
+                                });
+                            } else {
+                                self.status_message = Some((
+                                    "No runtime available for folder picker".to_string(),
+                                    Instant::now(),
+                                    colors::RED_CONFLICT,
+                                ));
+                            }
+                        }
+
                         // Pair Device button
                         if ui
                             .button(
