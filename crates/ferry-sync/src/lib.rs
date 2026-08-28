@@ -72,6 +72,7 @@
 
 pub mod engine;
 pub mod exchange;
+pub mod pairing_transport;
 pub mod session;
 pub mod transport;
 

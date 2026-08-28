@@ -291,6 +291,12 @@ pub trait UiBackend: Send + Sync + 'static {
     }
 }
 
+#[derive(Debug, Clone)]
+struct InMemPairingSession {
+    folder_id: String,
+    expires_at: std::time::SystemTime,
+}
+
 /// In-memory fake backend for deterministic testing across frontends.
 #[derive(Clone)]
 pub struct FakeBackend {
@@ -300,6 +306,7 @@ pub struct FakeBackend {
     active_share: Arc<RwLock<Option<ShareOffer>>>,
     event_tx: broadcast::Sender<UiEvent>,
     fs_fixture: Arc<RwLock<HashMap<PathBuf, Vec<crate::fs::DirectoryEntry>>>>,
+    pairing_sessions: Arc<std::sync::Mutex<HashMap<String, InMemPairingSession>>>,
 }
 
 impl Default for FakeBackend {
@@ -324,6 +331,17 @@ impl FakeBackend {
             active_share: Arc::new(RwLock::new(None)),
             event_tx,
             fs_fixture: Arc::new(RwLock::new(HashMap::new())),
+            pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Test helper: force a pairing code to be expired.
+    pub fn expire_pairing_code(&self, code: &str) {
+        let key = code.to_ascii_uppercase();
+        if let Ok(mut m) = self.pairing_sessions.lock() {
+            if let Some(s) = m.get_mut(&key) {
+                s.expires_at = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+            }
         }
     }
 
@@ -595,25 +613,88 @@ impl UiBackend for FakeBackend {
 
     fn create_pairing_session(
         &self,
-        _req: CreatePairingRequest,
+        req: CreatePairingRequest,
     ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
+        let sessions = Arc::clone(&self.pairing_sessions);
+        Box::pin(async move {
+            // Validate folder_id shape (32 hex chars, like real pairing_transport)
+            let folder_id = req.folder_id.clone();
+            if folder_id.len() < 32 {
+                return Err(OpError::new(
+                    "bad-request",
+                    "invalid folder_id",
+                    "folder_id must be 32 hex chars",
+                ));
+            }
+            let mut rng = rand::thread_rng();
+            let code = {
+                use crate::pairing::PairingCode;
+                PairingCode::generate(&mut rng).0
+            };
+            let key = code.to_ascii_uppercase();
+            let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(300);
+            let expires_at_str = {
+                let secs = expires_at
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                format!("2026-08-29T00:00:00Z#{}", secs)
+            };
+            let sess = InMemPairingSession {
+                folder_id: folder_id.clone(),
+                expires_at,
+            };
+            {
+                let mut m = sessions.lock().unwrap();
+                m.insert(key.clone(), sess);
+            }
+            Ok(CreatePairingResponse::new(code, expires_at_str))
         })
     }
 
     fn join_pairing_session(
         &self,
-        _req: JoinPairingRequest,
+        req: JoinPairingRequest,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
+        let sessions = Arc::clone(&self.pairing_sessions);
+        Box::pin(async move {
+            let key = req.code.trim().to_ascii_uppercase().replace('-', "").replace(' ', "");
+            let sess = {
+                let mut m = sessions.lock().unwrap();
+                let sess = m.get(&key).cloned();
+                match sess {
+                    Some(s) => {
+                        if std::time::SystemTime::now()
+                            .duration_since(s.expires_at)
+                            .is_ok()
+                        {
+                            m.remove(&key);
+                            return Err(OpError::new(
+                                "pairing-expired",
+                                format!("pairing code {} expired", req.code),
+                                "ask the sharing device to create a new code",
+                            ));
+                        }
+                        m.remove(&key);
+                        s
+                    }
+                    None => {
+                        return Err(OpError::new(
+                            "pairing-not-found",
+                            format!("pairing code {} not found", req.code),
+                            "check the code and try again",
+                        ))
+                    }
+                }
+            };
+            // No file at $FERRY_HOME/pair-* is ever touched here — in-memory rendezvous only.
+            Ok(PairResult {
+                folder_id: sess.folder_id,
+                device_id: "peer-device-id".to_string(),
+                folder_path: req.target_dir,
+                status: "paired".to_string(),
+                message: Some("paired via in-memory rendezvous".to_string()),
+            })
         })
     }
 }

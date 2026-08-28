@@ -99,6 +99,8 @@ impl DashboardServer {
             .route("/api/share", post(api_share))
             .route("/api/share/status", get(api_share_status))
             .route("/api/pair/accept", post(api_pair_accept))
+            .route("/api/pair/create", post(api_pair_create))
+            .route("/api/pair/join", post(api_pair_join))
             .route("/api/pin/start", post(api_pin_start))
             .route("/api/pin/stop", post(api_pin_stop))
             .route("/api/pin/release", post(api_pin_release))
@@ -421,6 +423,76 @@ async fn api_pair_accept(
     Ok(Json(json!({
         "command": "pair",
         "role": "accept",
+        "status": res.status,
+        "folder": res.folder_path.display().to_string(),
+        "folder_id": res.folder_id,
+        "device_id": res.device_id,
+    })))
+}
+
+async fn api_pair_create(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = payload.map_err(bad_body)?;
+    let folder_id = body
+        .get("folder_id")
+        .or_else(|| body.get("folderId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-request",
+                "folder_id is required",
+                "pass the folder_id to share",
+            )
+        })?;
+    let req = ferry_ipc::pairing::CreatePairingRequest::new(folder_id.to_string());
+    let resp = server.backend.create_pairing_session(req).await?;
+    Ok(Json(json!({
+        "command": "pair",
+        "role": "create",
+        "status": "pending",
+        "code": resp.code,
+        "expires_at": resp.expires_at,
+    })))
+}
+
+async fn api_pair_join(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = payload.map_err(bad_body)?;
+    let code = body
+        .get("code")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-request",
+                "code is required",
+                "pass the 6-character pairing code",
+            )
+        })?;
+    let target_dir = body
+        .get("target_dir")
+        .or_else(|| body.get("targetDir"))
+        .or_else(|| body.get("dir"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-request",
+                "target_dir is required",
+                "pass the directory to create the synced folder in",
+            )
+        })?;
+    let req = ferry_ipc::pairing::JoinPairingRequest::new(code.to_string(), target_dir);
+    let res = server.backend.join_pairing_session(req).await?;
+    Ok(Json(json!({
+        "command": "pair",
+        "role": "join",
         "status": res.status,
         "folder": res.folder_path.display().to_string(),
         "folder_id": res.folder_id,

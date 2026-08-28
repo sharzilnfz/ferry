@@ -420,14 +420,38 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 },
             }
         }
-        ClientCommand::CreatePairingSession { req: _ } => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "create_pairing_session not implemented in this wave".to_string(),
-        },
-        ClientCommand::JoinPairingSession { req: _ } => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "join_pairing_session not implemented in this wave".to_string(),
-        },
+        ClientCommand::CreatePairingSession { req } => {
+            let home = ferry_home_for_registry();
+            let identity = state.identity().clone();
+            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                home,
+                identity,
+                ferry_sync::pairing_transport::daemon_shared_store(),
+            );
+            match transport.create_session(req.folder_id) {
+                Ok(resp) => DaemonMessage::PairingCreated { response: resp },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::JoinPairingSession { req } => {
+            let home = ferry_home_for_registry();
+            let identity = state.identity().clone();
+            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                home,
+                identity,
+                ferry_sync::pairing_transport::daemon_shared_store(),
+            );
+            match transport.join_session(req) {
+                Ok(result) => DaemonMessage::PairingJoined { result },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
     }
 }
 
@@ -475,6 +499,34 @@ pub fn dispatch_supervisor_command(
                         message: e.message,
                     },
                 },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::CreatePairingSession { req } => {
+            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                supervisor.home().to_path_buf(),
+                supervisor.identity().clone(),
+                ferry_sync::pairing_transport::daemon_shared_store(),
+            );
+            match transport.create_session(req.folder_id) {
+                Ok(resp) => DaemonMessage::PairingCreated { response: resp },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::JoinPairingSession { req } => {
+            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                supervisor.home().to_path_buf(),
+                supervisor.identity().clone(),
+                ferry_sync::pairing_transport::daemon_shared_store(),
+            );
+            match transport.join_session(req) {
+                Ok(result) => DaemonMessage::PairingJoined { result },
                 Err(e) => DaemonMessage::Error {
                     code: e.code,
                     message: e.message,

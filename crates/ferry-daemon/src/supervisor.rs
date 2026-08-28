@@ -55,6 +55,10 @@ impl Supervisor {
         &self.home
     }
 
+    pub fn identity(&self) -> &DeviceIdentity {
+        &self.identity
+    }
+
     pub fn broadcast_tx(&self) -> &tokio::sync::broadcast::Sender<UiEvent> {
         &self.broadcast_tx
     }

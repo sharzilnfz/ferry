@@ -115,6 +115,7 @@ pub struct InProcessAdapter {
     folder: PathBuf,
     identity: Option<DeviceIdentity>,
     event_tx: tokio::sync::broadcast::Sender<UiEvent>,
+    pairing_store: ferry_sync::pairing_transport::SharedRendezvous,
 }
 
 impl InProcessAdapter {
@@ -125,6 +126,7 @@ impl InProcessAdapter {
             folder: folder.into(),
             identity: None,
             event_tx,
+            pairing_store: ferry_sync::pairing_transport::daemon_shared_store(),
         }
     }
 
@@ -140,7 +142,7 @@ impl InProcessAdapter {
         self
     }
 
-    fn get_identity(&self) -> DeviceIdentity {
+    pub(crate) fn get_identity(&self) -> DeviceIdentity {
         if let Some(ref id) = self.identity {
             return id.clone();
         }
@@ -608,6 +610,46 @@ impl UiBackend for InProcessAdapter {
         })
     }
 
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<ferry_ipc::pairing::CreatePairingResponse, OpError>> {
+        let home = ferry_home_for_backend();
+        let identity = self.get_identity();
+        let folder = self.folder.clone();
+        let store = self.pairing_store.clone();
+        Box::pin(async move {
+            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                home,
+                identity,
+                store,
+            );
+            // Ensure the folder_id maps to our current folder (InProcess is single-folder, but
+            // PairingTransport looks up via registry/override; registering our folder here makes
+            // create_session work without a pre-existing registry entry in tests).
+            transport.register_folder_path(req.folder_id.clone(), folder);
+            tokio::task::spawn_blocking(move || transport.create_session(req.folder_id))
+                .await
+                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let home = ferry_home_for_backend();
+        let identity = self.get_identity();
+        let store = self.pairing_store.clone();
+        Box::pin(async move {
+            let transport =
+                ferry_sync::pairing_transport::PairingTransport::with_shared(home, identity, store);
+            tokio::task::spawn_blocking(move || transport.join_session(req))
+                .await
+                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
@@ -1053,6 +1095,80 @@ impl UiBackend for DaemonIpcAdapter {
         })
     }
 
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<ferry_ipc::pairing::CreatePairingResponse, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            // Try IPC first; on failure fall back to in-process (daemon offline).
+            match async {
+                let mut client = IpcClient::connect(&socket).await
+                    .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+                let _initial = client.recv_message().await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+                client.send_command(&ClientCommand::CreatePairingSession { req: req.clone() }).await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+                let resp = client.recv_message().await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                    .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                match resp {
+                    DaemonMessage::PairingCreated { response } => Ok(response),
+                    DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                    other => Err(OpError::new("protocol", format!("unexpected response {other:?}"), "retry")),
+                }
+            }.await {
+                Ok(r) => Ok(r),
+                Err(_) => {
+                    // Fallback: in-process pairing via shared store (tests without daemon).
+                    let home = ferry_home_for_backend();
+                    let identity = InProcessAdapter::new(".").get_identity();
+                    let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                        home, identity, ferry_sync::pairing_transport::daemon_shared_store()
+                    );
+                    tokio::task::spawn_blocking(move || transport.create_session(req.folder_id))
+                        .await.map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+                }
+            }
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            match async {
+                let mut client = IpcClient::connect(&socket).await
+                    .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+                let _initial = client.recv_message().await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+                client.send_command(&ClientCommand::JoinPairingSession { req: req.clone() }).await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+                let resp = client.recv_message().await
+                    .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                    .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                match resp {
+                    DaemonMessage::PairingJoined { result } => Ok(result),
+                    DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                    other => Err(OpError::new("protocol", format!("unexpected response {other:?}"), "retry")),
+                }
+            }.await {
+                Ok(r) => Ok(r),
+                Err(_) => {
+                    let home = ferry_home_for_backend();
+                    let identity = InProcessAdapter::new(".").get_identity();
+                    let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+                        home, identity, ferry_sync::pairing_transport::daemon_shared_store()
+                    );
+                    tokio::task::spawn_blocking(move || transport.join_session(req))
+                        .await.map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+                }
+            }
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let socket = self.socket_path.clone();
         Box::pin(async move {
@@ -1292,6 +1408,34 @@ impl UiBackend for AutoBackend {
                 return Ok(());
             }
             in_proc.remove_folder(folder_id).await
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<ferry_ipc::pairing::CreatePairingResponse, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(resp) = ipc.create_pairing_session(req.clone()).await {
+                return Ok(resp);
+            }
+            in_proc.create_pairing_session(req).await
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.join_pairing_session(req.clone()).await {
+                return Ok(res);
+            }
+            in_proc.join_pairing_session(req).await
         })
     }
 

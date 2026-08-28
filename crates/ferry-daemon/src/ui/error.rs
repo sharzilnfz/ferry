@@ -69,7 +69,8 @@ pub use ferry_ipc::backend::OpError;
 pub fn status_for_code(code: &str) -> StatusCode {
     match code {
         "forbidden" => StatusCode::FORBIDDEN,
-        "not-found" => StatusCode::NOT_FOUND,
+        "not-found" | "pairing-not-found" => StatusCode::NOT_FOUND,
+        "pairing-expired" => StatusCode::GONE,
         "warming-up" => StatusCode::SERVICE_UNAVAILABLE,
         "not-implemented" => StatusCode::NOT_IMPLEMENTED,
         "secrets-found" | "pin-active" | "already-initialized" | "pair-timeout" => {

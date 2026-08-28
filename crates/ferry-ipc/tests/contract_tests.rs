@@ -332,22 +332,40 @@ async fn fake_backend_stubs_return_not_implemented() {
         .unwrap_err();
     assert_eq!(err.code, "not-found");
 
-    let err = backend
+    // Wave 3: pairing is now implemented via in-memory rendezvous (no files at $FERRY_HOME/pair-*)
+    let resp = backend
         .create_pairing_session(CreatePairingRequest {
             folder_id: "0123456789abcdef0123456789abcdef".to_string(),
         })
         .await
-        .unwrap_err();
-    assert_eq!(err.code, "not-found");
-
+        .expect("create pairing should succeed");
+    assert_eq!(resp.code.len(), 6);
     let err = backend
         .join_pairing_session(JoinPairingRequest {
-            code: "ABC123".to_string(),
+            code: "WRONG1".to_string(),
             target_dir: PathBuf::from("/tmp/join"),
         })
         .await
         .unwrap_err();
-    assert_eq!(err.code, "not-found");
+    assert_eq!(err.code, "pairing-not-found");
+    let ok = backend
+        .join_pairing_session(JoinPairingRequest {
+            code: resp.code.clone(),
+            target_dir: PathBuf::from("/tmp/join-ok"),
+        })
+        .await
+        .expect("join with correct code should succeed");
+    assert_eq!(ok.folder_id, "0123456789abcdef0123456789abcdef");
+    assert_eq!(ok.status, "paired");
+    // Re-join same code must fail (one-time)
+    let err = backend
+        .join_pairing_session(JoinPairingRequest {
+            code: resp.code,
+            target_dir: PathBuf::from("/tmp/join-again"),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "pairing-not-found");
 }
 
 #[tokio::test]

@@ -8,10 +8,15 @@ license.workspace = true
 ferry-store = { path = "../ferry-store" }
 ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
+ferry-folder = { path = "../ferry-folder" }
+ferry-ipc = { path = "../ferry-ipc" }
+toml = "0.8"
 # Session-pin types for sync engine tests and release planning.
 ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true
 rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
@@ -28,6 +33,7 @@ rand.workspace = true
 tempfile.workspace = true
 filetime.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "io-util"] }
 
 [lints]
 workspace = true
