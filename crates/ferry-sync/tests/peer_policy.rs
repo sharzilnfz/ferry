@@ -89,7 +89,16 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     let handle_c = engine_c.start();
 
     // Wait and verify Node C fails to sync to Node A.
-    std::thread::sleep(Duration::from_millis(500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let s = handle_a.stats();
+        if s.sessions_failed > stats_before_c.sessions_failed
+            || s.rejected_items > stats_before_c.rejected_items
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         !dir.path().join("a/tree/file_c.txt").exists(),
         "Node C's files must NOT be applied to Node A"
@@ -204,7 +213,16 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
     let handle_c = engine_c.start();
 
-    std::thread::sleep(Duration::from_millis(500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let s = handle_a.stats();
+        if s.sessions_failed > stats_before_c.sessions_failed
+            || s.rejected_items > stats_before_c.rejected_items
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         !dir.path().join("a/tree/file_c.txt").exists(),
         "Unauthorized Node C must not sync to Node A"
@@ -392,7 +410,16 @@ fn tofu_pinned_identity_survives_engine_restart() {
     let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
     let handle_c = engine_c.start();
 
-    std::thread::sleep(Duration::from_millis(500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let s = handle_a_restarted.stats();
+        if s.sessions_failed > stats_before_c.sessions_failed
+            || s.rejected_items > stats_before_c.rejected_items
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         !dir.path().join("a/tree/bad.txt").exists(),
         "Node C must be refused after restart"

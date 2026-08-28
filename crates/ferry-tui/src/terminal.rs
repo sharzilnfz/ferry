@@ -51,12 +51,12 @@ impl Drop for TerminalGuard {
 /// Explicitly restore terminal state (raw mode disabled, leave alternate screen, disable mouse capture, show cursor) to a writer.
 pub fn restore_terminal_writer<W: io::Write>(writer: &mut W) -> io::Result<()> {
     let _ = disable_raw_mode();
-    execute!(
+    let _ = execute!(
         writer,
         LeaveAlternateScreen,
         DisableMouseCapture,
         crossterm::cursor::Show
-    )?;
+    );
     Ok(())
 }
 
