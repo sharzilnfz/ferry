@@ -788,6 +788,203 @@ async function doAcceptPair() {
   }
 }
 
+// ---- Folder Picker Modal (Issue 06) -----------------------------------------
+let pickerCurrentPath = "";
+let pickerDebounceTimer = null;
+
+async function fetchFsList(path) {
+  const qs = path ? "?path=" + encodeURIComponent(path) : "";
+  return api("/api/fs/ls" + qs);
+}
+
+function renderBreadcrumb(absPath) {
+  const bc = $("picker-breadcrumb");
+  if (!bc) return;
+  bc.innerHTML = "";
+  const parts = absPath.split("/").filter(Boolean);
+  const makeCrumb = (label, target) => {
+    const span = document.createElement("span");
+    span.className = "crumb";
+    span.textContent = label;
+    span.addEventListener("click", () => loadPickerPath(target));
+    return span;
+  };
+  const sep = () => {
+    const s = document.createElement("span");
+    s.className = "crumb-sep";
+    s.textContent = "/";
+    return s;
+  };
+  bc.appendChild(makeCrumb("/", "/"));
+  let accum = "";
+  parts.forEach((p) => {
+    bc.appendChild(sep());
+    accum += "/" + p;
+    bc.appendChild(makeCrumb(p, accum));
+  });
+}
+
+function renderEntries(entries, absPath) {
+  const container = $("picker-entries");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!entries || entries.length === 0) {
+    container.innerHTML = '<div style="color: var(--text-3); font-size: 11.5px; padding: 8px; text-align: center;">Empty folder</div>';
+    return;
+  }
+  entries.forEach((e) => {
+    const row = document.createElement("div");
+    row.className = "picker-row" + (e.is_dir ? " is-dir" : "");
+    const meta = e.is_dir ? "dir" : "file";
+    const gitMark = e.is_git_repo ? " · git" : "";
+    const syncedMark = e.is_already_synced ? " · synced" : "";
+    row.innerHTML = '<span class="row-name">' + esc(e.name) + '</span><span class="row-meta">' + esc(meta + gitMark + syncedMark) + '</span>';
+    row.addEventListener("click", () => {
+      if (e.is_dir) {
+        loadPickerPath(e.path);
+      } else {
+        const input = $("picker-path-input");
+        if (input) input.value = e.path;
+      }
+    });
+    container.appendChild(row);
+  });
+}
+
+async function loadPickerPath(path) {
+  const input = $("picker-path-input");
+  const warn = $("picker-warn");
+  if (warn) warn.style.display = "none";
+  try {
+    const doc = await fetchFsList(path);
+    pickerCurrentPath = doc.absolute_path || path || "";
+    if (input) input.value = pickerCurrentPath;
+    renderBreadcrumb(pickerCurrentPath);
+    renderEntries(doc.entries || [], pickerCurrentPath);
+    const sugg = $("picker-suggestions");
+    if (sugg) sugg.style.display = "none";
+  } catch (err) {
+    if (warn) {
+      warn.style.display = "block";
+      warn.textContent = (err && err.error) ? err.error : "Failed to list folder";
+    }
+  }
+}
+
+function presetPath(name) {
+  if (name === "home") return null;
+  if (name === "projects") return "/projects";
+  if (name === "desktop") return "/Desktop";
+  return null;
+}
+
+async function handlePresetClick(name) {
+  playHapticFeedback("tick");
+  const p = presetPath(name);
+  if (p === null) {
+    await loadPickerPath(null);
+  } else {
+    await loadPickerPath(p);
+  }
+}
+
+function scheduleAutocomplete() {
+  if (pickerDebounceTimer) clearTimeout(pickerDebounceTimer);
+  pickerDebounceTimer = setTimeout(async () => {
+    const input = $("picker-path-input");
+    const sugg = $("picker-suggestions");
+    if (!input || !sugg) return;
+    const val = input.value.trim();
+    if (!val) { sugg.style.display = "none"; return; }
+    const lastSlash = val.lastIndexOf("/");
+    const dirPart = lastSlash >= 0 ? val.slice(0, lastSlash) || "/" : "";
+    const prefix = lastSlash >= 0 ? val.slice(lastSlash + 1) : val;
+    if (!prefix) { sugg.style.display = "none"; return; }
+    try {
+      const doc = await fetchFsList(dirPart || null);
+      const matches = (doc.entries || []).filter((e) => e.name.toLowerCase().startsWith(prefix.toLowerCase()));
+      if (matches.length === 0) { sugg.style.display = "none"; return; }
+      sugg.innerHTML = "";
+      matches.slice(0, 8).forEach((m) => {
+        const div = document.createElement("div");
+        div.className = "suggestion";
+        div.textContent = m.name;
+        div.addEventListener("click", () => {
+          const newPath = (dirPart === "/" ? "/" : dirPart + "/") + m.name;
+          input.value = newPath;
+          sugg.style.display = "none";
+          loadPickerPath(newPath);
+        });
+        sugg.appendChild(div);
+      });
+      sugg.style.display = "flex";
+    } catch {
+      sugg.style.display = "none";
+    }
+  }, 150);
+}
+
+function openFolderPicker() {
+  playHapticFeedback("tick");
+  const modal = $("folder-picker-modal");
+  if (!modal) return;
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+  const warn = $("picker-warn");
+  if (warn) warn.style.display = "none";
+  const sugg = $("picker-suggestions");
+  if (sugg) sugg.style.display = "none";
+  loadPickerPath(pickerCurrentPath || null);
+  const input = $("picker-path-input");
+  if (input) setTimeout(() => input.focus(), 50);
+}
+
+function closeFolderPicker() {
+  playHapticFeedback("tick");
+  const modal = $("folder-picker-modal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+  const sugg = $("picker-suggestions");
+  if (sugg) sugg.style.display = "none";
+  if (pickerDebounceTimer) clearTimeout(pickerDebounceTimer);
+}
+
+async function doRegisterFolder(force) {
+  const input = $("picker-path-input");
+  const warn = $("picker-warn");
+  const raw = input ? input.value.trim() : pickerCurrentPath;
+  if (!raw) return;
+  if (warn) warn.style.display = "none";
+  try {
+    const doc = await api("/api/registry/register", { path: raw, force: !!force });
+    if (warn) warn.style.display = "none";
+    closeFolderPicker();
+    addActivity("Folder registered: " + raw);
+    playHapticFeedback("success");
+    await loadStatus();
+    return doc;
+  } catch (err) {
+    if (err && (err.code === "secrets-found" || err.code === "secrets_found")) {
+      if (warn) {
+        warn.style.display = "block";
+        warn.textContent = err.error || "Secrets detected in folder. Review before sharing.";
+        warn.innerHTML += ' <button id="picker-share-anyway" class="btn btn-danger btn-sm" type="button" style="margin-left: 8px;">Share Anyway</button>';
+        const btn = warn.querySelector("#picker-share-anyway");
+        if (btn) btn.addEventListener("click", () => doRegisterFolder(true));
+      }
+      playHapticFeedback("alert");
+      addActivity("Folder register blocked: secrets found");
+      return;
+    }
+    if (warn) {
+      warn.style.display = "block";
+      warn.textContent = (err && err.error) ? err.error : "Failed to register folder";
+    }
+    playHapticFeedback("alert");
+  }
+}
+
 // ---- Theme Controller (Issue 04) -------------------------------------------
 function updateThemeIcons(theme) {
   const moon = $("icon-theme-moon");
@@ -938,12 +1135,51 @@ function setupEventListeners() {
   const btnCloseTokenModal = $("btn-close-token-modal");
   if (btnCloseTokenModal) btnCloseTokenModal.addEventListener("click", hideTokenModal);
 
+  // Folder Picker Modal
+  const btnAddFolder = $("btn-add-folder");
+  if (btnAddFolder) btnAddFolder.addEventListener("click", openFolderPicker);
+
+  const btnClosePicker = $("btn-close-picker");
+  if (btnClosePicker) btnClosePicker.addEventListener("click", closeFolderPicker);
+
+  const pickerCancel = $("picker-cancel");
+  if (pickerCancel) pickerCancel.addEventListener("click", closeFolderPicker);
+
+  const pickerModal = $("folder-picker-modal");
+  if (pickerModal) {
+    pickerModal.addEventListener("click", (e) => {
+      if (e.target === pickerModal) closeFolderPicker();
+    });
+  }
+
+  const pickerPresets = $("picker-presets");
+  if (pickerPresets) {
+    pickerPresets.querySelectorAll("[data-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => handlePresetClick(btn.getAttribute("data-preset")));
+    });
+  }
+
+  const pickerInput = $("picker-path-input");
+  if (pickerInput) {
+    pickerInput.addEventListener("input", scheduleAutocomplete);
+    pickerInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadPickerPath(pickerInput.value.trim());
+      }
+    });
+  }
+
+  const pickerSelect = $("picker-select");
+  if (pickerSelect) pickerSelect.addEventListener("click", () => doRegisterFolder(false));
+
   // Keyboard Shortcuts (Issue 04)
   window.addEventListener("keydown", (e) => {
     if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
       if (e.key === "Escape") {
         document.activeElement.blur();
         closePairModal();
+        closeFolderPicker();
       }
       return;
     }
@@ -963,6 +1199,7 @@ function setupEventListeners() {
       if (syncBtn) syncBtn.click();
     } else if (e.key === "Escape") {
       closePairModal();
+      closeFolderPicker();
     }
   });
 }

@@ -98,6 +98,8 @@
             </svg>
             <span>Release & Merge</span>
           </button>
+
+          <button id="btn-add-folder" class="btn btn-ghost" type="button">+ Add Folder</button>
         </div>
 
         <!-- Sync Progress Bar (Reveals smoothly during sync) -->
@@ -211,6 +213,32 @@
           </div>
           <div id="pair-result" class="banner banner-success" style="display: none; margin-top: 6px;"></div>
           <div id="pair-err" class="banner banner-error" style="display: none; margin-top: 6px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Folder Picker Modal -->
+  <div id="folder-picker-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="picker-modal-title" style="max-width: 560px; max-height: 80vh;">
+      <div class="modal-header">
+        <h2 id="picker-modal-title" class="modal-title">Select Folder</h2>
+        <button id="btn-close-picker" class="btn-icon" aria-label="Close picker" type="button">✕</button>
+      </div>
+      <div class="modal-content" style="overflow: hidden; display: flex; flex-direction: column; gap: 10px;">
+        <input id="picker-path-input" class="minimal-input font-mono" placeholder="/home/user/projects" spellcheck="false" autocomplete="off">
+        <div id="picker-suggestions" class="picker-suggestions" style="display: none;"></div>
+        <div id="picker-presets" class="picker-presets" style="display: flex; gap: 6px;">
+          <button class="btn btn-ghost btn-sm" data-preset="home" type="button">Home</button>
+          <button class="btn btn-ghost btn-sm" data-preset="projects" type="button">Projects</button>
+          <button class="btn btn-ghost btn-sm" data-preset="desktop" type="button">Desktop</button>
+        </div>
+        <nav id="picker-breadcrumb" class="picker-breadcrumb" aria-label="Breadcrumb"></nav>
+        <div id="picker-entries" class="picker-entries" style="max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;"></div>
+        <div id="picker-warn" class="banner banner-warn" style="display: none;"></div>
+        <div class="btnrow" style="justify-content: flex-end;">
+          <button id="picker-cancel" class="btn btn-ghost" type="button">Cancel</button>
+          <button id="picker-select" class="btn btn-primary" type="button">Select Folder</button>
         </div>
       </div>
     </div>

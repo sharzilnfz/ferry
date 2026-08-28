@@ -843,6 +843,93 @@ body {
   border-color: var(--state-syncing);
 }
 
+/* Folder Picker Modal */
+.picker-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.picker-breadcrumb .crumb {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.picker-breadcrumb .crumb:hover {
+  background: var(--surface-hover);
+  color: var(--text-1);
+}
+.picker-breadcrumb .crumb-sep {
+  color: var(--text-3);
+  font-size: 10px;
+}
+.picker-entries {
+  scrollbar-width: thin;
+}
+.picker-entries::-webkit-scrollbar {
+  width: 3px;
+}
+.picker-entries::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+.picker-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out);
+  font-size: 12.5px;
+}
+.picker-row:hover {
+  background: var(--surface-hover);
+}
+.picker-row .row-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-1);
+}
+.picker-row .row-meta {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.picker-row.is-dir .row-name {
+  font-weight: 600;
+}
+.picker-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 140px;
+  overflow-y: auto;
+  background: var(--surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 4px;
+}
+.picker-suggestions .suggestion {
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-1);
+}
+.picker-suggestions .suggestion:hover {
+  background: var(--surface-active);
+}
+.picker-presets {
+  flex-wrap: wrap;
+}
+
 /* Responsive & Mobile Polishing */
 @media (max-width: 640px) {
   body {
