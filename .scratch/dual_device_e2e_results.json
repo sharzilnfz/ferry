@@ -1,0 +1,247 @@
+[
+  {
+    "stage_name": "Stage 1: Environment & Connectivity",
+    "status": "PASS",
+    "duration_ms": 4423.082582999996,
+    "details": {
+      "mac_binary": "/Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry",
+      "mac_version": "ferry 0.1.0",
+      "mac_size_bytes": 6483856,
+      "arch_binary": "/home/sharzil/.cargo/bin/ferry",
+      "arch_version": "ferry 0.1.0",
+      "ping_mac_to_arch_rtt_avg_ms": 5.781,
+      "ping_arch_to_mac_rtt_avg_ms": 17.875
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 2: Workspace & Pairing Ritual",
+    "status": "PASS",
+    "duration_ms": 1506.7618749999383,
+    "details": {
+      "offer_size_bytes": 93,
+      "mac_folder_id": "a4b18e57fa39af5d1be5b28196cb938d",
+      "arch_folder_id": "a4b18e57fa39af5d1be5b28196cb938d",
+      "mac_device_id": "3d5b5d41d1e24244e792830c196c3fd42089f38650862eee6fb7743449bca447",
+      "arch_device_id": "99e0942a138f0e53342dbc3fdb760e6dd9137d96352bec65eb3ea45b2af8b043"
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 3: Live P2P Sync Daemons",
+    "status": "PASS",
+    "duration_ms": 3905.462875000012,
+    "details": {
+      "mac_daemon_pane": "wS:pJ",
+      "mac_daemon_listen_output": "{\"id\":\"cli:pane:wait-output\",\"result\":{\"matched_line\":\"LISTENING 0.0.0.0:44001\",\"pane_id\":\"wS:pJ\",\"read\":{\"format\":\"text\",\"pane_id\":\"wS:pJ\",\"revision\":0,\"source\":\"recent_unwrapped\",\"tab_id\":\"wS:t1\",\"text\":\"/Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry daemon --listen 0.0.0.0:44001 /tmp/ferry-dual-test-mac\\n\u276f /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry daemon --listen 0.0.0.0:44001 /tmp/ferry-dual-test-mac\\nLISTENING 0.0.0.0:44001\",\"truncated\":false,\"workspace_id\":\"wS\"},\"revision\":0,\"type\":\"output_matched\"}}",
+      "arch_daemon_pane": "wS:pK",
+      "mac_peers": [],
+      "arch_peers": []
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 4: Bidirectional Sync & Integrity",
+    "status": "PASS",
+    "duration_ms": 9866.863040999306,
+    "details": {
+      "mac_to_arch": {
+        "file_count": 11,
+        "convergence_time_ms": 7213.69,
+        "all_matched": true,
+        "files": {
+          "source.rs": {
+            "size_bytes": 82,
+            "mac_sha256": "de3c2d4879b2d6a8f538e3fa740c9ce9a38448ea23efb7cc136214937752c8fb",
+            "arch_sha256": "de3c2d4879b2d6a8f538e3fa740c9ce9a38448ea23efb7cc136214937752c8fb",
+            "matched": true
+          },
+          "README.md": {
+            "size_bytes": 81,
+            "mac_sha256": "625b788a5c70a2ea08ce4537a67e792c3249c58ed25e076c3866fe97915164a9",
+            "arch_sha256": "625b788a5c70a2ea08ce4537a67e792c3249c58ed25e076c3866fe97915164a9",
+            "matched": true
+          },
+          "config.json": {
+            "size_bytes": 85,
+            "mac_sha256": "2d7496c8421fbb4179996b96261132822c0eae86afdc115767e5c0034cfb1910",
+            "arch_sha256": "2d7496c8421fbb4179996b96261132822c0eae86afdc115767e5c0034cfb1910",
+            "matched": true
+          },
+          "settings.yaml": {
+            "size_bytes": 76,
+            "mac_sha256": "814c43cf2e786476310392a0113c7b82670982ca742255b98d057e2fe0fa4cea",
+            "arch_sha256": "814c43cf2e786476310392a0113c7b82670982ca742255b98d057e2fe0fa4cea",
+            "matched": true
+          },
+          "docker-compose.yml": {
+            "size_bytes": 78,
+            "mac_sha256": "9800893b3904329b7d4664303b424f7f77a5c7a249a76be760c623697f45fd5a",
+            "arch_sha256": "9800893b3904329b7d4664303b424f7f77a5c7a249a76be760c623697f45fd5a",
+            "matched": true
+          },
+          "binary_1k.dat": {
+            "size_bytes": 1024,
+            "mac_sha256": "7bb803d62d21dca3f755cd40dffb62942a092fa0633734af670eff395f2c75fa",
+            "arch_sha256": "7bb803d62d21dca3f755cd40dffb62942a092fa0633734af670eff395f2c75fa",
+            "matched": true
+          },
+          "binary_10k.dat": {
+            "size_bytes": 10240,
+            "mac_sha256": "02c1428865339f8e2a37c991465231e5c320334177a1b147233e28cc3b3daa2e",
+            "arch_sha256": "02c1428865339f8e2a37c991465231e5c320334177a1b147233e28cc3b3daa2e",
+            "matched": true
+          },
+          "binary_100k.dat": {
+            "size_bytes": 102400,
+            "mac_sha256": "4a379f283de398002504c41bc36283c8e31f7bb4725c44f9cf2a6f89fc8fa196",
+            "arch_sha256": "4a379f283de398002504c41bc36283c8e31f7bb4725c44f9cf2a6f89fc8fa196",
+            "matched": true
+          },
+          "binary_500k.dat": {
+            "size_bytes": 512000,
+            "mac_sha256": "4aaee575282050d67605d2c286d355f95ec9e2f8f77189e54dc7e8d21167a422",
+            "arch_sha256": "4aaee575282050d67605d2c286d355f95ec9e2f8f77189e54dc7e8d21167a422",
+            "matched": true
+          },
+          "payload_1mb.bin": {
+            "size_bytes": 1048576,
+            "mac_sha256": "a4c64314d2b66f414a7d983fc4690fa66c971360b934f5c6e273851b806063ac",
+            "arch_sha256": "a4c64314d2b66f414a7d983fc4690fa66c971360b934f5c6e273851b806063ac",
+            "matched": true
+          },
+          "payload_5mb.bin": {
+            "size_bytes": 5242880,
+            "mac_sha256": "f4ae4bb8a5888ea87acbc5a1141a0420c60e9e5c42409f56134f3531f578ae5e",
+            "arch_sha256": "f4ae4bb8a5888ea87acbc5a1141a0420c60e9e5c42409f56134f3531f578ae5e",
+            "matched": true
+          }
+        }
+      },
+      "arch_to_mac": {
+        "convergence_time_ms": 1426.34,
+        "all_matched": true,
+        "files": {
+          "nested/deep/level3/service/app.toml": {
+            "arch_sha256": "56d8b549c89ec1cffa5591cd53183e53907a1d6a6ea66a1ee355416813e75feb",
+            "mac_sha256": "56d8b549c89ec1cffa5591cd53183e53907a1d6a6ea66a1ee355416813e75feb",
+            "matched": true
+          },
+          "logs/app.log": {
+            "arch_sha256": "95d999cb7607f14b48d044b14e34d95ae7e5700383003ba11f86954e44a3fdb7",
+            "mac_sha256": "95d999cb7607f14b48d044b14e34d95ae7e5700383003ba11f86954e44a3fdb7",
+            "matched": true
+          }
+        }
+      }
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 5: Pinning & Web UI/REST Telemetry",
+    "status": "PASS",
+    "duration_ms": 2194.0197500007343,
+    "details": {
+      "pinning": {
+        "arch_pin_start": {
+          "action": "start",
+          "base_peers_recorded": 1,
+          "command": "pin",
+          "device_id": "99e0942a138f0e53342dbc3fdb760e6dd9137d96352bec65eb3ea45b2af8b043",
+          "folder": "/tmp/ferry-dual-test-arch",
+          "paths": [
+            "logs/app.log"
+          ],
+          "pid": 178471,
+          "started_at": "2026-08-27T11:20:47Z"
+        },
+        "mac_status_during_pin": {
+          "pin": {
+            "holding": false,
+            "paths": [],
+            "state": "none"
+          },
+          "held_by_peer": {},
+          "peers": [
+            {
+              "agreed_at": "2026-08-27T11:20:47Z",
+              "connectivity": "reachable",
+              "device_id": "99e0942a138f0e53342dbc3fdb760e6dd9137d96352bec65eb3ea45b2af8b043",
+              "last_agreed_manifest_id": "b88362992dc38ad3246e5078b41d687aba32bbf6865cb2e344859e706d7597ce"
+            }
+          ]
+        },
+        "arch_pin_stop": {
+          "action": "stop",
+          "command": "pin",
+          "folder": "/tmp/ferry-dual-test-arch",
+          "held_by_peer": {},
+          "held_changes": 0,
+          "was_pinned": true
+        }
+      },
+      "web_ui": {
+        "pane_id": "wS:pM",
+        "startup_output": "{\"id\":\"cli:pane:wait-output\",\"result\":{\"matched_line\":\"Ferry UI listening on http://127.0.0.1:8098/?token=a82aa4cb2bfc9dd346897f928b82188a\",\"pane_id\":\"wS:pM\",\"read\":{\"format\":\"text\",\"pane_id\":\"wS:pM\",\"revision\":0,\"source\":\"recent_unwrapped\",\"tab_id\":\"wS:t1\",\"text\":\"/Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry ui --port 8098 --no-open /tmp/ferry-dual-test-mac\\n\u276f /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry ui --port 8098 --no-open /tmp/ferry-dual-test-mac\\nFerry UI listening on http://127.0.0.1:8098/?token=a82aa4cb2bfc9dd346897f928b82188a\\nOne-time access token: a82aa4cb2bfc9dd346897f928b82188a\\nPress Ctrl+C to stop the server.\",\"truncated\":false,\"workspace_id\":\"wS\"},\"revision\":0,\"type\":\"output_matched\"}}",
+        "token": "a82aa4cb2bfc9dd346897f928b82188a",
+        "index_html_status": 200,
+        "index_html_len": 11808,
+        "style_css_status": 200,
+        "app_js_status": 200,
+        "api_status_code": 200,
+        "api_status_payload": {
+          "command": "status",
+          "conflicts": 0,
+          "device_id": "3d5b5d41d1e24244e792830c196c3fd42089f38650862eee6fb7743449bca447",
+          "folder": "/tmp/ferry-dual-test-mac",
+          "folder_id": "a4b18e57fa39af5d1be5b28196cb938d",
+          "held_by_peer": {},
+          "held_changes": 0,
+          "manifest_id": "f59a3bb2b2429471d5d9589b9fb4f5e06ac6ce4edd8a13989d4d511dafa33383",
+          "peers": [
+            {
+              "agreed_at": "2026-08-27T11:20:47Z",
+              "connectivity": "reachable",
+              "device_id": "99e0942a138f0e53342dbc3fdb760e6dd9137d96352bec65eb3ea45b2af8b043",
+              "last_agreed_manifest_id": "b88362992dc38ad3246e5078b41d687aba32bbf6865cb2e344859e706d7597ce"
+            }
+          ],
+          "pending_changes": -1,
+          "pin": {
+            "holding": false,
+            "paths": [],
+            "state": "none"
+          },
+          "scanned": {
+            "bytes_chunked": 0,
+            "dirs": 5,
+            "files": 17,
+            "symlinks": 0
+          }
+        },
+        "api_conflicts_code": 200,
+        "api_conflicts_payload": {
+          "command": "conflicts",
+          "entries": [],
+          "folder": "/tmp/ferry-dual-test-mac"
+        },
+        "sse_status": 200,
+        "sse_first_chunk": "event: state\ndata: {\"command\":\"status\",\"conflicts\":0,\"device_id\":\"3d5b5d41d1e24244e792830c196c3fd42089f38650862eee6fb7743449bca4"
+      }
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 6: Teardown & Cleanup",
+    "status": "PASS",
+    "duration_ms": 2118.7547499994253,
+    "details": {
+      "panes_closed": [
+        "wS:pJ",
+        "wS:pK",
+        "wS:pM"
+      ]
+    },
+    "error_message": null
+  }
+]
