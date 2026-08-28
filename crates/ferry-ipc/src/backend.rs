@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
 
-use crate::fs::ListDirectoryResponse;
+use std::collections::HashMap;
+
+use crate::fs::{sort_entries, validate_path, ListDirectoryResponse};
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDirection};
 use crate::registry::FolderRecord;
@@ -297,6 +299,7 @@ pub struct FakeBackend {
     active_pin: Arc<RwLock<Option<PinRecord>>>,
     active_share: Arc<RwLock<Option<ShareOffer>>>,
     event_tx: broadcast::Sender<UiEvent>,
+    fs_fixture: Arc<RwLock<HashMap<PathBuf, Vec<crate::fs::DirectoryEntry>>>>,
 }
 
 impl Default for FakeBackend {
@@ -320,7 +323,18 @@ impl FakeBackend {
             active_pin: Arc::new(RwLock::new(None)),
             active_share: Arc::new(RwLock::new(None)),
             event_tx,
+            fs_fixture: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Insert or replace the in-memory directory tree used by `list_directory`.
+    pub async fn set_fs_fixture(&self, fixture: HashMap<PathBuf, Vec<crate::fs::DirectoryEntry>>) {
+        *self.fs_fixture.write().await = fixture;
+    }
+
+    /// Insert entries for a single directory into the in-memory fixture.
+    pub async fn insert_fs_dir(&self, dir: PathBuf, entries: Vec<crate::fs::DirectoryEntry>) {
+        self.fs_fixture.write().await.insert(dir, entries);
     }
 
     #[must_use]
@@ -527,13 +541,28 @@ impl UiBackend for FakeBackend {
 
     fn list_directory(
         &self,
-        _path: Option<PathBuf>,
+        path: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
+        let fixture = Arc::clone(&self.fs_fixture);
+        Box::pin(async move {
+            let validated = validate_path(path)?;
+            let map = fixture.read().await;
+            // Preserve wave 0 stub for tests that never configure a fixture.
+            if map.is_empty() && !map.contains_key(&validated) {
+                return Err(OpError::not_found("not-implemented", "wave 0 stub"));
+            }
+            match map.get(&validated) {
+                Some(entries) => {
+                    let mut out = entries.clone();
+                    sort_entries(&mut out);
+                    Ok(ListDirectoryResponse::new(out, validated))
+                }
+                None => Err(OpError::new(
+                    "not-found",
+                    format!("no such directory: {}", validated.display()),
+                    "check path",
+                )),
+            }
         })
     }
 

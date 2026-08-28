@@ -12,6 +12,7 @@ use ferry_ipc::backend::{
     OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary, ShareOffer, ShareStatus,
     UiBackend, UiEvent, UiEventStream,
 };
+use ferry_ipc::fs::{list_directory_sync, validate_path, ListDirectoryResponse};
 use ferry_ipc::protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
     PinView, ScanStatsView,
@@ -563,6 +564,19 @@ impl UiBackend for InProcessAdapter {
         })
     }
 
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        Box::pin(async move {
+            let validated = validate_path(path)?;
+            let validated_clone = validated.clone();
+            tokio::task::spawn_blocking(move || list_directory_sync(validated_clone))
+                .await
+                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
@@ -844,6 +858,55 @@ impl UiBackend for DaemonIpcAdapter {
         })
     }
 
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            // Boundary validation without disk I/O — shared guard reused from ferry-ipc
+            let validated = validate_path(path.clone())?;
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _initial = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            client
+                .send_command(&ClientCommand::ListDirectory { path: Some(validated) })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                .ok_or_else(|| {
+                    OpError::new("internal", "daemon disconnected", "check daemon log")
+                })?;
+            match resp {
+                DaemonMessage::DirectoryListing {
+                    entries,
+                    absolute_path,
+                } => Ok(ListDirectoryResponse::new(entries, absolute_path)),
+                DaemonMessage::Error { code, message } => {
+                    let hint = match code.as_str() {
+                        "permission-denied" => "check folder permissions",
+                        "path-traversal" => "path escapes allowed root",
+                        "bad-path" => "use absolute path",
+                        _ => "check daemon",
+                    };
+                    Err(OpError::new(code, message, hint))
+                }
+                other => Err(OpError::new(
+                    "protocol",
+                    format!("unexpected response {other:?}"),
+                    "retry",
+                )),
+            }
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let socket = self.socket_path.clone();
         Box::pin(async move {
@@ -1031,6 +1094,22 @@ impl UiBackend for AutoBackend {
                 return Ok(());
             }
             in_proc.trigger_scan().await
+        })
+    }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            // Boundary validation shared with InProcessAdapter (no duplicate read_dir here)
+            validate_path(path.clone())?;
+            if let Ok(res) = ipc.list_directory(path.clone()).await {
+                return Ok(res);
+            }
+            in_proc.list_directory(path).await
         })
     }
 

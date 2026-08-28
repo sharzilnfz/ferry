@@ -317,6 +317,42 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
             },
         },
         ClientCommand::Ping => DaemonMessage::Pong,
+        ClientCommand::ListDirectory { path } => {
+            use ferry_ipc::fs::{list_directory_sync, validate_path};
+            match validate_path(path) {
+                Ok(validated) => match list_directory_sync(validated) {
+                    Ok(resp) => DaemonMessage::DirectoryListing {
+                        entries: resp.entries,
+                        absolute_path: resp.absolute_path,
+                    },
+                    Err(e) => DaemonMessage::Error {
+                        code: e.code,
+                        message: e.message,
+                    },
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::ListFolders => DaemonMessage::FolderList { folders: Vec::new() },
+        ClientCommand::RegisterFolder { path: _ } => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "register_folder not implemented in this wave".to_string(),
+        },
+        ClientCommand::RemoveFolder { folder_id: _ } => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "remove_folder not implemented in this wave".to_string(),
+        },
+        ClientCommand::CreatePairingSession { req: _ } => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "create_pairing_session not implemented in this wave".to_string(),
+        },
+        ClientCommand::JoinPairingSession { req: _ } => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "join_pairing_session not implemented in this wave".to_string(),
+        },
     }
 }
 

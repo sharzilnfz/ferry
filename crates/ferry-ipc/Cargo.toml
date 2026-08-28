@@ -11,6 +11,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "sync", "macros"] }
 tokio-stream = { workspace = true }
+unicode-normalization = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true

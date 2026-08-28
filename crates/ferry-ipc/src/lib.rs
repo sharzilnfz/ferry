@@ -22,7 +22,11 @@ pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZ
 pub use paths::{
     default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX,
 };
-pub use fs::{DirectoryEntry, ListDirectoryRequest, ListDirectoryResponse};
+pub use fs::{
+    default_listing_root, is_already_synced, list_directory_sync, load_folder_registry,
+    sort_entries, validate_and_normalize, validate_path, DirectoryEntry, ListDirectoryRequest,
+    ListDirectoryResponse,
+};
 pub use pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode};
 pub use protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
