@@ -58,6 +58,7 @@
 //!   passphrase-wrapped export ([`recovery`]); there is no server-side reset.
 
 pub mod base32;
+pub mod bip39;
 pub mod config_head;
 pub mod crc32;
 pub mod folder_key;

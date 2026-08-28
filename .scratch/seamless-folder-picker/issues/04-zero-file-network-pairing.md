@@ -4,10 +4,10 @@
 
 **Blocked by:** 03: Centralized Multi-Folder Device Daemon & Registry
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] Short pairing code generation and derivation implemented in `ferry-crypto`.
-- [ ] Ephemeral discovery topic advertisement via mDNS on LAN and Iroh relay.
-- [ ] In-band cryptographic handshake (Offer -> Response -> Grant) executes across an established QUIC connection.
-- [ ] `UiBackend` exposes `create_pairing_session()` and `join_pairing_session()`.
-- [ ] End-to-end tests verify zero-file pairing between two local instances.
+- [x] Short pairing code generation and derivation implemented in `ferry-crypto`.
+- [x] Ephemeral discovery topic advertisement via mDNS on LAN and Iroh relay.
+- [x] In-band cryptographic handshake (Offer -> Response -> Grant) executes across an established QUIC connection.
+- [x] `UiBackend` exposes `create_pairing_session()` and `join_pairing_session()`.
+- [x] End-to-end tests verify zero-file pairing between two local instances.

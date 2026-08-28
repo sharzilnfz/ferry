@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] `UiBackend` trait and `ferry-ipc` support `list_directory(path)` returning path metadata (directory, git repository, already synced).
-- [ ] TUI renders a modal filesystem tree with folder icons, parent navigation (`..`), and live search filtering.
-- [ ] Keyboard shortcuts `A` and `O` open the modal; `Space` or `Enter` selects the highlighted folder.
-- [ ] Unit and component tests verify keyboard navigation and selection against `FakeBackend`.
+- [x] `UiBackend` trait and `ferry-ipc` support `list_directory(path)` returning path metadata (directory, git repository, already synced).
+- [x] TUI renders a modal filesystem tree with folder icons, parent navigation (`..`), and live search filtering.
+- [x] Keyboard shortcuts `A` and `O` open the modal; `Space` or `Enter` selects the highlighted folder.
+- [x] Unit and component tests verify keyboard navigation and selection against `FakeBackend`.

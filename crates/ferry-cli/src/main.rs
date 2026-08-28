@@ -54,7 +54,22 @@ fn report_error(e: &CliError, json_mode: bool) {
 }
 
 fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
-    match &cli.command {
+    let Some(command) = &cli.command else {
+        // Default interactive entrypoint launches the UI with auto-bootstrapped daemon
+        let _ = ferry_cli::ipc::ensure_daemon_running();
+        return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+            folder: None,
+            gui: false,
+            web: false,
+            tui: false,
+            host: "127.0.0.1",
+            port: 0,
+            no_open: false,
+            test: false,
+        });
+    };
+
+    match command {
         Command::Init { path } => {
             let p: PathBuf = path.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::init::run(&p, "init")
@@ -88,6 +103,11 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::share::run(&f, *i_know, *timeout_secs)
         }
+        Command::Join {
+            code,
+            dest,
+            timeout_secs,
+        } => ferry_cli::commands::pairing::join(code, dest.as_deref(), *timeout_secs),
         Command::Status { folder } => {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::status::run(&f)
@@ -195,15 +215,18 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             port,
             no_open,
             test,
-        } => ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
-            folder: folder.as_deref(),
-            gui: *gui,
-            web: *web,
-            tui: *tui,
-            host,
-            port: *port,
-            no_open: *no_open,
-            test: *test,
-        }),
+        } => {
+            let _ = ferry_cli::ipc::ensure_daemon_running();
+            ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                folder: folder.as_deref(),
+                gui: *gui,
+                web: *web,
+                tui: *tui,
+                host,
+                port: *port,
+                no_open: *no_open,
+                test: *test,
+            })
+        }
     }
 }

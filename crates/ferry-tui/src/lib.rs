@@ -16,5 +16,7 @@ pub use error::TuiError;
 pub mod timefmt {
     pub use ferry_platform::time::*;
 }
-pub use state::{format_bytes, SyncState, TransferProgressState, TuiState};
+pub use state::{
+    format_bytes, FolderPickerItem, FolderPickerState, SyncState, TransferProgressState, TuiState,
+};
 pub use terminal::{install_panic_hook, restore_terminal_writer, TerminalEvents, TerminalGuard};

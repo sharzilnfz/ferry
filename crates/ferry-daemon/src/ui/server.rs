@@ -103,6 +103,11 @@ impl DashboardServer {
             .route("/api/pin/stop", post(api_pin_stop))
             .route("/api/pin/release", post(api_pin_release))
             .route("/api/events", get(api_events))
+            .route("/api/fs/ls", get(api_fs_ls).post(api_fs_ls))
+            .route("/api/fs/scan", get(api_fs_scan).post(api_fs_scan))
+            .route("/api/folders", get(api_folders_list).post(api_folders_add))
+            .route("/api/folders/add", post(api_folders_add))
+            .route("/api/folders/switch", post(api_folders_switch))
             .fallback(fallback)
             .layer(axum::middleware::from_fn_with_state(
                 self.clone(),
@@ -574,6 +579,280 @@ async fn api_events(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn expand_tilde(p: &str) -> PathBuf {
+    if p == "~" || p.starts_with("~/") || p.starts_with("~\\") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        if p == "~" {
+            home
+        } else {
+            home.join(&p[2..])
+        }
+    } else {
+        PathBuf::from(p)
+    }
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    out.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn decode_query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+            if k == key {
+                return Some(percent_decode(v));
+            }
+        }
+    }
+    None
+}
+
+fn safe_resolve_path(raw_path: Option<&str>) -> Result<PathBuf, ApiError> {
+    let raw = match raw_path {
+        Some(s) if !s.trim().is_empty() => s.trim(),
+        _ => return Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+    };
+
+    if raw.contains('\0') {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid-path",
+            "path contains null bytes",
+            "provide a valid filesystem path",
+        ));
+    }
+
+    let expanded = expand_tilde(raw);
+
+    // Normalize path components safely
+    let mut normalized = PathBuf::new();
+    for comp in expanded.components() {
+        match comp {
+            std::path::Component::Prefix(p) => normalized.push(p.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(c) => normalized.push(c),
+        }
+    }
+
+    let norm_str = normalized.to_string_lossy();
+    if norm_str.starts_with("/proc")
+        || norm_str.starts_with("/sys")
+        || norm_str.starts_with("/dev")
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden-path",
+            format!("access to system virtual path '{norm_str}' is restricted"),
+            "choose a user or project directory",
+        ));
+    }
+
+    if let Ok(canon) = std::fs::canonicalize(&normalized) {
+        let canon_str = canon.to_string_lossy();
+        if canon_str.starts_with("/proc")
+            || canon_str.starts_with("/sys")
+            || canon_str.starts_with("/dev")
+        {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden-path",
+                format!("access to system virtual path '{canon_str}' is restricted"),
+                "choose a user or project directory",
+            ));
+        }
+        Ok(canon)
+    } else {
+        Ok(normalized)
+    }
+}
+
+async fn api_fs_ls(
+    State(server): State<DashboardServer>,
+    req: axum::extract::Request,
+) -> Result<Json<Value>, ApiError> {
+    let mut raw_path = None;
+    if let Some(query) = req.uri().query() {
+        if let Some(p) = decode_query_param(query, "path") {
+            if !p.is_empty() {
+                raw_path = Some(p);
+            }
+        }
+    }
+
+    let target_path = safe_resolve_path(raw_path.as_deref())?;
+    let listing = server
+        .backend
+        .list_directory(Some(target_path))
+        .await?;
+
+    let entries_val: Vec<Value> = listing
+        .entries
+        .iter()
+        .map(|e| {
+            json!({
+                "name": e.name,
+                "path": e.path.display().to_string(),
+                "is_dir": e.is_dir,
+                "is_symlink": e.is_symlink,
+                "is_git_repo": e.is_git_repo,
+                "is_already_synced": e.is_already_synced,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "current_path": listing.current_path.display().to_string(),
+        "parent_path": listing.parent_path.map(|p| p.display().to_string()),
+        "entries": entries_val,
+    })))
+}
+
+async fn api_fs_scan(
+    State(_server): State<DashboardServer>,
+    req: axum::extract::Request,
+) -> Result<Json<Value>, ApiError> {
+    let mut raw_path = None;
+    if let Some(query) = req.uri().query() {
+        if let Some(p) = decode_query_param(query, "path") {
+            if !p.is_empty() {
+                raw_path = Some(p);
+            }
+        }
+    }
+
+    let target_path = safe_resolve_path(raw_path.as_deref())?;
+
+    let mut warnings = Vec::new();
+    if target_path.exists() && target_path.is_dir() {
+        if let Ok(rules) = ferry_ignore::policy::FerryIgnore::new(
+            &target_path,
+            &ferry_ignore::config::IgnoreConfig {
+                overrides: vec![
+                    "!.env".to_string(),
+                    "!.env.*".to_string(),
+                    "!*.pem".to_string(),
+                    "!*.key".to_string(),
+                    "!id_rsa*".to_string(),
+                    "!credentials.json".to_string(),
+                    "!.npmrc".to_string(),
+                ],
+                ..Default::default()
+            },
+        ) {
+            let found = ferry_ignore::secrets::scan_for_secrets(&rules, &target_path);
+            for w in found {
+                warnings.push(json!({
+                    "path": w.path.join("/"),
+                    "line": w.line,
+                    "class": w.class.label(),
+                    "preview": w.preview,
+                }));
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "path": target_path.display().to_string(),
+        "has_secrets": !warnings.is_empty(),
+        "warnings": warnings,
+    })))
+}
+
+async fn api_folders_list(
+    State(server): State<DashboardServer>,
+) -> Result<Json<Value>, ApiError> {
+    let folders = server.backend.list_folders().await?;
+    let folders_val: Vec<Value> = folders
+        .iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "path": f.path.display().to_string(),
+                "active": f.active,
+                "state": f.state.as_deref().unwrap_or("idle"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "command": "folders",
+        "folders": folders_val,
+    })))
+}
+
+async fn api_folders_add(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = payload.map_err(bad_body)?;
+    let Some(raw_path) = body.get("path").and_then(Value::as_str) else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad-request",
+            "path is required",
+            "provide folder path in json body",
+        ));
+    };
+
+    let target_path = safe_resolve_path(Some(raw_path))?;
+    let info = server.backend.register_folder(target_path).await?;
+    Ok(Json(json!({
+        "command": "folders",
+        "action": "add",
+        "status": "ok",
+        "folder": {
+            "id": info.id,
+            "path": info.path.display().to_string(),
+            "active": info.active,
+            "state": info.state.as_deref().unwrap_or("idle"),
+        }
+    })))
+}
+
+async fn api_folders_switch(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = payload.map_err(bad_body)?;
+    let Some(folder_id) = body.get("folder_id").and_then(Value::as_str) else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad-request",
+            "folder_id is required",
+            "provide folder_id in json body",
+        ));
+    };
+
+    let snap = server.backend.switch_folder(folder_id.to_string()).await?;
+    Ok(Json(snapshot_to_status_doc(&snap)))
 }
 
 #[cfg(test)]

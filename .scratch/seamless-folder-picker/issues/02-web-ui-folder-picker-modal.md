@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] `/api/fs/ls` REST endpoint in the Web Dashboard server securely exposes filesystem navigation with path traversal guards.
-- [ ] Obsidian Glass modal renders breadcrumb navigation, directory lists, and quick-access directory presets.
-- [ ] Live input autocomplete suggests matching filesystem paths as the user types.
-- [ ] Secret detection warnings display in the modal if potential secrets exist in the selected folder.
-- [ ] Integration tests verify secure directory listing and folder addition from the web UI.
+- [x] `/api/fs/ls` REST endpoint in the Web Dashboard server securely exposes filesystem navigation with path traversal guards.
+- [x] Obsidian Glass modal renders breadcrumb navigation, directory lists, and quick-access directory presets.
+- [x] Live input autocomplete suggests matching filesystem paths as the user types.
+- [x] Secret detection warnings display in the modal if potential secrets exist in the selected folder.
+- [x] Integration tests verify secure directory listing and folder addition from the web UI.

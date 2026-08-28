@@ -87,6 +87,10 @@ pub enum PairingError {
     MacMismatch,
     #[error("short code rejected: {0}")]
     Code(#[from] Base32Error),
+    #[error("invalid mnemonic word: '{0}' not in BIP-39 wordlist")]
+    InvalidMnemonicWord(String),
+    #[error("mnemonic word count mismatch: expected {expected}, got {actual}")]
+    MnemonicWordCount { expected: usize, actual: usize },
     #[error("short code checksum mismatch: the code was mistyped or the payload corrupted")]
     CodeChecksumMismatch,
     #[error("short code does not match this offer payload")]
@@ -259,6 +263,11 @@ impl PairingOffer {
     /// The human-typed confirmation code for these offer bytes.
     pub fn short_code(&self, hints: TransportHints) -> String {
         short_code_for(&self.serialize(), hints)
+    }
+
+    /// The 6-word human mnemonic code for these offer bytes.
+    pub fn mnemonic(&self, hints: TransportHints) -> String {
+        mnemonic_for(&self.serialize(), hints)
     }
 
     /// Bytes to feed to the QR renderer (identical to [`Self::serialize`] —
@@ -571,6 +580,150 @@ pub fn verify_short_code(code: &str, offer_bytes: &[u8]) -> Result<VerifiedCode,
     Ok(VerifiedCode {
         hints: TransportHints::from_bytes([data[0], data[1]]),
     })
+}
+
+// --- 6-word pairing mnemonics ---
+
+fn mnemonic_payload(offer_bytes: &[u8], hints: TransportHints) -> ([u8; 7], u16) {
+    let digest = blake3::hash(offer_bytes);
+    let mut data = [0u8; 7];
+    data[..2].copy_from_slice(&hints.to_bytes());
+    data[2..7].copy_from_slice(&digest.as_bytes()[..5]);
+    let check = (crc32(&data) & 0x3FF) as u16; // 10-bit checksum
+    (data, check)
+}
+
+/// Encode a 6-word human mnemonic code for `offer_bytes` and `hints`.
+#[must_use]
+pub fn mnemonic_for(offer_bytes: &[u8], hints: TransportHints) -> String {
+    let (data, check) = mnemonic_payload(offer_bytes, hints);
+
+    let mut total_val: u128 = 0;
+    for &b in &data {
+        total_val = (total_val << 8) | u128::from(b);
+    }
+    total_val = (total_val << 10) | u128::from(check);
+
+    let mut indices = [0usize; 6];
+    for i in (0..6).rev() {
+        indices[i] = (total_val & 0x7FF) as usize;
+        total_val >>= 11;
+    }
+
+    format!(
+        "{}-{}-{}-{}-{}-{}",
+        crate::bip39::BIP39_WORDS[indices[0]],
+        crate::bip39::BIP39_WORDS[indices[1]],
+        crate::bip39::BIP39_WORDS[indices[2]],
+        crate::bip39::BIP39_WORDS[indices[3]],
+        crate::bip39::BIP39_WORDS[indices[4]],
+        crate::bip39::BIP39_WORDS[indices[5]],
+    )
+}
+
+/// Generate a fresh random 6-word pairing code.
+#[must_use]
+pub fn generate_pairing_code() -> String {
+    let mut rng = rand::rngs::OsRng;
+    let mut indices = [0usize; 6];
+    for idx in &mut indices {
+        *idx = (rng.next_u32() % 2048) as usize;
+    }
+    format!(
+        "{}-{}-{}-{}-{}-{}",
+        crate::bip39::BIP39_WORDS[indices[0]],
+        crate::bip39::BIP39_WORDS[indices[1]],
+        crate::bip39::BIP39_WORDS[indices[2]],
+        crate::bip39::BIP39_WORDS[indices[3]],
+        crate::bip39::BIP39_WORDS[indices[4]],
+        crate::bip39::BIP39_WORDS[indices[5]],
+    )
+}
+
+/// Decode + verify a 6-word mnemonic code against candidate offer bytes.
+pub fn verify_mnemonic(code: &str, offer_bytes: &[u8]) -> Result<VerifiedCode, PairingError> {
+    let words: Vec<&str> = code
+        .split(['-', ' ', '_'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if words.len() != 6 {
+        return Err(PairingError::MnemonicWordCount {
+            expected: 6,
+            actual: words.len(),
+        });
+    }
+
+    let mut indices = [0usize; 6];
+    for (i, &w) in words.iter().enumerate() {
+        let lower = w.to_lowercase();
+        indices[i] = crate::bip39::word_index(&lower)
+            .ok_or_else(|| PairingError::InvalidMnemonicWord(w.to_string()))?;
+    }
+
+    let mut total_val: u128 = 0;
+    for &idx in &indices {
+        total_val = (total_val << 11) | (idx as u128);
+    }
+    let check_in = (total_val & 0x3FF) as u16;
+    let data_val = total_val >> 10;
+    let mut data = [0u8; 7];
+    let mut cur = data_val;
+    for i in (0..7).rev() {
+        data[i] = (cur & 0xFF) as u8;
+        cur >>= 8;
+    }
+
+    let expected_check = (crc32(&data) & 0x3FF) as u16;
+    if check_in != expected_check {
+        return Err(PairingError::CodeChecksumMismatch);
+    }
+
+    let digest = blake3::hash(offer_bytes);
+    if data[2..7] != digest.as_bytes()[..5] {
+        return Err(PairingError::CodeHashMismatch);
+    }
+
+    Ok(VerifiedCode {
+        hints: TransportHints::from_bytes([data[0], data[1]]),
+    })
+}
+
+/// Normalize pairing code (mnemonic or alphanumeric) into canonical lowercase hyphenated form.
+#[must_use]
+pub fn normalize_pairing_code(code: &str) -> String {
+    code.split(['-', ' ', '_'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Derive a deterministic 32-byte rendezvous topic from a pairing code or mnemonic.
+#[must_use]
+pub fn derive_pairing_topic(code: &str) -> [u8; 32] {
+    let clean = normalize_pairing_code(code);
+    let mut hasher = blake3::Hasher::new_keyed(b"ferry-v1-pairing-rendezvous-key!");
+    hasher.update(b"ferry/v1/pairing/topic/");
+    hasher.update(clean.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+/// Verify either a 6-word mnemonic code or a 20-character base32 short code against candidate offer bytes.
+pub fn verify_pairing_code(code: &str, offer_bytes: &[u8]) -> Result<VerifiedCode, PairingError> {
+    let trimmed = code.trim();
+    let word_count = trimmed
+        .split(['-', ' ', '_'])
+        .filter(|s| !s.is_empty())
+        .count();
+
+    if word_count == 6 {
+        verify_mnemonic(trimmed, offer_bytes)
+    } else {
+        verify_short_code(trimmed, offer_bytes)
+    }
 }
 
 #[cfg(test)]
@@ -900,5 +1053,73 @@ mod tests {
                 .unwrap();
         assert_eq!(*got_a, fmk);
         assert_eq!(*got_b, fmk);
+    }
+
+    #[test]
+    fn mnemonic_derivation_shape_and_roundtrip() {
+        let (offer, bytes) = test_offer();
+        let hints = TransportHints(TransportHints::DIRECT_LAN | TransportHints::RELAY_OFFERED);
+        let mnemonic = offer.mnemonic(hints);
+        let words: Vec<&str> = mnemonic.split('-').collect();
+        assert_eq!(words.len(), 6);
+        for w in &words {
+            assert!(crate::bip39::word_index(w).is_some(), "word {w} must be in BIP-39");
+        }
+
+        // Round-trip verification
+        let verified = verify_mnemonic(&mnemonic, &bytes).unwrap();
+        assert_eq!(verified.hints, hints);
+
+        // Verification accepts space-separated and mixed casing
+        let space_code = words.join(" ").to_uppercase();
+        let verified_space = verify_mnemonic(&space_code, &bytes).unwrap();
+        assert_eq!(verified_space.hints, hints);
+
+        // Unified verify_pairing_code also passes
+        assert!(verify_pairing_code(&mnemonic, &bytes).is_ok());
+    }
+
+    #[test]
+    fn mnemonic_typo_and_invalid_word_detection() {
+        let (_offer, bytes) = test_offer();
+        let hints = TransportHints(TransportHints::DIRECT_LAN);
+        let mnemonic = mnemonic_for(&bytes, hints);
+        let mut words: Vec<String> = mnemonic.split('-').map(String::from).collect();
+
+        // 1. Unknown word
+        let mut evil = words.clone();
+        evil[0] = "foobarxyz".to_string();
+        assert!(matches!(
+            verify_mnemonic(&evil.join("-"), &bytes),
+            Err(PairingError::InvalidMnemonicWord(w)) if w == "foobarxyz"
+        ));
+
+        // 2. Wrong word count
+        assert!(matches!(
+            verify_mnemonic("beacon river falcon", &bytes),
+            Err(PairingError::MnemonicWordCount { expected: 6, actual: 3 })
+        ));
+
+        // 3. Substituting a different BIP-39 word fails checksum/hash check
+        let original_word = words[0].clone();
+        let sub_word = if original_word == "abandon" { "ability" } else { "abandon" };
+        words[0] = sub_word.to_string();
+        assert!(matches!(
+            verify_mnemonic(&words.join("-"), &bytes),
+            Err(PairingError::CodeChecksumMismatch | PairingError::CodeHashMismatch)
+        ));
+    }
+
+    #[test]
+    fn pairing_topic_derivation_is_deterministic_and_normalized() {
+        let topic1 = derive_pairing_topic("beacon-river-falcon-ember-drift-summit");
+        let topic2 = derive_pairing_topic("BEACON RIVER FALCON EMBER DRIFT SUMMIT");
+        let topic3 = derive_pairing_topic("beacon_river_falcon_ember_drift_summit");
+        assert_eq!(topic1, topic2);
+        assert_eq!(topic1, topic3);
+        assert_ne!(topic1, [0u8; 32]);
+
+        let diff = derive_pairing_topic("beacon-river-falcon-ember-drift-galaxy");
+        assert_ne!(topic1, diff);
     }
 }

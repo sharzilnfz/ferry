@@ -1665,11 +1665,13 @@ dependencies = [
  "ferry-sync",
  "ferry-sync-engine",
  "rand 0.8.7",
+ "serde",
  "serde_json",
  "subtle",
  "tempfile",
  "tokio",
  "tokio-stream",
+ "toml",
 ]
 
 [[package]]
@@ -1723,6 +1725,7 @@ dependencies = [
 name = "ferry-ipc"
 version = "0.1.0"
 dependencies = [
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "tempfile",

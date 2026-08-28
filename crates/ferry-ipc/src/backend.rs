@@ -144,6 +144,129 @@ pub struct PairResult {
     pub message: Option<String>,
 }
 
+/// Entry in a filesystem directory listing for in-UI folder pickers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub is_git_repo: bool,
+    pub is_already_synced: bool,
+}
+
+/// Directory listing payload for folder explorers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectoryListing {
+    pub current_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_path: Option<PathBuf>,
+    pub entries: Vec<FsEntry>,
+}
+
+/// Folder registration metadata for multi-folder daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderInfo {
+    pub id: String,
+    pub path: PathBuf,
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+/// In-band pairing session state negotiated over mDNS/Iroh.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingSession {
+    pub session_id: String,
+    pub code: String,
+    pub folder_id: String,
+    pub role: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Persistent record for active in-band pairing sessions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingSessionRecord {
+    pub session_id: String,
+    pub code: String,
+    pub folder_id: String,
+    pub device_id: String,
+    pub listen_addr: String,
+    pub poly: u64,
+    pub fmk_hex: String,
+    pub created_sec: i64,
+    #[serde(default)]
+    pub sync_listen_addr: Option<String>,
+}
+
+pub const WORDLIST: &[&str] = &[
+    "beacon", "river", "falcon", "ember", "drift", "summit", "cedar", "harbor", "meadow",
+    "glacier", "breeze", "canyon", "orbit", "pulse", "timber", "quartz", "echo", "solace",
+    "valley", "zenith", "aurora", "cliff", "dune", "forest", "haven", "island", "jungle",
+    "lagoon", "mountain", "oasis", "prairie", "ridge", "safari", "tundra", "voyage", "willow",
+    "cove", "delta", "frost", "grove", "inlet", "mesa", "ocean", "pinnacle", "reef", "stream",
+    "trail", "vista", "cascade", "crag", "fjord", "geyser", "hollow", "knoll", "ledge",
+    "plateau", "ravine", "steppe", "thicket", "volcano", "watershed", "alpha", "bravo",
+];
+
+#[must_use]
+pub fn generate_6word_code() -> String {
+    use rand::seq::SliceRandom;
+    let mut rng = rand::thread_rng();
+    let words: Vec<&str> = WORDLIST.choose_multiple(&mut rng, 6).copied().collect();
+    words.join("-")
+}
+
+#[must_use]
+pub fn normalize_code(code: &str) -> String {
+    code.trim().to_lowercase().replace(' ', "-")
+}
+
+#[must_use]
+pub fn pairing_store_dir() -> PathBuf {
+    std::env::temp_dir().join(".ferry_pairing")
+}
+
+pub fn save_pairing_record(record: &PairingSessionRecord) -> std::io::Result<()> {
+    let dir = pairing_store_dir();
+    std::fs::create_dir_all(&dir)?;
+    let norm = normalize_code(&record.code);
+    let path = dir.join(format!("{norm}.json"));
+    let content = serde_json::to_string_pretty(record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+#[must_use]
+pub fn load_pairing_record(code: &str) -> Option<PairingSessionRecord> {
+    let dir = pairing_store_dir();
+    let norm = normalize_code(code);
+    let path = dir.join(format!("{norm}.json"));
+    if path.exists() {
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    } else {
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                let ep = entry.path();
+                if ep.extension().and_then(|s| s.to_str()) == Some("json") {
+                    if let Ok(content) = std::fs::read_to_string(&ep) {
+                        if let Ok(rec) = serde_json::from_str::<PairingSessionRecord>(&content) {
+                            if normalize_code(&rec.code) == norm || rec.code.contains(&norm) {
+                                return Some(rec);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Real-time asynchronous push events emitted by `UiBackend`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -251,6 +374,37 @@ pub trait UiBackend: Send + Sync + 'static {
     ) -> BoxFuture<'_, Result<PairResult, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
+
+    /// List directory contents for filesystem browser modals.
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>>;
+
+    /// List all registered folders in the device daemon.
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>>;
+
+    /// Register a new folder to sync.
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>>;
+
+    /// Unregister a folder by id.
+    fn unregister_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>>;
+
+    /// Switch active folder context for status view.
+    fn switch_folder(&self, folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>>;
+
+    /// Create an in-band pairing session generating a 6-word code.
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>>;
+
+    /// Join an in-band pairing session via 6-word code and destination folder.
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>>;
 }
 
 /// In-memory fake backend for deterministic testing across frontends.
@@ -260,6 +414,8 @@ pub struct FakeBackend {
     conflicts: Arc<RwLock<Vec<ConflictEntry>>>,
     active_pin: Arc<RwLock<Option<PinRecord>>>,
     active_share: Arc<RwLock<Option<ShareOffer>>>,
+    folders: Arc<RwLock<Vec<FolderInfo>>>,
+    pairing_sessions: Arc<RwLock<Vec<PairingSession>>>,
     event_tx: broadcast::Sender<UiEvent>,
 }
 
@@ -273,6 +429,12 @@ impl FakeBackend {
     #[must_use]
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(64);
+        let default_folder = FolderInfo {
+            id: "0123456789abcdef0123456789abcdef".to_string(),
+            path: PathBuf::from("/test/folder"),
+            active: true,
+            state: Some("idle".to_string()),
+        };
         Self {
             snapshot: Arc::new(RwLock::new(EngineSnapshot::new(
                 "/test/folder",
@@ -283,6 +445,8 @@ impl FakeBackend {
             conflicts: Arc::new(RwLock::new(Vec::new())),
             active_pin: Arc::new(RwLock::new(None)),
             active_share: Arc::new(RwLock::new(None)),
+            folders: Arc::new(RwLock::new(vec![default_folder])),
+            pairing_sessions: Arc::new(RwLock::new(Vec::new())),
             event_tx,
         }
     }
@@ -487,5 +651,171 @@ impl UiBackend for FakeBackend {
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
+    }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>> {
+        Box::pin(async move {
+            let target = path.unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            });
+            if target.exists() && target.is_dir() {
+                let mut entries = Vec::new();
+                if let Ok(rd) = std::fs::read_dir(&target) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        let is_dir = p.is_dir();
+                        let is_symlink = p.is_symlink();
+                        let is_git_repo = is_dir && p.join(".git").exists();
+                        let is_already_synced = is_dir && p.join(".ferry").exists();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        entries.push(FsEntry {
+                            name,
+                            path: p,
+                            is_dir,
+                            is_symlink,
+                            is_git_repo,
+                            is_already_synced,
+                        });
+                    }
+                }
+                entries.sort_by(|a, b| match (b.is_dir, a.is_dir) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                });
+                let parent_path = target.parent().map(PathBuf::from);
+                Ok(DirectoryListing {
+                    current_path: target,
+                    parent_path,
+                    entries,
+                })
+            } else {
+                Ok(DirectoryListing {
+                    current_path: target.clone(),
+                    parent_path: target.parent().map(PathBuf::from),
+                    entries: vec![
+                        FsEntry {
+                            name: "project-a".to_string(),
+                            path: target.join("project-a"),
+                            is_dir: true,
+                            is_symlink: false,
+                            is_git_repo: true,
+                            is_already_synced: false,
+                        },
+                        FsEntry {
+                            name: "project-b".to_string(),
+                            path: target.join("project-b"),
+                            is_dir: true,
+                            is_symlink: false,
+                            is_git_repo: false,
+                            is_already_synced: true,
+                        },
+                    ],
+                })
+            }
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>> {
+        let folders = Arc::clone(&self.folders);
+        Box::pin(async move { Ok(folders.read().await.clone()) })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>> {
+        let folders = Arc::clone(&self.folders);
+        let snap = Arc::clone(&self.snapshot);
+        Box::pin(async move {
+            let id = format!("{:032x}", folders.read().await.len() + 1);
+            let info = FolderInfo {
+                id: id.clone(),
+                path: path.clone(),
+                active: true,
+                state: Some("idle".to_string()),
+            };
+            let mut flist = folders.write().await;
+            for f in flist.iter_mut() {
+                f.active = false;
+            }
+            flist.push(info.clone());
+            let mut st = snap.write().await;
+            st.folder = path.display().to_string();
+            st.folder_id = id;
+            Ok(info)
+        })
+    }
+
+    fn unregister_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let folders = Arc::clone(&self.folders);
+        Box::pin(async move {
+            let mut flist = folders.write().await;
+            flist.retain(|f| f.id != folder_id);
+            Ok(())
+        })
+    }
+
+    fn switch_folder(&self, folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let folders = Arc::clone(&self.folders);
+        let snap = Arc::clone(&self.snapshot);
+        let tx = self.event_tx.clone();
+        Box::pin(async move {
+            let mut flist = folders.write().await;
+            let mut target_path = None;
+            for f in flist.iter_mut() {
+                if f.id == folder_id {
+                    f.active = true;
+                    target_path = Some(f.path.clone());
+                } else {
+                    f.active = false;
+                }
+            }
+            let path = target_path.ok_or_else(|| {
+                OpError::not_found("folder not found", "register the folder first")
+            })?;
+            let mut st = snap.write().await;
+            st.folder = path.display().to_string();
+            st.folder_id = folder_id;
+            let _ = tx.send(UiEvent::State(st.clone()));
+            Ok(st.clone())
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>> {
+        let sessions = Arc::clone(&self.pairing_sessions);
+        let snap = Arc::clone(&self.snapshot);
+        Box::pin(async move {
+            let fid = folder_id.unwrap_or_else(|| snap.try_read().map_or("default".into(), |s| s.folder_id.clone()));
+            let session = PairingSession {
+                session_id: "sess-12345".to_string(),
+                code: "beacon-river-falcon-ember-drift-summit".to_string(),
+                folder_id: fid,
+                role: "host".to_string(),
+                status: "advertising".to_string(),
+                message: Some("Pairing session active. Share the 6-word code with your peer.".to_string()),
+            };
+            sessions.write().await.push(session.clone());
+            Ok(session)
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        Box::pin(async move {
+            Ok(PairResult {
+                folder_id: "0123456789abcdef0123456789abcdef".to_string(),
+                device_id: "remote-peer-id".to_string(),
+                folder_path: target_dir.unwrap_or_else(|| PathBuf::from("/test/target")),
+                status: "paired".to_string(),
+                message: Some(format!("Successfully paired via code: {code}")),
+            })
+        })
     }
 }

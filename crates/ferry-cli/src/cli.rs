@@ -11,7 +11,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// comment; this constant backs the `--help` epilog with the five-minute
 /// path.
 pub const AFTER_HELP: &str = "\
-Five-minute path:
+Quick start:
+  ferry share           inside your project (prints 6-word pairing code)
+  ferry join <code>     on the other machine
+UI dashboards:
+  ferry                 launch the default UI (GUI / Web / TUI)
+  ferry ui --gui|web|tui
+Five-minute manual path:
   ferry init            inside your project
   ferry pair            on this machine; follow the printed steps on the other device
   ferry daemon --listen 127.0.0.1:44001        (device A)
@@ -48,7 +54,7 @@ pub struct Cli {
     pub verbose: bool,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -80,7 +86,7 @@ pub enum Command {
         timeout_secs: u64,
     },
     /// Prepare this folder for another device: secret-scan first, then emit
-    /// a share payload.
+    /// a 6-word pairing code and advertise for incoming pairing.
     Share {
         /// Folder to share (default: current directory).
         folder: Option<PathBuf>,
@@ -88,6 +94,16 @@ pub enum Command {
         #[arg(long)]
         i_know: bool,
         /// Seconds to wait for the accepting device's response.
+        #[arg(long, default_value_t = 120, value_name = "SECONDS")]
+        timeout_secs: u64,
+    },
+    /// Join a pairing session using a 6-word pairing code and synchronize to destination.
+    Join {
+        /// 6-word pairing code emitted by `ferry share`.
+        code: String,
+        /// Destination directory to synchronize into (default: current directory).
+        dest: Option<PathBuf>,
+        /// Seconds to wait for pairing and initial synchronization.
         #[arg(long, default_value_t = 120, value_name = "SECONDS")]
         timeout_secs: u64,
     },

@@ -3,14 +3,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_folder::folder::{dot_dir, load_rules, open_folder};
+use ferry_folder::folder::{
+    create_folder, dot_dir, load_rules, open_folder, save_settings, write_default_ignore_if_absent,
+    Settings, SETTINGS_FORMAT_VERSION,
+};
 use ferry_folder::pairing::{
     accept_begin, accept_complete, initiate_begin, GRANT_SUFFIX, OFFER_SUFFIX, RESPONSE_SUFFIX,
 };
 pub use ferry_ipc::backend::BoxFuture;
 use ferry_ipc::backend::{
-    OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary, ShareOffer, ShareStatus,
-    UiBackend, UiEvent, UiEventStream,
+    DirectoryListing, FolderInfo, FsEntry, OpError, PairResult, PairingSession, PinRecord,
+    PinReleaseSummary, PinStopSummary, ShareOffer, ShareStatus, UiBackend, UiEvent, UiEventStream,
 };
 use ferry_ipc::protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
@@ -112,6 +115,7 @@ fn log_err(e: ferry_sync_engine::LogError) -> OpError {
 #[derive(Clone, Debug)]
 pub struct InProcessAdapter {
     folder: PathBuf,
+    home: Option<PathBuf>,
     identity: Option<DeviceIdentity>,
     event_tx: tokio::sync::broadcast::Sender<UiEvent>,
 }
@@ -122,9 +126,16 @@ impl InProcessAdapter {
         let (event_tx, _) = tokio::sync::broadcast::channel(64);
         Self {
             folder: folder.into(),
+            home: None,
             identity: None,
             event_tx,
         }
+    }
+
+    #[must_use]
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.home = Some(home);
+        self
     }
 
     #[must_use]
@@ -139,26 +150,18 @@ impl InProcessAdapter {
         self
     }
 
+    fn get_home(&self) -> PathBuf {
+        if let Some(ref h) = self.home {
+            return h.clone();
+        }
+        crate::registry::ferry_home()
+    }
+
     fn get_identity(&self) -> DeviceIdentity {
         if let Some(ref id) = self.identity {
             return id.clone();
         }
-        let home = if let Some(v) = std::env::var_os("FERRY_HOME") {
-            let p = PathBuf::from(&v);
-            if p.as_os_str().is_empty() {
-                let h = std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map_or_else(|| PathBuf::from("."), PathBuf::from);
-                h.join(".ferry")
-            } else {
-                p
-            }
-        } else {
-            let h = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map_or_else(|| PathBuf::from("."), PathBuf::from);
-            h.join(".ferry")
-        };
+        let home = self.get_home();
         ferry_crypto::identity::load_or_create(&home.join("identity"))
             .unwrap_or_else(|_| DeviceIdentity::generate())
     }
@@ -567,6 +570,243 @@ impl UiBackend for InProcessAdapter {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
     }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>> {
+        Box::pin(async move {
+            let target = path.unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            });
+            if target.exists() && target.is_dir() {
+                let mut entries = Vec::new();
+                if let Ok(rd) = std::fs::read_dir(&target) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        let is_dir = p.is_dir();
+                        let is_symlink = p.is_symlink();
+                        let is_git_repo = is_dir && p.join(".git").exists();
+                        let is_already_synced = is_dir && p.join(".ferry").exists();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        entries.push(FsEntry {
+                            name,
+                            path: p,
+                            is_dir,
+                            is_symlink,
+                            is_git_repo,
+                            is_already_synced,
+                        });
+                    }
+                }
+                entries.sort_by(|a, b| match (b.is_dir, a.is_dir) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                });
+                let parent_path = target.parent().map(PathBuf::from);
+                Ok(DirectoryListing {
+                    current_path: target,
+                    parent_path,
+                    entries,
+                })
+            } else {
+                Ok(DirectoryListing {
+                    current_path: target.clone(),
+                    parent_path: target.parent().map(PathBuf::from),
+                    entries: Vec::new(),
+                })
+            }
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>> {
+        let default_folder = self.folder.clone();
+        let home = self.get_home();
+        Box::pin(async move {
+            let reg_path = home.join("folders.toml");
+            if let Ok(reg) = crate::registry::FolderRegistry::load_from_file(&reg_path) {
+                if !reg.list().is_empty() {
+                    let mut infos = Vec::new();
+                    for entry in reg.list() {
+                        infos.push(FolderInfo {
+                            id: entry.id.clone(),
+                            path: entry.path.clone(),
+                            active: entry.active,
+                            state: entry.state.clone().or_else(|| Some("idle".to_string())),
+                        });
+                    }
+                    return Ok(infos);
+                }
+            }
+
+            let id = if default_folder.join(".ferry").join("settings.json").exists() {
+                if let Ok(content) =
+                    std::fs::read_to_string(default_folder.join(".ferry").join("settings.json"))
+                {
+                    if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&content) {
+                        settings
+                            .get("folder_id")
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+            .unwrap_or_else(|| "default".to_string());
+
+            Ok(vec![FolderInfo {
+                id,
+                path: default_folder,
+                active: true,
+                state: Some("idle".to_string()),
+            }])
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>> {
+        let identity = self.get_identity();
+        let home = self.get_home();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let abs_path = if path.is_relative() {
+                    std::env::current_dir().map_or_else(|_| path.clone(), |cwd| cwd.join(&path))
+                } else {
+                    path.clone()
+                };
+                if !abs_path.exists() {
+                    std::fs::create_dir_all(&abs_path)
+                        .map_err(|e| OpError::new("io", e.to_string(), "cannot create directory"))?;
+                }
+
+                let opened = if abs_path.join(".ferry").join("config").exists() {
+                    open_folder(&abs_path, &identity).map_err(folder_err)?
+                } else {
+                    use rand::rngs::StdRng;
+                    use rand::SeedableRng;
+                    let fid = rand::random::<[u8; 16]>();
+                    let mut rng = StdRng::from_entropy();
+                    let poly = ferry_store::chunker::generate_polynomial(&mut rng);
+                    let (store, _fmk) =
+                        create_folder(&abs_path, &identity, fid, poly).map_err(folder_err)?;
+                    store
+                        .flush()
+                        .map_err(|e| OpError::new("store", e.to_string(), "store flush failed"))?;
+                    store
+                        .write_index_snapshot()
+                        .map_err(|e| OpError::new("store", e.to_string(), "index snapshot failed"))?;
+                    let settings = Settings {
+                        format_version: SETTINGS_FORMAT_VERSION,
+                        folder_id: hex_str(&fid),
+                        honor_gitignore: true,
+                        presets: Vec::new(),
+                        overrides: Vec::new(),
+                    };
+                    save_settings(&abs_path, &settings).map_err(folder_err)?;
+                    let _ = write_default_ignore_if_absent(&abs_path);
+                    open_folder(&abs_path, &identity).map_err(folder_err)?
+                };
+
+                let folder_id_hex = hex_str(&opened.folder_id);
+                let reg_path = home.join("folders.toml");
+                let mut reg =
+                    crate::registry::FolderRegistry::load_from_file(&reg_path).unwrap_or_default();
+                reg.register(folder_id_hex.clone(), abs_path.clone());
+                reg.switch(&folder_id_hex);
+                let _ = reg.save_to_file(&reg_path);
+
+                Ok(FolderInfo {
+                    id: folder_id_hex,
+                    path: abs_path,
+                    active: true,
+                    state: Some("idle".to_string()),
+                })
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "worker error"))?
+        })
+    }
+
+    fn unregister_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let home = self.get_home();
+        Box::pin(async move {
+            let reg_path = home.join("folders.toml");
+            let mut reg =
+                crate::registry::FolderRegistry::load_from_file(&reg_path).unwrap_or_default();
+            reg.unregister(&folder_id);
+            let _ = reg.save_to_file(&reg_path);
+            Ok(())
+        })
+    }
+
+    fn switch_folder(&self, folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let identity = self.get_identity();
+        let home = self.get_home();
+        Box::pin(async move {
+            let reg_path = home.join("folders.toml");
+            let mut reg =
+                crate::registry::FolderRegistry::load_from_file(&reg_path).unwrap_or_default();
+            let entry = reg.switch(&folder_id).cloned();
+            let _ = reg.save_to_file(&reg_path);
+
+            if let Some(entry) = entry {
+                InProcessAdapter::new(entry.path)
+                    .with_home(home)
+                    .with_identity(identity)
+                    .get_status()
+                    .await
+            } else {
+                Err(OpError::not_found(
+                    "folder not found",
+                    "register the folder first",
+                ))
+            }
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>> {
+        let folder_path = self.folder.clone();
+        let identity = self.get_identity();
+        Box::pin(async move {
+            let host_session = crate::pairing::start_host_pairing(&folder_path, &identity, folder_id, None)?;
+            Ok(host_session.session)
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let identity = self.get_identity();
+        let home = self.get_home();
+        Box::pin(async move {
+            let target = target_dir.unwrap_or_else(|| PathBuf::from("."));
+            let abs_path = if target.is_relative() {
+                std::env::current_dir().map_or_else(|_| target.clone(), |cwd| cwd.join(&target))
+            } else {
+                target.clone()
+            };
+
+            let res = crate::pairing::execute_joiner_pairing(&code, &abs_path, &identity).await?;
+
+            let reg_path = home.join("folders.toml");
+            let mut reg = crate::registry::FolderRegistry::load_from_file(&reg_path).unwrap_or_default();
+            reg.register(res.folder_id.clone(), abs_path.clone());
+            reg.switch(&res.folder_id);
+            let _ = reg.save_to_file(&reg_path);
+
+            Ok(res)
+        })
+    }
 }
 
 /// Remote IPC client adapter querying a running daemon over IPC.
@@ -907,6 +1147,231 @@ impl UiBackend for DaemonIpcAdapter {
             Ok(UiEventStream::new(rx))
         })
     }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::ListDirectory {
+                    path: path.map(|p| p.display().to_string()),
+                })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            if let Some(DaemonMessage::Ack {
+                message: Some(msg), ..
+            }) = resp
+            {
+                if let Ok(listing) = serde_json::from_str::<DirectoryListing>(&msg) {
+                    return Ok(listing);
+                }
+            }
+            Err(OpError::bad_request("failed to list directory", "check daemon logs"))
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::ListFolders)
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            match resp {
+                Some(DaemonMessage::Ack {
+                    message: Some(msg), ..
+                }) => {
+                    let folders: Vec<FolderInfo> =
+                        serde_json::from_str(&msg).unwrap_or_default();
+                    Ok(folders)
+                }
+                Some(DaemonMessage::Error { code, message }) => {
+                    Err(OpError::new(code, message, "check daemon logs"))
+                }
+                _ => Err(OpError::bad_request("failed to list folders", "check daemon logs")),
+            }
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::RegisterFolder {
+                    path: path.display().to_string(),
+                })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            match resp {
+                Some(DaemonMessage::Ack {
+                    message: Some(msg), ..
+                }) => {
+                    if let Ok(info) = serde_json::from_str::<FolderInfo>(&msg) {
+                        return Ok(info);
+                    }
+                    Ok(FolderInfo {
+                        id: "temp".to_string(),
+                        path,
+                        active: true,
+                        state: Some("idle".to_string()),
+                    })
+                }
+                Some(DaemonMessage::Error { code, message }) => {
+                    Err(OpError::new(code, message, "check daemon logs"))
+                }
+                _ => Err(OpError::bad_request(
+                    "failed to register folder",
+                    "check daemon logs",
+                )),
+            }
+        })
+    }
+
+    fn unregister_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::UnregisterFolder { folder_id })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            match resp {
+                Some(DaemonMessage::Ack { .. }) => Ok(()),
+                Some(DaemonMessage::Error { code, message }) => {
+                    Err(OpError::new(code, message, "check daemon logs"))
+                }
+                _ => Err(OpError::bad_request(
+                    "failed to unregister folder",
+                    "check daemon logs",
+                )),
+            }
+        })
+    }
+
+    fn switch_folder(&self, folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::SwitchFolder { folder_id })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            match resp {
+                Some(DaemonMessage::Snapshot(s)) => Ok(s),
+                Some(DaemonMessage::Error { code, message }) => {
+                    Err(OpError::new(code, message, "check daemon logs"))
+                }
+                _ => Err(OpError::bad_request(
+                    "failed to switch folder",
+                    "check daemon logs",
+                )),
+            }
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::CreatePairingSession { folder_id })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            if let Some(DaemonMessage::Ack {
+                message: Some(msg), ..
+            }) = resp
+            {
+                if let Ok(sess) = serde_json::from_str::<PairingSession>(&msg) {
+                    return Ok(sess);
+                }
+            }
+            Err(OpError::bad_request("failed to create pairing session", "check daemon logs"))
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _ = client.recv_message().await;
+            client
+                .send_command(&ClientCommand::JoinPairingSession {
+                    code,
+                    target_dir: target_dir.map(|p| p.display().to_string()),
+                })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            if let Some(DaemonMessage::Ack {
+                message: Some(msg), ..
+            }) = resp
+            {
+                if let Ok(res) = serde_json::from_str::<PairResult>(&msg) {
+                    return Ok(res);
+                }
+            }
+            Err(OpError::bad_request("failed to join pairing session", "check daemon logs"))
+        })
+    }
 }
 
 /// Composite automatic backend connecting to the daemon over IPC when available,
@@ -936,6 +1401,12 @@ impl AutoBackend {
     #[must_use]
     pub fn with_identity(mut self, identity: DeviceIdentity) -> Self {
         self.in_process = self.in_process.with_identity(identity);
+        self
+    }
+
+    #[must_use]
+    pub fn with_home(mut self, home: PathBuf) -> Self {
+        self.in_process = self.in_process.with_home(home);
         self
     }
 }
@@ -1042,6 +1513,93 @@ impl UiBackend for AutoBackend {
                 return Ok(stream);
             }
             in_proc.subscribe_events().await
+        })
+    }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.list_directory(path.clone()).await {
+                return Ok(res);
+            }
+            in_proc.list_directory(path).await
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.list_folders().await {
+                return Ok(res);
+            }
+            in_proc.list_folders().await
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.register_folder(path.clone()).await {
+                return Ok(res);
+            }
+            in_proc.register_folder(path).await
+        })
+    }
+
+    fn unregister_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.unregister_folder(folder_id.clone()).await {
+                return Ok(res);
+            }
+            in_proc.unregister_folder(folder_id).await
+        })
+    }
+
+    fn switch_folder(&self, folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.switch_folder(folder_id.clone()).await {
+                return Ok(res);
+            }
+            in_proc.switch_folder(folder_id).await
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.create_pairing_session(folder_id.clone()).await {
+                return Ok(res);
+            }
+            in_proc.create_pairing_session(folder_id).await
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(res) = ipc.join_pairing_session(code.clone(), target_dir.clone()).await {
+                return Ok(res);
+            }
+            in_proc.join_pairing_session(code, target_dir).await
         })
     }
 }
@@ -1373,6 +1931,113 @@ impl UiBackend for DirectBackend {
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let (_tx, rx) = tokio::sync::broadcast::channel(16);
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
+    }
+
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<DirectoryListing, OpError>> {
+        let default_dir = self.state.tree_dir().to_path_buf();
+        Box::pin(async move {
+            let target = path.unwrap_or(default_dir);
+            if target.exists() && target.is_dir() {
+                let mut entries = Vec::new();
+                if let Ok(rd) = std::fs::read_dir(&target) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        let is_dir = p.is_dir();
+                        let is_symlink = p.is_symlink();
+                        let is_git_repo = is_dir && p.join(".git").exists();
+                        let is_already_synced = is_dir && p.join(".ferry").exists();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        entries.push(FsEntry {
+                            name,
+                            path: p,
+                            is_dir,
+                            is_symlink,
+                            is_git_repo,
+                            is_already_synced,
+                        });
+                    }
+                }
+                entries.sort_by(|a, b| match (b.is_dir, a.is_dir) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                });
+                let parent_path = target.parent().map(PathBuf::from);
+                Ok(DirectoryListing {
+                    current_path: target,
+                    parent_path,
+                    entries,
+                })
+            } else {
+                Ok(DirectoryListing {
+                    current_path: target.clone(),
+                    parent_path: target.parent().map(PathBuf::from),
+                    entries: Vec::new(),
+                })
+            }
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderInfo>, OpError>> {
+        let st = Arc::clone(&self.state);
+        Box::pin(async move {
+            Ok(vec![FolderInfo {
+                id: hex_str(&st.folder_id()),
+                path: st.tree_dir().to_path_buf(),
+                active: true,
+                state: Some("idle".to_string()),
+            }])
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderInfo, OpError>> {
+        Box::pin(async move {
+            Ok(FolderInfo {
+                id: "default".to_string(),
+                path,
+                active: true,
+                state: Some("idle".to_string()),
+            })
+        })
+    }
+
+    fn unregister_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn switch_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        self.get_status()
+    }
+
+    fn create_pairing_session(
+        &self,
+        folder_id: Option<String>,
+    ) -> BoxFuture<'_, Result<PairingSession, OpError>> {
+        let st = Arc::clone(&self.state);
+        Box::pin(async move {
+            let host_session = crate::pairing::start_host_pairing(st.tree_dir(), st.identity(), folder_id, None)?;
+            Ok(host_session.session)
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        code: String,
+        target_dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let st = Arc::clone(&self.state);
+        Box::pin(async move {
+            let target = target_dir.unwrap_or_else(|| st.tree_dir().to_path_buf());
+            let abs_path = if target.is_relative() {
+                std::env::current_dir().map_or_else(|_| target.clone(), |cwd| cwd.join(&target))
+            } else {
+                target.clone()
+            };
+            crate::pairing::execute_joiner_pairing(&code, &abs_path, st.identity()).await
+        })
     }
 }
 

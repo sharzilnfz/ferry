@@ -84,6 +84,43 @@ pub enum ClientCommand {
     /// List recorded conflicts.
     ListConflicts,
 
+    /// List entries in a directory for interactive file pickers.
+    ListDirectory {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+
+    /// List all configured folders managed by the device daemon.
+    ListFolders,
+
+    /// Register and start synchronizing a new folder.
+    RegisterFolder {
+        path: String,
+    },
+
+    /// Unregister a folder from the device daemon.
+    UnregisterFolder {
+        folder_id: String,
+    },
+
+    /// Switch active folder context for status reporting.
+    SwitchFolder {
+        folder_id: String,
+    },
+
+    /// Create an in-band pairing session with a short ephemeral code.
+    CreatePairingSession {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder_id: Option<String>,
+    },
+
+    /// Join an in-band pairing session using a 6-word or short code.
+    JoinPairingSession {
+        code: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_dir: Option<String>,
+    },
+
     /// Ping request to test connectivity and liveness.
     Ping,
 }

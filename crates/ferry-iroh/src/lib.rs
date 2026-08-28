@@ -45,7 +45,8 @@ mod lock;
 
 pub use config::{IrohConfig, IrohConfigBuilder, MdnsSetting, RelaySetting};
 pub use directory::{
-    publish_route, register_explicit_route, resolve_route, Route, RouteScope, RouteTable,
+    publish_route, publish_topic, register_explicit_route, resolve_route, resolve_topic, Route,
+    RouteScope, RouteTable,
 };
 pub use transport::{DialFailure, IrohTransport, PathObservation};
 

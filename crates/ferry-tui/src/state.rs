@@ -1,12 +1,14 @@
 //! UI State model and transitions for Ferry TUI.
 
 use crate::activity_log::ActivityLog;
+use ferry_ipc::backend::{DirectoryListing, FsEntry};
 use ferry_ipc::protocol::{
     ConflictEntry, DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
     TransferDirection,
 };
 use ferry_platform::time::current_time_str;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Core synchronization state badge displayed in the TUI header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,6 +83,121 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Single entry displayed in the filesystem explorer modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderPickerItem {
+    Parent(PathBuf),
+    Entry(FsEntry),
+}
+
+/// Interactive filesystem explorer modal state.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FolderPickerState {
+    pub current_path: PathBuf,
+    pub parent_path: Option<PathBuf>,
+    pub raw_entries: Vec<FsEntry>,
+    pub filter_query: String,
+    pub selected_index: usize,
+    pub error_message: Option<String>,
+}
+
+impl FolderPickerState {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Reset query and populate listing from backend.
+    pub fn set_listing(&mut self, listing: DirectoryListing) {
+        self.current_path = listing.current_path;
+        self.parent_path = listing.parent_path;
+        self.raw_entries = listing.entries;
+        self.error_message = None;
+        self.clamp_selection();
+    }
+
+    /// Return all items matching the active filter query.
+    #[must_use]
+    pub fn filtered_items(&self) -> Vec<FolderPickerItem> {
+        let mut items = Vec::new();
+        let query = self.filter_query.to_lowercase();
+
+        if let Some(ref parent) = self.parent_path {
+            if query.is_empty() || "..".contains(&query) {
+                items.push(FolderPickerItem::Parent(parent.clone()));
+            }
+        }
+
+        for entry in &self.raw_entries {
+            if query.is_empty() || entry.name.to_lowercase().contains(&query) {
+                items.push(FolderPickerItem::Entry(entry.clone()));
+            }
+        }
+
+        items
+    }
+
+    /// Move the active list highlight up.
+    pub fn move_selection_up(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        }
+    }
+
+    /// Move the active list highlight down.
+    pub fn move_selection_down(&mut self) {
+        let total = self.filtered_items().len();
+        if total > 0 && self.selected_index + 1 < total {
+            self.selected_index += 1;
+        }
+    }
+
+    /// Append a typed character to the live filter query.
+    pub fn append_filter(&mut self, c: char) {
+        self.filter_query.push(c);
+        self.selected_index = 0;
+    }
+
+    /// Remove the last character from the live filter query.
+    pub fn backspace_filter(&mut self) {
+        self.filter_query.pop();
+        self.selected_index = 0;
+    }
+
+    /// Clear the live filter query.
+    pub fn clear_filter(&mut self) {
+        self.filter_query.clear();
+        self.selected_index = 0;
+    }
+
+    /// Ensure selected index is within bounds of filtered items.
+    pub fn clamp_selection(&mut self) {
+        let total = self.filtered_items().len();
+        if total == 0 {
+            self.selected_index = 0;
+        } else if self.selected_index >= total {
+            self.selected_index = total - 1;
+        }
+    }
+
+    /// Currently highlighted item in the filtered list.
+    #[must_use]
+    pub fn selected_item(&self) -> Option<FolderPickerItem> {
+        let items = self.filtered_items();
+        items.get(self.selected_index).cloned()
+    }
+
+    /// Path corresponding to the highlighted entry or current working directory.
+    #[must_use]
+    pub fn highlighted_path(&self) -> PathBuf {
+        match self.selected_item() {
+            Some(FolderPickerItem::Parent(p)) => p,
+            Some(FolderPickerItem::Entry(e)) => e.path,
+            None => self.current_path.clone(),
+        }
+    }
+}
+
 /// Complete in-memory state of the Ferry TUI dashboard.
 #[derive(Debug, Clone)]
 pub struct TuiState {
@@ -101,6 +218,8 @@ pub struct TuiState {
     pub activity_log: ActivityLog,
     pub show_conflicts_modal: bool,
     pub conflict_entries: Vec<ConflictEntry>,
+    pub show_folder_picker_modal: bool,
+    pub folder_picker: FolderPickerState,
     pub is_connected: bool,
     pub should_quit: bool,
 
@@ -133,6 +252,8 @@ impl Default for TuiState {
             activity_log: ActivityLog::default(),
             show_conflicts_modal: false,
             conflict_entries: Vec::new(),
+            show_folder_picker_modal: false,
+            folder_picker: FolderPickerState::default(),
             is_connected: false,
             should_quit: false,
             cached_metrics_line: String::new(),
@@ -350,6 +471,17 @@ impl TuiState {
                     self.conflict_entries = entries;
                     self.conflicts = self.conflict_entries.len().max(self.conflicts);
                 }
+            }
+        } else if command == "list_directory" {
+            if let Some(ref msg_json) = message {
+                if let Ok(listing) = serde_json::from_str::<DirectoryListing>(msg_json) {
+                    self.folder_picker.set_listing(listing);
+                }
+            }
+        } else if command == "register_folder" {
+            if let Some(ref path_str) = message {
+                self.folder.clone_from(path_str);
+                self.show_folder_picker_modal = false;
             }
         }
         self.engine_state = self.resolve_sync_state();

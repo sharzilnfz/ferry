@@ -336,6 +336,9 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
     // Consume initial snapshot
     let _ = client.recv_message().await.unwrap().unwrap();
 
+    // Wait a tick for watcher initialization
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
     // Append a conflict to .ferry/conflicts.jsonl
     let entry = ferry_sync_engine::ConflictEntry {
         ts: "2026-08-26T12:00:00Z".to_string(),

@@ -31,7 +31,7 @@ impl Device {
         c.args(args)
             .env("FERRY_HOME", self.home.path())
             .current_dir(&self.tree)
-            .env("RUST_LOG", "");
+            .env("RUST_LOG", "debug");
         c
     }
 }
@@ -149,7 +149,12 @@ fn two_devices_pair_and_converge_over_localhost() {
         if got_hello && got_src {
             break;
         }
-        assert!(Instant::now() < deadline, "B never converged: {addr}");
+        assert!(
+            Instant::now() < deadline,
+            "B never converged: {addr}\n=== A LOG ===\n{}\n=== B LOG ===\n{}",
+            std::fs::read_to_string(log_dir.join("a.log")).unwrap_or_default(),
+            std::fs::read_to_string(log_dir.join("b.log")).unwrap_or_default(),
+        );
         std::thread::sleep(Duration::from_millis(250));
     }
 
@@ -271,18 +276,15 @@ fn wait_for(child: &mut Child, secs: u64) -> bool {
 }
 
 /// Read stdout until the `LISTENING <addr>` line appears.
-fn read_listening<R: std::io::Read>(r: R, secs: u64) -> Option<String> {
-    let reader = BufReader::new(r);
-    let deadline = Instant::now() + Duration::from_secs(secs);
-    for line in reader.lines() {
-        if Instant::now() > deadline {
-            return None;
-        }
-        if let Ok(line) = line {
+fn read_listening(r: std::process::ChildStdout, secs: u64) -> Option<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(r);
+        for line in reader.lines().map_while(Result::ok) {
             if let Some(addr) = line.strip_prefix("LISTENING ") {
-                return Some(addr.trim().to_string());
+                let _ = tx.send(addr.trim().to_string());
             }
         }
-    }
-    None
+    });
+    rx.recv_timeout(Duration::from_secs(secs)).ok()
 }

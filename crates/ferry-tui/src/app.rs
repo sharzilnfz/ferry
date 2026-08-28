@@ -143,10 +143,81 @@ impl TuiApp {
             }
         }
 
+        // When folder picker modal is visible:
+        if self.state.show_folder_picker_modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.state.show_folder_picker_modal = false;
+                    return None;
+                }
+                KeyCode::Char('q' | 'Q') if self.state.folder_picker.filter_query.is_empty() => {
+                    self.state.show_folder_picker_modal = false;
+                    return None;
+                }
+                KeyCode::Up => {
+                    self.state.folder_picker.move_selection_up();
+                    return None;
+                }
+                KeyCode::Down => {
+                    self.state.folder_picker.move_selection_down();
+                    return None;
+                }
+                KeyCode::Backspace => {
+                    self.state.folder_picker.backspace_filter();
+                    return None;
+                }
+                KeyCode::Enter => {
+                    match self.state.folder_picker.selected_item() {
+                        Some(crate::state::FolderPickerItem::Parent(p)) => {
+                            self.state.folder_picker.clear_filter();
+                            return Some(ClientCommand::ListDirectory {
+                                path: Some(p.display().to_string()),
+                            });
+                        }
+                        Some(crate::state::FolderPickerItem::Entry(e)) if e.is_dir => {
+                            self.state.folder_picker.clear_filter();
+                            return Some(ClientCommand::ListDirectory {
+                                path: Some(e.path.display().to_string()),
+                            });
+                        }
+                        _ => {
+                            let target = self.state.folder_picker.highlighted_path();
+                            self.state.show_folder_picker_modal = false;
+                            return Some(ClientCommand::RegisterFolder {
+                                path: target.display().to_string(),
+                            });
+                        }
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    let target = self.state.folder_picker.highlighted_path();
+                    self.state.show_folder_picker_modal = false;
+                    return Some(ClientCommand::RegisterFolder {
+                        path: target.display().to_string(),
+                    });
+                }
+                KeyCode::Char(c) => {
+                    self.state.folder_picker.append_filter(c);
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+
         match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.state.should_quit = true;
                 None
+            }
+            KeyCode::Char('a' | 'A' | 'o' | 'O') => {
+                self.state.show_folder_picker_modal = true;
+                self.state.folder_picker.clear_filter();
+                let initial = if self.state.folder != "-" && !self.state.folder.is_empty() {
+                    Some(self.state.folder.clone())
+                } else {
+                    None
+                };
+                Some(ClientCommand::ListDirectory { path: initial })
             }
             KeyCode::Char('p' | 'P') => {
                 if self.state.pin.holding || self.state.engine_state == SyncState::Pinned {
@@ -190,9 +261,122 @@ impl TuiApp {
             }
         }
 
+        if self.state.show_folder_picker_modal {
+            match key.code {
+                KeyCode::Esc => {
+                    self.state.show_folder_picker_modal = false;
+                    return;
+                }
+                KeyCode::Char('q' | 'Q') if self.state.folder_picker.filter_query.is_empty() => {
+                    self.state.show_folder_picker_modal = false;
+                    return;
+                }
+                KeyCode::Up => {
+                    self.state.folder_picker.move_selection_up();
+                    return;
+                }
+                KeyCode::Down => {
+                    self.state.folder_picker.move_selection_down();
+                    return;
+                }
+                KeyCode::Backspace => {
+                    self.state.folder_picker.backspace_filter();
+                    return;
+                }
+                KeyCode::Enter => {
+                    match self.state.folder_picker.selected_item() {
+                        Some(crate::state::FolderPickerItem::Parent(p)) => {
+                            self.state.folder_picker.clear_filter();
+                            match backend.list_directory(Some(p)).await {
+                                Ok(listing) => self.state.folder_picker.set_listing(listing),
+                                Err(e) => {
+                                    self.state.folder_picker.error_message = Some(e.to_string());
+                                }
+                            }
+                        }
+                        Some(crate::state::FolderPickerItem::Entry(e)) if e.is_dir => {
+                            self.state.folder_picker.clear_filter();
+                            match backend.list_directory(Some(e.path)).await {
+                                Ok(listing) => self.state.folder_picker.set_listing(listing),
+                                Err(e) => {
+                                    self.state.folder_picker.error_message = Some(e.to_string());
+                                }
+                            }
+                        }
+                        _ => {
+                            let target = self.state.folder_picker.highlighted_path();
+                            match backend.register_folder(target).await {
+                                Ok(info) => {
+                                    self.state.folder = info.path.display().to_string();
+                                    self.state.folder_id = info.id;
+                                    self.state.show_folder_picker_modal = false;
+                                    self.state.activity_log.push_info(
+                                        current_time_str(),
+                                        format!("Registered folder: {}", info.path.display()),
+                                    );
+                                }
+                                Err(e) => {
+                                    self.state.folder_picker.error_message = Some(e.to_string());
+                                    self.state.activity_log.push_error(
+                                        current_time_str(),
+                                        format!("Register folder error: {e}"),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Char(' ') => {
+                    let target = self.state.folder_picker.highlighted_path();
+                    match backend.register_folder(target).await {
+                        Ok(info) => {
+                            self.state.folder = info.path.display().to_string();
+                            self.state.folder_id = info.id;
+                            self.state.show_folder_picker_modal = false;
+                            self.state.activity_log.push_info(
+                                current_time_str(),
+                                format!("Registered folder: {}", info.path.display()),
+                            );
+                        }
+                        Err(e) => {
+                            self.state.folder_picker.error_message = Some(e.to_string());
+                            self.state.activity_log.push_error(
+                                current_time_str(),
+                                format!("Register folder error: {e}"),
+                            );
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    self.state.folder_picker.append_filter(c);
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.state.should_quit = true;
+            }
+            KeyCode::Char('a' | 'A' | 'o' | 'O') => {
+                self.state.show_folder_picker_modal = true;
+                self.state.folder_picker.clear_filter();
+                let initial = if self.state.folder != "-" && !self.state.folder.is_empty() {
+                    Some(std::path::PathBuf::from(&self.state.folder))
+                } else {
+                    None
+                };
+                match backend.list_directory(initial).await {
+                    Ok(listing) => {
+                        self.state.folder_picker.set_listing(listing);
+                    }
+                    Err(e) => {
+                        self.state.folder_picker.error_message = Some(e.to_string());
+                    }
+                }
             }
             KeyCode::Char('r' | 'R') => {
                 if let Err(e) = backend.trigger_scan().await {

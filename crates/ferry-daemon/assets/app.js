@@ -788,6 +788,316 @@ async function doAcceptPair() {
   }
 }
 
+// ---- Interactive Directory Picker Modal (Issue 02) ------------------------
+let pickerCurrentPath = "~";
+let pickerParentPath = null;
+let pickerEntries = [];
+let pickerSelectedPath = "";
+let autocompleteDebounce = null;
+
+function openFolderPickerModal(initialPath = null) {
+  playHapticFeedback("tick");
+  const modal = $("folder-picker-modal");
+  if (!modal) return;
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+
+  const start = initialPath || (lastStatus && lastStatus.folder) || "~";
+  loadDirectory(start);
+
+  const input = $("picker-path-input");
+  if (input) {
+    input.focus();
+  }
+}
+
+function closeFolderPickerModal() {
+  playHapticFeedback("tick");
+  const modal = $("folder-picker-modal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+
+  const dropdown = $("picker-autocomplete-list");
+  if (dropdown) dropdown.style.display = "none";
+  const err = $("picker-error");
+  if (err) err.style.display = "none";
+}
+
+function renderBreadcrumbs(currentPath) {
+  const container = $("picker-breadcrumbs");
+  if (!container) return;
+
+  if (!currentPath) {
+    container.innerHTML = `<span class="breadcrumb-chip current">~</span>`;
+    return;
+  }
+
+  const isWindows = currentPath.includes(":\\") || currentPath.includes(":/");
+  const normalized = currentPath.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+
+  let html = "";
+  if (!isWindows) {
+    html += `<button class="breadcrumb-chip" type="button" data-path="/">/</button>`;
+  }
+
+  let accumulated = "";
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (isWindows && i === 0) {
+      accumulated = part + "/";
+    } else {
+      accumulated = accumulated ? accumulated.replace(/\/$/, "") + "/" + part : "/" + part;
+    }
+    const isLast = i === parts.length - 1;
+    const target = accumulated;
+    html += `<span class="breadcrumb-sep">/</span>`;
+    if (isLast) {
+      html += `<span class="breadcrumb-chip current">${esc(part)}</span>`;
+    } else {
+      html += `<button class="breadcrumb-chip" type="button" data-path="${esc(target)}">${esc(part)}</button>`;
+    }
+  }
+
+  container.innerHTML = html;
+
+  container.querySelectorAll(".breadcrumb-chip[data-path]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const p = btn.getAttribute("data-path");
+      if (p) loadDirectory(p);
+    });
+  });
+}
+
+function setSelectedFolder(path) {
+  pickerSelectedPath = path;
+  const label = $("picker-selected-path");
+  if (label) label.textContent = path;
+  checkSecrets(path);
+}
+
+async function checkSecrets(path) {
+  const badge = $("picker-secret-badge");
+  const title = $("picker-secret-title");
+  const list = $("picker-secret-list");
+  if (!badge) return;
+
+  try {
+    const res = await api("/api/fs/scan?path=" + encodeURIComponent(path));
+    if (res && res.has_secrets && res.warnings && res.warnings.length > 0) {
+      if (title) {
+        title.textContent = `${res.warnings.length} potential secret ${res.warnings.length === 1 ? "risk" : "risks"} in folder`;
+      }
+      if (list) {
+        list.innerHTML = res.warnings.slice(0, 5).map((w) => {
+          const loc = w.line ? `:${w.line}` : "";
+          return `<div>• ${esc(w.path)}${esc(loc)} <span style="opacity:0.8">(${esc(w.class)})</span></div>`;
+        }).join("");
+      }
+      badge.style.display = "flex";
+    } else {
+      badge.style.display = "none";
+    }
+  } catch {
+    badge.style.display = "none";
+  }
+}
+
+function renderDirectoryList(entries, parentPath) {
+  const list = $("picker-dir-list");
+  if (!list) return;
+
+  pickerEntries = entries || [];
+
+  let html = "";
+
+  if (parentPath) {
+    html += `
+      <div class="picker-dir-item picker-parent-item" data-path="${esc(parentPath)}" role="option" aria-selected="false">
+        <div class="picker-item-left">
+          <svg class="picker-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"></path>
+          </svg>
+          <span class="picker-item-name">.. (Parent Directory)</span>
+        </div>
+        <span class="badge-parent">Up</span>
+      </div>
+    `;
+  }
+
+  if (pickerEntries.length === 0) {
+    html += `
+      <div style="padding: 18px 12px; text-align: center; color: var(--text-3); font-size: 11.5px;">
+        No subdirectories found
+      </div>
+    `;
+  } else {
+    for (const entry of pickerEntries) {
+      const isSelected = entry.path === pickerSelectedPath;
+      const isDir = entry.is_dir;
+      let badges = "";
+      if (entry.is_git_repo) badges += `<span class="badge-tag badge-git">Git</span>`;
+      if (entry.is_already_synced) badges += `<span class="badge-tag badge-synced">Synced</span>`;
+      if (entry.is_symlink) badges += `<span class="badge-tag badge-link">Link</span>`;
+
+      const iconSvg = isDir
+        ? `<svg class="picker-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`
+        : `<svg class="picker-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity: 0.6;"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`;
+
+      html += `
+        <div class="picker-dir-item ${isSelected ? "selected" : ""}" data-path="${esc(entry.path)}" data-isdir="${entry.is_dir ? "true" : "false"}" role="option" aria-selected="${isSelected}">
+          <div class="picker-item-left">
+            ${iconSvg}
+            <span class="picker-item-name">${esc(entry.name)}</span>
+          </div>
+          <div class="picker-item-badges">${badges}</div>
+        </div>
+      `;
+    }
+  }
+
+  list.innerHTML = html;
+
+  list.querySelectorAll(".picker-dir-item").forEach((item) => {
+    const p = item.getAttribute("data-path");
+    const isDir = item.getAttribute("data-isdir") === "true";
+    const isParent = item.classList.contains("picker-parent-item");
+
+    item.addEventListener("click", () => {
+      playHapticFeedback("tick");
+      if (isParent || isDir) {
+        loadDirectory(p);
+      } else {
+        setSelectedFolder(p);
+      }
+    });
+
+    item.addEventListener("dblclick", () => {
+      if (isDir || isParent) {
+        loadDirectory(p);
+      } else {
+        setSelectedFolder(p);
+      }
+    });
+  });
+}
+
+async function loadDirectory(path) {
+  const err = $("picker-error");
+  if (err) err.style.display = "none";
+
+  try {
+    const q = path ? "?path=" + encodeURIComponent(path) : "";
+    const data = await api("/api/fs/ls" + q);
+
+    pickerCurrentPath = data.current_path || path;
+    pickerParentPath = data.parent_path || null;
+
+    const input = $("picker-path-input");
+    if (input) input.value = pickerCurrentPath;
+
+    setSelectedFolder(pickerCurrentPath);
+    renderBreadcrumbs(pickerCurrentPath);
+    renderDirectoryList(data.entries, pickerParentPath);
+  } catch (e) {
+    if (err) {
+      err.style.display = "block";
+      err.textContent = e.error || e.message || "Failed to load directory";
+    }
+    playHapticFeedback("alert");
+  }
+}
+
+async function handleAutocomplete(val) {
+  const dropdown = $("picker-autocomplete-list");
+  if (!dropdown) return;
+
+  const trimmed = val.trim();
+  if (!trimmed) {
+    dropdown.style.display = "none";
+    return;
+  }
+
+  try {
+    const lastSlash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+    const dirToQuery = lastSlash >= 0 ? trimmed.slice(0, lastSlash + 1) : "";
+    const queryPrefix = lastSlash >= 0 ? trimmed.slice(lastSlash + 1).toLowerCase() : trimmed.toLowerCase();
+
+    const data = await api("/api/fs/ls?path=" + encodeURIComponent(dirToQuery || "."));
+    const matches = (data.entries || []).filter(
+      (e) => e.is_dir && e.name.toLowerCase().startsWith(queryPrefix)
+    );
+
+    if (matches.length === 0) {
+      dropdown.style.display = "none";
+      return;
+    }
+
+    dropdown.innerHTML = matches.map((m) => `
+      <div class="autocomplete-item" data-path="${esc(m.path)}">
+        <svg class="autocomplete-item-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>${esc(m.path)}</span>
+      </div>
+    `).join("");
+
+    dropdown.style.display = "flex";
+
+    dropdown.querySelectorAll(".autocomplete-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        const p = item.getAttribute("data-path");
+        if (p) {
+          dropdown.style.display = "none";
+          loadDirectory(p);
+        }
+      });
+    });
+  } catch {
+    dropdown.style.display = "none";
+  }
+}
+
+async function doAddFolder() {
+  const target = pickerSelectedPath || pickerCurrentPath;
+  const err = $("picker-error");
+  if (err) err.style.display = "none";
+
+  if (!target) {
+    if (err) {
+      err.style.display = "block";
+      err.textContent = "Please select a folder to sync.";
+    }
+    return;
+  }
+
+  playHapticFeedback("snap");
+  addActivity(`Registering folder: ${target}`);
+
+  try {
+    let res;
+    try {
+      res = await api("/api/folders/add", { path: target });
+    } catch {
+      res = await api("/api/folders", { path: target });
+    }
+
+    playHapticFeedback("success");
+    addActivity(`Folder Synced: ${target}`);
+    closeFolderPickerModal();
+    await loadStatus();
+    await loadConflicts();
+  } catch (e) {
+    if (err) {
+      err.style.display = "block";
+      err.textContent = e.error || e.message || "Failed to register folder";
+    }
+    playHapticFeedback("alert");
+    addActivity(`Folder Registration Failed: ${e.error || e.code || "Error"}`);
+  }
+}
+
 // ---- Theme Controller (Issue 04) -------------------------------------------
 function updateThemeIcons(theme) {
   const moon = $("icon-theme-moon");
@@ -861,6 +1171,65 @@ function setupEventListeners() {
 
   const btnRelease = $("btn-release");
   if (btnRelease) btnRelease.addEventListener("click", () => doPin("release"));
+
+  // Folder Picker Modal
+  const btnAddFolder = $("btn-add-folder");
+  if (btnAddFolder) btnAddFolder.addEventListener("click", () => openFolderPickerModal());
+
+  const btnCloseFolderModal = $("btn-close-folder-modal");
+  if (btnCloseFolderModal) btnCloseFolderModal.addEventListener("click", closeFolderPickerModal);
+
+  const btnCancelFolderPicker = $("btn-cancel-folder-picker");
+  if (btnCancelFolderPicker) btnCancelFolderPicker.addEventListener("click", closeFolderPickerModal);
+
+  const btnConfirmAddFolder = $("btn-confirm-add-folder");
+  if (btnConfirmAddFolder) btnConfirmAddFolder.addEventListener("click", doAddFolder);
+
+  const folderPickerModal = $("folder-picker-modal");
+  if (folderPickerModal) {
+    folderPickerModal.addEventListener("click", (e) => {
+      if (e.target === folderPickerModal) closeFolderPickerModal();
+    });
+  }
+
+  // Preset Buttons
+  ["preset-home", "preset-projects", "preset-desktop"].forEach((id) => {
+    const btn = $(id);
+    if (btn) {
+      btn.addEventListener("click", () => {
+        const preset = btn.getAttribute("data-preset");
+        if (preset) loadDirectory(preset);
+      });
+    }
+  });
+
+  // Path Input & Live Autocomplete
+  const pickerPathInput = $("picker-path-input");
+  if (pickerPathInput) {
+    pickerPathInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const val = pickerPathInput.value.trim();
+        if (val) loadDirectory(val);
+      }
+    });
+
+    pickerPathInput.addEventListener("input", (e) => {
+      const val = e.target.value;
+      if (autocompleteDebounce) clearTimeout(autocompleteDebounce);
+      autocompleteDebounce = setTimeout(() => {
+        handleAutocomplete(val);
+      }, 150);
+    });
+  }
+
+  const btnPickerGo = $("btn-picker-go");
+  if (btnPickerGo) {
+    btnPickerGo.addEventListener("click", () => {
+      const val = pickerPathInput ? pickerPathInput.value.trim() : "";
+      if (val) loadDirectory(val);
+    });
+  }
 
   // Modals & Pairing
   const btnPair = $("btn-pair");
@@ -944,12 +1313,20 @@ function setupEventListeners() {
       if (e.key === "Escape") {
         document.activeElement.blur();
         closePairModal();
+        closeFolderPickerModal();
       }
       return;
     }
 
     if (e.key === "t" || e.key === "T") {
       toggleTheme();
+    } else if (e.key === "f" || e.key === "F") {
+      const modal = $("folder-picker-modal");
+      if (modal && (modal.classList.contains("open") || modal.getAttribute("aria-hidden") === "false")) {
+        closeFolderPickerModal();
+      } else {
+        openFolderPickerModal();
+      }
     } else if (e.key === "p" || e.key === "P") {
       const modal = $("pair-modal");
       if (modal && (modal.classList.contains("open") || modal.getAttribute("aria-hidden") === "false")) {
@@ -963,6 +1340,7 @@ function setupEventListeners() {
       if (syncBtn) syncBtn.click();
     } else if (e.key === "Escape") {
       closePairModal();
+      closeFolderPickerModal();
     }
   });
 }

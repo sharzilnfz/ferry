@@ -368,7 +368,7 @@ pub fn short_device(dev: &[u8; 32]) -> String {
 }
 
 /// Read this folder's `CONFIG_HEAD` entry for our device and unwrap the FMK.
-pub(crate) fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> FolderResult<Fmk> {
+pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> FolderResult<Fmk> {
     let head_bytes = std::fs::read(dot_dir(&opened.root).join(CONFIG_FILE)).code(
         "config-corrupt",
         "the folder's key envelope is missing or unreadable",
@@ -397,7 +397,7 @@ pub(crate) fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> 
 
 /// Append one wrapped-key entry to the folder's `CONFIG_HEAD` (idempotent per
 /// recipient device).
-pub(crate) fn append_wrap_entry_for(
+pub fn append_wrap_entry_for(
     root: &Path,
     folder_id: [u8; 16],
     recipient: &DeviceId,

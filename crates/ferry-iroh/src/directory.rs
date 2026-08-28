@@ -60,6 +60,7 @@ pub fn next_global_synth_key(ip: std::net::IpAddr) -> RouteKey {
 pub struct RouteTable {
     inner: Arc<Mutex<HashMap<RouteKey, (Route, RouteScope)>>>,
     by_peer: Arc<Mutex<HashMap<[u8; 32], Route>>>,
+    by_topic: Arc<Mutex<HashMap<[u8; 32], Route>>>,
 }
 
 impl Default for RouteTable {
@@ -74,6 +75,7 @@ impl RouteTable {
         RouteTable {
             inner: Arc::new(Mutex::new(HashMap::new())),
             by_peer: Arc::new(Mutex::new(HashMap::new())),
+            by_topic: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -93,6 +95,17 @@ impl RouteTable {
         bp.insert(route.endpoint_id, route.clone());
         let mut t = lock(&self.inner);
         t.insert(key, (route, RouteScope::Explicit));
+    }
+
+    /// Publish an ephemeral pairing rendezvous topic mapping to this endpoint.
+    pub fn publish_topic(&self, topic: [u8; 32], route: Route) {
+        let mut bt = lock(&self.by_topic);
+        bt.insert(topic, route);
+    }
+
+    /// Resolve a pairing rendezvous topic into an endpoint Route.
+    pub fn resolve_topic(&self, topic: &[u8; 32]) -> Option<Route> {
+        lock(&self.by_topic).get(topic).cloned()
     }
 
     /// Register a peer identity explicitly and return a synthesized route key.
@@ -148,6 +161,16 @@ pub fn publish_route(key: RouteKey, route: Route) {
 /// Register an explicit route into the process-global fallback table.
 pub fn register_explicit_route(key: RouteKey, route: Route) {
     global_table().register_explicit_route(key, route);
+}
+
+/// Publish a rendezvous topic into the process-global fallback table.
+pub fn publish_topic(topic: [u8; 32], route: Route) {
+    global_table().publish_topic(topic, route);
+}
+
+/// Resolve a rendezvous topic from the process-global fallback table.
+pub fn resolve_topic(topic: &[u8; 32]) -> Option<Route> {
+    global_table().resolve_topic(topic)
 }
 
 /// Resolve a route key from the process-global fallback table.

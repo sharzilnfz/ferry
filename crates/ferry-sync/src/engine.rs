@@ -787,9 +787,7 @@ struct Ctx {
 
 impl Ctx {
     fn status(&self, line: &str) {
-        if !self.cfg.quiet {
-            println!("[{}] {}", self.cfg.tag, line);
-        }
+        eprintln!("[{}] {}", self.cfg.tag, line);
     }
 
     fn bump_ok(&self) {
@@ -999,11 +997,34 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     };
 
     let ledger = PeerLedger::new(ctx.store.store_dir());
-    let (expect, is_tofu_fresh) = match &ctx.peer_policy {
+    let current_policy = match &ctx.peer_policy {
         PeerPolicy::AllowList(set) => {
-            if set.len() == 1 {
-                let pin = *set.iter().next().unwrap();
+            let disk_policy = resolve_peer_policy_from_disk(&ctx.cfg, &ctx.store);
+            if let PeerPolicy::AllowList(disk_set) = disk_policy {
+                let mut combined = set.clone();
+                combined.extend(disk_set);
+                PeerPolicy::AllowList(combined)
+            } else {
+                PeerPolicy::AllowList(set.clone())
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => resolve_peer_policy_from_disk(&ctx.cfg, &ctx.store),
+    };
+
+    let (expect, is_tofu_fresh) = match &current_policy {
+        PeerPolicy::AllowList(set) => {
+            let mut peers = set.clone();
+            peers.remove(ctx.identity.device_id());
+            if peers.len() == 1 {
+                let pin = *peers.iter().next().unwrap();
                 (ExpectPeer::Pin(pin), false)
+            } else if peers.is_empty() {
+                let known = ledger.list_peers(&ctx.cfg.folder_id)?;
+                if let Some(first) = known.first() {
+                    (ExpectPeer::Pin(*first), false)
+                } else {
+                    (ExpectPeer::TrustOnFirstUse, true)
+                }
             } else {
                 (ExpectPeer::TrustOnFirstUse, false)
             }
@@ -1021,9 +1042,11 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
 
-    match &ctx.peer_policy {
+    match &current_policy {
         PeerPolicy::AllowList(set) => {
-            if !set.contains(&est.peer) {
+            let mut peers = set.clone();
+            peers.remove(ctx.identity.device_id());
+            if !peers.is_empty() && !peers.contains(&est.peer) {
                 let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
                 ctx.shared.record_peer_connectivity(est.peer, "unreachable");
                 ctx.status(&format!(
@@ -1031,6 +1054,9 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
                     hex(&est.peer)
                 ));
                 return Err(SessionError::PeerUnauthorized(hex(&est.peer)));
+            }
+            if is_tofu_fresh || peers.is_empty() {
+                let _ = ledger.record_peer(&ctx.cfg.folder_id, &est.peer);
             }
         }
         PeerPolicy::TrustOnFirstUse => {
@@ -1312,6 +1338,7 @@ impl SyncEngine {
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
         if let Some(listener) = listener {
+            eprintln!("[{}] start(): spawning accept thread on {:?}", self.cfg.tag, listen_addr);
             let ctx2 = Arc::clone(&ctx);
             let shared2 = Arc::clone(&shared);
             let joins2 = Arc::clone(&joins);
@@ -1577,7 +1604,9 @@ impl EngineHandle {
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
-        self.shutdown();
+        if Arc::strong_count(&self.shared) == 1 {
+            self.shutdown();
+        }
     }
 }
 

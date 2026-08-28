@@ -84,6 +84,15 @@
             <span>Sync Now</span>
           </button>
           
+          <button id="btn-add-folder" class="btn btn-ghost" title="Add Folder to Sync (F)" type="button">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              <line x1="12" y1="11" x2="12" y2="17"></line>
+              <line x1="9" y1="14" x2="15" y2="14"></line>
+            </svg>
+            <span>+ Add Folder</span>
+          </button>
+
           <button id="btn-pin" class="btn btn-ghost" type="button">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
@@ -212,6 +221,107 @@
           <div id="pair-result" class="banner banner-success" style="display: none; margin-top: 6px;"></div>
           <div id="pair-err" class="banner banner-error" style="display: none; margin-top: 6px;"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Obsidian Glass Interactive Directory Picker Modal -->
+  <div id="folder-picker-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal-card modal-card-lg" role="dialog" aria-modal="true" aria-labelledby="folder-picker-title">
+      <div class="modal-header">
+        <div class="modal-title-stack">
+          <h2 id="folder-picker-title" class="modal-title">Select Folder to Sync</h2>
+          <span class="modal-subtitle">Choose a local directory to continuously synchronize</span>
+        </div>
+        <button id="btn-close-folder-modal" class="btn-icon" aria-label="Close modal" type="button">✕</button>
+      </div>
+
+      <div class="modal-content">
+        <!-- Quick Access Presets -->
+        <div class="picker-presets">
+          <span class="picker-label">Quick Access:</span>
+          <div class="preset-group">
+            <button id="preset-home" class="btn btn-ghost btn-sm preset-btn" type="button" data-preset="~">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+              <span>Home (~)</span>
+            </button>
+            <button id="preset-projects" class="btn btn-ghost btn-sm preset-btn" type="button" data-preset="~/Projects">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+              </svg>
+              <span>Projects</span>
+            </button>
+            <button id="preset-desktop" class="btn btn-ghost btn-sm preset-btn" type="button" data-preset="~/Desktop">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+              <span>Desktop</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Path Input & Live Autocomplete Search -->
+        <div class="picker-path-box">
+          <div class="path-input-row">
+            <input id="picker-path-input" class="minimal-input font-mono" placeholder="Enter path or type to autocomplete (e.g. ~/Projects)" spellcheck="false" autocomplete="off">
+            <button id="btn-picker-go" class="btn btn-primary btn-sm" type="button">Go</button>
+          </div>
+          <div id="picker-autocomplete-list" class="autocomplete-dropdown" style="display: none;"></div>
+        </div>
+
+        <!-- Breadcrumb Bar -->
+        <div id="picker-breadcrumbs" class="picker-breadcrumbs" aria-label="Directory breadcrumbs">
+          <!-- Populated dynamically -->
+        </div>
+
+        <!-- Secret Scan Warning Badge -->
+        <div id="picker-secret-badge" class="banner banner-warn secret-warning-box" style="display: none;" role="alert">
+          <div class="secret-warning-header">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <span id="picker-secret-title">Potential secrets detected in selected folder</span>
+          </div>
+          <div id="picker-secret-list" class="secret-warning-items"></div>
+        </div>
+
+        <!-- Directory Browser List -->
+        <div class="picker-list-container">
+          <div class="picker-list-header">
+            <span>Directory Name</span>
+            <span>Type</span>
+          </div>
+          <div id="picker-dir-list" class="picker-dir-scroll" role="listbox" tabindex="0">
+            <!-- Directory entries dynamically rendered here -->
+          </div>
+        </div>
+
+        <!-- Selected Folder & Action Buttons -->
+        <div class="picker-footer">
+          <div class="picker-selection-info">
+            <span class="selection-label">Selected:</span>
+            <span id="picker-selected-path" class="selection-path font-mono">—</span>
+          </div>
+          <div class="picker-footer-actions">
+            <button id="btn-cancel-folder-picker" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="btn-confirm-add-folder" class="btn btn-primary" type="button">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <span>Add Folder</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="picker-error" class="banner banner-error" style="display: none; margin-top: 4px;"></div>
       </div>
     </div>
   </div>

@@ -22,8 +22,15 @@ struct Finding {
     preview: String,
 }
 
-pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> {
-    let opened = folder::open_folder(folder)?;
+pub fn run(folder: &Path, i_know: bool, _timeout_secs: u64) -> CliResult<Output> {
+    let opened = match folder::open_folder(folder) {
+        Ok(o) => o,
+        Err(e) if e.code == "not-a-folder" => {
+            super::init::run(folder, "init")?;
+            folder::open_folder(folder)?
+        }
+        Err(e) => return Err(e),
+    };
     let rules = folder::load_rules(&opened.root, &opened.settings)?;
     let warnings = ferry_ignore::secrets::scan_for_secrets(&rules, &opened.root);
 
@@ -74,37 +81,93 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         return Err(err);
     }
 
-    // Gate passed (or nothing found): emit the payload via the pairing flow.
-    let identity = {
-        let home = crate::home::ferry_home()?;
-        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {
-            CliError::new(
-                "identity-corrupt",
-                e.to_string(),
-                "restore or replace your device.key",
-            )
-        })?
-    };
-    let mut out = super::pairing::initiate(&opened, &identity, timeout_secs)?;
+    // Gate passed (or nothing found): ensure daemon and register folder.
+    let _ = crate::ipc::ensure_daemon_running();
+    let _ = crate::ipc::send_command_to_daemon(ferry_ipc::protocol::ClientCommand::RegisterFolder {
+        path: opened.root.display().to_string(),
+    });
 
-    // Re-shape the document as a share.
-    if let Some(obj) = out.json.as_object_mut() {
-        obj.insert("command".into(), json!("share"));
-        obj.insert("warnings_reviewed".into(), json!(!findings.is_empty()));
-        obj.insert(
-            "warnings".into(),
-            json!(findings
-                .iter()
-                .map(|f| json!({
-                    "path": f.path, "line": f.line, "class": f.class, "preview": f.preview,
-                }))
-                .collect::<Vec<_>>()),
-        );
+    let identity = crate::ensure_identity()?;
+    let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
+
+    let mut listen_addr_str = "127.0.0.1:0".to_string();
+    if let Ok(addr_s) = std::fs::read_to_string(opened.state_dir().join("listen.addr")) {
+        listen_addr_str = addr_s.trim().to_string();
+    }
+    let mut fmk_hex = String::new();
+    if let Ok(head_bytes) = std::fs::read(opened.state_dir().join("config")) {
+        if let Ok(head) = ferry_crypto::config_head::parse_config_head(&head_bytes) {
+            if let Some(entry) = head.entries.iter().find(|e| e.device_pub == *identity.public()) {
+                if let Ok(fmk) = ferry_crypto::folder_key::unwrap_folder_key(&entry.wrapped, &head.folder_id, &identity) {
+                    fmk_hex = ferry_store::format::hex(fmk.as_ref());
+                }
+            }
+        }
     }
 
-    // Prepend the warning recap to the human text even when proceeding.
+    let mut code = ferry_ipc::backend::generate_6word_code();
+    let pairing_resp = crate::ipc::send_command_to_daemon(
+        ferry_ipc::protocol::ClientCommand::CreatePairingSession {
+            folder_id: Some(folder_id_hex.clone()),
+        },
+    );
+    if let Some(ferry_ipc::protocol::DaemonMessage::Ack {
+        message: Some(ref msg),
+        ..
+    }) = pairing_resp
+    {
+        if let Ok(sess) = serde_json::from_str::<ferry_ipc::backend::PairingSession>(msg) {
+            code = sess.code;
+        }
+    }
+
+    if pairing_resp.is_none() {
+        let session_id = format!("sess-{}", &ferry_store::format::hex(&rand::random::<[u8; 8]>())[..8]);
+        let record = ferry_ipc::backend::PairingSessionRecord {
+            session_id,
+            code: code.clone(),
+            folder_id: folder_id_hex.clone(),
+            device_id: ferry_store::format::hex(identity.public()),
+            listen_addr: listen_addr_str.clone(),
+            poly: opened.poly,
+            fmk_hex,
+            created_sec: ferry_platform::time::now_unix().0,
+            sync_listen_addr: Some(listen_addr_str),
+        };
+        let _ = ferry_ipc::backend::save_pairing_record(&record);
+    }
+
+    // Also write legacy offer file for compatibility
+    if let Ok(pending) = ferry_folder::pairing::initiate_begin(&opened, &identity) {
+        let _ = std::fs::write(&pending.offer_path, &pending.offer_bytes);
+    }
+
+    let json_doc = json!({
+        "command": "share",
+        "status": "advertising",
+        "folder": opened.root.display().to_string(),
+        "folder_id": folder_id_hex,
+        "device_id": ferry_store::format::hex(identity.public()),
+        "code": code,
+        "warnings_reviewed": !findings.is_empty(),
+        "warnings": findings
+            .iter()
+            .map(|f| json!({
+                "path": f.path, "line": f.line, "class": f.class, "preview": f.preview,
+            }))
+            .collect::<Vec<_>>(),
+    });
+
+    let mut human = format!(
+        "Sharing folder: {}\nFolder ID: {}\nPairing code: {}\n\nOn the other machine, run:\n  ferry join {} [dest]\n",
+        opened.root.display(),
+        folder_id_hex,
+        code,
+        code,
+    );
+
     if !findings.is_empty() {
-        out.human = format!(
+        human = format!(
             "Proceeding WITH {} flagged secret risk(s) (--i-know given):\n{}\n---\n{}",
             findings.len(),
             findings
@@ -112,8 +175,9 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
                 .map(|f| format!("  [{}] {}", f.class, f.path))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            out.human
+            human
         );
     }
-    Ok(out)
+
+    Ok(Output::new(json_doc, human))
 }

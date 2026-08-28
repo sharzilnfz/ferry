@@ -13,8 +13,34 @@ fn parse(args: &[&str]) -> Cli {
 
 fn expect_init(args: &[&str]) -> Option<PathBuf> {
     match &parse(args).command {
-        Command::Init { path } => path.clone(),
+        Some(Command::Init { path }) => path.clone(),
         other => panic!("expected Init, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_command_is_none() {
+    let cli = parse(&[]);
+    assert!(cli.command.is_none());
+}
+
+#[test]
+fn join_command_parses_code_and_dest() {
+    match parse(&["join", "beacon-river-falcon-ember-drift-summit"]).command {
+        Some(Command::Join { code, dest, timeout_secs }) => {
+            assert_eq!(code, "beacon-river-falcon-ember-drift-summit");
+            assert_eq!(dest, None);
+            assert_eq!(timeout_secs, 120);
+        }
+        other => panic!("{other:?}"),
+    }
+    match parse(&["join", "my-code", "target/dir", "--timeout-secs", "60"]).command {
+        Some(Command::Join { code, dest, timeout_secs }) => {
+            assert_eq!(code, "my-code");
+            assert_eq!(dest, Some(PathBuf::from("target/dir")));
+            assert_eq!(timeout_secs, 60);
+        }
+        other => panic!("{other:?}"),
     }
 }
 
@@ -43,7 +69,7 @@ fn init_defaults_to_cwd_and_takes_a_path() {
 #[test]
 fn add_requires_path() {
     match parse(&["add", "x"]).command {
-        Command::Add { path } => assert_eq!(path, PathBuf::from("x")),
+        Some(Command::Add { path }) => assert_eq!(path, PathBuf::from("x")),
         other => panic!("{other:?}"),
     }
     assert!(
@@ -56,11 +82,11 @@ fn add_requires_path() {
 fn pair_has_initiate_and_accept_forms() {
     // Bare `pair` = initiate with defaults.
     match parse(&["pair"]).command {
-        Command::Pair {
+        Some(Command::Pair {
             accept,
             dir,
             timeout_secs,
-        } => {
+        }) => {
             assert_eq!(accept, None);
             assert_eq!(dir, None);
             assert_eq!(timeout_secs, 120);
@@ -69,7 +95,7 @@ fn pair_has_initiate_and_accept_forms() {
     }
     // Accept form.
     match parse(&["pair", "--accept", "/tmp/offer.ferry-pair", "dest"]).command {
-        Command::Pair { accept, dir, .. } => {
+        Some(Command::Pair { accept, dir, .. }) => {
             assert_eq!(accept, Some(PathBuf::from("/tmp/offer.ferry-pair")));
             assert_eq!(dir, Some(PathBuf::from("dest")));
         }
@@ -77,7 +103,7 @@ fn pair_has_initiate_and_accept_forms() {
     }
     // Timeout override.
     match parse(&["pair", "--timeout-secs", "5"]).command {
-        Command::Pair { timeout_secs, .. } => assert_eq!(timeout_secs, 5),
+        Some(Command::Pair { timeout_secs, .. }) => assert_eq!(timeout_secs, 5),
         other => panic!("{other:?}"),
     }
 }
@@ -85,14 +111,14 @@ fn pair_has_initiate_and_accept_forms() {
 #[test]
 fn share_gating_flag_and_folder() {
     match parse(&["share"]).command {
-        Command::Share { folder, i_know, .. } => {
+        Some(Command::Share { folder, i_know, .. }) => {
             assert_eq!(folder, None);
             assert!(!i_know);
         }
         other => panic!("{other:?}"),
     }
     match parse(&["share", "--i-know", "sub/dir"]).command {
-        Command::Share { folder, i_know, .. } => {
+        Some(Command::Share { folder, i_know, .. }) => {
             assert_eq!(folder, Some(PathBuf::from("sub/dir")));
             assert!(i_know);
         }
@@ -104,7 +130,7 @@ fn share_gating_flag_and_folder() {
 fn conflicts_needs_list_subcommand() {
     assert!(Cli::try_parse_from(["ferry", "conflicts"]).is_err());
     match parse(&["conflicts", "list"]).command {
-        Command::Conflicts { action } => {
+        Some(Command::Conflicts { action }) => {
             let _: ferry_cli::cli::ConflictsAction = action;
         }
         other => panic!("{other:?}"),
@@ -114,35 +140,35 @@ fn conflicts_needs_list_subcommand() {
 #[test]
 fn ignore_pattern_preset_and_list() {
     match parse(&["ignore", "*.log"]).command {
-        Command::Ignore { pattern, list, .. } => {
+        Some(Command::Ignore { pattern, list, .. }) => {
             assert_eq!(pattern.as_deref(), Some("*.log"));
             assert!(!list);
         }
         other => panic!("{other:?}"),
     }
     match parse(&["ignore", "--list"]).command {
-        Command::Ignore {
+        Some(Command::Ignore {
             pattern,
             preset: _,
             list,
             ..
-        } => {
+        }) => {
             assert_eq!(pattern, None);
             assert!(list);
         }
         other => panic!("{other:?}"),
     }
     match parse(&["ignore", "--preset", "claude"]).command {
-        Command::Ignore { preset, .. } => assert_eq!(preset.as_deref(), Some("claude")),
+        Some(Command::Ignore { preset, .. }) => assert_eq!(preset.as_deref(), Some("claude")),
         other => panic!("{other:?}"),
     }
     match parse(&["ignore", "--list", "/tmp/proj"]).command {
-        Command::Ignore {
+        Some(Command::Ignore {
             pattern,
             list,
             folder,
             ..
-        } => {
+        }) => {
             assert_eq!(pattern.as_deref(), Some("/tmp/proj"));
             assert_eq!(folder, None);
             assert!(list);
@@ -150,9 +176,9 @@ fn ignore_pattern_preset_and_list() {
         other => panic!("{other:?}"),
     }
     match parse(&["ignore", "--preset", "claude", "/tmp/proj"]).command {
-        Command::Ignore {
+        Some(Command::Ignore {
             preset, pattern, ..
-        } => {
+        }) => {
             assert_eq!(preset.as_deref(), Some("claude"));
             assert_eq!(pattern.as_deref(), Some("/tmp/proj"));
         }
@@ -163,7 +189,7 @@ fn ignore_pattern_preset_and_list() {
 #[test]
 fn daemon_folders_listen_peer_transport_interval() {
     match parse(&["daemon"]).command {
-        Command::Daemon { folders, .. } => assert!(folders.is_empty()),
+        Some(Command::Daemon { folders, .. }) => assert!(folders.is_empty()),
         other => panic!("{other:?}"),
     }
     let cli = parse(&[
@@ -177,13 +203,13 @@ fn daemon_folders_listen_peer_transport_interval() {
         "2",
     ]);
     match cli.command {
-        Command::Daemon {
+        Some(Command::Daemon {
             folders,
             listen,
             peer_url,
             transport,
             interval_secs,
-        } => {
+        }) => {
             assert_eq!(folders.len(), 2);
             assert_eq!(listen.as_deref(), Some("127.0.0.1:44001"));
             assert_eq!(peer_url, None);
@@ -195,15 +221,15 @@ fn daemon_folders_listen_peer_transport_interval() {
     // --peer-url per ticket naming; --peer alias for humans.
     let cli = parse(&["daemon", "--peer-url", "127.0.0.1:1"]);
     assert!(
-        matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
+        matches!(&cli.command, Some(Command::Daemon { peer_url, .. }) if peer_url.as_deref() == Some("127.0.0.1:1"))
     );
     let cli = parse(&["daemon", "--peer", "127.0.0.1:1"]);
     assert!(
-        matches!(&cli.command, Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
+        matches!(&cli.command, Some(Command::Daemon { peer_url, .. }) if peer_url.as_deref() == Some("127.0.0.1:1"))
     );
     // Unknown transport values still PARSE (runtime rejects them cleanly).
     let cli = parse(&["daemon", "--transport", "iroh"]);
-    assert!(matches!(&cli.command, Command::Daemon { transport, .. } if transport == "iroh"));
+    assert!(matches!(&cli.command, Some(Command::Daemon { transport, .. }) if transport == "iroh"));
 }
 
 #[test]
@@ -217,12 +243,12 @@ fn sync_flags() {
         "7",
     ]);
     match cli.command {
-        Command::Sync {
+        Some(Command::Sync {
             folder,
             peer_url,
             timeout_secs,
             ..
-        } => {
+        }) => {
             assert_eq!(folder, Some(PathBuf::from("myfolder")));
             assert_eq!(peer_url.as_deref(), Some("127.0.0.1:9"));
             assert_eq!(timeout_secs, 7);
@@ -242,14 +268,14 @@ fn version_flag_is_wired() {
 fn pin_has_four_actions_and_repeatable_paths() {
     // Bare start: no globs = whole folder, default hours = 8.
     match parse(&["pin", "start"]).command {
-        Command::Pin {
+        Some(Command::Pin {
             action:
                 ferry_cli::cli::PinAction::Start {
                     paths,
                     hours,
                     folder: None,
                 },
-        } => {
+        }) => {
             assert!(paths.is_empty(), "no --paths means whole-folder");
             assert_eq!(hours, 8);
         }
@@ -257,9 +283,9 @@ fn pin_has_four_actions_and_repeatable_paths() {
     }
     // Custom --hours flag.
     match parse(&["pin", "start", "--hours", "24"]).command {
-        Command::Pin {
+        Some(Command::Pin {
             action: ferry_cli::cli::PinAction::Start { hours, .. },
-        } => assert_eq!(hours, 24),
+        }) => assert_eq!(hours, 24),
         other => panic!("{other:?}"),
     }
     // Repeatable --paths plus positional folder.
@@ -268,14 +294,14 @@ fn pin_has_four_actions_and_repeatable_paths() {
     ])
     .command
     {
-        Command::Pin {
+        Some(Command::Pin {
             action:
                 ferry_cli::cli::PinAction::Start {
                     paths,
                     hours,
                     folder: Some(folder),
                 },
-        } => {
+        }) => {
             assert_eq!(paths, vec!["src/**".to_string(), "docs/*".to_string()]);
             assert_eq!(hours, 8);
             assert_eq!(folder, PathBuf::from("sub"));
@@ -289,7 +315,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
         vec!["pin", "status", "elsewhere"],
     ] {
         let cli = parse(&args);
-        assert!(matches!(&cli.command, Command::Pin { .. }), "{args:?}");
+        assert!(matches!(&cli.command, Some(Command::Pin { .. })), "{args:?}");
     }
     // Unknown action refused.
     assert!(Cli::try_parse_from(["ferry", "pin", "rebase"]).is_err());
@@ -298,7 +324,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
 #[test]
 fn ui_flags_parse_web_gui_tui() {
     match parse(&["ui"]).command {
-        Command::Ui {
+        Some(Command::Ui {
             folder,
             gui,
             web,
@@ -307,7 +333,7 @@ fn ui_flags_parse_web_gui_tui() {
             port,
             no_open,
             test,
-        } => {
+        }) => {
             assert_eq!(folder, None);
             assert!(!gui);
             assert!(!web);
@@ -321,13 +347,13 @@ fn ui_flags_parse_web_gui_tui() {
     }
 
     match parse(&["ui", "--gui", "my_folder"]).command {
-        Command::Ui {
+        Some(Command::Ui {
             folder,
             gui,
             web,
             tui,
             ..
-        } => {
+        }) => {
             assert_eq!(folder, Some(PathBuf::from("my_folder")));
             assert!(gui);
             assert!(!web);
@@ -347,7 +373,7 @@ fn ui_flags_parse_web_gui_tui() {
     ])
     .command
     {
-        Command::Ui {
+        Some(Command::Ui {
             gui,
             web,
             tui,
@@ -355,7 +381,7 @@ fn ui_flags_parse_web_gui_tui() {
             port,
             no_open,
             ..
-        } => {
+        }) => {
             assert!(!gui);
             assert!(web);
             assert!(!tui);
@@ -367,7 +393,7 @@ fn ui_flags_parse_web_gui_tui() {
     }
 
     match parse(&["ui", "--tui"]).command {
-        Command::Ui { gui, web, tui, .. } => {
+        Some(Command::Ui { gui, web, tui, .. }) => {
             assert!(!gui);
             assert!(!web);
             assert!(tui);
@@ -379,5 +405,5 @@ fn ui_flags_parse_web_gui_tui() {
 #[test]
 fn help_mentions_the_five_minute_path() {
     let err = Cli::try_parse_from(["ferry", "--help"]).unwrap_err();
-    assert!(err.to_string().contains("Five-minute path"));
+    assert!(err.to_string().contains("Five-minute manual path") || err.to_string().contains("Five-minute path"));
 }

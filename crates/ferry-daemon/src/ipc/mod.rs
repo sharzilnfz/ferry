@@ -189,7 +189,7 @@ where
             cmd_res = receiver.recv_command() => {
                 match cmd_res {
                     Ok(Some(cmd)) => {
-                        let response = dispatch_client_command(&state, cmd);
+                        let response = dispatch_client_command(&state, cmd).await;
                         if sender.send_message(&response).await.is_err() {
                             break;
                         }
@@ -232,7 +232,7 @@ where
 }
 
 /// Process a single client command and return the immediate response message.
-pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
+pub async fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
         ClientCommand::GetStatus => DaemonMessage::Snapshot(state.snapshot()),
         ClientCommand::StartPin {
@@ -316,40 +316,140 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 message: e.to_string(),
             },
         },
+        ClientCommand::ListDirectory { path } => {
+            let p = path.map_or_else(
+                || std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                std::path::PathBuf::from,
+            );
+            let mut entries = Vec::new();
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                for entry in rd.flatten() {
+                    let ep = entry.path();
+                    let is_dir = ep.is_dir();
+                    let is_symlink = ep.is_symlink();
+                    let is_git_repo = is_dir && ep.join(".git").exists();
+                    let is_already_synced = is_dir && ep.join(".ferry").exists();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    entries.push(ferry_ipc::backend::FsEntry {
+                        name,
+                        path: ep,
+                        is_dir,
+                        is_symlink,
+                        is_git_repo,
+                        is_already_synced,
+                    });
+                }
+            }
+            let listing = ferry_ipc::backend::DirectoryListing {
+                parent_path: p.parent().map(std::path::PathBuf::from),
+                current_path: p,
+                entries,
+            };
+            DaemonMessage::Ack {
+                command: "list_directory".to_string(),
+                message: serde_json::to_string(&listing).ok(),
+            }
+        }
+        ClientCommand::ListFolders => {
+            let folders = state.list_folders();
+            DaemonMessage::Ack {
+                command: "list_folders".to_string(),
+                message: serde_json::to_string(&folders).ok(),
+            }
+        }
+        ClientCommand::RegisterFolder { path } => match state.register_folder(PathBuf::from(path)) {
+            Ok(info) => DaemonMessage::Ack {
+                command: "register_folder".to_string(),
+                message: serde_json::to_string(&info).ok(),
+            },
+            Err(e) => DaemonMessage::Error {
+                code: e.code,
+                message: e.message,
+            },
+        },
+        ClientCommand::UnregisterFolder { folder_id } => {
+            match state.unregister_folder(&folder_id) {
+                Ok(()) => DaemonMessage::Ack {
+                    command: "unregister_folder".to_string(),
+                    message: Some(folder_id),
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::SwitchFolder { folder_id } => match state.switch_folder(&folder_id) {
+            Ok(snap) => DaemonMessage::Snapshot(snap),
+            Err(e) => DaemonMessage::Error {
+                code: e.code,
+                message: e.message,
+            },
+        },
+        ClientCommand::CreatePairingSession { folder_id } => {
+            let fid_str = folder_id.unwrap_or_else(|| state.snapshot().folder_id);
+            let (folder_path, sync_addr) = if let Some(fid_bytes) = ferry_store::format::unhex::<16>(&fid_str) {
+                let p = state.store_dir_for(&fid_bytes).unwrap_or_else(|| state.tree_dir());
+                let a = state.managed_folders().into_iter().find(|m| m.folder_id == fid_bytes).and_then(|m| m.listen_addr);
+                (p, a)
+            } else {
+                (state.tree_dir(), None)
+            };
+
+            match crate::pairing::start_host_pairing(&folder_path, state.identity(), Some(fid_str), sync_addr) {
+                Ok(host_sess) => DaemonMessage::Ack {
+                    command: "create_pairing_session".to_string(),
+                    message: serde_json::to_string(&host_sess.session).ok(),
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::JoinPairingSession { code, target_dir } => {
+            let p = target_dir
+                .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+            let abs_path = if p.is_relative() {
+                std::env::current_dir().map_or_else(|_| p.clone(), |cwd| cwd.join(&p))
+            } else {
+                p.clone()
+            };
+
+            match crate::pairing::execute_joiner_pairing(&code, &abs_path, state.identity()).await {
+                Ok(res) => {
+                    let _ = state.register_folder(abs_path.clone());
+                    DaemonMessage::Ack {
+                        command: "join_pairing_session".to_string(),
+                        message: serde_json::to_string(&res).ok(),
+                    }
+                }
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
         ClientCommand::Ping => DaemonMessage::Pong,
     }
 }
 
-/// Background watcher task that monitors engine state transitions and new conflict records.
+struct FolderTrack {
+    last_manifest: Option<[u8; 32]>,
+    last_agreed: Option<[u8; 32]>,
+    last_scanned: Option<ScanStatsView>,
+    last_pending: Option<i64>,
+    last_pin_holding: bool,
+    last_meta: Option<(u64, Option<std::time::SystemTime>)>,
+    last_conflicts_count: usize,
+}
+
+/// Background watcher task that monitors engine state transitions and new conflict records across all folders.
 async fn run_state_watcher(
     state: Arc<DaemonState>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
-    let mut last_manifest = state.handle().current_manifest_id();
-    let mut last_agreed = state.handle().agreed_id();
-    let mut last_scanned = state.handle().scan_counts().map(|s| {
-        ScanStatsView::new(
-            s.files as u64,
-            s.dirs as u64,
-            s.symlinks as u64,
-            s.bytes_chunked,
-        )
-    });
-    let mut last_pending = state.handle().pending_changes();
-    let mut last_pin_holding = ferry_pin::PinManager::new(state.state_dir())
-        .is_holding()
-        .unwrap_or(false);
-
-    let conflicts_file = state.state_dir().join("conflicts.jsonl");
-    let mut last_meta = std::fs::metadata(&conflicts_file)
-        .ok()
-        .map(|m| (m.len(), m.modified().ok()));
-    let mut last_conflicts_count = if last_meta.is_some() {
-        state.list_conflicts().map_or(0, |c| c.len())
-    } else {
-        0
-    };
-
+    let mut tracked: std::collections::HashMap<[u8; 16], FolderTrack> = std::collections::HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_millis(100));
 
     loop {
@@ -364,68 +464,120 @@ async fn run_state_watcher(
                     break;
                 }
 
-                let cur_manifest = state.handle().current_manifest_id();
-                let cur_agreed = state.handle().agreed_id();
-                let cur_scan = state.handle().scan_counts().map(|s| {
-                    ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked)
-                });
-                let cur_pending = state.handle().pending_changes();
-                let cur_pin_holding = ferry_pin::PinManager::new(state.state_dir())
-                    .is_holding()
-                    .unwrap_or(false);
+                let managed = state.managed_folders();
+                let active_id = state.active_folder_id();
 
-                let changed = cur_manifest != last_manifest
-                    || cur_agreed != last_agreed
-                    || cur_scan != last_scanned
-                    || cur_pending != last_pending
-                    || cur_pin_holding != last_pin_holding;
+                let current_ids: std::collections::HashSet<[u8; 16]> =
+                    managed.iter().map(|m| m.folder_id).collect();
+                tracked.retain(|fid, _| current_ids.contains(fid));
 
-                if changed {
-                    last_manifest = cur_manifest;
-                    last_agreed = cur_agreed;
-                    last_scanned = cur_scan;
-                    last_pending = cur_pending;
-                    last_pin_holding = cur_pin_holding;
+                for m in managed {
+                    let fid = m.folder_id;
+                    let state_dir = state
+                        .state_dir_for(&fid)
+                        .unwrap_or_else(|| m.store_dir.join(".ferry"));
+                    let conflicts_file = state_dir.join("conflicts.jsonl");
 
-                    let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
-                    let agreed_hex = cur_agreed.map(|a| hex_str(&a));
-                    let state_str = if cur_manifest.is_some() {
-                        "idle".to_string()
-                    } else {
-                        "initializing".to_string()
-                    };
-
-                    state.broadcast(DaemonMessage::StateChanged {
-                        state: state_str,
-                        manifest_id: manifest_hex,
-                        agreed_id: agreed_hex,
-                        pending_changes: cur_pending,
-                        stats: cur_scan,
+                    let track = tracked.entry(fid).or_insert_with(|| {
+                        let cur_meta = std::fs::metadata(&conflicts_file)
+                            .ok()
+                            .map(|meta| (meta.len(), meta.modified().ok()));
+                        let cur_conflicts =
+                            ferry_sync_engine::list_conflicts(&state_dir).map_or(0, |c| c.len());
+                        FolderTrack {
+                            last_manifest: m.handle.current_manifest_id(),
+                            last_agreed: m.handle.agreed_id(),
+                            last_scanned: m.handle.scan_counts().map(|s| {
+                                ScanStatsView::new(
+                                    s.files as u64,
+                                    s.dirs as u64,
+                                    s.symlinks as u64,
+                                    s.bytes_chunked,
+                                )
+                            }),
+                            last_pending: m.handle.pending_changes(),
+                            last_pin_holding: ferry_pin::PinManager::new(&state_dir)
+                                .is_holding()
+                                .unwrap_or(false),
+                            last_meta: cur_meta,
+                            last_conflicts_count: cur_conflicts,
+                        }
                     });
-                }
 
-                // Check for new conflicts in .ferry/conflicts.jsonl when file metadata changes
-                let cur_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
-                if cur_meta != last_meta {
-                    last_meta = cur_meta;
-                    if let Ok(conflicts) = state.list_conflicts() {
-                        if conflicts.len() > last_conflicts_count {
-                            for entry in &conflicts[last_conflicts_count..] {
-                                let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
-                                    .unwrap_or_else(|| ferry_platform::time::now_unix().0 as u64);
-                                state.broadcast(DaemonMessage::ConflictRecorded {
-                                    path: entry.path.clone(),
-                                    conflict_path: entry
-                                        .quarantined_as
-                                        .clone()
-                                        .unwrap_or_else(|| entry.path.clone()),
-                                    timestamp: ts,
-                                    quarantined_as: entry.quarantined_as.clone(),
-                                });
+                    let cur_manifest = m.handle.current_manifest_id();
+                    let cur_agreed = m.handle.agreed_id();
+                    let cur_scan = m.handle.scan_counts().map(|s| {
+                        ScanStatsView::new(
+                            s.files as u64,
+                            s.dirs as u64,
+                            s.symlinks as u64,
+                            s.bytes_chunked,
+                        )
+                    });
+                    let cur_pending = m.handle.pending_changes();
+                    let cur_pin_holding = ferry_pin::PinManager::new(&state_dir)
+                        .is_holding()
+                        .unwrap_or(false);
+
+                    let changed = cur_manifest != track.last_manifest
+                        || cur_agreed != track.last_agreed
+                        || cur_scan != track.last_scanned
+                        || cur_pending != track.last_pending
+                        || cur_pin_holding != track.last_pin_holding;
+
+                    if changed {
+                        track.last_manifest = cur_manifest;
+                        track.last_agreed = cur_agreed;
+                        track.last_scanned = cur_scan;
+                        track.last_pending = cur_pending;
+                        track.last_pin_holding = cur_pin_holding;
+
+                        if Some(fid) == active_id {
+                            let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
+                            let agreed_hex = cur_agreed.map(|a| hex_str(&a));
+                            let state_str = if cur_manifest.is_some() {
+                                "idle".to_string()
+                            } else {
+                                "initializing".to_string()
+                            };
+
+                            state.broadcast(DaemonMessage::StateChanged {
+                                state: state_str,
+                                manifest_id: manifest_hex,
+                                agreed_id: agreed_hex,
+                                pending_changes: cur_pending,
+                                stats: cur_scan,
+                            });
+                        }
+                    }
+
+                    // Check for new conflicts in .ferry/conflicts.jsonl when file metadata changes
+                    let cur_meta = std::fs::metadata(&conflicts_file)
+                        .ok()
+                        .map(|meta| (meta.len(), meta.modified().ok()));
+                    if cur_meta != track.last_meta {
+                        track.last_meta = cur_meta;
+                        if let Ok(conflicts) = ferry_sync_engine::list_conflicts(&state_dir) {
+                            if conflicts.len() > track.last_conflicts_count {
+                                for entry in &conflicts[track.last_conflicts_count..] {
+                                    let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
+                                        .unwrap_or_else(|| {
+                                            ferry_platform::time::now_unix().0 as u64
+                                        });
+                                    state.broadcast(DaemonMessage::ConflictRecorded {
+                                        path: entry.path.clone(),
+                                        conflict_path: entry
+                                            .quarantined_as
+                                            .clone()
+                                            .unwrap_or_else(|| entry.path.clone()),
+                                        timestamp: ts,
+                                        quarantined_as: entry.quarantined_as.clone(),
+                                    });
+                                }
+                                track.last_conflicts_count = conflicts.len();
+                            } else if conflicts.len() < track.last_conflicts_count {
+                                track.last_conflicts_count = conflicts.len();
                             }
-                            last_conflicts_count = conflicts.len();
-                        } else if conflicts.len() < last_conflicts_count {
-                            last_conflicts_count = conflicts.len();
                         }
                     }
                 }

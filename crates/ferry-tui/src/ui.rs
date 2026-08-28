@@ -46,6 +46,8 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
 
     if state.show_conflicts_modal {
         render_conflicts_modal(state, frame, area);
+    } else if state.show_folder_picker_modal {
+        render_folder_picker_modal(state, frame, area);
     }
 }
 
@@ -362,7 +364,9 @@ fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
     let label_style = Style::default().fg(Color::DarkGray);
 
     let spans = vec![
-        Span::styled(" [P] ", hotkey_style),
+        Span::styled(" [A] ", hotkey_style),
+        Span::styled("Add/Open  ", label_style),
+        Span::styled("[P] ", hotkey_style),
         Span::styled("Pin  ", label_style),
         Span::styled("[R] ", hotkey_style),
         Span::styled("Rescan  ", label_style),
@@ -374,6 +378,180 @@ fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
 
     let footer = Paragraph::new(Line::from(spans));
     frame.render_widget(footer, area);
+}
+
+/// Render the interactive directory explorer modal.
+fn render_folder_picker_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
+    let modal_area = centered_rect(80, 75, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Filesystem Explorer — Select Folder to Sync ",
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ));
+    let inner_area = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    if inner_area.height < 4 {
+        return;
+    }
+
+    // Split inner area into:
+    // [0] Current directory path (1 line)
+    // [1] Filter input field (1 line)
+    // [2] Instruction / Shortcut hints (1 line)
+    // [3] Entries list (remaining height)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(inner_area);
+
+    // 1. Current path
+    let cur_path_str = state.folder_picker.current_path.display().to_string();
+    let path_line = Line::from(vec![
+        Span::styled(
+            " Directory: ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            cur_path_str,
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(path_line), chunks[0]);
+
+    // 2. Filter input
+    let filter_text = if state.folder_picker.filter_query.is_empty() {
+        Span::styled("(type to filter)", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled(
+            &state.folder_picker.filter_query,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )
+    };
+    let filter_line = Line::from(vec![
+        Span::styled(
+            " Filter:    ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        filter_text,
+    ]);
+    frame.render_widget(Paragraph::new(filter_line), chunks[1]);
+
+    // 3. Navigation shortcuts
+    let shortcuts_line = Line::from(vec![
+        Span::styled(
+            " [↑/↓] ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[Enter] ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Open Dir  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[Space] ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Select Folder  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[Esc/Q] ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Cancel", Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(shortcuts_line), chunks[2]);
+
+    // 4. Entries list
+    let items = state.folder_picker.filtered_items();
+    let selected_idx = state.folder_picker.selected_index;
+
+    if items.is_empty() {
+        let empty_msg = if let Some(ref err) = state.folder_picker.error_message {
+            format!("  Error: {err}")
+        } else {
+            "  (No matching folders or files found)".to_string()
+        };
+        let p = Paragraph::new(empty_msg).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(p, chunks[3]);
+        return;
+    }
+
+    let max_visible = chunks[3].height as usize;
+    let scroll_offset = if selected_idx >= max_visible {
+        selected_idx - max_visible + 1
+    } else {
+        0
+    };
+
+    let list_items: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(max_visible)
+        .map(|(idx, item)| {
+            let is_selected = idx == selected_idx;
+            let cursor = if is_selected { "❯ " } else { "  " };
+
+            match item {
+                crate::state::FolderPickerItem::Parent(_) => {
+                    let style = if is_selected {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+                    let line = Line::from(vec![
+                        Span::styled(cursor, Style::default().fg(Color::Yellow)),
+                        Span::styled("📁 .. (parent directory)", style),
+                    ]);
+                    ListItem::new(line)
+                }
+                crate::state::FolderPickerItem::Entry(entry) => {
+                    let mut spans = Vec::new();
+                    spans.push(Span::styled(cursor, Style::default().fg(Color::Yellow)));
+
+                    let icon = if entry.is_dir { "📁 " } else { "📄 " };
+                    spans.push(Span::raw(icon));
+
+                    let name_style = if is_selected {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else if entry.is_dir {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    spans.push(Span::styled(&entry.name, name_style));
+
+                    if entry.is_git_repo {
+                        spans.push(Span::styled(
+                            " [git]",
+                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if entry.is_already_synced {
+                        spans.push(Span::styled(
+                            " [synced]",
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if entry.is_symlink {
+                        spans.push(Span::styled(" [link]", Style::default().fg(Color::Magenta)));
+                    }
+
+                    ListItem::new(Line::from(spans))
+                }
+            }
+        })
+        .collect();
+
+    let list_widget = List::new(list_items);
+    frame.render_widget(list_widget, chunks[3]);
 }
 
 /// Render the quarantined conflict inspector modal.

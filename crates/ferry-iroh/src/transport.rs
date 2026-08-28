@@ -214,6 +214,36 @@ impl IrohTransport {
         self.dial_endpoint(*endpoint_id, hints)
     }
 
+    /// Publish an ephemeral pairing rendezvous topic pointing to this endpoint.
+    pub fn publish_topic(&self, topic: [u8; 32]) {
+        let route = Route {
+            endpoint_id: *self.inner.my_id.as_bytes(),
+            ip_hints: direct_hints(&self.inner.ep),
+        };
+        self.inner.routes.publish_topic(topic, route.clone());
+        crate::directory::publish_topic(topic, route);
+    }
+
+    /// Dial a peer by an ephemeral pairing rendezvous topic.
+    pub fn dial_topic(&self, topic: &[u8; 32]) -> Result<Box<dyn DynConnection>, DialFailure> {
+        let route = self
+            .inner
+            .routes
+            .resolve_topic(topic)
+            .or_else(|| crate::directory::resolve_topic(topic));
+        if let Some(r) = route {
+            self.dial_endpoint(r.endpoint_id, r.ip_hints)
+        } else {
+            let hints = self
+                .inner
+                .routes
+                .resolve_peer(topic)
+                .map(|r| r.ip_hints)
+                .unwrap_or_default();
+            self.dial_endpoint(*topic, hints)
+        }
+    }
+
     /// Dial straight by public key — the ADR-0003 primitive that alias
     /// dialing resolves into. `hints` are optional direct addresses; with
     /// relays or discovery configured, an empty hint list still connects.

@@ -48,13 +48,10 @@ fn share_refuses_and_redacts_until_i_know() {
     assert!(!proj.join(".ferry/pair-offer.ferry-pair").exists());
 
     // With --i-know: proceeds past the gate into the pairing flow (offer
-    // file written; the ritual then waits for an acceptor, which this test
-    // does not provide — pair-timeout proves the gate opened).
-    let err = commands::share::run(&proj, true, 1).unwrap_err();
-    assert_eq!(
-        err.code, "pair-timeout",
-        "--i-know must proceed past the gate"
-    );
+    // file written and in-band session advertised).
+    let ok = commands::share::run(&proj, true, 0).expect("--i-know must proceed past the gate");
+    assert_eq!(ok.json["command"], "share");
+    assert_eq!(ok.json["warnings_reviewed"], true);
     assert!(proj.join(".ferry/pair-offer.ferry-pair").exists());
 }
 
@@ -66,31 +63,11 @@ fn share_clean_folder_emits_payload_without_gate() {
     commands::init::run(&proj, "init").unwrap();
     std::fs::write(proj.join("README.md"), b"clean").unwrap();
 
-    // A bare `share` blocks waiting for the acceptor; run the initiator in a
-    // thread and stop after the offer file appears (gate already passed).
-    let proj2 = proj.clone();
-    let h = std::thread::spawn(move || commands::share::run(&proj2, false, 3));
-    let offer = proj.join(".ferry/pair-offer.ferry-pair");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !offer.exists() {
-        assert!(std::time::Instant::now() < deadline, "offer never written");
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    // Complete the ritual from a second device so the thread finishes cleanly.
-    let responder_home = tempfile::tempdir().unwrap();
-    env.switch_home_to(responder_home.path());
-    let target = env.work().join("device-b");
-    std::fs::create_dir_all(&target).unwrap();
-    let out = commands::pairing::accept(
-        &ferry_cli::ensure_identity().unwrap(),
-        &offer,
-        Some(&target),
-        15,
-    )
-    .expect("accept completes");
-    assert_eq!(out.json["status"], "completed");
-
-    let initiated = h.join().unwrap().expect("initiator completed");
-    assert_eq!(initiated.json["command"], "share");
-    assert_eq!(initiated.json["warnings_reviewed"], false);
+    let ok = commands::share::run(&proj, false, 0).expect("clean folder emits payload");
+    assert_eq!(ok.json["command"], "share");
+    assert_eq!(ok.json["status"], "advertising");
+    assert_eq!(ok.json["warnings_reviewed"], false);
+    let code = ok.json["code"].as_str().expect("emits 6-word code");
+    assert_eq!(code.split('-').count(), 6);
+    assert!(proj.join(".ferry/pair-offer.ferry-pair").exists());
 }

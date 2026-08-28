@@ -265,3 +265,133 @@ async fn test_dashboard_server_with_auto_backend() {
 
     server_handle.abort();
 }
+
+#[tokio::test]
+async fn test_filesystem_ls_traversal_safety_and_responses() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base_dir = temp.path().join("sandbox");
+    let sub_a = base_dir.join("project_alpha");
+    let sub_b = base_dir.join("synced_beta");
+    let sub_c = base_dir.join("git_gamma");
+
+    std::fs::create_dir_all(&sub_a).unwrap();
+    std::fs::create_dir_all(sub_b.join(".ferry")).unwrap();
+    std::fs::create_dir_all(sub_c.join(".git")).unwrap();
+    std::fs::write(base_dir.join("notes.txt"), "hello").unwrap();
+
+    #[cfg(unix)]
+    {
+        let link = base_dir.join("link_alpha");
+        let _ = std::os::unix::fs::symlink(&sub_a, &link);
+    }
+
+    let fake = Arc::new(FakeBackend::new());
+    let token = generate_token();
+    let server = DashboardServer::new(fake).with_token(&token);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
+
+    // 1. Listing directory with ?path= parameter
+    let path_str = base_dir.display().to_string();
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/fs/ls?token={token}&path={path_str}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(json["current_path"].as_str().unwrap().contains("sandbox"));
+    let entries = json["entries"].as_array().expect("entries array");
+    assert!(!entries.is_empty());
+
+    // Verify properties
+    let git_entry = entries.iter().find(|e| e["name"] == "git_gamma").expect("git_gamma entry");
+    assert_eq!(git_entry["is_dir"], true);
+    assert_eq!(git_entry["is_git_repo"], true);
+
+    let synced_entry = entries.iter().find(|e| e["name"] == "synced_beta").expect("synced_beta entry");
+    assert_eq!(synced_entry["is_dir"], true);
+    assert_eq!(synced_entry["is_already_synced"], true);
+
+    // 2. Traversal protections: Null bytes in path -> 400 Bad Request
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/fs/ls?token={token}&path=/some/path%00/escape"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(json["code"], "invalid-path");
+
+    // 3. Traversal protections: Restricted virtual filesystem paths -> 403 Forbidden
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/fs/ls?token={token}&path=/proc/self"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 403);
+    assert_eq!(json["code"], "forbidden-path");
+
+    // 4. Secret scan check: Clean directory vs secret-bearing directory
+    let secret_dir = temp.path().join("secrets_project");
+    std::fs::create_dir_all(&secret_dir).unwrap();
+    std::fs::write(
+        secret_dir.join(".env"),
+        "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nOPENAI_API_KEY=sk-proj0123456789abcdefghij0123\n",
+    )
+    .unwrap();
+
+    let sec_str = secret_dir.display().to_string();
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/fs/scan?token={token}&path={sec_str}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["has_secrets"], true);
+    let warnings = json["warnings"].as_array().expect("warnings array");
+    assert!(!warnings.is_empty());
+
+    // 5. Folder registration: /api/folders/add
+    let (status, json, _) = send_http(
+        addr,
+        "POST",
+        &format!("/api/folders/add?token={token}"),
+        &[],
+        Some(&format!(r#"{{"path": "{path_str}"}}"#)),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "folders");
+    assert_eq!(json["action"], "add");
+    assert_eq!(json["status"], "ok");
+
+    // 6. Folder listing: /api/folders
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/folders?token={token}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "folders");
+    assert!(json["folders"].as_array().unwrap().len() >= 2);
+
+    server_handle.abort();
+}

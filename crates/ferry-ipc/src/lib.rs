@@ -11,8 +11,9 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::{
-    BoxFuture, FakeBackend, OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary,
-    ShareOffer, ShareStatus, UiBackend, UiEvent, UiEventStream,
+    BoxFuture, DirectoryListing, FakeBackend, FolderInfo, FsEntry, OpError, PairResult,
+    PairingSession, PinRecord, PinReleaseSummary, PinStopSummary, ShareOffer, ShareStatus,
+    UiBackend, UiEvent, UiEventStream,
 };
 pub use error::IpcError;
 pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZE};

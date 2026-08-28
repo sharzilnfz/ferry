@@ -45,6 +45,9 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         })?),
         None => None,
     };
+    if listen_addr.is_none() && peer_addr.is_none() && args.folders.is_empty() {
+        return run_central_daemon();
+    }
     if listen_addr.is_none() && peer_addr.is_none() {
         return Err(CliError::new(
             "usage",
@@ -165,4 +168,45 @@ fn check_transport(kind: &str) -> CliResult<()> {
             "use --transport tcp today; iroh QUIC P2P lands with tickets T-009/T-014",
         )),
     }
+}
+
+fn run_central_daemon() -> CliResult<Output> {
+    let home = crate::home::ferry_home()?;
+    let identity = crate::ensure_identity()?;
+    let socket_path = ferry_ipc::paths::default_socket_path();
+
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
+    let daemon_state = std::sync::Arc::new(ferry_daemon::state::DaemonState::with_home_and_transport(
+        home.clone(),
+        identity,
+        std::sync::Arc::new(ferry_sync::TcpTransport),
+        broadcast_tx,
+    ));
+
+    eprintln!("Central daemon starting at {} (socket: {})", home.display(), socket_path.display());
+    let ipc_handle = ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), std::sync::Arc::clone(&daemon_state))
+        .map_err(|e| {
+            CliError::new(
+                "ipc-server",
+                format!("failed to bind central IPC server at {}: {e}", socket_path.display()),
+                "check socket permissions or remove stale socket",
+            )
+        })?;
+    eprintln!("Central daemon IPC server ready at {}", socket_path.display());
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| CliError::new("runtime", e.to_string(), "failed to initialize runtime"))?;
+
+    rt.block_on(async {
+        let _ = tokio::signal::ctrl_c().await;
+    });
+
+    ipc_handle.shutdown();
+
+    Ok(Output::new(
+        serde_json::json!({"command": "daemon", "status": "stopped"}),
+        "Ferry daemon stopped.\n",
+    ))
 }

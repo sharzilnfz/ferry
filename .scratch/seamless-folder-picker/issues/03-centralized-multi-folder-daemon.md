@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** closed
 
-- [ ] Folder registry persists configured sync roots and settings under `$FERRY_HOME/folders.toml`.
-- [ ] Central IPC socket at `$FERRY_HOME/daemon.sock` serves multi-folder status and dynamic folder registration commands.
-- [ ] Daemon spawns and supervises isolated `SyncEngine` instances concurrently without cross-folder state interference.
-- [ ] Frontends and `UiBackend` adapters (`InProcessAdapter`, `DaemonIpcAdapter`) implement `list_folders()` and `register_folder()`.
-- [ ] Integration tests verify multi-folder synchronization under one device daemon process.
+- [x] Folder registry persists configured sync roots and settings under `$FERRY_HOME/folders.toml`.
+- [x] Central IPC socket at `$FERRY_HOME/daemon.sock` serves multi-folder status and dynamic folder registration commands.
+- [x] Daemon spawns and supervises isolated `SyncEngine` instances concurrently without cross-folder state interference.
+- [x] Frontends and `UiBackend` adapters (`InProcessAdapter`, `DaemonIpcAdapter`) implement `list_folders()` and `register_folder()`.
+- [x] Integration tests verify multi-folder synchronization under one device daemon process.
