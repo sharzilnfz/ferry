@@ -11,6 +11,7 @@ use ratatui::{Frame, Terminal};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::error::TuiError;
+use crate::picker::{self, PickerSelectResult, PickerState};
 use crate::state::{SyncState, TuiState};
 use crate::terminal::TerminalEvents;
 use crate::ui;
@@ -21,6 +22,9 @@ use ferry_platform::time::current_time_str;
 pub struct TuiApp {
     pub state: TuiState,
     pub backend: Option<Arc<dyn UiBackend>>,
+    pub picker: Option<PickerState>,
+    /// Test-only headless override. When Some, forces headless detection without touching global env.
+    pub headless_override: Option<bool>,
 }
 
 impl Default for TuiApp {
@@ -36,6 +40,8 @@ impl TuiApp {
         Self {
             state,
             backend: None,
+            picker: None,
+            headless_override: None,
         }
     }
 
@@ -45,6 +51,8 @@ impl TuiApp {
         Self {
             state: TuiState::default(),
             backend: Some(backend),
+            picker: None,
+            headless_override: None,
         }
     }
 
@@ -53,6 +61,51 @@ impl TuiApp {
     pub fn with_backend(mut self, backend: Arc<dyn UiBackend>) -> Self {
         self.backend = Some(backend);
         self
+    }
+
+    pub fn is_headless(&self) -> bool {
+        if let Some(v) = self.headless_override {
+            return v;
+        }
+        picker::is_headless()
+    }
+
+    #[must_use]
+    pub fn is_picker_open(&self) -> bool {
+        self.picker.is_some()
+    }
+
+    pub fn close_picker(&mut self) {
+        self.picker = None;
+    }
+
+    /// Attempt to open picker. Returns Err(no-tty) when headless.
+    pub async fn open_picker(
+        &mut self,
+        backend: &Arc<dyn UiBackend>,
+        path: Option<std::path::PathBuf>,
+    ) -> Result<(), ferry_ipc::backend::OpError> {
+        if self.is_headless() {
+            let err = picker::headless_error();
+            self.state
+                .activity_log
+                .push_error(current_time_str(), format!("Picker error: {err}"));
+            return Err(err);
+        }
+        let mut p = PickerState::new();
+        p.open(path);
+        match p.load(backend.as_ref()).await {
+            Ok(()) => {
+                self.picker = Some(p);
+                Ok(())
+            }
+            Err(e) => {
+                self.state
+                    .activity_log
+                    .push_error(current_time_str(), format!("Picker load error: {e}"));
+                Err(e)
+            }
+        }
     }
 
     /// Check if the application has been requested to terminate.
@@ -64,6 +117,9 @@ impl TuiApp {
     /// Render the current state onto the provided ratatui frame.
     pub fn render(&self, frame: &mut Frame) {
         ui::render(&self.state, frame);
+        if let Some(ref picker) = self.picker {
+            ui::render_picker(picker, frame, frame.area());
+        }
     }
 
     /// Process an incoming server push message from the daemon (legacy wire protocol).
@@ -132,6 +188,77 @@ impl TuiApp {
             }
         }
 
+        // When picker is open, it captures most keys
+        if let Some(ref mut picker) = self.picker {
+            match key.code {
+                KeyCode::Esc => {
+                    if picker.has_filter() {
+                        picker.clear_filter();
+                    } else {
+                        self.picker = None;
+                    }
+                    return None;
+                }
+                KeyCode::Up => {
+                    picker.move_up();
+                    return None;
+                }
+                KeyCode::Down => {
+                    picker.move_down();
+                    return None;
+                }
+                KeyCode::Backspace => {
+                    picker.pop_filter_char();
+                    return None;
+                }
+                KeyCode::Enter => {
+                    if let Some(target) = picker.enter() {
+                        let mut next = PickerState::new();
+                        next.open(Some(target));
+                        next.loading = true;
+                        self.picker = Some(next);
+                    }
+                    return None;
+                }
+                KeyCode::Char(' ') => {
+                    match picker.try_select() {
+                        PickerSelectResult::AlreadySynced(_) => {
+                            let hint = "already synced".to_string();
+                            if let Some(p) = self.picker.as_mut() {
+                                p.hint = Some(hint.clone());
+                            }
+                            self.state
+                                .activity_log
+                                .push_warn(current_time_str(), "already synced");
+                        }
+                        PickerSelectResult::Selected(_) => {
+                            self.state.activity_log.push_info(
+                                current_time_str(),
+                                "folder selected (sync handle pending backend)",
+                            );
+                        }
+                        PickerSelectResult::Nothing => {}
+                    }
+                    return None;
+                }
+                KeyCode::BackTab | KeyCode::Tab => {
+                    return None;
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    return None;
+                }
+                KeyCode::Char(c) => {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        picker.push_filter_char(c);
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+
         // When conflict modal is visible, Esc / q / c dismisses it
         if self.state.show_conflicts_modal {
             match key.code {
@@ -146,6 +273,20 @@ impl TuiApp {
         match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.state.should_quit = true;
+                None
+            }
+            KeyCode::Char('a' | 'A' | 'o' | 'O') => {
+                if self.is_headless() {
+                    let err = picker::headless_error();
+                    self.state
+                        .activity_log
+                        .push_error(current_time_str(), format!("Picker error: {err}"));
+                    return None;
+                }
+                let mut p = PickerState::new();
+                p.open(None);
+                p.loading = true;
+                self.picker = Some(p);
                 None
             }
             KeyCode::Char('p' | 'P') => {
@@ -180,6 +321,111 @@ impl TuiApp {
             }
         }
 
+        // Picker modal captures keys before other modals / global hotkeys
+        if self.picker.is_some() {
+            // Clone to avoid borrow issues when we need to replace picker
+            let code = key.code;
+            match code {
+                KeyCode::Esc => {
+                    let has_filter = self
+                        .picker
+                        .as_ref()
+                        .is_some_and(PickerState::has_filter);
+                    if has_filter {
+                        if let Some(p) = self.picker.as_mut() {
+                            p.clear_filter();
+                        }
+                    } else {
+                        self.picker = None;
+                    }
+                    return;
+                }
+                KeyCode::Up => {
+                    if let Some(p) = self.picker.as_mut() {
+                        p.move_up();
+                    }
+                    return;
+                }
+                KeyCode::Down => {
+                    if let Some(p) = self.picker.as_mut() {
+                        p.move_down();
+                    }
+                    return;
+                }
+                KeyCode::Backspace => {
+                    if let Some(p) = self.picker.as_mut() {
+                        p.pop_filter_char();
+                    }
+                    return;
+                }
+                KeyCode::Enter => {
+                    let target = self.picker.as_ref().and_then(PickerState::enter);
+                    if let Some(path) = target {
+                        let mut next = PickerState::new();
+                        next.open(Some(path.clone()));
+                        match next.load(backend.as_ref()).await {
+                            Ok(()) => self.picker = Some(next),
+                            Err(e) => {
+                                self.state.activity_log.push_error(
+                                    current_time_str(),
+                                    format!("Picker load error: {e}"),
+                                );
+                                // keep old picker for retry
+                            }
+                        }
+                    }
+                    return;
+                }
+                KeyCode::Char(' ') => {
+                    let result = self.picker.as_mut().map(PickerState::try_select);
+                    match result {
+                        Some(PickerSelectResult::Selected(entry)) => {
+                            match backend.register_folder(entry.path.clone()).await {
+                                Ok(rec) => {
+                                    self.state.activity_log.push_info(
+                                        current_time_str(),
+                                        format!("Folder registered: {}", rec.path.display()),
+                                    );
+                                    self.picker = None;
+                                }
+                                Err(e) => {
+                                    self.state.activity_log.push_error(
+                                        current_time_str(),
+                                        format!("Register folder error: {e}"),
+                                    );
+                                }
+                            }
+                        }
+                        Some(PickerSelectResult::AlreadySynced(_)) => {
+                            self.state
+                                .activity_log
+                                .push_warn(current_time_str(), "already synced");
+                        }
+                        Some(PickerSelectResult::Nothing) | None => {}
+                    }
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        // Treat typing as filter input when picker is open.
+                        // This includes 'q', 'p', etc. They should not quit.
+                        if let Some(p) = self.picker.as_mut() {
+                            // Backtab/escape already handled; for normal chars, push filter
+                            // Special case: if char is ' ' we already handled above, so only non-space here
+                            // We already matched Space above; so this is other chars.
+                            p.push_filter_char(c);
+                        }
+                        return;
+                    }
+                }
+                _ => {
+                    return;
+                }
+            }
+        }
+
         if self.state.show_conflicts_modal {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q' | 'Q' | 'c' | 'C') => {
@@ -193,6 +439,12 @@ impl TuiApp {
         match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.state.should_quit = true;
+            }
+            KeyCode::Char('a' | 'A' | 'o' | 'O') => {
+                if let Err(e) = self.open_picker(backend, None).await {
+                    // open_picker already logged; ensure hint for test visibility
+                    let _ = e;
+                }
             }
             KeyCode::Char('r' | 'R') => {
                 if let Err(e) = backend.trigger_scan().await {
@@ -253,6 +505,18 @@ impl TuiApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Handle picker go-parent explicitly (used by tests or Left key variant).
+    pub async fn picker_go_parent(&mut self, backend: &Arc<dyn UiBackend>) {
+        let parent = self.picker.as_ref().and_then(PickerState::go_parent);
+        if let Some(par) = parent {
+            let mut next = PickerState::new();
+            next.open(Some(par));
+            if next.load(backend.as_ref()).await.is_ok() {
+                self.picker = Some(next);
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 pub mod activity_log;
 pub mod app;
 pub mod error;
+pub mod picker;
 pub mod state;
 pub mod terminal;
 pub mod ui;

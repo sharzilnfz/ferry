@@ -404,6 +404,11 @@ impl TuiState {
             DaemonMessage::Ack { command, message } => self.apply_ack(command, message),
             DaemonMessage::Pong => self.apply_pong(),
             DaemonMessage::Error { code, message } => self.apply_error(code, message),
+            _ => {
+                self.is_connected = true;
+                self.engine_state = self.resolve_sync_state();
+                self.update_cached_strings();
+            }
         }
     }
 

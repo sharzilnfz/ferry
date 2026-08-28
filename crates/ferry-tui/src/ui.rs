@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::activity_log::LogLevel;
+use crate::picker::PickerState;
 use crate::state::{SyncState, TuiState};
 
 /// Main entry point for drawing the complete Ferry TUI dashboard onto a frame.
@@ -474,4 +475,151 @@ pub fn truncate_str(s: &str, max_len: usize) -> &str {
     } else {
         &s[..max_len]
     }
+}
+
+/// Render the filesystem picker modal as a centered overlay.
+pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
+    let modal_area = centered_rect(75, 70, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Select Folder ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Line::from(vec![
+            Span::styled(" Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" open  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Space", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" close", Style::default().fg(Color::DarkGray)),
+        ]));
+
+    let inner = block.inner(modal_area);
+    frame.render_widget(block, modal_area);
+
+    if inner.height < 4 || inner.width < 10 {
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // breadcrumb
+            Constraint::Length(1), // filter
+            Constraint::Min(3),     // list
+            Constraint::Length(1), // hint
+        ])
+        .split(inner);
+
+    // Breadcrumb bar
+    let breadcrumb = Paragraph::new(Line::from(vec![
+        Span::styled(" Path: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(picker.breadcrumbs(), Style::default().fg(Color::White)),
+    ]))
+    .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(breadcrumb, chunks[0]);
+
+    // Filter line
+    let filter_text = if picker.filter.is_empty() {
+        Span::styled(" Filter: (type to filter)", Style::default().fg(Color::DarkGray))
+    } else {
+        Span::styled(format!(" Filter: {}", picker.filter), Style::default().fg(Color::Yellow))
+    };
+    let filter_para = Paragraph::new(Line::from(vec![filter_text]));
+    frame.render_widget(filter_para, chunks[1]);
+
+    // Build list items: .. parent row + visible entries
+    let mut items: Vec<ListItem> = Vec::new();
+
+    // .. parent row (always visible when not filtered, dimmed if at root)
+    let show_parent = picker.filter.is_empty();
+    if show_parent {
+        let parent_label = if picker.current_path.parent().is_some() {
+            "📁  .. (parent)"
+        } else {
+            "—  .. (root)"
+        };
+        let parent_style = Style::default().fg(Color::DarkGray);
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            parent_label,
+            parent_style,
+        )])));
+    }
+
+    let visible = picker.visible_entries();
+    for (idx, entry) in visible.iter().enumerate() {
+        // Adjust index for cursor offset when parent row is shown
+        let _ = idx;
+        let icon = if entry.is_symlink {
+            "🔗"
+        } else if entry.is_dir {
+            "📁"
+        } else {
+            "📄"
+        };
+        let mut spans = vec![
+            Span::raw(format!("{icon}  ")),
+            Span::styled(entry.name.clone(), Style::default().fg(Color::White)),
+        ];
+        if entry.is_git_repo {
+            spans.push(Span::styled("  [git]", Style::default().fg(Color::Green)));
+        }
+        if entry.is_already_synced {
+            spans.push(Span::styled("  (synced)", Style::default().fg(Color::DarkGray)));
+        }
+        let mut line = Line::from(spans);
+        if entry.is_already_synced {
+            line = line.style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+        }
+        // Highlight cursor: need to compute effective cursor index matching this row's position
+        let effective_cursor = picker.cursor;
+        let row_idx = if show_parent { idx + 1 } else { idx };
+        let is_selected = row_idx == effective_cursor;
+        let mut item = ListItem::new(line);
+        if is_selected {
+            item = item.style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD));
+        } else if entry.is_already_synced {
+            item = item.style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+        }
+        items.push(item);
+    }
+
+    if picker.loading {
+        let loading = Paragraph::new(" Loading…")
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, chunks[2]);
+    } else if items.is_empty() {
+        let empty = Paragraph::new(" (no entries)")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        frame.render_widget(empty, chunks[2]);
+    } else {
+        let list = List::new(items)
+            .highlight_style(Style::default().bg(Color::DarkGray))
+            .highlight_symbol("▶ ");
+        frame.render_widget(list, chunks[2]);
+    }
+
+    // Hint / is_git_repo badge line
+    let hint_line = if let Some(ref h) = picker.hint {
+        Paragraph::new(Line::from(vec![Span::styled(
+            h.clone(),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )]))
+    } else if picker.loading {
+        Paragraph::new(Line::from(vec![Span::styled(
+            "loading…",
+            Style::default().fg(Color::DarkGray),
+        )]))
+    } else {
+        Paragraph::new(Line::from(vec![Span::styled(
+            "Space on folder to select • already-synced dirs dimmed",
+            Style::default().fg(Color::DarkGray),
+        )]))
+    };
+    frame.render_widget(hint_line, chunks[3]);
 }

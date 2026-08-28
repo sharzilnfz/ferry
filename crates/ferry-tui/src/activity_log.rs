@@ -139,6 +139,9 @@ impl ActivityLog {
             DaemonMessage::Error { code, message } => {
                 self.push_error(ts, format!("Daemon error [{code}]: {message}"));
             }
+            _ => {
+                self.push_info(ts, "Daemon message received");
+            }
         }
     }
 
