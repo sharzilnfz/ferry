@@ -231,6 +231,24 @@ where
     }
 }
 
+fn ferry_home_for_registry() -> std::path::PathBuf {
+    if let Some(v) = std::env::var_os("FERRY_HOME") {
+        let p = PathBuf::from(&v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    {
+        if !home.as_os_str().is_empty() {
+            return home.join(".ferry");
+        }
+    }
+    PathBuf::from("/tmp/.ferry")
+}
+
 /// Process a single client command and return the immediate response message.
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
@@ -336,15 +354,72 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 },
             }
         }
-        ClientCommand::ListFolders => DaemonMessage::FolderList { folders: Vec::new() },
-        ClientCommand::RegisterFolder { path: _ } => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "register_folder not implemented in this wave".to_string(),
-        },
-        ClientCommand::RemoveFolder { folder_id: _ } => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "remove_folder not implemented in this wave".to_string(),
-        },
+        ClientCommand::ListFolders => {
+            let home = ferry_home_for_registry();
+            match crate::registry::FolderRegistry::load(&home) {
+                Ok(reg) => DaemonMessage::FolderList {
+                    folders: reg.folders,
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code.clone(),
+                    message: e.message.clone(),
+                },
+            }
+        }
+        ClientCommand::RegisterFolder { path } => {
+            let home = ferry_home_for_registry();
+            let mut reg = match crate::registry::FolderRegistry::load(&home) {
+                Ok(r) => r,
+                Err(e) => {
+                    return DaemonMessage::Error {
+                        code: e.code,
+                        message: e.message,
+                    }
+                }
+            };
+            match reg.register(path) {
+                Ok(rec) => {
+                    if let Err(e) = reg.save(&home) {
+                        return DaemonMessage::Error {
+                            code: e.code,
+                            message: e.message,
+                        };
+                    }
+                    DaemonMessage::FolderRegistered { folder: rec }
+                }
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        ClientCommand::RemoveFolder { folder_id } => {
+            let home = ferry_home_for_registry();
+            let mut reg = match crate::registry::FolderRegistry::load(&home) {
+                Ok(r) => r,
+                Err(e) => {
+                    return DaemonMessage::Error {
+                        code: e.code,
+                        message: e.message,
+                    }
+                }
+            };
+            match reg.remove(&folder_id) {
+                Ok(()) => {
+                    if let Err(e) = reg.save(&home) {
+                        return DaemonMessage::Error {
+                            code: e.code,
+                            message: e.message,
+                        };
+                    }
+                    DaemonMessage::FolderRemoved { folder_id }
+                }
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
         ClientCommand::CreatePairingSession { req: _ } => DaemonMessage::Error {
             code: "not-implemented".to_string(),
             message: "create_pairing_session not implemented in this wave".to_string(),
@@ -354,6 +429,198 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
             message: "join_pairing_session not implemented in this wave".to_string(),
         },
     }
+}
+
+/// Dispatch for the centralized Supervisor (multi-engine) daemon.
+pub fn dispatch_supervisor_command(
+    supervisor: &mut crate::supervisor::Supervisor,
+    cmd: ClientCommand,
+) -> DaemonMessage {
+    match cmd {
+        ClientCommand::ListFolders => DaemonMessage::FolderList {
+            folders: supervisor.list_folders(),
+        },
+        ClientCommand::RegisterFolder { path } => match supervisor.handle_register(path) {
+            Ok(rec) => DaemonMessage::FolderRegistered { folder: rec },
+            Err(e) => DaemonMessage::Error {
+                code: e.code,
+                message: e.message,
+            },
+        },
+        ClientCommand::RemoveFolder { folder_id } => match supervisor.handle_remove(&folder_id) {
+            Ok(()) => DaemonMessage::FolderRemoved { folder_id },
+            Err(e) => DaemonMessage::Error {
+                code: e.code,
+                message: e.message,
+            },
+        },
+        ClientCommand::GetStatus => match supervisor.get_status(None) {
+            Ok(snap) => DaemonMessage::Snapshot(snap),
+            Err(e) => DaemonMessage::Error {
+                code: e.code,
+                message: e.message,
+            },
+        },
+        ClientCommand::Ping => DaemonMessage::Pong,
+        ClientCommand::ListDirectory { path } => {
+            use ferry_ipc::fs::{list_directory_sync, validate_path};
+            match validate_path(path) {
+                Ok(validated) => match list_directory_sync(validated) {
+                    Ok(resp) => DaemonMessage::DirectoryListing {
+                        entries: resp.entries,
+                        absolute_path: resp.absolute_path,
+                    },
+                    Err(e) => DaemonMessage::Error {
+                        code: e.code,
+                        message: e.message,
+                    },
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code,
+                    message: e.message,
+                },
+            }
+        }
+        other => dispatch_client_command_fallback(other),
+    }
+}
+
+fn dispatch_client_command_fallback(cmd: ClientCommand) -> DaemonMessage {
+    match cmd {
+        ClientCommand::CreatePairingSession { .. }
+        | ClientCommand::JoinPairingSession { .. }
+        | ClientCommand::StartPin { .. }
+        | ClientCommand::ReleasePin
+        | ClientCommand::TriggerScan
+        | ClientCommand::ListConflicts => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "single-folder command not supported in supervisor context".to_string(),
+        },
+        _ => DaemonMessage::Error {
+            code: "not-implemented".to_string(),
+            message: "unsupported command".to_string(),
+        },
+    }
+}
+
+/// Handle a supervisor-backed client connection over a duplex stream.
+pub async fn handle_supervisor_connection<S>(
+    mut conn: IpcConnection<S>,
+    supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let initial = {
+        let sup = supervisor.lock().await;
+        match sup.get_status(None) {
+            Ok(snap) => DaemonMessage::Snapshot(snap),
+            Err(_) => DaemonMessage::Snapshot(ferry_ipc::protocol::EngineSnapshot::new(
+                "",
+                "",
+                "",
+                "idle",
+            )),
+        }
+    };
+    if let Err(e) = conn.send_message(&initial).await {
+        eprintln!("[ferry-ipc] failed to send initial supervisor snapshot: {e}");
+        return;
+    }
+    let (mut sender, mut receiver) = conn.split();
+    loop {
+        match receiver.recv_command().await {
+            Ok(Some(cmd)) => {
+                let mut sup = supervisor.lock().await;
+                let resp = dispatch_supervisor_command(&mut sup, cmd);
+                if sender.send_message(&resp).await.is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let err_msg = DaemonMessage::Error {
+                    code: "bad_command".to_string(),
+                    message: e.to_string(),
+                };
+                let _ = sender.send_message(&err_msg).await;
+                break;
+            }
+        }
+    }
+}
+
+/// Spawn a supervisor-backed IPC server.
+pub fn spawn_supervisor_ipc_server(
+    socket_path: PathBuf,
+    supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
+) -> Result<IpcServerHandle, IpcError> {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let (server_task, runtime) = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let server = IpcServer::bind(&socket_path)?;
+        let s_rx = shutdown_rx.clone();
+        let sup_clone = std::sync::Arc::clone(&supervisor);
+        let server_task = handle.spawn(async move {
+            run_supervisor_server_loop(server, sup_clone, s_rx).await;
+        });
+        (Some(server_task), None)
+    } else {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(IpcError::Io)?;
+        let server = {
+            let _guard = rt.enter();
+            IpcServer::bind(&socket_path)?
+        };
+        let s_rx = shutdown_rx.clone();
+        let sup_clone = std::sync::Arc::clone(&supervisor);
+        let server_task = rt.spawn(async move {
+            run_supervisor_server_loop(server, sup_clone, s_rx).await;
+        });
+        (Some(server_task), Some(rt))
+    };
+    Ok(IpcServerHandle {
+        socket_path,
+        shutdown_tx,
+        server_task,
+        watcher_task: None,
+        _runtime: runtime,
+    })
+}
+
+async fn run_supervisor_server_loop(
+    server: IpcServer,
+    supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            accept_res = server.accept() => {
+                match accept_res {
+                    Ok(conn) => {
+                        let sup = std::sync::Arc::clone(&supervisor);
+                        tokio::spawn(async move {
+                            handle_supervisor_connection(conn, sup).await;
+                        });
+                    }
+                    Err(e) => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                        eprintln!("[ferry-ipc] accept error: {e}");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }
+    }
+    server.close();
 }
 
 /// Background watcher task that monitors engine state transitions and new conflict records.

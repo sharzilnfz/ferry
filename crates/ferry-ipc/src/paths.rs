@@ -8,8 +8,26 @@ pub const DEFAULT_SOCKET_FILENAME: &str = "daemon.sock";
 /// Default Windows named pipe prefix.
 pub const DEFAULT_WINDOWS_PIPE_PREFIX: &str = r"\\.\pipe\ferry";
 
+fn ferry_home_dir() -> PathBuf {
+    if let Some(v) = std::env::var_os("FERRY_HOME") {
+        let p = PathBuf::from(&v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    {
+        if !home.as_os_str().is_empty() {
+            return home.join(".ferry");
+        }
+    }
+    PathBuf::from("/tmp/.ferry")
+}
+
 /// Returns the default global daemon socket path:
-/// - Unix: `~/.ferry/daemon.sock` (or `/tmp/.ferry/daemon.sock` if `$HOME` is unset)
+/// - Unix: `$FERRY_HOME/daemon.sock` (or `~/.ferry/daemon.sock` / `/tmp/.ferry/daemon.sock` fallback)
 /// - Windows: `\\.\pipe\ferry-daemon`
 pub fn default_socket_path() -> PathBuf {
     #[cfg(windows)]
@@ -18,19 +36,17 @@ pub fn default_socket_path() -> PathBuf {
     }
     #[cfg(not(windows))]
     {
-        if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home)
-                .join(".ferry")
-                .join(DEFAULT_SOCKET_FILENAME)
-        } else {
-            PathBuf::from("/tmp/.ferry").join(DEFAULT_SOCKET_FILENAME)
-        }
+        ferry_home_dir().join(DEFAULT_SOCKET_FILENAME)
     }
 }
 
 /// Returns the socket path for a specific folder or store directory:
 /// - Unix: `<dir>/daemon.sock` if `dir` ends in `.ferry`, otherwise `<dir>/.ferry/daemon.sock`
 /// - Windows: `\\.\pipe\ferry-<path_hash>`
+///
+/// Deprecated: central daemon now lives at `default_socket_path()` regardless of folder.
+/// This remains for backward compatibility with single-folder `--listen` mode.
+#[deprecated(since = "0.1.0", note = "use default_socket_path() instead; socket is now device-global")]
 pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
     #[cfg(windows)]
     {

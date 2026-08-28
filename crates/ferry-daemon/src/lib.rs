@@ -3,6 +3,7 @@
 pub mod ipc;
 pub mod registry;
 pub mod state;
+pub mod supervisor;
 pub mod ui;
 
 pub use ipc::{

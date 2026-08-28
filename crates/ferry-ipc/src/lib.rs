@@ -19,9 +19,9 @@ pub use backend::{
 };
 pub use error::IpcError;
 pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZE};
-pub use paths::{
-    default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX,
-};
+pub use paths::{default_socket_path, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX};
+#[allow(deprecated)]
+pub use paths::socket_path_for_dir;
 pub use fs::{
     default_listing_root, is_already_synced, list_directory_sync, load_folder_registry,
     sort_entries, validate_and_normalize, validate_path, DirectoryEntry, ListDirectoryRequest,

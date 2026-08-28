@@ -136,7 +136,58 @@ fn cmd_genpoly(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn ferry_home() -> std::path::PathBuf {
+    if let Some(v) = std::env::var_os("FERRY_HOME") {
+        let p = std::path::PathBuf::from(&v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+    {
+        if !home.as_os_str().is_empty() {
+            return home.join(".ferry");
+        }
+    }
+    std::path::PathBuf::from("/tmp/.ferry")
+}
+
 fn cmd_daemon(args: &[String]) -> ExitCode {
+    // Central supervisor mode: `ferry daemon` without legacy flags runs Supervisor.
+    // Preserve `--listen` single-folder deprecated wrapper by routing to legacy when --store/--role present.
+    let is_legacy = has_flag(args, "--store")
+        || has_flag(args, "--tree")
+        || has_flag(args, "--role")
+        || has_flag(args, "--transport");
+    if !is_legacy {
+        match run_central_daemon(args) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    // Legacy single-folder path (also used for `ferry daemon --listen` deprecated wrapper)
+    if has_flag(args, "--listen") {
+        eprintln!("warning: --listen is deprecated; use `ferry daemon` without args for device daemon");
+        // If --listen is given with a path arg, register it before falling through to legacy
+        if let Some(p) = flag(args, "--listen") {
+            let home = ferry_home();
+            let _ = std::fs::create_dir_all(&home);
+            if let Ok(mut reg) = ferry_daemon::registry::FolderRegistry::load(&home) {
+                let pb = std::path::PathBuf::from(&p);
+                if pb.is_absolute() && pb.exists() {
+                    if let Ok(rec) = reg.register(pb) {
+                        let _ = reg.save(&home);
+                        eprintln!("registered folder {} -> {}", rec.path.display(), rec.folder_id);
+                    }
+                }
+            }
+        }
+    }
     match parse_and_run_daemon(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -144,6 +195,74 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn run_central_daemon(args: &[String]) -> Result<(), String> {
+    let home = ferry_home();
+    std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
+    // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
+    let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
+        .or_else(|_| ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key")))
+        .map_err(|e| format!("device identity: {e}"))?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    let mut supervisor = ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
+    // Register any folder args before spawning (e.g., `ferry daemon /tmp/a /tmp/b`)
+    for arg in args {
+        if arg.starts_with('-') {
+            continue;
+        }
+        if arg == "daemon" {
+            continue;
+        }
+        let p = std::path::PathBuf::from(arg);
+        if p.as_os_str().is_empty() {
+            continue;
+        }
+        let abs = if p.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&p))
+                .unwrap_or(p.clone())
+        } else {
+            p.clone()
+        };
+        // handle_register may need tokio runtime for engine spawn; run inside runtime
+        let rec = rt.block_on(async { supervisor.handle_register(abs.clone()) });
+        match rec {
+            Ok(r) => eprintln!("registered {} -> {}", r.path.display(), r.folder_id),
+            Err(e) if e.code == "already-synced" => eprintln!("already-synced {}: {}", p.display(), e.message),
+            Err(e) => return Err(format!("register {}: {}", p.display(), e.message)),
+        }
+    }
+    rt.block_on(async {
+        supervisor
+            .spawn_engines()
+            .map_err(|e| format!("spawn engines: {}: {}", e.code, e.message))
+    })?;
+    let socket_path = ferry_ipc::paths::default_socket_path();
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let supervisor_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
+    let sup_for_ipc = std::sync::Arc::clone(&supervisor_arc);
+    let _ipc_handle = rt.block_on(async {
+        ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
+    }).map_err(|e| format!("ipc server: {e}"))?;
+    eprintln!("ferry device daemon listening at {}", socket_path.display());
+    // Supervision loop with backoff — runs until killed
+    rt.block_on(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            let mut sup = supervisor_arc.lock().await;
+            sup.tick();
+        }
+    });
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 enum TransportKind {
@@ -355,6 +474,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         broadcast_tx,
     ));
 
+    #[allow(deprecated)]
     let socket_path = d
         .socket_path
         .unwrap_or_else(|| ferry_ipc::paths::socket_path_for_dir(&d.store_dir));

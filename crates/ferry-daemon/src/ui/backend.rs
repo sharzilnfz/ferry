@@ -577,10 +577,59 @@ impl UiBackend for InProcessAdapter {
         })
     }
 
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
+        Box::pin(async move {
+            let home = ferry_home_for_backend();
+            let reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
+            Ok(reg.folders.clone())
+        })
+    }
+
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
+        Box::pin(async move {
+            let home = ferry_home_for_backend();
+            let mut reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
+            let rec = reg.register(path).map_err(|e| e.to_op_error())?;
+            reg.save(&home).map_err(|e| e.to_op_error())?;
+            Ok(rec)
+        })
+    }
+
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        Box::pin(async move {
+            let home = ferry_home_for_backend();
+            let mut reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
+            reg.remove(&folder_id).map_err(|e| e.to_op_error())?;
+            reg.save(&home).map_err(|e| e.to_op_error())?;
+            Ok(())
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
     }
+}
+
+fn ferry_home_for_backend() -> PathBuf {
+    if let Some(v) = std::env::var_os("FERRY_HOME") {
+        let p = PathBuf::from(&v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    {
+        if !home.as_os_str().is_empty() {
+            return home.join(".ferry");
+        }
+    }
+    PathBuf::from("/tmp/.ferry")
 }
 
 /// Remote IPC client adapter querying a running daemon over IPC.
@@ -907,6 +956,103 @@ impl UiBackend for DaemonIpcAdapter {
         })
     }
 
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _initial = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            client
+                .send_command(&ClientCommand::ListFolders)
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+            match resp {
+                DaemonMessage::FolderList { folders } => Ok(folders),
+                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                other => Err(OpError::new(
+                    "protocol",
+                    format!("unexpected response {other:?}"),
+                    "retry",
+                )),
+            }
+        })
+    }
+
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _initial = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            client
+                .send_command(&ClientCommand::RegisterFolder { path })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+            match resp {
+                DaemonMessage::FolderRegistered { folder } => Ok(folder),
+                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                other => Err(OpError::new(
+                    "protocol",
+                    format!("unexpected response {other:?}"),
+                    "retry",
+                )),
+            }
+        })
+    }
+
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let socket = self.socket_path.clone();
+        Box::pin(async move {
+            let mut client = IpcClient::connect(&socket)
+                .await
+                .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
+            let _initial = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            client
+                .send_command(&ClientCommand::RemoveFolder { folder_id: folder_id.clone() })
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
+            let resp = client
+                .recv_message()
+                .await
+                .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
+                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+            match resp {
+                DaemonMessage::FolderRemoved { .. } => Ok(()),
+                DaemonMessage::Ack { .. } => Ok(()),
+                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                other => Err(OpError::new(
+                    "protocol",
+                    format!("unexpected response {other:?}"),
+                    "retry",
+                )),
+            }
+        })
+    }
+
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let socket = self.socket_path.clone();
         Box::pin(async move {
@@ -1110,6 +1256,42 @@ impl UiBackend for AutoBackend {
                 return Ok(res);
             }
             in_proc.list_directory(path).await
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(list) = ipc.list_folders().await {
+                return Ok(list);
+            }
+            in_proc.list_folders().await
+        })
+    }
+
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(rec) = ipc.register_folder(path.clone()).await {
+                return Ok(rec);
+            }
+            in_proc.register_folder(path).await
+        })
+    }
+
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let ipc = self.ipc.clone();
+        let in_proc = self.in_process.clone();
+        Box::pin(async move {
+            if let Ok(()) = ipc.remove_folder(folder_id.clone()).await {
+                return Ok(());
+            }
+            in_proc.remove_folder(folder_id).await
         })
     }
 
