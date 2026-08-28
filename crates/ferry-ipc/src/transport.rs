@@ -165,12 +165,25 @@ pub mod windows {
 
     impl IpcClient {
         /// Connect to a Windows Named Pipe at the specified path.
-        #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
         pub async fn connect(
             path: impl AsRef<Path>,
         ) -> Result<IpcConnection<NamedPipeClient>, IpcError> {
             let pipe_name = path.as_ref().to_string_lossy().to_string();
-            let client = ClientOptions::new().open(&pipe_name)?;
+            let mut attempts = 0;
+            let client = loop {
+                match ClientOptions::new().open(&pipe_name) {
+                    Ok(client) => break client,
+                    Err(e)
+                        if (e.raw_os_error() == Some(231)
+                            || e.kind() == std::io::ErrorKind::ResourceBusy)
+                            && attempts < 50 =>
+                    {
+                        attempts += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Err(e) => return Err(IpcError::from(e)),
+                }
+            };
             Ok(IpcConnection::new(client))
         }
     }

@@ -124,16 +124,19 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
 
     // 1. Initial snapshot is pushed immediately
     let mut buffer = vec![0u8; 4096];
-    let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
-        .await
-        .expect("timed out reading initial sse response")
-        .expect("read response");
-
-    let initial_resp = String::from_utf8_lossy(&buffer[..n]);
-    assert!(initial_resp.contains("HTTP/1.1 200 OK"));
-    assert!(initial_resp.contains("content-type: text/event-stream"));
-    assert!(initial_resp.contains("event: state"));
-    assert!(initial_resp.contains("\"command\":\"status\""));
+    let mut stream_resp = String::new();
+    read_until_contains(
+        &mut stream,
+        &mut buffer,
+        &mut stream_resp,
+        "event: state",
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(stream_resp.contains("HTTP/1.1 200 OK"));
+    assert!(stream_resp.contains("content-type: text/event-stream"));
+    assert!(stream_resp.contains("event: state"));
+    assert!(stream_resp.contains("\"command\":\"status\""));
 
     // 2. Emit a live StateChanged push event
     backend.emit_event(UiEvent::StateChanged {
@@ -144,15 +147,17 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
         stats: None,
     });
 
-    let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
-        .await
-        .expect("timed out reading live sse event")
-        .expect("read chunk");
-
-    let event_resp = String::from_utf8_lossy(&buffer[..n]);
-    assert!(event_resp.contains("event: state_changed"));
-    assert!(event_resp.contains("\"state\":\"syncing\""));
-    assert!(event_resp.contains("\"manifest_id\":\"m_live_event\""));
+    read_until_contains(
+        &mut stream,
+        &mut buffer,
+        &mut stream_resp,
+        "event: state_changed",
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(stream_resp.contains("event: state_changed"));
+    assert!(stream_resp.contains("\"state\":\"syncing\""));
+    assert!(stream_resp.contains("\"manifest_id\":\"m_live_event\""));
 
     // 3. Emit a live ConflictRecorded push event
     backend.emit_event(UiEvent::ConflictRecorded {
@@ -162,15 +167,42 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
         quarantined_as: Some("hello.txt.ferry-conflict".to_string()),
     });
 
-    let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
-        .await
-        .expect("timed out reading conflict sse event")
-        .expect("read chunk");
-
-    let conflict_resp = String::from_utf8_lossy(&buffer[..n]);
-    assert!(conflict_resp.contains("event: conflict"));
-    assert!(conflict_resp.contains("\"path\":\"hello.txt\""));
+    read_until_contains(
+        &mut stream,
+        &mut buffer,
+        &mut stream_resp,
+        "event: conflict",
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(stream_resp.contains("event: conflict"));
+    assert!(stream_resp.contains("\"path\":\"hello.txt\""));
 
     drop(stream);
     server_task.abort();
+}
+
+async fn read_until_contains(
+    stream: &mut tokio::net::TcpStream,
+    buffer: &mut [u8],
+    accum: &mut String,
+    needle: &str,
+    timeout: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while !accum.contains(needle) {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for '{needle}' in stream; got: {accum}"
+        );
+        let n = tokio::time::timeout(remaining, stream.read(buffer))
+            .await
+            .expect("timed out waiting for chunk")
+            .expect("read chunk");
+        if n == 0 {
+            break;
+        }
+        accum.push_str(&String::from_utf8_lossy(&buffer[..n]));
+    }
 }
