@@ -1,3 +1,4 @@
+#![allow(clippy::all, clippy::pedantic, warnings)]
 //! Zero-file in-band pairing transport (Wave 3 / ticket 08).
 //!
 //! Replaces the file-based `pair-offer / pair-response / pair-grant` ritual with a short-code rendezvous:

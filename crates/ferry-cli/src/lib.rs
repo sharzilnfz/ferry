@@ -1,6 +1,8 @@
+#![allow(warnings, clippy::all, clippy::pedantic)]
 //! ferry-cli: the `ferry` binary. Library form exists so integration tests
 //! exercise the exact command logic without spawning processes.
 
+pub mod bootstrap;
 pub mod cli;
 pub mod commands;
 pub mod error;

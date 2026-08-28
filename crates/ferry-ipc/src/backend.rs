@@ -638,7 +638,7 @@ impl UiBackend for FakeBackend {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                format!("2026-08-29T00:00:00Z#{}", secs)
+                format!("2026-08-29T00:00:00Z#{secs}")
             };
             let sess = InMemPairingSession {
                 folder_id: folder_id.clone(),
@@ -658,7 +658,7 @@ impl UiBackend for FakeBackend {
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let sessions = Arc::clone(&self.pairing_sessions);
         Box::pin(async move {
-            let key = req.code.trim().to_ascii_uppercase().replace('-', "").replace(' ', "");
+            let key = req.code.trim().to_ascii_uppercase().replace(['-', ' '], "");
             let sess = {
                 let mut m = sessions.lock().unwrap();
                 let sess = m.get(&key).cloned();

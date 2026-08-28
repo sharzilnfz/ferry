@@ -11,7 +11,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// comment; this constant backs the `--help` epilog with the five-minute
 /// path.
 pub const AFTER_HELP: &str = "\
-Five-minute path:
+Two-minute path (zero-config):
+  ferry                         launch UI (auto-detects GUI/Web/TUI, bootstraps daemon)
+  ferry share [FOLDER]          create a share code for FOLDER (prints code + QR)
+  ferry join <CODE> [DEST]      join a shared folder at DEST using CODE
+Five-minute path (legacy):
   ferry init            inside your project
   ferry pair            on this machine; follow the printed steps on the other device
   ferry daemon --listen 127.0.0.1:44001        (device A)
@@ -48,7 +52,7 @@ pub struct Cli {
     pub verbose: bool,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -90,6 +94,13 @@ pub enum Command {
         /// Seconds to wait for the accepting device's response.
         #[arg(long, default_value_t = 120, value_name = "SECONDS")]
         timeout_secs: u64,
+    },
+    /// Join a shared folder using a pairing code.
+    Join {
+        /// Pairing code (6 chars, case-insensitive, dashes/spaces ignored).
+        code: String,
+        /// Destination folder (default: current directory).
+        dest: Option<PathBuf>,
     },
     /// Show what Ferry knows about a folder right now.
     Status {

@@ -321,6 +321,10 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
 
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     // 1. Explicit --gui flag
     if args.gui {
         #[cfg(feature = "gui")]
@@ -372,26 +376,26 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
     // 4. Default frontend selection (GUI -> Web -> TUI)
     #[cfg(feature = "gui")]
     {
-        run_gui_mode(&_folder_path, args.test)
+        return run_gui_mode(&_folder_path, args.test);
     }
 
     #[cfg(all(not(feature = "gui"), feature = "web-ui"))]
     {
-        run_web_mode(&_folder_path, args.host, args.port, args.no_open, args.test)
+        return run_web_mode(&_folder_path, args.host, args.port, args.no_open, args.test);
     }
 
     #[cfg(all(not(feature = "gui"), not(feature = "web-ui"), feature = "tui"))]
     {
-        run_tui_mode(&_folder_path, args.test)
+        return run_tui_mode(&_folder_path, args.test);
     }
 
     #[cfg(all(not(feature = "gui"), not(feature = "web-ui"), not(feature = "tui")))]
     {
-        Err(CliError::new(
+        return Err(CliError::new(
             "feature-disabled",
             "No frontend feature ('gui', 'web-ui', or 'tui') is enabled in this build.",
             "Rebuild with: cargo build --features gui",
-        ))
+        ));
     }
 }
 

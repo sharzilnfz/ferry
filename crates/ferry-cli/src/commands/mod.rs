@@ -5,6 +5,7 @@ pub mod conflicts;
 pub mod daemon;
 pub mod ignore_cmd;
 pub mod init;
+pub mod join;
 pub mod pairing;
 pub mod pin;
 pub mod share;

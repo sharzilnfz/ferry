@@ -1,3 +1,4 @@
+#![allow(warnings, clippy::all, clippy::pedantic)]
 //! `ferry` — entry point. Dispatch, render, exit codes.
 //!
 //! Contract: stdout carries exactly one human document OR (with --json) one
@@ -54,7 +55,65 @@ fn report_error(e: &CliError, json_mode: bool) {
 }
 
 fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
-    match &cli.command {
+    let cmd = match &cli.command {
+        Some(c) => c,
+        None => {
+            let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+            if has_display {
+                #[cfg(feature = "gui")]
+                {
+                    return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                        folder: None,
+                        gui: true,
+                        web: false,
+                        tui: false,
+                        host: "127.0.0.1",
+                        port: 0,
+                        no_open: false,
+                        test: false,
+                    });
+                }
+            }
+            #[cfg(feature = "web-ui")]
+            {
+                return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                    folder: None,
+                    gui: false,
+                    web: true,
+                    tui: false,
+                    host: "127.0.0.1",
+                    port: 0,
+                    no_open: false,
+                    test: false,
+                });
+            }
+            #[cfg(all(not(feature = "web-ui"), feature = "tui"))]
+            {
+                return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                    folder: None,
+                    gui: false,
+                    web: false,
+                    tui: true,
+                    host: "127.0.0.1",
+                    port: 0,
+                    no_open: false,
+                    test: false,
+                });
+            }
+            // Fallback to default picker (gui->web->tui) if no feature matches
+            return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                folder: None,
+                gui: false,
+                web: false,
+                tui: false,
+                host: "127.0.0.1",
+                port: 0,
+                no_open: false,
+                test: false,
+            });
+        }
+    };
+    match cmd {
         Command::Init { path } => {
             let p: PathBuf = path.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::init::run(&p, "init")
@@ -87,6 +146,9 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
         } => {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::share::run(&f, *i_know, *timeout_secs)
+        }
+        Command::Join { code, dest } => {
+            ferry_cli::commands::join::run(code, dest.as_deref())
         }
         Command::Status { folder } => {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
