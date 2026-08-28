@@ -25,7 +25,7 @@ impl PairingCode {
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
         let mut chars = Vec::with_capacity(6);
         for _ in 0..5 {
-            let idx = (rng.gen::<u32>() % 32) as usize;
+            let idx = (rng.gen::<u32>() & 31) as usize;
             chars.push(ALPHABET[idx] as char);
         }
         let data_str: String = chars.iter().collect();
@@ -119,12 +119,12 @@ mod tests {
         let s = code.as_str().to_string();
         let first = s.chars().next().unwrap();
         let mut flipped = s.clone();
-        let sub = if first != 'A' { 'A' } else { 'B' };
+        let sub = if first == 'A' { 'B' } else { 'A' };
         flipped.replace_range(0..1, &sub.to_string());
         assert!(!code.verify(&flipped));
         let last = s.chars().last().unwrap();
         let mut flipped_last = s.clone();
-        let sub2 = if last != 'Z' { 'Z' } else { 'Y' };
+        let sub2 = if last == 'Z' { 'Y' } else { 'Z' };
         flipped_last.replace_range(5..6, &sub2.to_string());
         assert!(!code.verify(&flipped_last));
     }

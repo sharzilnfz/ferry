@@ -240,6 +240,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_endpoint_proxying_over_ipc() {
     let env = common::Env::new("endpoint_ipc");
     let work = env.work();

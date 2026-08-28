@@ -307,6 +307,7 @@ fn test_cli_ignore_external_folder_targeting() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_ui_events_and_token_auth_flow() {
     use ferry_daemon::ui::backend::IpcBackend;
     use ferry_daemon::ui::server::{generate_token, DashboardServer};

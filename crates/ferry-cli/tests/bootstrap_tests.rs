@@ -22,7 +22,7 @@ fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
     let p2 = ensure_daemon(&hp).expect("second ensure reuses");
     let elapsed = start.elapsed();
     assert_eq!(p2, sock);
-    assert!(elapsed < std::time::Duration::from_millis(500), "second call should be fast (ping within 200ms), got {:?}", elapsed);
+    assert!(elapsed < std::time::Duration::from_millis(500), "second call should be fast (ping within 200ms), got {elapsed:?}");
 }
 
 #[test]

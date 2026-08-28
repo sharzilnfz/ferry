@@ -30,7 +30,7 @@ pub fn is_headless() -> bool {
         if std::env::var("FERRY_TUI_FORCE_HEADLESS").is_ok() {
             return true;
         }
-        return false;
+        false
     }
     #[cfg(not(test))]
     {

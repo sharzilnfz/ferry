@@ -1,3 +1,5 @@
+#![allow(deprecated, clippy::ptr_as_ptr)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 

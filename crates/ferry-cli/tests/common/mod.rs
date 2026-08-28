@@ -47,6 +47,48 @@ pub struct RunningDaemon {
 
 #[allow(dead_code)]
 impl RunningDaemon {
+    #[allow(deprecated)]
+    pub fn spawn_with_ipc(proj: &std::path::Path) -> Self {
+        let opened = ferry_cli::folder::open_folder(proj).expect("open folder");
+        let identity = ferry_cli::ensure_identity().expect("device identity");
+
+        let mut cfg = ferry_sync::EngineConfig::default_for_test(12345);
+        cfg.tag = "ipc-test-daemon".to_string();
+        cfg.store_dir.clone_from(&opened.root);
+        cfg.tree_dir.clone_from(&opened.root);
+        cfg.folder_id = opened.folder_id;
+        cfg.pin_state_dir = Some(opened.state_dir());
+        cfg.poll_interval = std::time::Duration::from_millis(50);
+
+        let mut engine =
+            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
+                .expect("engine init");
+        engine.set_identity(identity.clone());
+        let handle = engine.start();
+
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
+        let daemon_state = std::sync::Arc::new(ferry_daemon::state::DaemonState::new(
+            handle.clone(),
+            opened.root.clone(),
+            opened.root.clone(),
+            opened.folder_id,
+            identity,
+            broadcast_tx,
+        ));
+
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&opened.root);
+        let ipc_handle =
+            ferry_daemon::ipc::spawn_ipc_server(socket_path, std::sync::Arc::clone(&daemon_state))
+                .expect("spawn ipc server");
+
+        Self {
+            engine_handle: handle,
+            state: daemon_state,
+            ipc_handle: Some(ipc_handle),
+        }
+    }
+
+    #[allow(deprecated)]
     pub fn start(proj: &std::path::Path) -> Self {
         let opened = ferry_cli::folder::open_folder(proj).expect("open folder");
         let identity = ferry_cli::ensure_identity().expect("device identity");

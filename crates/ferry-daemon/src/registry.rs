@@ -1,3 +1,15 @@
+//! Device-level folder registry persisted at `$FERRY_HOME/folders.toml`.
+//!
+//! **Ownership choice:** `crates/ferry-daemon/src/registry.rs` (this file),
+//! not `crates/ferry-folder/src/registry.rs`. Rationale: the supervisor
+//! lives in `ferry-daemon` and needs standalone `$FERRY_HOME` resolution
+//! without depending on `ferry-cli`. `ferry-folder` owns per-folder
+//! bootstrap (`.ferry/config`) but not device home. Placing the registry
+//! in `daemon` avoids a circular dep and keeps pure storage next to its
+//! future consumer (ticket 07). Caller resolves `$FERRY_HOME` via
+//! `ferry_cli::home::ferry_home()` and passes `&Path` to `load`/`save`
+//! for testability. See commit b29e892.
+
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

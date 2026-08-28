@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,7 +68,7 @@ async fn picker_open_and_navigate_via_backend() {
     let mut picker = PickerState::new();
     picker.open_and_load(&backend, Some(PathBuf::from("/"))).await.unwrap();
     assert_eq!(picker.current_path, PathBuf::from("/"));
-    assert_eq!(picker.loading, false);
+    assert!(!picker.loading);
     // Sorted: dirs first alphabetically (docs, projects, synced_dir) then files
     // sort_entries: is_dir desc then name asc => docs, projects, synced_dir, file.txt
     assert_eq!(picker.entries[0].name, "docs");
@@ -338,7 +340,7 @@ fn picker_state_machine_unit() {
     assert!(p.filter.is_empty());
 
     p.set_entries(vec![entry("b", "/tmp/b", true, true, false)], PathBuf::from("/tmp"));
-    assert_eq!(p.loading, false);
+    assert!(!p.loading);
     assert_eq!(p.entries.len(), 1);
     assert_eq!(p.breadcrumbs(), "/tmp");
 

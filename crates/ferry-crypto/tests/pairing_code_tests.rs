@@ -10,7 +10,7 @@ fn six_chars_round_trip() {
     let mut rng = StdRng::seed_from_u64(100);
     let code = PairingCode::generate(&mut rng);
     let s = code.as_str().to_string();
-    assert!(s.len() == 6);
+    assert_eq!(s.len(), 6);
     assert!(code.verify(&s));
     let via_direct = DirectPairingCode::generate(&mut rng);
     assert!(via_direct.verify(via_direct.as_str()));
@@ -33,7 +33,7 @@ fn checksum_flip_fails() {
     let s = code.as_str().to_string();
     for pos in 0..6 {
         let orig = s.chars().nth(pos).unwrap();
-        let sub = if orig != 'A' { 'A' } else { 'B' };
+        let sub = if orig == 'A' { 'B' } else { 'A' };
         let mut flipped: Vec<char> = s.chars().collect();
         flipped[pos] = sub;
         let flipped_str: String = flipped.into_iter().collect();
@@ -93,15 +93,14 @@ fn verify_uses_constant_time() {
     };
     let verify_end = verify_section
         .find("\n    }")
-        .map(|p| &verify_section[..p])
-        .unwrap_or(verify_section);
+        .map_or(verify_section, |p| &verify_section[..p]);
     assert!(
         verify_end.contains("ct_eq"),
         "verify should use ct_eq"
     );
     let eq_count = verify_end.matches("==").count();
-    assert!(
-        eq_count == 0,
+    assert_eq!(
+        eq_count, 0,
         "verify should not contain ==, found {eq_count} occurrences"
     );
     assert!(content.contains("Zeroizing"));
@@ -110,12 +109,10 @@ fn verify_uses_constant_time() {
 #[test]
 fn system_time_now_not_in_verify() {
     let content = std::fs::read_to_string("crates/ferry-crypto/src/pairing_code.rs")
-        .unwrap_or_else(|_| std::fs::read_to_string("src/pairing_code.rs").expect("pairing_code.rs"))
-        ;
+        .unwrap_or_else(|_| std::fs::read_to_string("src/pairing_code.rs").expect("pairing_code.rs"));
     let verify_section = content
         .find("fn verify")
-        .map(|p| &content[p..p + 2000])
-        .unwrap_or(&content);
+        .map_or(&content[..], |p| &content[p..p + 2000]);
     assert!(
         !verify_section.contains("SystemTime::now"),
         "verify should not call SystemTime::now"

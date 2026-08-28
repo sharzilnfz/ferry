@@ -1,3 +1,5 @@
+#![allow(deprecated, clippy::await_holding_lock, clippy::assigning_clones, clippy::cmp_owned, clippy::unnecessary_semicolon)]
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -52,13 +54,12 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
     let root = tmp.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
 
-    // Create 20 entries: 10 dirs, 10 files
-    for i in 0..10 {
+    // Create 20 entries: 9 dirs + 9 files + 2 symlinks
+    for i in 0..9 {
         std::fs::create_dir(root.join(format!("dir_{i:02}"))).unwrap();
         std::fs::write(root.join(format!("file_{i:02}.txt")), b"hello").unwrap();
     }
     // One of the dirs is a git repo
-    std::fs::create_dir(root.join(".git")).unwrap(); // not counted, but test git detection
     let git_dir = root.join("dir_05");
     std::fs::create_dir(git_dir.join(".git")).unwrap();
 
@@ -68,8 +69,6 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         std::os::unix::fs::symlink(root.join("dir_01"), root.join("link_to_dir")).unwrap();
         std::os::unix::fs::symlink(root.join("file_00.txt"), root.join("link_to_file")).unwrap();
     }
-    // Count: we have 10 dirs + 10 files + 2 symlinks + .git dir? But we created 10 dirs + 10 files + 2 symlinks =22, plus top-level .git dir makes 23.
-    // For test, we assert at least 20 and check classifications.
 
     let adapter = InProcessAdapter::new(PathBuf::from("/tmp"));
     let resp = adapter
@@ -77,7 +76,7 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         .await
         .expect("listing");
     assert_eq!(resp.absolute_path, root);
-    assert!(resp.entries.len() >= 20, "got {}", resp.entries.len());
+    assert_eq!(resp.entries.len(), 20, "expected 20 entries, got {}", resp.entries.len());
 
     // Stable sort: dirs first, then name asc
     let mut is_dir_seen_false = false;

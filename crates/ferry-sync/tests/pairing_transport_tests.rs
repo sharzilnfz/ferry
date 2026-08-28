@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -22,12 +22,12 @@ fn temp_home() -> (tempfile::TempDir, PathBuf) {
     (dir, home)
 }
 
-fn create_test_folder(home: &PathBuf, identity: &DeviceIdentity, _poly: ValidatedPoly) -> (PathBuf, [u8; 16]) {
+fn create_test_folder(home: &Path, identity: &DeviceIdentity, _poly: ValidatedPoly) -> (PathBuf, [u8; 16]) {
     create_test_folder_with_id(home, identity, rand::random())
 }
 
-fn create_test_folder_with_id(home: &PathBuf, identity: &DeviceIdentity, folder_id: [u8; 16]) -> (PathBuf, [u8; 16]) {
-    let folder_path = home.join(format!("folder-{}", ferry_store::format::hex(&folder_id)[..8].to_string()));
+fn create_test_folder_with_id(home: &Path, identity: &DeviceIdentity, folder_id: [u8; 16]) -> (PathBuf, [u8; 16]) {
+    let folder_path = home.join(format!("folder-{}", &ferry_store::format::hex(&folder_id)[..8]));
     std::fs::create_dir_all(&folder_path).unwrap();
     let poly_u64: u64 = 0x1234567890abcdef;
     let (store, _fmk) = create_folder(&folder_path, identity, folder_id, poly_u64).unwrap();
@@ -199,7 +199,7 @@ fn uibackend_fakebackend_create_and_join_roundtrip() {
 }
 
 #[test]
-#[ignore] // loopback needs network but we at least exercise in-memory path; this is the ignored e2e placeholder
+#[ignore = "requires full network setup; covered by in-memory handshake tests"]
 fn loopback_e2e_pair_then_sync_trees_identical() {
     // This test would require two SyncEngines with paired folders to sync a file after pairing.
     // For wave 3 we verify in-memory handshake already ensures CONFIG_HEAD mutual; full loopback sync is exercised
