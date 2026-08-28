@@ -24,8 +24,11 @@ ferry-ipc = { path = "../ferry-ipc" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-platform.workspace = true
 rand.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
+toml = "0.8"
+tempfile.workspace = true
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 axum = { workspace = true, optional = true }
