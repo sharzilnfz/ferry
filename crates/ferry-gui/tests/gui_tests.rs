@@ -80,7 +80,8 @@ fn test_beacon_states_and_pulses() {
 fn test_telemetry_hairline_rendering() {
     let ctx = Context::default();
     let mut snap = EngineSnapshot::new("/test/folder", "folder123", "device456", "synced");
-    snap.manifest_id = Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
+    snap.manifest_id =
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
     snap.held_changes = 3;
 
     let mut conflicts_clicked = false;
@@ -111,12 +112,7 @@ fn test_fleet_table_rendering() {
 
     let _ = ctx.run(RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            render_fleet_table(
-                ui,
-                &peers,
-                || pair_clicked = true,
-                || share_clicked = true,
-            );
+            render_fleet_table(ui, &peers, || pair_clicked = true, || share_clicked = true);
         });
     });
 }
@@ -199,7 +195,9 @@ fn test_modals_render() {
     let offer = ShareOffer {
         folder: "/test/folder".to_string(),
         token: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX".to_string(),
-        payload_path: Some(std::path::PathBuf::from("/test/folder/.ferry/pair-offer.ferry-pair")),
+        payload_path: Some(std::path::PathBuf::from(
+            "/test/folder/.ferry/pair-offer.ferry-pair",
+        )),
         qr_payload: Some("FERRY:PAIR:TEST".to_string()),
         expires_at: None,
         secret_warnings: Vec::new(),

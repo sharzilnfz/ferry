@@ -165,15 +165,17 @@ impl EngineFixture {
     }
 
     /// Converged = same non-zero agreed manifest id on both sides AND equal
-    /// current root trees (the snapshot each side last took).
+    /// current manifests (the snapshot each side last took agrees with the peer).
     pub fn converged(&self) -> bool {
         match (
             self.a.agreed_id(),
             self.b.agreed_id(),
-            self.a.root_id(),
-            self.b.root_id(),
+            self.a.current_manifest_id(),
+            self.b.current_manifest_id(),
         ) {
-            (Some(x), Some(y), Some(rx), Some(ry)) => x == y && x != [0u8; 32] && rx == ry,
+            (Some(a_agr), Some(b_agr), Some(a_cur), Some(b_cur)) => {
+                a_agr == b_agr && a_agr == a_cur && b_agr == b_cur && a_agr != [0u8; 32]
+            }
             _ => false,
         }
     }

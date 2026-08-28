@@ -84,19 +84,24 @@ fn render_peer_row(ui: &mut egui::Ui, peer: &PeerStatusView, _idx: usize) {
             ui.horizontal(|ui| {
                 // Connectivity status pill
                 let conn_lower = peer.connectivity.to_lowercase();
-                let (status_text, bg, fg) = if conn_lower.contains("online") || conn_lower.contains("connected") {
-                    ("Online", colors::FERRY_GREEN, Color32::BLACK)
-                } else if conn_lower.contains("dial") || conn_lower.contains("connecting") {
-                    ("Dialing", colors::AMBER_WARN, Color32::BLACK)
-                } else {
-                    ("Offline", colors::GRAY_OFFLINE, colors::TEXT_MUTED)
-                };
+                let (status_text, bg, fg) =
+                    if conn_lower.contains("online") || conn_lower.contains("connected") {
+                        ("Online", colors::FERRY_GREEN, Color32::BLACK)
+                    } else if conn_lower.contains("dial") || conn_lower.contains("connecting") {
+                        ("Dialing", colors::AMBER_WARN, Color32::BLACK)
+                    } else {
+                        ("Offline", colors::GRAY_OFFLINE, colors::TEXT_MUTED)
+                    };
 
                 let padding = vec2(6.0f32, 2.0f32);
                 let font_id = egui::FontId::proportional(11.0f32);
-                let galley = ui.painter().layout_no_wrap(status_text.to_string(), font_id, fg);
-                let (badge_rect, _) = ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
-                ui.painter().rect_filled(badge_rect, Rounding::same(6.0f32), bg);
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(status_text.to_string(), font_id, fg);
+                let (badge_rect, _) =
+                    ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(badge_rect, Rounding::same(6.0f32), bg);
                 ui.painter().galley(badge_rect.min + padding, galley, fg);
 
                 ui.add_space(8.0);
@@ -111,23 +116,43 @@ fn render_peer_row(ui: &mut egui::Ui, peer: &PeerStatusView, _idx: usize) {
                 );
                 dev_label.on_hover_text(format!("Full Device ID:\n{}", peer.device_id));
 
-                if ui.small_button("📋").on_hover_text("Copy Device ID").clicked() {
-                    ui.ctx().output_mut(|o| o.copied_text.clone_from(&peer.device_id));
+                if ui
+                    .small_button("📋")
+                    .on_hover_text("Copy Device ID")
+                    .clicked()
+                {
+                    ui.ctx()
+                        .output_mut(|o| o.copied_text.clone_from(&peer.device_id));
                 }
 
                 // Agreed Manifest / Timestamp
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(ref agreed_at) = peer.agreed_at {
-                        ui.label(RichText::new(agreed_at).color(colors::TEXT_MUTED).size(11.5));
-                        ui.label(RichText::new("Agreed:").color(colors::TEXT_SECONDARY).size(11.0));
-                    } else if let Some(ref last_manifest) = peer.last_agreed_manifest_id {
-                        ui.monospace(
-                            RichText::new(format!("manifest: {}", format_short_hex(Some(last_manifest))))
-                                .color(colors::GRAY_MUTED)
+                        ui.label(
+                            RichText::new(agreed_at)
+                                .color(colors::TEXT_MUTED)
+                                .size(11.5),
+                        );
+                        ui.label(
+                            RichText::new("Agreed:")
+                                .color(colors::TEXT_SECONDARY)
                                 .size(11.0),
                         );
+                    } else if let Some(ref last_manifest) = peer.last_agreed_manifest_id {
+                        ui.monospace(
+                            RichText::new(format!(
+                                "manifest: {}",
+                                format_short_hex(Some(last_manifest))
+                            ))
+                            .color(colors::GRAY_MUTED)
+                            .size(11.0),
+                        );
                     } else {
-                        ui.label(RichText::new("Pending initial sync").color(colors::TEXT_MUTED).size(11.0));
+                        ui.label(
+                            RichText::new("Pending initial sync")
+                                .color(colors::TEXT_MUTED)
+                                .size(11.0),
+                        );
                     }
                 });
             });

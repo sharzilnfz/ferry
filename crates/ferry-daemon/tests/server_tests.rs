@@ -223,7 +223,8 @@ async fn test_dashboard_server_with_auto_backend() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(1234);
     use rand::SeedableRng as _;
     let poly = ferry_store::chunker::generate_polynomial(&mut rng);
-    let (store, _) = ferry_folder::folder::create_folder(&tree_dir, &identity, folder_id, poly).unwrap();
+    let (store, _) =
+        ferry_folder::folder::create_folder(&tree_dir, &identity, folder_id, poly).unwrap();
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
 

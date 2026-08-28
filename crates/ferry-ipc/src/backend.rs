@@ -30,7 +30,11 @@ pub struct OpError {
 
 impl OpError {
     #[must_use]
-    pub fn new(code: impl Into<String>, message: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -63,7 +67,11 @@ impl OpError {
 
 impl From<std::io::Error> for OpError {
     fn from(e: std::io::Error) -> Self {
-        Self::new("io", e.to_string(), "check folder permissions and disk space")
+        Self::new(
+            "io",
+            e.to_string(),
+            "check folder permissions and disk space",
+        )
     }
 }
 
@@ -223,12 +231,24 @@ impl Stream for UiEventStream {
 pub trait UiBackend: Send + Sync + 'static {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>>;
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>>;
-    fn start_pin(&self, paths: Vec<String>, hours: Option<u64>) -> BoxFuture<'_, Result<PinRecord, OpError>>;
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>>;
     fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>>;
     fn release_pin(&self) -> BoxFuture<'_, Result<PinReleaseSummary, OpError>>;
-    fn share_initiate(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<ShareOffer, OpError>>;
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>>;
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>>;
-    fn pair_accept(&self, payload: PathBuf, dir: Option<PathBuf>) -> BoxFuture<'_, Result<PairResult, OpError>>;
+    fn pair_accept(
+        &self,
+        payload: PathBuf,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
 }
@@ -305,7 +325,11 @@ impl UiBackend for FakeBackend {
         Box::pin(async move { Ok(confs.read().await.clone()) })
     }
 
-    fn start_pin(&self, paths: Vec<String>, _hours: Option<u64>) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        _hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
         let active_pin = Arc::clone(&self.active_pin);
         let snap = Arc::clone(&self.snapshot);
         let tx = self.event_tx.clone();
@@ -371,7 +395,11 @@ impl UiBackend for FakeBackend {
         })
     }
 
-    fn share_initiate(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
         let snap = Arc::clone(&self.snapshot);
         let active_share = Arc::clone(&self.active_share);
         Box::pin(async move {
@@ -417,7 +445,11 @@ impl UiBackend for FakeBackend {
             let active = offer.is_some();
             Ok(ShareStatus {
                 folder: folder_str,
-                status: if active { "pending".to_string() } else { "none".to_string() },
+                status: if active {
+                    "pending".to_string()
+                } else {
+                    "none".to_string()
+                },
                 active,
                 peer_device_id: None,
                 offer,
@@ -425,7 +457,11 @@ impl UiBackend for FakeBackend {
         })
     }
 
-    fn pair_accept(&self, payload: PathBuf, dir: Option<PathBuf>) -> BoxFuture<'_, Result<PairResult, OpError>> {
+    fn pair_accept(
+        &self,
+        payload: PathBuf,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         Box::pin(async move {
             Ok(PairResult {
                 folder_id: "0123456789abcdef0123456789abcdef".to_string(),

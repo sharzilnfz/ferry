@@ -865,4 +865,3 @@ fn test_ui_gui_and_tui_dispatch_modes() {
     #[cfg(all(not(feature = "gui"), feature = "web-ui"))]
     assert_eq!(out_default.json["frontend"], "web");
 }
-

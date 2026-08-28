@@ -34,7 +34,8 @@ impl TestRig {
         let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::from_seed([42u8; 32]));
 
         // Initialize folder format
-        let (store, _fmk) = create_folder(&tree_dir, &identity, folder_id, poly).expect("create folder");
+        let (store, _fmk) =
+            create_folder(&tree_dir, &identity, folder_id, poly).expect("create folder");
         store.flush().expect("store flush");
         store.write_index_snapshot().expect("index snapshot");
 

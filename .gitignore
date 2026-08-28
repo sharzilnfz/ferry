@@ -5,3 +5,4 @@
 .pi/
 .agents
 new-session-*.json
+.playwright-mcp/

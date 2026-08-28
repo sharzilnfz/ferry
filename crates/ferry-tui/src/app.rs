@@ -110,12 +110,9 @@ impl TuiApp {
                 conflict_path,
                 timestamp,
                 quarantined_as,
-            } => self.state.apply_conflict_recorded(
-                path,
-                conflict_path,
-                timestamp,
-                quarantined_as,
-            ),
+            } => self
+                .state
+                .apply_conflict_recorded(path, conflict_path, timestamp, quarantined_as),
             UiEvent::Error { code, message } => self.state.apply_error(code, message),
         }
     }
@@ -199,15 +196,13 @@ impl TuiApp {
             }
             KeyCode::Char('r' | 'R') => {
                 if let Err(e) = backend.trigger_scan().await {
-                    self.state.activity_log.push_error(
-                        current_time_str(),
-                        format!("Trigger scan error: {e}"),
-                    );
+                    self.state
+                        .activity_log
+                        .push_error(current_time_str(), format!("Trigger scan error: {e}"));
                 } else {
-                    self.state.activity_log.push_info(
-                        current_time_str(),
-                        "Scan triggered",
-                    );
+                    self.state
+                        .activity_log
+                        .push_info(current_time_str(), "Scan triggered");
                 }
             }
             KeyCode::Char('p' | 'P') => {
@@ -220,10 +215,9 @@ impl TuiApp {
                             );
                         }
                         Err(e) => {
-                            self.state.activity_log.push_error(
-                                current_time_str(),
-                                format!("Release pin error: {e}"),
-                            );
+                            self.state
+                                .activity_log
+                                .push_error(current_time_str(), format!("Release pin error: {e}"));
                         }
                     }
                 } else {
@@ -235,10 +229,9 @@ impl TuiApp {
                             );
                         }
                         Err(e) => {
-                            self.state.activity_log.push_error(
-                                current_time_str(),
-                                format!("Start pin error: {e}"),
-                            );
+                            self.state
+                                .activity_log
+                                .push_error(current_time_str(), format!("Start pin error: {e}"));
                         }
                     }
                 }
@@ -248,14 +241,14 @@ impl TuiApp {
                 match backend.list_conflicts().await {
                     Ok(entries) => {
                         self.state.conflict_entries = entries;
-                        self.state.conflicts = self.state.conflict_entries.len().max(self.state.conflicts);
+                        self.state.conflicts =
+                            self.state.conflict_entries.len().max(self.state.conflicts);
                         self.state.update_cached_strings();
                     }
                     Err(e) => {
-                        self.state.activity_log.push_error(
-                            current_time_str(),
-                            format!("List conflicts error: {e}"),
-                        );
+                        self.state
+                            .activity_log
+                            .push_error(current_time_str(), format!("List conflicts error: {e}"));
                     }
                 }
             }
@@ -278,10 +271,9 @@ impl TuiApp {
                 self.state.apply_snapshot(snap);
             }
             Err(e) => {
-                self.state.activity_log.push_warn(
-                    current_time_str(),
-                    format!("Initial status query: {e}"),
-                );
+                self.state
+                    .activity_log
+                    .push_warn(current_time_str(), format!("Initial status query: {e}"));
             }
         }
 

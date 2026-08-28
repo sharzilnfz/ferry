@@ -24,9 +24,11 @@ use ferry_tui::TuiApp;
 async fn test_four_frontends_synced_state_consistency() {
     let fake = Arc::new(FakeBackend::new());
     let mut snap = EngineSnapshot::new("/workspace/project", "fold-1234", "dev-5678", "synced");
-    snap.manifest_id = Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
+    snap.manifest_id =
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
     snap.scanned = ScanStatsView::new(250, 30, 4, 4_500_000);
-    snap.peers.push(PeerStatusView::new("peer-node-alpha", "online"));
+    snap.peers
+        .push(PeerStatusView::new("peer-node-alpha", "online"));
     fake.set_snapshot(snap.clone()).await;
 
     // 1. CLI Frontend projection
@@ -36,7 +38,10 @@ async fn test_four_frontends_synced_state_consistency() {
     assert_eq!(cli_doc["folder"], "/workspace/project");
     assert_eq!(cli_doc["folder_id"], "fold-1234");
     assert_eq!(cli_doc["device_id"], "dev-5678");
-    assert_eq!(cli_doc["manifest_id"], "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(
+        cli_doc["manifest_id"],
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
     assert_eq!(cli_doc["scanned"]["files"], 250);
     assert_eq!(cli_doc["scanned"]["dirs"], 30);
     assert_eq!(cli_doc["scanned"]["symlinks"], 4);
@@ -66,12 +71,18 @@ async fn test_four_frontends_synced_state_consistency() {
     gui_app.handle_event(UiEvent::State(cli_snap));
     assert_eq!(gui_app.beacon_state(), BeaconState::Synced);
     assert_eq!(gui_app.current_badge().0, "SYNCED");
-    assert_eq!(gui_app.snapshot.as_ref().unwrap().folder, "/workspace/project");
+    assert_eq!(
+        gui_app.snapshot.as_ref().unwrap().folder,
+        "/workspace/project"
+    );
     assert_eq!(gui_app.snapshot.as_ref().unwrap().folder_id, "fold-1234");
     assert_eq!(gui_app.snapshot.as_ref().unwrap().scanned.files, 250);
     assert_eq!(gui_app.snapshot.as_ref().unwrap().scanned.dirs, 30);
     assert_eq!(gui_app.snapshot.as_ref().unwrap().scanned.symlinks, 4);
-    assert_eq!(gui_app.snapshot.as_ref().unwrap().scanned.bytes_chunked, 4_500_000);
+    assert_eq!(
+        gui_app.snapshot.as_ref().unwrap().scanned.bytes_chunked,
+        4_500_000
+    );
     assert!(!gui_app.snapshot.as_ref().unwrap().pin.holding);
     assert_eq!(gui_app.snapshot.as_ref().unwrap().held_changes, 0);
 }

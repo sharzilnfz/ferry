@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
-use ferry_ipc::protocol::{ConflictEntry, DeviceStamp, EngineSnapshot, ScanStatsView, TransferDirection};
+use ferry_ipc::protocol::{
+    ConflictEntry, DeviceStamp, EngineSnapshot, ScanStatsView, TransferDirection,
+};
 use ferry_tui::state::SyncState;
 use ferry_tui::TuiApp;
 
@@ -67,20 +69,23 @@ async fn test_tuiapp_keyboard_actions_against_fake_backend() {
     // 1. Rescan action ('r')
     let snap_before = fake.get_status().await.unwrap();
     let files_before = snap_before.scanned.files;
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('r'))).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('r')))
+        .await;
     let snap_after = fake.get_status().await.unwrap();
     assert_eq!(snap_after.scanned.files, files_before + 1);
 
     // 2. Pin start ('p')
     assert!(!app.state.pin.holding);
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('p'))).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('p')))
+        .await;
     let snap_pinned = fake.get_status().await.unwrap();
     assert!(snap_pinned.pin.holding);
 
     // 3. Pin release ('p' while pinned)
     app.state.engine_state = SyncState::Pinned;
     app.state.pin = snap_pinned.pin;
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('p'))).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('p')))
+        .await;
     let snap_released = fake.get_status().await.unwrap();
     assert!(!snap_released.pin.holding);
 
@@ -101,19 +106,23 @@ async fn test_tuiapp_keyboard_actions_against_fake_backend() {
             mtime_nsec: Some(0),
         },
         quarantined_as: Some("README.sync-conflict.md".to_string()),
-    }).await;
+    })
+    .await;
 
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('c'))).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('c')))
+        .await;
     assert!(app.state.show_conflicts_modal);
     assert_eq!(app.state.conflict_entries.len(), 1);
     assert_eq!(app.state.conflict_entries[0].path, "README.md");
 
     // Close conflict modal with Esc
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Esc)).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Esc))
+        .await;
     assert!(!app.state.show_conflicts_modal);
     assert!(!app.should_quit());
 
     // Quit with 'q'
-    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('q'))).await;
+    app.handle_key_action(&trait_backend, make_key(KeyCode::Char('q')))
+        .await;
     assert!(app.should_quit());
 }

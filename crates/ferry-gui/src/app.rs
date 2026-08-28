@@ -23,11 +23,18 @@ use crate::theme::{colors, Theme};
 /// User actions sent asynchronously to the backend worker task.
 pub enum BackendAction {
     TriggerScan,
-    StartPin { paths: Vec<String>, hours: Option<u64> },
+    StartPin {
+        paths: Vec<String>,
+        hours: Option<u64>,
+    },
     StopPin,
     ReleasePin,
-    InitiateShare { i_know: bool },
-    AcceptPair { payload_path: std::path::PathBuf },
+    InitiateShare {
+        i_know: bool,
+    },
+    AcceptPair {
+        payload_path: std::path::PathBuf,
+    },
     FetchStatus,
     FetchConflicts,
 }
@@ -221,7 +228,10 @@ impl GuiApp {
                             Ok(res) => {
                                 let _ = ev_tx_actions.send(UiEvent::Error {
                                     code: "pair_success".to_string(),
-                                    message: format!("Successfully paired with device {}", res.device_id),
+                                    message: format!(
+                                        "Successfully paired with device {}",
+                                        res.device_id
+                                    ),
                                 });
                                 if let Ok(snap) = b_actions.get_status().await {
                                     let _ = ev_tx_actions.send(UiEvent::State(snap));
@@ -302,7 +312,10 @@ impl GuiApp {
 
         if snap.pin.holding || snap.state.eq_ignore_ascii_case("pinned") {
             BeaconState::Holding
-        } else if snap.conflicts > 0 || !self.conflicts.is_empty() || snap.state.eq_ignore_ascii_case("conflict") {
+        } else if snap.conflicts > 0
+            || !self.conflicts.is_empty()
+            || snap.state.eq_ignore_ascii_case("conflict")
+        {
             BeaconState::Conflict
         } else if snap.state.eq_ignore_ascii_case("syncing") || self.active_transfer.is_some() {
             BeaconState::Syncing
@@ -334,8 +347,14 @@ impl GuiApp {
         self.is_connected = true;
         match event {
             UiEvent::State(snap) => {
-                let msg = format!("State: {} (files: {}, size: {})", snap.state, snap.scanned.files, format_bytes(snap.scanned.bytes_chunked));
-                self.activity_log.push(ActivityEntry::new("Snapshot", msg, colors::FERRY_GREEN));
+                let msg = format!(
+                    "State: {} (files: {}, size: {})",
+                    snap.state,
+                    snap.scanned.files,
+                    format_bytes(snap.scanned.bytes_chunked)
+                );
+                self.activity_log
+                    .push(ActivityEntry::new("Snapshot", msg, colors::FERRY_GREEN));
                 self.snapshot = Some(snap);
             }
             UiEvent::StateChanged {
@@ -346,7 +365,8 @@ impl GuiApp {
                 ..
             } => {
                 let msg = format!("Transitioned to {state} (manifest: {manifest_id})");
-                self.activity_log.push(ActivityEntry::new("State", msg, colors::BLUE_SYNCING));
+                self.activity_log
+                    .push(ActivityEntry::new("State", msg, colors::BLUE_SYNCING));
                 if let Some(ref mut snap) = self.snapshot {
                     snap.state = state;
                     snap.manifest_id = Some(manifest_id);
@@ -368,8 +388,15 @@ impl GuiApp {
                 direction,
             } => {
                 if total_bytes > 0 && bytes_transferred >= total_bytes {
-                    let msg = format!("Completed transfer of {current_path} ({})", format_bytes(total_bytes));
-                    self.activity_log.push(ActivityEntry::new("Transfer", msg, colors::FERRY_GREEN));
+                    let msg = format!(
+                        "Completed transfer of {current_path} ({})",
+                        format_bytes(total_bytes)
+                    );
+                    self.activity_log.push(ActivityEntry::new(
+                        "Transfer",
+                        msg,
+                        colors::FERRY_GREEN,
+                    ));
                     self.active_transfer = None;
                 } else {
                     let dir_label = match direction {
@@ -377,9 +404,15 @@ impl GuiApp {
                         Some(TransferDirection::Receiving) => "Receiving",
                         None => "Transferring",
                     };
-                    let msg = format!("{dir_label} {current_path} ({bytes_transferred}/{total_bytes} bytes)");
+                    let msg = format!(
+                        "{dir_label} {current_path} ({bytes_transferred}/{total_bytes} bytes)"
+                    );
                     if self.active_transfer.is_none() {
-                        self.activity_log.push(ActivityEntry::new("Transfer", msg, colors::BLUE_SYNCING));
+                        self.activity_log.push(ActivityEntry::new(
+                            "Transfer",
+                            msg,
+                            colors::BLUE_SYNCING,
+                        ));
                     }
                     self.active_transfer = Some(GuiTransferState {
                         bytes_transferred,
@@ -398,11 +431,16 @@ impl GuiApp {
                 ..
             } => {
                 let msg = format!("Quarantined conflict: {path} -> {conflict_path}");
-                self.activity_log.push(ActivityEntry::new("Conflict", msg, colors::RED_CONFLICT));
+                self.activity_log
+                    .push(ActivityEntry::new("Conflict", msg, colors::RED_CONFLICT));
                 if !self.conflicts.iter().any(|c| c.path == path) {
                     self.conflicts.push(ConflictEntry {
                         ts: ferry_platform::time::current_time_str(),
-                        folder_id: self.snapshot.as_ref().map(|s| s.folder_id.clone()).unwrap_or_default(),
+                        folder_id: self
+                            .snapshot
+                            .as_ref()
+                            .map(|s| s.folder_id.clone())
+                            .unwrap_or_default(),
                         path: path.clone(),
                         kind: "content".to_string(),
                         winner: ferry_ipc::protocol::DeviceStamp {
@@ -432,17 +470,30 @@ impl GuiApp {
                         Instant::now(),
                         colors::AMBER_WARN,
                     ));
-                    self.activity_log.push(ActivityEntry::new("Security", message, colors::AMBER_WARN));
+                    self.activity_log.push(ActivityEntry::new(
+                        "Security",
+                        message,
+                        colors::AMBER_WARN,
+                    ));
                 } else if code == "pair_success" {
-                    self.status_message = Some((message.clone(), Instant::now(), colors::FERRY_GREEN));
-                    self.activity_log.push(ActivityEntry::new("Pairing", message, colors::FERRY_GREEN));
+                    self.status_message =
+                        Some((message.clone(), Instant::now(), colors::FERRY_GREEN));
+                    self.activity_log.push(ActivityEntry::new(
+                        "Pairing",
+                        message,
+                        colors::FERRY_GREEN,
+                    ));
                 } else {
                     self.status_message = Some((
                         format!("{code}: {message}"),
                         Instant::now(),
                         colors::RED_CONFLICT,
                     ));
-                    self.activity_log.push(ActivityEntry::new("Error", format!("{code}: {message}"), colors::RED_CONFLICT));
+                    self.activity_log.push(ActivityEntry::new(
+                        "Error",
+                        format!("{code}: {message}"),
+                        colors::RED_CONFLICT,
+                    ));
                 }
             }
         }
@@ -466,7 +517,11 @@ impl GuiApp {
         ctx.input(|i| {
             // Close modal with Escape
             if i.key_pressed(Key::Escape) {
-                if self.show_conflicts_modal || self.show_pin_modal || self.show_share_modal || self.show_pair_modal {
+                if self.show_conflicts_modal
+                    || self.show_pin_modal
+                    || self.show_share_modal
+                    || self.show_pair_modal
+                {
                     self.show_conflicts_modal = false;
                     self.show_pin_modal = false;
                     self.show_share_modal = false;
@@ -479,8 +534,16 @@ impl GuiApp {
             // Rescan 'r'
             if i.key_pressed(Key::R) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.dispatch(BackendAction::TriggerScan);
-                self.status_message = Some(("Rescan triggered".to_string(), Instant::now(), colors::FERRY_GREEN));
-                self.activity_log.push(ActivityEntry::new("Scan", "Manual rescan triggered by user", colors::FERRY_GREEN));
+                self.status_message = Some((
+                    "Rescan triggered".to_string(),
+                    Instant::now(),
+                    colors::FERRY_GREEN,
+                ));
+                self.activity_log.push(ActivityEntry::new(
+                    "Scan",
+                    "Manual rescan triggered by user",
+                    colors::FERRY_GREEN,
+                ));
             }
 
             // Pin toggle 'p'
@@ -492,8 +555,16 @@ impl GuiApp {
 
                 if is_pinned {
                     self.dispatch(BackendAction::ReleasePin);
-                    self.status_message = Some(("Releasing pin...".to_string(), Instant::now(), colors::FERRY_GREEN));
-                    self.activity_log.push(ActivityEntry::new("Pin", "Session pin release requested", colors::PURPLE_PINNED));
+                    self.status_message = Some((
+                        "Releasing pin...".to_string(),
+                        Instant::now(),
+                        colors::FERRY_GREEN,
+                    ));
+                    self.activity_log.push(ActivityEntry::new(
+                        "Pin",
+                        "Session pin release requested",
+                        colors::PURPLE_PINNED,
+                    ));
                 } else {
                     self.show_pin_modal = !self.show_pin_modal;
                 }
@@ -508,7 +579,13 @@ impl GuiApp {
             }
 
             // Quit 'q'
-            if (i.key_pressed(Key::Q) && i.modifiers.ctrl) || (i.key_pressed(Key::Q) && !self.show_conflicts_modal && !self.show_pin_modal && !self.show_share_modal && !self.show_pair_modal) {
+            if (i.key_pressed(Key::Q) && i.modifiers.ctrl)
+                || (i.key_pressed(Key::Q)
+                    && !self.show_conflicts_modal
+                    && !self.show_pin_modal
+                    && !self.show_share_modal
+                    && !self.show_pair_modal)
+            {
                 self.should_quit = true;
             }
         });
@@ -538,7 +615,11 @@ impl GuiApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // App Logo & Status Beacon with expanding animated aura
-                    ui.heading(RichText::new("⛵ Ferry").strong().color(colors::TEXT_PRIMARY));
+                    ui.heading(
+                        RichText::new("⛵ Ferry")
+                            .strong()
+                            .color(colors::TEXT_PRIMARY),
+                    );
                     ui.add_space(8.0);
 
                     status_beacon_ui(ui, b_state, time);
@@ -546,12 +627,22 @@ impl GuiApp {
                     // Hero Action Buttons
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // Pair Device button
-                        if ui.button(RichText::new("+ Pair Device").size(12.0).color(colors::FERRY_GREEN)).clicked() {
+                        if ui
+                            .button(
+                                RichText::new("+ Pair Device")
+                                    .size(12.0)
+                                    .color(colors::FERRY_GREEN),
+                            )
+                            .clicked()
+                        {
                             self.show_pair_modal = true;
                         }
 
                         // Share Folder button
-                        if ui.button(RichText::new("Share Folder").size(12.0)).clicked() {
+                        if ui
+                            .button(RichText::new("Share Folder").size(12.0))
+                            .clicked()
+                        {
                             self.show_share_modal = true;
                         }
 
@@ -566,30 +657,59 @@ impl GuiApp {
                         } else {
                             colors::RED_CONFLICT
                         };
-                        if ui.button(RichText::new(conf_btn_text).color(conf_color).size(12.0)).clicked() {
+                        if ui
+                            .button(RichText::new(conf_btn_text).color(conf_color).size(12.0))
+                            .clicked()
+                        {
                             self.show_conflicts_modal = true;
                             self.dispatch(BackendAction::FetchConflicts);
                         }
 
                         // Hold Edits / Release Pin toggle hero button
-                        let is_pinned = self
-                            .snapshot
-                            .as_ref()
-                            .is_some_and(|s| s.pin.holding || s.state.eq_ignore_ascii_case("pinned"));
+                        let is_pinned = self.snapshot.as_ref().is_some_and(|s| {
+                            s.pin.holding || s.state.eq_ignore_ascii_case("pinned")
+                        });
 
                         if is_pinned {
-                            if ui.button(RichText::new("Release Pin").color(colors::PURPLE_PINNED).strong().size(12.0)).clicked() {
+                            if ui
+                                .button(
+                                    RichText::new("Release Pin")
+                                        .color(colors::PURPLE_PINNED)
+                                        .strong()
+                                        .size(12.0),
+                                )
+                                .clicked()
+                            {
                                 self.dispatch(BackendAction::ReleasePin);
-                                self.status_message = Some(("Releasing session pin...".to_string(), Instant::now(), colors::PURPLE_PINNED));
+                                self.status_message = Some((
+                                    "Releasing session pin...".to_string(),
+                                    Instant::now(),
+                                    colors::PURPLE_PINNED,
+                                ));
                             }
-                        } else if ui.button(RichText::new("Hold Edits [P]").size(12.0)).clicked() {
+                        } else if ui
+                            .button(RichText::new("Hold Edits [P]").size(12.0))
+                            .clicked()
+                        {
                             self.show_pin_modal = true;
                         }
 
                         // Sync Now / Rescan hero action button
-                        if ui.button(RichText::new("↻ Sync Now [R]").color(colors::BLUE_SYNCING).strong().size(12.0)).clicked() {
+                        if ui
+                            .button(
+                                RichText::new("↻ Sync Now [R]")
+                                    .color(colors::BLUE_SYNCING)
+                                    .strong()
+                                    .size(12.0),
+                            )
+                            .clicked()
+                        {
                             self.dispatch(BackendAction::TriggerScan);
-                            self.status_message = Some(("Rescan triggered".to_string(), Instant::now(), colors::FERRY_GREEN));
+                            self.status_message = Some((
+                                "Rescan triggered".to_string(),
+                                Instant::now(),
+                                colors::FERRY_GREEN,
+                            ));
                         }
                     });
                 });
@@ -625,13 +745,29 @@ impl GuiApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("[R] Rescan").size(11.0).color(colors::TEXT_MUTED));
+                    ui.label(
+                        RichText::new("[R] Rescan")
+                            .size(11.0)
+                            .color(colors::TEXT_MUTED),
+                    );
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
-                    ui.label(RichText::new("[P] Hold / Pin").size(11.0).color(colors::TEXT_MUTED));
+                    ui.label(
+                        RichText::new("[P] Hold / Pin")
+                            .size(11.0)
+                            .color(colors::TEXT_MUTED),
+                    );
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
-                    ui.label(RichText::new("[C] Conflicts").size(11.0).color(colors::TEXT_MUTED));
+                    ui.label(
+                        RichText::new("[C] Conflicts")
+                            .size(11.0)
+                            .color(colors::TEXT_MUTED),
+                    );
                     ui.label(RichText::new("•").size(11.0).color(colors::GRAY_MUTED));
-                    ui.label(RichText::new("[Q] / [Esc] Quit").size(11.0).color(colors::TEXT_MUTED));
+                    ui.label(
+                        RichText::new("[Q] / [Esc] Quit")
+                            .size(11.0)
+                            .color(colors::TEXT_MUTED),
+                    );
 
                     if let Some((ref msg, instant, color)) = self.status_message {
                         if instant.elapsed().as_secs() < 5 {
@@ -649,7 +785,11 @@ impl GuiApp {
         let mut clear_activity = false;
 
         CentralPanel::default()
-            .frame(Frame::none().fill(colors::OBSIDIAN_BG).inner_margin(16.0f32))
+            .frame(
+                Frame::none()
+                    .fill(colors::OBSIDIAN_BG)
+                    .inner_margin(16.0f32),
+            )
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     if let Some(ref snap) = self.snapshot {
@@ -657,11 +797,17 @@ impl GuiApp {
                         render_card(ui, "Folder Status", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Path:").color(colors::TEXT_MUTED));
-                                ui.label(RichText::new(&snap.folder).color(colors::TEXT_PRIMARY).strong());
+                                ui.label(
+                                    RichText::new(&snap.folder)
+                                        .color(colors::TEXT_PRIMARY)
+                                        .strong(),
+                                );
                             });
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Folder ID:").color(colors::TEXT_MUTED));
-                                ui.monospace(RichText::new(&snap.folder_id).color(colors::TEXT_SECONDARY));
+                                ui.monospace(
+                                    RichText::new(&snap.folder_id).color(colors::TEXT_SECONDARY),
+                                );
                             });
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Manifest:").color(colors::TEXT_MUTED));
@@ -677,17 +823,43 @@ impl GuiApp {
                         // Storage & Tree Metrics Grid
                         render_card(ui, "Storage & Tree Metrics", |ui| {
                             ui.columns(4, |cols| {
-                                cols[0].label(RichText::new("Files").color(colors::TEXT_MUTED).size(11.0));
-                                cols[0].heading(RichText::new(format!("{}", snap.scanned.files)).color(colors::TEXT_PRIMARY));
+                                cols[0].label(
+                                    RichText::new("Files").color(colors::TEXT_MUTED).size(11.0),
+                                );
+                                cols[0].heading(
+                                    RichText::new(format!("{}", snap.scanned.files))
+                                        .color(colors::TEXT_PRIMARY),
+                                );
 
-                                cols[1].label(RichText::new("Directories").color(colors::TEXT_MUTED).size(11.0));
-                                cols[1].heading(RichText::new(format!("{}", snap.scanned.dirs)).color(colors::TEXT_PRIMARY));
+                                cols[1].label(
+                                    RichText::new("Directories")
+                                        .color(colors::TEXT_MUTED)
+                                        .size(11.0),
+                                );
+                                cols[1].heading(
+                                    RichText::new(format!("{}", snap.scanned.dirs))
+                                        .color(colors::TEXT_PRIMARY),
+                                );
 
-                                cols[2].label(RichText::new("Total Size").color(colors::TEXT_MUTED).size(11.0));
-                                cols[2].heading(RichText::new(format_bytes(snap.scanned.bytes_chunked)).color(colors::TEXT_PRIMARY));
+                                cols[2].label(
+                                    RichText::new("Total Size")
+                                        .color(colors::TEXT_MUTED)
+                                        .size(11.0),
+                                );
+                                cols[2].heading(
+                                    RichText::new(format_bytes(snap.scanned.bytes_chunked))
+                                        .color(colors::TEXT_PRIMARY),
+                                );
 
-                                cols[3].label(RichText::new("Pending Changes").color(colors::TEXT_MUTED).size(11.0));
-                                cols[3].heading(RichText::new(format!("{}", snap.pending_changes.unwrap_or(0))).color(colors::TEXT_PRIMARY));
+                                cols[3].label(
+                                    RichText::new("Pending Changes")
+                                        .color(colors::TEXT_MUTED)
+                                        .size(11.0),
+                                );
+                                cols[3].heading(
+                                    RichText::new(format!("{}", snap.pending_changes.unwrap_or(0)))
+                                        .color(colors::TEXT_PRIMARY),
+                                );
                             });
                         });
 
@@ -696,20 +868,34 @@ impl GuiApp {
                         // Active Transfer Banner
                         if let Some(ref transfer) = self.active_transfer {
                             render_card(ui, "Active Transfer", |ui| {
-                                let ratio = (transfer.bytes_transferred as f32 / transfer.total_bytes.max(1) as f32).clamp(0.0, 1.0);
+                                let ratio = (transfer.bytes_transferred as f32
+                                    / transfer.total_bytes.max(1) as f32)
+                                    .clamp(0.0, 1.0);
                                 let dir_str = match transfer.direction {
                                     Some(TransferDirection::Sending) => "Sending",
                                     Some(TransferDirection::Receiving) => "Receiving",
                                     None => "Transferring",
                                 };
-                                ui.label(RichText::new(format!(
-                                    "{dir_str}: {} / {} ({:.0}%)",
-                                    format_bytes(transfer.bytes_transferred),
-                                    format_bytes(transfer.total_bytes),
-                                    ratio * 100.0
-                                )).color(colors::BLUE_SYNCING).strong());
-                                ui.label(RichText::new(&transfer.current_path).color(colors::TEXT_SECONDARY).size(12.0));
-                                ui.add(egui::ProgressBar::new(ratio).fill(colors::BLUE_SYNCING).rounding(Rounding::same(4.0f32)));
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{dir_str}: {} / {} ({:.0}%)",
+                                        format_bytes(transfer.bytes_transferred),
+                                        format_bytes(transfer.total_bytes),
+                                        ratio * 100.0
+                                    ))
+                                    .color(colors::BLUE_SYNCING)
+                                    .strong(),
+                                );
+                                ui.label(
+                                    RichText::new(&transfer.current_path)
+                                        .color(colors::TEXT_SECONDARY)
+                                        .size(12.0),
+                                );
+                                ui.add(
+                                    egui::ProgressBar::new(ratio)
+                                        .fill(colors::BLUE_SYNCING)
+                                        .rounding(Rounding::same(4.0f32)),
+                                );
                             });
                             ui.add_space(12.0);
                         }
@@ -733,7 +919,11 @@ impl GuiApp {
                         );
                     } else {
                         ui.centered_and_justified(|ui| {
-                            ui.label(RichText::new("Connecting to Ferry Sync Engine...").color(colors::TEXT_MUTED).size(16.0));
+                            ui.label(
+                                RichText::new("Connecting to Ferry Sync Engine...")
+                                    .color(colors::TEXT_MUTED)
+                                    .size(16.0),
+                            );
                         });
                     }
                 });
@@ -752,12 +942,9 @@ impl GuiApp {
         // 5. Modals & Drawers
         if self.show_conflicts_modal {
             let mut refresh_conflicts = false;
-            render_conflicts_modal(
-                ctx,
-                &mut self.show_conflicts_modal,
-                &self.conflicts,
-                || refresh_conflicts = true,
-            );
+            render_conflicts_modal(ctx, &mut self.show_conflicts_modal, &self.conflicts, || {
+                refresh_conflicts = true;
+            });
             if refresh_conflicts {
                 self.dispatch(BackendAction::FetchConflicts);
             }
@@ -803,14 +990,9 @@ impl GuiApp {
         if self.show_pair_modal {
             let mut pair_action = None;
             let mut pair_input = self.pair_path_input.clone();
-            render_pair_modal(
-                ctx,
-                &mut self.show_pair_modal,
-                &mut pair_input,
-                |path| {
-                    pair_action = Some(BackendAction::AcceptPair { payload_path: path });
-                },
-            );
+            render_pair_modal(ctx, &mut self.show_pair_modal, &mut pair_input, |path| {
+                pair_action = Some(BackendAction::AcceptPair { payload_path: path });
+            });
             self.pair_path_input = pair_input;
             if let Some(act) = pair_action {
                 self.dispatch(act);
@@ -832,7 +1014,12 @@ fn render_card(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::U
         .rounding(Rounding::same(10.0f32))
         .inner_margin(Margin::same(14.0f32))
         .show(ui, |ui| {
-            ui.label(RichText::new(title).strong().color(colors::TEXT_PRIMARY).size(13.5));
+            ui.label(
+                RichText::new(title)
+                    .strong()
+                    .color(colors::TEXT_PRIMARY)
+                    .size(13.5),
+            );
             ui.add_space(8.0);
             content(ui);
         });

@@ -111,6 +111,7 @@ fn edits_on_either_side_converge_both_directions() {
     assert!(trees_byte_equal(&fx), "phase 1 (A->B)");
 
     // Phase 2: edit on B only.
+    std::thread::sleep(Duration::from_millis(50));
     let mut b2 = TreeBuilder::new(fx.tree_b(), SEED + 3);
     b2.write("from-b.txt", b"written on node B");
     b2.write("from-a.txt", b"edited on node B"); // overwrite of A's file

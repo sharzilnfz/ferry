@@ -49,22 +49,17 @@ impl BeaconState {
     #[must_use]
     pub const fn pulse_speed(&self) -> f64 {
         match self {
-            Self::Synced => 0.8,    // Gentle breath
-            Self::Syncing => 2.0,   // Active energetic waves
-            Self::Holding => 1.0,   // Steady pulse
-            Self::Conflict => 3.0,  // Rapid warning pulse
+            Self::Synced => 0.8,   // Gentle breath
+            Self::Syncing => 2.0,  // Active energetic waves
+            Self::Holding => 1.0,  // Steady pulse
+            Self::Conflict => 3.0, // Rapid warning pulse
             Self::Idle | Self::Offline => 0.0,
         }
     }
 }
 
 /// Render the pulsating beacon dot with animated aura waves.
-pub fn render_pulsating_beacon(
-    painter: &Painter,
-    center: Pos2,
-    state: BeaconState,
-    time: f64,
-) {
+pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconState, time: f64) {
     let speed = state.pulse_speed();
     let base_color = state.color();
 
@@ -139,10 +134,14 @@ pub fn status_beacon_ui(ui: &mut egui::Ui, state: BeaconState, time: f64) {
 
         let padding = vec2(8.0f32, 3.0f32);
         let font_id = egui::FontId::proportional(11.5f32);
-        let galley = ui.painter().layout_no_wrap(state.label().to_string(), font_id, fg);
-        let (badge_rect, _) = ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
+        let galley = ui
+            .painter()
+            .layout_no_wrap(state.label().to_string(), font_id, fg);
+        let (badge_rect, _) =
+            ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
 
-        ui.painter().rect_filled(badge_rect, Rounding::same(8.0f32), bg);
+        ui.painter()
+            .rect_filled(badge_rect, Rounding::same(8.0f32), bg);
         ui.painter().rect_stroke(
             badge_rect,
             Rounding::same(8.0f32),

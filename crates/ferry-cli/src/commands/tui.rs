@@ -17,9 +17,8 @@ pub fn run(folder: Option<&Path>) -> CliResult<crate::out::Output> {
     rt.block_on(async {
         let dir = folder.unwrap_or_else(|| Path::new("."));
         let socket_path = ferry_ipc::paths::socket_path_for_dir(dir);
-        let backend: Arc<dyn UiBackend> = Arc::new(
-            AutoBackend::new(socket_path).with_fallback(dir.to_path_buf()),
-        );
+        let backend: Arc<dyn UiBackend> =
+            Arc::new(AutoBackend::new(socket_path).with_fallback(dir.to_path_buf()));
 
         let mut guard = ferry_tui::TerminalGuard::init().map_err(|e| {
             crate::error::CliError::new("tui-error", e.to_string(), "failed to initialize terminal")

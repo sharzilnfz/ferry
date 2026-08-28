@@ -368,7 +368,9 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     }
     #[cfg(not(feature = "web-ui"))]
     if d.ui_addr.is_some() {
-        return Err("web dashboard disabled in this build (compiled with --features lean)".to_string());
+        return Err(
+            "web dashboard disabled in this build (compiled with --features lean)".to_string(),
+        );
     }
 
     handle.join_until_signal();

@@ -336,7 +336,17 @@ fn ui_flags_parse_web_gui_tui() {
         other => panic!("{other:?}"),
     }
 
-    match parse(&["ui", "--web", "--host", "0.0.0.0", "-p", "8080", "--no-open"]).command {
+    match parse(&[
+        "ui",
+        "--web",
+        "--host",
+        "0.0.0.0",
+        "-p",
+        "8080",
+        "--no-open",
+    ])
+    .command
+    {
         Command::Ui {
             gui,
             web,
@@ -357,12 +367,7 @@ fn ui_flags_parse_web_gui_tui() {
     }
 
     match parse(&["ui", "--tui"]).command {
-        Command::Ui {
-            gui,
-            web,
-            tui,
-            ..
-        } => {
+        Command::Ui { gui, web, tui, .. } => {
             assert!(!gui);
             assert!(!web);
             assert!(tui);
@@ -376,4 +381,3 @@ fn help_mentions_the_five_minute_path() {
     let err = Cli::try_parse_from(["ferry", "--help"]).unwrap_err();
     assert!(err.to_string().contains("Five-minute path"));
 }
-

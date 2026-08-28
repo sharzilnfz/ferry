@@ -17,9 +17,7 @@ use ferry_gui::modals::render_share_modal;
 use ferry_gui::theme::Theme;
 use ferry_gui::GuiApp;
 use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
-use ferry_ipc::protocol::{
-    ConflictEntry, DeviceStamp, EngineSnapshot, PinView, TransferDirection,
-};
+use ferry_ipc::protocol::{ConflictEntry, DeviceStamp, EngineSnapshot, PinView, TransferDirection};
 
 #[test]
 fn test_edge_case_asymmetric_conflicts() {
@@ -144,10 +142,7 @@ fn test_edge_case_active_transfers_boundary_values() {
     });
 
     // 2. 120 GB massive transfer edge case
-    assert_eq!(
-        format_bytes(120 * 1024 * 1024 * 1024),
-        "120.00 GB"
-    );
+    assert_eq!(format_bytes(120 * 1024 * 1024 * 1024), "120.00 GB");
 
     app.handle_event(UiEvent::TransferProgress {
         bytes_transferred: 60 * 1024 * 1024 * 1024,
@@ -229,8 +224,5 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     });
 
     assert!(app.active_share.is_some());
-    assert_eq!(
-        app.active_share.as_ref().unwrap().token,
-        offer.token
-    );
+    assert_eq!(app.active_share.as_ref().unwrap().token, offer.token);
 }

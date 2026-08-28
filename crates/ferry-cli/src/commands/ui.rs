@@ -81,7 +81,8 @@ impl UiServerState {
 #[cfg(feature = "web-ui")]
 pub fn router(state: Arc<UiServerState>) -> Router {
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&state.folder);
-    let backend = ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(state.folder.clone());
+    let backend =
+        ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(state.folder.clone());
     let server = DashboardServer::new(Arc::new(backend))
         .with_token(&state.token)
         .with_inactivity_timeout(INACTIVITY_TIMEOUT);
@@ -125,7 +126,10 @@ fn run_gui_mode(folder_path: &Path, test_mode: bool) -> CliResult<Output> {
                 "status": "ok",
                 "folder": folder_path.display().to_string(),
             }),
-            format!("Ferry GUI initialized successfully in test mode for {}\n", folder_path.display()),
+            format!(
+                "Ferry GUI initialized successfully in test mode for {}\n",
+                folder_path.display()
+            ),
         ));
     }
 
@@ -148,7 +152,11 @@ fn run_gui_mode(folder_path: &Path, test_mode: bool) -> CliResult<Output> {
 
     let handle = rt.handle().clone();
     ferry_gui::run_gui(backend, handle).map_err(|e| {
-        CliError::new("gui-error", e.to_string(), "GUI application exited with error")
+        CliError::new(
+            "gui-error",
+            e.to_string(),
+            "GUI application exited with error",
+        )
     })?;
 
     Ok(Output::new(
@@ -171,7 +179,10 @@ fn run_tui_mode(folder_path: &Path, test_mode: bool) -> CliResult<Output> {
                 "status": "ok",
                 "folder": folder_path.display().to_string(),
             }),
-            format!("Ferry TUI initialized successfully in test mode for {}\n", folder_path.display()),
+            format!(
+                "Ferry TUI initialized successfully in test mode for {}\n",
+                folder_path.display()
+            ),
         ));
     }
     crate::commands::tui::run(Some(folder_path))

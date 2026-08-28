@@ -49,10 +49,13 @@ pub fn render_activity_stream(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("Real-Time Activity Stream ({})", activity_log.len()))
-                        .strong()
-                        .color(colors::TEXT_PRIMARY)
-                        .size(13.5),
+                    RichText::new(format!(
+                        "Real-Time Activity Stream ({})",
+                        activity_log.len()
+                    ))
+                    .strong()
+                    .color(colors::TEXT_PRIMARY)
+                    .size(13.5),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -83,9 +86,11 @@ pub fn render_activity_stream(
                     scroll.show(ui, |ui| {
                         if activity_log.is_empty() {
                             ui.label(
-                                RichText::new("No activity recorded yet. Waiting for sync events...")
-                                    .color(colors::TEXT_MUTED)
-                                    .size(12.0),
+                                RichText::new(
+                                    "No activity recorded yet. Waiting for sync events...",
+                                )
+                                .color(colors::TEXT_MUTED)
+                                .size(12.0),
                             );
                         } else {
                             for entry in activity_log {

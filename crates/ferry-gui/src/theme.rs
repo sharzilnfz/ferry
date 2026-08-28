@@ -1,8 +1,6 @@
 //! Obsidian dark theme engine and fluid glass visual tokens for Ferry GUI.
 
-use egui::{
-    epaint::Shadow, vec2, Color32, FontId, Margin, Rounding, Stroke, TextStyle, Visuals,
-};
+use egui::{epaint::Shadow, vec2, Color32, FontId, Margin, Rounding, Stroke, TextStyle, Visuals};
 
 /// Color palette constants for the Ferry Obsidian design system.
 pub mod colors {
@@ -83,26 +81,21 @@ impl Theme {
 
         // Typography scale
         let mut style = (*ctx.style()).clone();
-        style.text_styles.insert(
-            TextStyle::Heading,
-            FontId::proportional(20.0f32),
-        );
-        style.text_styles.insert(
-            TextStyle::Body,
-            FontId::proportional(14.0f32),
-        );
-        style.text_styles.insert(
-            TextStyle::Monospace,
-            FontId::monospace(13.0f32),
-        );
-        style.text_styles.insert(
-            TextStyle::Button,
-            FontId::proportional(13.5f32),
-        );
-        style.text_styles.insert(
-            TextStyle::Small,
-            FontId::proportional(11.5f32),
-        );
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::proportional(20.0f32));
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::proportional(14.0f32));
+        style
+            .text_styles
+            .insert(TextStyle::Monospace, FontId::monospace(13.0f32));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::proportional(13.5f32));
+        style
+            .text_styles
+            .insert(TextStyle::Small, FontId::proportional(11.5f32));
         style.spacing.item_spacing = vec2(8.0f32, 8.0f32);
         style.spacing.window_margin = Margin::same(16.0f32);
         ctx.set_style(style);
@@ -117,14 +110,19 @@ impl Theme {
     ) {
         let padding = vec2(10.0f32, 4.0f32);
         let font_id = FontId::proportional(12.0f32);
-        let galley = ui.painter().layout_no_wrap(text.to_string(), font_id, text_color);
-        let (rect, _response) = ui.allocate_exact_size(
-            galley.size() + padding * 2.0f32,
-            egui::Sense::hover(),
-        );
+        let galley = ui
+            .painter()
+            .layout_no_wrap(text.to_string(), font_id, text_color);
+        let (rect, _response) =
+            ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
 
-        ui.painter().rect_filled(rect, Rounding::same(10.0f32), bg_color);
-        ui.painter().rect_stroke(rect, Rounding::same(10.0f32), Stroke::new(1.0f32, colors::GLASS_BORDER_STRONG));
+        ui.painter()
+            .rect_filled(rect, Rounding::same(10.0f32), bg_color);
+        ui.painter().rect_stroke(
+            rect,
+            Rounding::same(10.0f32),
+            Stroke::new(1.0f32, colors::GLASS_BORDER_STRONG),
+        );
         ui.painter().galley(rect.min + padding, galley, text_color);
     }
 }
