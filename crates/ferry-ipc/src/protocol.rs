@@ -1,7 +1,13 @@
 //! Typed IPC messages and wire protocol data structures for Ferry.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::fs::DirectoryEntry;
+use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
+use crate::registry::FolderRecord;
 
 /// Server push messages emitted by the sync daemon over IPC.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +64,27 @@ pub enum DaemonMessage {
 
     /// Error notification or command failure response.
     Error { code: String, message: String },
+
+    /// Directory listing response.
+    DirectoryListing {
+        entries: Vec<DirectoryEntry>,
+        absolute_path: PathBuf,
+    },
+
+    /// List of registered folders.
+    FolderList { folders: Vec<FolderRecord> },
+
+    /// A folder was registered.
+    FolderRegistered { folder: FolderRecord },
+
+    /// A folder was removed.
+    FolderRemoved { folder_id: String },
+
+    /// Pairing session created.
+    PairingCreated { response: CreatePairingResponse },
+
+    /// Pairing session joined.
+    PairingJoined { result: crate::backend::PairResult },
 }
 
 /// Commands sent from a client (CLI / TUI / Web proxy) to the sync daemon.
@@ -86,6 +113,27 @@ pub enum ClientCommand {
 
     /// Ping request to test connectivity and liveness.
     Ping,
+
+    /// List directory entries at the given path (None = `FERRY_HOME`).
+    ListDirectory {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<PathBuf>,
+    },
+
+    /// List all registered sync folders.
+    ListFolders,
+
+    /// Register a new sync folder.
+    RegisterFolder { path: PathBuf },
+
+    /// Remove a registered sync folder by id.
+    RemoveFolder { folder_id: String },
+
+    /// Create a short-lived pairing session for a folder.
+    CreatePairingSession { req: CreatePairingRequest },
+
+    /// Join a pairing session using a code and target directory.
+    JoinPairingSession { req: JoinPairingRequest },
 }
 
 /// Snapshot of the complete engine state, matching the CLI `--json` schema.

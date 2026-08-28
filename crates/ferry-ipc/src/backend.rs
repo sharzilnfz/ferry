@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::Stream;
 
+use crate::fs::ListDirectoryResponse;
+use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDirection};
+use crate::registry::FolderRecord;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -251,6 +254,39 @@ pub trait UiBackend: Send + Sync + 'static {
     ) -> BoxFuture<'_, Result<PairResult, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
+
+    fn list_directory(
+        &self,
+        _path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
+
+    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
+
+    fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
+
+    fn create_pairing_session(
+        &self,
+        _req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
+
+    fn join_pairing_session(
+        &self,
+        _req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        Box::pin(async { unimplemented!() })
+    }
 }
 
 /// In-memory fake backend for deterministic testing across frontends.
@@ -487,5 +523,68 @@ impl UiBackend for FakeBackend {
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
+    }
+
+    fn list_directory(
+        &self,
+        _path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
+    }
+
+    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
+    }
+
+    fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        _req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        _req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        Box::pin(async {
+            Err(OpError::not_found(
+                "not-implemented",
+                "wave 0 stub",
+            ))
+        })
     }
 }

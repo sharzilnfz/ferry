@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -14,6 +15,7 @@ tokio-stream = { workspace = true }
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "io-util"] }
+toml = "0.8"
 
 [lints]
 workspace = true

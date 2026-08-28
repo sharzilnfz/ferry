@@ -6,8 +6,11 @@
 pub mod backend;
 pub mod error;
 pub mod framing;
+pub mod fs;
+pub mod pairing;
 pub mod paths;
 pub mod protocol;
+pub mod registry;
 pub mod transport;
 
 pub use backend::{
@@ -19,10 +22,13 @@ pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZ
 pub use paths::{
     default_socket_path, socket_path_for_dir, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX,
 };
+pub use fs::{DirectoryEntry, ListDirectoryRequest, ListDirectoryResponse};
+pub use pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode};
 pub use protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
     PinView, ScanStatsView, TransferDirection,
 };
+pub use registry::{FolderRecord, FolderRegistry};
 pub use transport::{
     create_in_memory_pair, create_in_memory_pair_with_buffer_size, InMemoryConnection,
     InMemoryStream,
