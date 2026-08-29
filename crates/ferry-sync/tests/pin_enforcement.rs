@@ -107,6 +107,15 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     // Surfaced: ledgered exactly where release looks, with the held
     // version's chunk refs (bytes were fetched during the hold).
     let ledger = HeldLedger::new(&a_ferry);
+    // d2 can land in a poll round whose B-snapshot predates the v2 write,
+    // so the held line may trail the unpinned flow by a tick.
+    wait_until("held decision surfaced for notes.txt", || {
+        ledger
+            .load_peer(&b_hex)
+            .unwrap()
+            .iter()
+            .any(|e| e.path == "notes.txt")
+    });
     let entries = ledger.load_peer(&b_hex).unwrap();
     let notes = entries
         .iter()
