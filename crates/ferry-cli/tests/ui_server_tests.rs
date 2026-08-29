@@ -507,6 +507,9 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     let mut engine_a =
         ferry_sync::SyncEngine::new(cfg_a.clone(), Arc::new(ferry_sync::TcpTransport)).unwrap();
     engine_a.set_identity(identity_a.clone());
+    // The default policy refuses unpaired devices (ADR-0007); this fixture
+    // pairs the two nodes explicitly via allow-lists.
+    engine_a.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*identity_b.public()]));
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
@@ -519,6 +522,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     let mut engine_b =
         ferry_sync::SyncEngine::new(cfg_b.clone(), Arc::new(ferry_sync::TcpTransport)).unwrap();
     engine_b.set_identity(identity_b.clone());
+    engine_b.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*identity_a.public()]));
     let handle_b = engine_b.start();
 
     // Wait for nodes to synchronize

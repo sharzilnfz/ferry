@@ -282,7 +282,9 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
     {
         let s_tx2 = shutdown_tx.clone();
         rt.spawn(async move {
-            if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            if let Ok(mut sig) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            {
                 sig.recv().await;
                 let _ = s_tx2.send(true);
             }

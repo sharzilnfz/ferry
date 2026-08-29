@@ -19,7 +19,7 @@ use rand::{Rng, SeedableRng};
 
 use ferry_store::chunker::generate_polynomial;
 use ferry_sync::format::hex;
-use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
+use ferry_sync::{EngineConfig, EngineHandle, PeerPolicy, SyncEngine};
 
 #[allow(unused_imports)]
 pub use corrupt::CorruptingTransport;
@@ -120,7 +120,11 @@ impl EngineFixture {
             hook(&mut cfg_a);
         }
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-        let engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
+        let mut engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
+        // The convergence suites exercise sync, not trust: they opt into TOFU
+        // explicitly, because the default policy refuses unpaired devices
+        // (ADR-0007).
+        engine_a.set_peer_policy(PeerPolicy::TrustOnFirstUse);
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
@@ -129,7 +133,8 @@ impl EngineFixture {
         let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
         cfg_b.connect_to = Some(addr);
         let tb = transport_b.unwrap_or_else(default_transport);
-        let engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
+        let mut engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
+        engine_b.set_peer_policy(PeerPolicy::TrustOnFirstUse);
         let b = engine_b.start();
 
         EngineFixture {
@@ -151,7 +156,9 @@ impl EngineFixture {
     /// Stop the default B and start a fresh one through `transport`.
     pub fn replace_b(&mut self, transport: Arc<dyn ferry_sync::Transport>) -> EngineHandle {
         self.b.shutdown();
-        let engine_b = SyncEngine::new(self.b_config(), transport).expect("engine B");
+        let mut engine_b = SyncEngine::new(self.b_config(), transport).expect("engine B");
+        // Same explicit TOFU opt-in as the initial fixture (ADR-0007).
+        engine_b.set_peer_policy(PeerPolicy::TrustOnFirstUse);
         self.b = engine_b.start();
         self.b.clone()
     }

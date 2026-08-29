@@ -127,7 +127,9 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             {
                 let s_tx2 = shutdown_tx.clone();
                 tokio::spawn(async move {
-                    if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    if let Ok(mut sig) =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    {
                         sig.recv().await;
                         let _ = s_tx2.send(true);
                     }
@@ -200,8 +202,8 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             quiet: true,
         };
 
-        let mut engine =
-            SyncEngine::with_store(cfg, transport.clone(), Arc::clone(&opened.store)).map_err(|e| {
+        let mut engine = SyncEngine::with_store(cfg, transport.clone(), Arc::clone(&opened.store))
+            .map_err(|e| {
                 CliError::new(
                     "bind",
                     format!(
@@ -337,7 +339,10 @@ pub fn status() -> CliResult<Output> {
         let pid = pid.unwrap();
         Ok(Output::new(
             serde_json::json!({"command": "daemon", "action": "status", "status": "running", "pid": pid, "socket": socket_path}),
-            format!("Ferry daemon is running (PID {pid}, socket: {})\n", socket_path.display()),
+            format!(
+                "Ferry daemon is running (PID {pid}, socket: {})\n",
+                socket_path.display()
+            ),
         ))
     } else {
         Ok(Output::new(

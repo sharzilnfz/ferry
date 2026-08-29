@@ -146,14 +146,10 @@ impl Supervisor {
             let config_path = record.path.join(".ferry").join("config");
             if config_path.is_file() {
                 if let Ok(bytes) = std::fs::read(&config_path) {
-                    if let Ok(ferry_sync::PeerPolicy::AllowList(set)) =
-                        ferry_sync::PeerPolicy::from_config_head(&bytes)
-                    {
-                        let remote: Vec<[u8; 32]> = set
-                            .into_iter()
-                            .filter(|p| p != self.identity.public())
-                            .collect();
-                        if let Some(peer) = remote.first() {
+                    if let Ok(policy) = ferry_sync::PeerPolicy::from_config_head(&bytes) {
+                        // The self-filtered device set lives on PeerPolicy;
+                        // the supervisor only turns it into dial targets.
+                        if let Some(peer) = policy.remote_peers(self.identity.public()).first() {
                             let alias = iroh.register_peer(*peer);
                             connect_to = Some(alias);
                             expected_peer_id = Some(*peer);
@@ -178,17 +174,16 @@ impl Supervisor {
             quiet: true,
         };
         let transport = Arc::clone(&self.transport);
-        let mut engine = if let Ok(opened) =
-            ferry_folder::folder::open_folder(&record.path, &self.identity)
-        {
-            SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
-        } else {
-            SyncEngine::new(cfg, transport)
-        }
-        .map_err(|e| SupervisorError {
-            code: "engine-init".to_string(),
-            message: e.to_string(),
-        })?;
+        let mut engine =
+            if let Ok(opened) = ferry_folder::folder::open_folder(&record.path, &self.identity) {
+                SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
+            } else {
+                SyncEngine::new(cfg, transport)
+            }
+            .map_err(|e| SupervisorError {
+                code: "engine-init".to_string(),
+                message: e.to_string(),
+            })?;
         engine.set_identity(self.identity.clone());
         let handle = Arc::new(engine.start());
         let task = tokio::spawn(async move {
