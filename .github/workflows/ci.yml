@@ -25,10 +25,6 @@ jobs:
         include:
           - os: macos-14        # Apple Silicon (arm64)
           - os: ubuntu-24.04    # x86_64
-          - os: windows-2022    # x86_64
-            # Non-blocking until the Windows job passes on its own; flip this
-            # off once two consecutive windows-2022 runs are green.
-            continue-on-error: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -52,15 +48,40 @@ jobs:
       - name: Tests (workspace)
         run: cargo test --workspace
 
-      # The skeleton E2E spawns two daemon processes over loopback TCP with
-      # retried free ports and trap-based teardown. That works under bash on
-      # macOS/Linux; under git-bash on Windows runners background-process
-      # lifecycle and signal handling have historically been flaky, so it is
-      # gated to unix here (documented decision, ticket T-012 comments).
-      # Windows process behavior is still exercised by the workspace tests.
-      - name: Walking-skeleton E2E (unix only)
-        if: runner.os != 'Windows'
+      - name: Walking-skeleton E2E
         run: bash scripts/skeleton-e2e.sh
 
-      - name: Adversarial fixture (all platforms)
+      - name: Adversarial fixture
+        run: bash scripts/adversarial-fixture.sh
+
+  # Non-blocking until the remaining unix-assumption test failures are
+  # worked off (see probe/win-tui-diag). Flip continue-on-error off once
+  # two consecutive windows runs are green. Kept as a separate job because
+  # matrix-include continue-on-error still fails the overall run conclusion.
+  test-windows:
+    continue-on-error: true
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (workspace, all targets, warnings denied)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests (workspace)
+        run: cargo test --workspace
+
+      - name: Adversarial fixture
         run: bash scripts/adversarial-fixture.sh
