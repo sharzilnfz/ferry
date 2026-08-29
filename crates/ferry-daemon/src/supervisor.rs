@@ -4,12 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferry_crypto::identity::DeviceIdentity;
+use ferry_folder::inventory::{FolderInventory, FolderRecord};
 use ferry_ipc::backend::{OpError, UiEvent};
 use ferry_ipc::protocol::EngineSnapshot;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::{EngineConfig, EngineHandle, SyncEngine, TcpTransport};
-
-use crate::registry::{FolderRegistry, RegistryError};
 
 #[derive(Debug)]
 pub struct SupervisorError {
@@ -26,7 +25,7 @@ impl std::fmt::Display for SupervisorError {
 impl std::error::Error for SupervisorError {}
 
 pub struct SupervisedEngine {
-    pub record: ferry_ipc::registry::FolderRecord,
+    pub record: FolderRecord,
     pub handle: Arc<EngineHandle>,
     pub task: tokio::task::JoinHandle<()>,
     pub folder_id_bytes: [u8; 16],
@@ -63,8 +62,8 @@ impl Supervisor {
         &self.broadcast_tx
     }
 
-    pub fn load_registry(&self) -> Result<FolderRegistry, RegistryError> {
-        FolderRegistry::load(&self.home)
+    pub fn inventory(&self) -> FolderInventory {
+        FolderInventory::new(&self.home)
     }
 
     fn parse_folder_id(hex_str: &str) -> Result<[u8; 16], OpError> {
@@ -108,14 +107,12 @@ impl Supervisor {
         ferry_store::chunker::ValidatedPoly::generate(&mut rng)
     }
 
-    fn spawn_one(
-        &self,
-        record: ferry_ipc::registry::FolderRecord,
-    ) -> Result<SupervisedEngine, SupervisorError> {
-        let folder_id_bytes = Self::parse_folder_id(&record.folder_id).map_err(|e| SupervisorError {
-            code: e.code.clone(),
-            message: e.message.clone(),
-        })?;
+    fn spawn_one(&self, record: FolderRecord) -> Result<SupervisedEngine, SupervisorError> {
+        let folder_id_bytes =
+            Self::parse_folder_id(&record.folder_id).map_err(|e| SupervisorError {
+                code: e.code.clone(),
+                message: e.message.clone(),
+            })?;
         let poly = Self::poly_for_id(&record.folder_id);
         let tag = format!(
             "ferry-{}",
@@ -157,11 +154,11 @@ impl Supervisor {
     }
 
     pub fn spawn_engines(&mut self) -> Result<(), SupervisorError> {
-        let registry = self.load_registry().map_err(|e| SupervisorError {
-            code: e.code.clone(),
+        let records = self.inventory().list().map_err(|e| SupervisorError {
+            code: e.code.to_string(),
             message: e.message.clone(),
         })?;
-        for rec in registry.folders {
+        for rec in records {
             let id = rec.folder_id.clone();
             if self.engines.contains_key(&id) {
                 continue;
@@ -172,22 +169,20 @@ impl Supervisor {
         Ok(())
     }
 
-    pub fn handle_register(&mut self, path: PathBuf) -> Result<ferry_ipc::registry::FolderRecord, OpError> {
-        let mut registry = self.load_registry().map_err(|e| e.to_op_error())?;
-        let record = registry.register(path).map_err(|e| e.to_op_error())?;
-        registry.save(&self.home).map_err(|e| e.to_op_error())?;
+    pub fn handle_register(&mut self, path: PathBuf) -> Result<FolderRecord, OpError> {
+        let record = self.inventory().register(&path).map_err(OpError::from)?;
         let id = record.folder_id.clone();
-        let entry = self.spawn_one(record.clone()).map_err(|e| {
-            OpError::new(e.code, e.message, "check daemon log")
-        })?;
+        let entry = self
+            .spawn_one(record.clone())
+            .map_err(|e| OpError::new(e.code, e.message, "check daemon log"))?;
         self.engines.insert(id, entry);
         Ok(record)
     }
 
     pub fn handle_remove(&mut self, folder_id: &str) -> Result<(), OpError> {
-        let mut registry = self.load_registry().map_err(|e| e.to_op_error())?;
-        registry.remove(folder_id).map_err(|e| e.to_op_error())?;
-        registry.save(&self.home).map_err(|e| e.to_op_error())?;
+        self.inventory()
+            .unregister(folder_id)
+            .map_err(OpError::from)?;
         if let Some(entry) = self.engines.remove(folder_id) {
             entry.handle.shutdown();
             entry.task.abort();
@@ -195,11 +190,8 @@ impl Supervisor {
         Ok(())
     }
 
-    pub fn list_folders(&self) -> Vec<ferry_ipc::registry::FolderRecord> {
-        match self.load_registry() {
-            Ok(r) => r.folders.clone(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list_folders(&self) -> Vec<FolderRecord> {
+        self.inventory().list().unwrap_or_default()
     }
 
     pub fn get_status(&self, folder_id: Option<String>) -> Result<EngineSnapshot, OpError> {
@@ -229,12 +221,14 @@ impl Supervisor {
         let manifest_id = handle.current_manifest_id().map(|id| hex_str(&id));
         let scanned = handle
             .scan_counts()
-            .map(|s| ferry_ipc::protocol::ScanStatsView::new(
-                s.files as u64,
-                s.dirs as u64,
-                s.symlinks as u64,
-                s.bytes_chunked,
-            ))
+            .map(|s| {
+                ferry_ipc::protocol::ScanStatsView::new(
+                    s.files as u64,
+                    s.dirs as u64,
+                    s.symlinks as u64,
+                    s.bytes_chunked,
+                )
+            })
             .unwrap_or_default();
         let state = if manifest_id.is_some() {
             "idle".to_string()

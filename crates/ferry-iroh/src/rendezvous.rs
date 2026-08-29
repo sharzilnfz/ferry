@@ -27,7 +27,10 @@ pub fn advertise(code: &str, mdns: Option<&MdnsSetting>) -> io::Result<()> {
 
 /// Discover a peer advertising `code` via mDNS or relay. Stub: production dials via the same topic using iroh discovery.
 /// Returns None when no peer is found within the caller's timeout; caller falls back to relay.
-pub fn discover(code: &str, mdns: Option<&MdnsSetting>) -> io::Result<Option<std::net::SocketAddr>> {
+pub fn discover(
+    code: &str,
+    mdns: Option<&MdnsSetting>,
+) -> io::Result<Option<std::net::SocketAddr>> {
     let _ = (code, mdns);
     Ok(None)
 }

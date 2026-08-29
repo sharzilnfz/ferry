@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs::DirectoryEntry;
+use ferry_folder::inventory::{DirectoryEntry, FolderRecord};
+
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
-use crate::registry::FolderRecord;
 
 /// Server push messages emitted by the sync daemon over IPC.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

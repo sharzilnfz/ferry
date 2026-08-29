@@ -13,7 +13,10 @@ fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
     assert!(!sock.exists());
 
     let p1 = ensure_daemon(&hp).expect("first ensure should spawn dummy daemon");
-    assert!(p1.exists() || sock.exists(), "socket should appear within 5s");
+    assert!(
+        p1.exists() || sock.exists(),
+        "socket should appear within 5s"
+    );
     // Socket should be at home/daemon.sock
     assert_eq!(p1, sock);
 
@@ -22,7 +25,10 @@ fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
     let p2 = ensure_daemon(&hp).expect("second ensure reuses");
     let elapsed = start.elapsed();
     assert_eq!(p2, sock);
-    assert!(elapsed < std::time::Duration::from_millis(500), "second call should be fast (ping within 200ms), got {elapsed:?}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "second call should be fast (ping within 200ms), got {elapsed:?}"
+    );
 }
 
 #[test]
@@ -43,7 +49,10 @@ fn ensure_daemon_ping_within_200ms_when_running() {
 #[test]
 fn zero_arg_defaults_to_ui_help_contains_two_minute_path() {
     let help = ferry_cli::cli::AFTER_HELP;
-    assert!(help.contains("Two-minute path"), "epilog must document two-minute path");
+    assert!(
+        help.contains("Two-minute path"),
+        "epilog must document two-minute path"
+    );
     assert!(help.contains("ferry share"), "epilog must mention share");
     assert!(help.contains("ferry join"), "epilog must mention join");
 }
@@ -53,7 +62,10 @@ fn ferry_with_zero_args_parses_as_none() {
     use clap::Parser;
     use ferry_cli::cli::Cli;
     let cli = Cli::try_parse_from(["ferry"]).expect("zero args should parse");
-    assert!(cli.command.is_none(), "zero args should be None (defaults to ui)");
+    assert!(
+        cli.command.is_none(),
+        "zero args should be None (defaults to ui)"
+    );
     let cli2 = Cli::try_parse_from(["ferry", "status"]).unwrap();
     assert!(cli2.command.is_some());
 }
@@ -74,7 +86,8 @@ fn share_and_join_json_round_trip_two_homes() {
     std::fs::create_dir_all(&proj_a).unwrap();
     ferry_cli::commands::init::run(&proj_a, "init").unwrap();
 
-    let out_a = ferry_cli::commands::share::run(&proj_a, false, 5).expect("share should succeed with code path");
+    let out_a = ferry_cli::commands::share::run(&proj_a, false, 5)
+        .expect("share should succeed with code path");
     assert!(out_a.json["code"].is_string());
     let code = out_a.json["code"].as_str().unwrap().to_string();
     let folder_id_a = out_a.json["folder_id"].as_str().unwrap().to_string();

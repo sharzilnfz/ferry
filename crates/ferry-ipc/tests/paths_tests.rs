@@ -1,7 +1,7 @@
 #![allow(deprecated)]
 
-use std::path::Path;
 use ferry_ipc::{default_socket_path, socket_path_for_dir};
+use std::path::Path;
 
 #[test]
 fn test_default_socket_path() {

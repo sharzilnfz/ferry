@@ -231,22 +231,13 @@ where
     }
 }
 
-fn ferry_home_for_registry() -> std::path::PathBuf {
-    if let Some(v) = std::env::var_os("FERRY_HOME") {
-        let p = PathBuf::from(&v);
-        if !p.as_os_str().is_empty() {
-            return p;
-        }
+use ferry_folder::inventory::{ferry_home as ferry_home_for_registry, FolderInventory};
+
+fn registry_error(e: ferry_folder::FolderError) -> DaemonMessage {
+    DaemonMessage::Error {
+        code: e.code.to_string(),
+        message: e.message,
     }
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-    {
-        if !home.as_os_str().is_empty() {
-            return home.join(".ferry");
-        }
-    }
-    PathBuf::from("/tmp/.ferry")
 }
 
 /// Process a single client command and return the immediate response message.
@@ -336,88 +327,34 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
         },
         ClientCommand::Ping => DaemonMessage::Pong,
         ClientCommand::ListDirectory { path } => {
-            use ferry_ipc::fs::{list_directory_sync, validate_path};
-            match validate_path(path) {
-                Ok(validated) => match list_directory_sync(validated) {
-                    Ok(resp) => DaemonMessage::DirectoryListing {
-                        entries: resp.entries,
-                        absolute_path: resp.absolute_path,
-                    },
-                    Err(e) => DaemonMessage::Error {
-                        code: e.code,
-                        message: e.message,
-                    },
+            let inv = FolderInventory::new(&ferry_home_for_registry());
+            match inv.inspect_dir(path) {
+                Ok(resp) => DaemonMessage::DirectoryListing {
+                    entries: resp.entries,
+                    absolute_path: resp.absolute_path,
                 },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code,
-                    message: e.message,
-                },
+                Err(e) => registry_error(e),
             }
         }
         ClientCommand::ListFolders => {
-            let home = ferry_home_for_registry();
-            match crate::registry::FolderRegistry::load(&home) {
-                Ok(reg) => DaemonMessage::FolderList {
-                    folders: reg.folders,
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code.clone(),
-                    message: e.message.clone(),
-                },
+            let inv = FolderInventory::new(&ferry_home_for_registry());
+            match inv.list() {
+                Ok(folders) => DaemonMessage::FolderList { folders },
+                Err(e) => registry_error(e),
             }
         }
         ClientCommand::RegisterFolder { path } => {
-            let home = ferry_home_for_registry();
-            let mut reg = match crate::registry::FolderRegistry::load(&home) {
-                Ok(r) => r,
-                Err(e) => {
-                    return DaemonMessage::Error {
-                        code: e.code,
-                        message: e.message,
-                    }
-                }
-            };
-            match reg.register(path) {
-                Ok(rec) => {
-                    if let Err(e) = reg.save(&home) {
-                        return DaemonMessage::Error {
-                            code: e.code,
-                            message: e.message,
-                        };
-                    }
-                    DaemonMessage::FolderRegistered { folder: rec }
-                }
-                Err(e) => DaemonMessage::Error {
-                    code: e.code,
-                    message: e.message,
-                },
+            let inv = FolderInventory::new(&ferry_home_for_registry());
+            match inv.register(&path) {
+                Ok(rec) => DaemonMessage::FolderRegistered { folder: rec },
+                Err(e) => registry_error(e),
             }
         }
         ClientCommand::RemoveFolder { folder_id } => {
-            let home = ferry_home_for_registry();
-            let mut reg = match crate::registry::FolderRegistry::load(&home) {
-                Ok(r) => r,
-                Err(e) => {
-                    return DaemonMessage::Error {
-                        code: e.code,
-                        message: e.message,
-                    }
-                }
-            };
-            match reg.remove(&folder_id) {
-                Ok(()) => {
-                    if let Err(e) = reg.save(&home) {
-                        return DaemonMessage::Error {
-                            code: e.code,
-                            message: e.message,
-                        };
-                    }
-                    DaemonMessage::FolderRemoved { folder_id }
-                }
-                Err(e) => DaemonMessage::Error {
-                    code: e.code,
-                    message: e.message,
-                },
+            let inv = FolderInventory::new(&ferry_home_for_registry());
+            match inv.unregister(&folder_id) {
+                Ok(()) => DaemonMessage::FolderRemoved { folder_id },
+                Err(e) => registry_error(e),
             }
         }
         ClientCommand::CreatePairingSession { req } => {
@@ -487,22 +424,13 @@ pub fn dispatch_supervisor_command(
         },
         ClientCommand::Ping => DaemonMessage::Pong,
         ClientCommand::ListDirectory { path } => {
-            use ferry_ipc::fs::{list_directory_sync, validate_path};
-            match validate_path(path) {
-                Ok(validated) => match list_directory_sync(validated) {
-                    Ok(resp) => DaemonMessage::DirectoryListing {
-                        entries: resp.entries,
-                        absolute_path: resp.absolute_path,
-                    },
-                    Err(e) => DaemonMessage::Error {
-                        code: e.code,
-                        message: e.message,
-                    },
+            let inv = FolderInventory::new(&ferry_home_for_registry());
+            match inv.inspect_dir(path) {
+                Ok(resp) => DaemonMessage::DirectoryListing {
+                    entries: resp.entries,
+                    absolute_path: resp.absolute_path,
                 },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code,
-                    message: e.message,
-                },
+                Err(e) => registry_error(e),
             }
         }
         ClientCommand::CreatePairingSession { req } => {
@@ -567,10 +495,7 @@ pub async fn handle_supervisor_connection<S>(
         match sup.get_status(None) {
             Ok(snap) => DaemonMessage::Snapshot(snap),
             Err(_) => DaemonMessage::Snapshot(ferry_ipc::protocol::EngineSnapshot::new(
-                "",
-                "",
-                "",
-                "idle",
+                "", "", "", "idle",
             )),
         }
     };

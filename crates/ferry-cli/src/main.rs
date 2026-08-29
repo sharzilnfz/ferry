@@ -58,7 +58,8 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
     let cmd = match &cli.command {
         Some(c) => c,
         None => {
-            let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+            let has_display = std::env::var_os("DISPLAY").is_some()
+                || std::env::var_os("WAYLAND_DISPLAY").is_some();
             if has_display {
                 #[cfg(feature = "gui")]
                 {
@@ -147,9 +148,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::share::run(&f, *i_know, *timeout_secs)
         }
-        Command::Join { code, dest } => {
-            ferry_cli::commands::join::run(code, dest.as_deref())
-        }
+        Command::Join { code, dest } => ferry_cli::commands::join::run(code, dest.as_deref()),
         Command::Status { folder } => {
             let f = folder.clone().unwrap_or_else(|| PathBuf::from("."));
             ferry_cli::commands::status::run(&f)

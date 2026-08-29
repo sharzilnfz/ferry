@@ -22,12 +22,23 @@ fn temp_home() -> (tempfile::TempDir, PathBuf) {
     (dir, home)
 }
 
-fn create_test_folder(home: &Path, identity: &DeviceIdentity, _poly: ValidatedPoly) -> (PathBuf, [u8; 16]) {
+fn create_test_folder(
+    home: &Path,
+    identity: &DeviceIdentity,
+    _poly: ValidatedPoly,
+) -> (PathBuf, [u8; 16]) {
     create_test_folder_with_id(home, identity, rand::random())
 }
 
-fn create_test_folder_with_id(home: &Path, identity: &DeviceIdentity, folder_id: [u8; 16]) -> (PathBuf, [u8; 16]) {
-    let folder_path = home.join(format!("folder-{}", &ferry_store::format::hex(&folder_id)[..8]));
+fn create_test_folder_with_id(
+    home: &Path,
+    identity: &DeviceIdentity,
+    folder_id: [u8; 16],
+) -> (PathBuf, [u8; 16]) {
+    let folder_path = home.join(format!(
+        "folder-{}",
+        &ferry_store::format::hex(&folder_id)[..8]
+    ));
     std::fs::create_dir_all(&folder_path).unwrap();
     let poly_u64: u64 = 0x1234567890abcdef;
     let (store, _fmk) = create_folder(&folder_path, identity, folder_id, poly_u64).unwrap();
@@ -54,9 +65,14 @@ fn create_session_generates_6_char_code_and_join_wrong_code_fails() {
     let transport_a = PairingTransport::new(home.clone(), id_a.clone());
     transport_a.register_folder_path(folder_id_hex.clone(), folder_path.clone());
 
-    let resp = transport_a.create_session(folder_id_hex.clone()).expect("create");
+    let resp = transport_a
+        .create_session(folder_id_hex.clone())
+        .expect("create");
     assert_eq!(resp.code.len(), 6, "code is 6 chars");
-    assert!(resp.code.chars().all(|c| c.is_ascii_alphanumeric() && !c.is_ascii_lowercase()));
+    assert!(resp
+        .code
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() && !c.is_ascii_lowercase()));
     assert!(!resp.expires_at.is_empty());
 
     // No pair-offer files at $FERRY_HOME or folder.
@@ -66,7 +82,11 @@ fn create_session_generates_6_char_code_and_join_wrong_code_fails() {
     assert!(!folder_path.join(".ferry/pair-offer").exists());
 
     // Join with wrong code -> pairing-not-found
-    let transport_b = PairingTransport::with_shared(home.clone(), DeviceIdentity::generate(), transport_a.shared());
+    let transport_b = PairingTransport::with_shared(
+        home.clone(),
+        DeviceIdentity::generate(),
+        transport_a.shared(),
+    );
     let join_req = JoinPairingRequest::new("ZZZZZZ".to_string(), home.join("target-wrong"));
     let err = transport_b.join_session(join_req).unwrap_err();
     assert_eq!(err.code, "pairing-not-found");
@@ -76,7 +96,10 @@ fn create_session_generates_6_char_code_and_join_wrong_code_fails() {
     std::fs::create_dir_all(&target).unwrap();
     let join_req = JoinPairingRequest::new(resp.code.clone(), target.clone());
     let result = transport_b.join_session(join_req).expect("join");
-    assert_eq!(result.folder_id.to_ascii_lowercase(), folder_id_hex.to_ascii_lowercase());
+    assert_eq!(
+        result.folder_id.to_ascii_lowercase(),
+        folder_id_hex.to_ascii_lowercase()
+    );
     assert_eq!(result.folder_path, target);
     assert_eq!(result.status, "paired");
     // Ensure no pair-offer files were written at $FERRY_HOME after join either
@@ -100,9 +123,11 @@ fn in_memory_e2e_handshake_persists_wrapped_fmk() {
     let (folder_path_a, _) = create_test_folder_with_id(&home, &id_a, folder_id);
     let folder_id_hex = ferry_store::format::hex(&folder_id);
     let shared = new_shared_rendezvous();
-    let transport_a = PairingTransport::with_shared(home.clone(), id_a.clone(), Arc::clone(&shared));
+    let transport_a =
+        PairingTransport::with_shared(home.clone(), id_a.clone(), Arc::clone(&shared));
     transport_a.register_folder_path(folder_id_hex.clone(), folder_path_a.clone());
-    let transport_b = PairingTransport::with_shared(home.clone(), id_b.clone(), Arc::clone(&shared));
+    let transport_b =
+        PairingTransport::with_shared(home.clone(), id_b.clone(), Arc::clone(&shared));
 
     let resp = transport_a.create_session(folder_id_hex.clone()).unwrap();
     let target_b = home.join("folder-b-e2e");
@@ -114,22 +139,39 @@ fn in_memory_e2e_handshake_persists_wrapped_fmk() {
 
     // B's folder has CONFIG_HEAD with wrapped FMK and folder_id matches
     let config_path = target_b.join(".ferry/config");
-    assert!(config_path.exists(), "CONFIG_HEAD should exist at {}", config_path.display());
+    assert!(
+        config_path.exists(),
+        "CONFIG_HEAD should exist at {}",
+        config_path.display()
+    );
     let bytes = std::fs::read(&config_path).unwrap();
     let head = ferry_crypto::config_head::parse_config_head(&bytes).unwrap();
     assert_eq!(head.folder_id, folder_id);
     assert!(head.entries.iter().any(|e| e.device_pub == *id_b.public()));
     assert!(head.entries.iter().any(|e| e.device_pub == *id_a.public()));
     // B can unwrap FMK
-    let entry_b = head.entries.iter().find(|e| e.device_pub == *id_b.public()).unwrap();
-    let fmk_b = ferry_crypto::folder_key::unwrap_folder_key(&entry_b.wrapped, &folder_id, &id_b).unwrap();
+    let entry_b = head
+        .entries
+        .iter()
+        .find(|e| e.device_pub == *id_b.public())
+        .unwrap();
+    let fmk_b =
+        ferry_crypto::folder_key::unwrap_folder_key(&entry_b.wrapped, &folder_id, &id_b).unwrap();
     // A's config also has B's entry (mutual)
     let config_a = std::fs::read(folder_path_a.join(".ferry/config")).unwrap();
     let head_a = ferry_crypto::config_head::parse_config_head(&config_a).unwrap();
-    assert!(head_a.entries.iter().any(|e| e.device_pub == *id_b.public()));
+    assert!(head_a
+        .entries
+        .iter()
+        .any(|e| e.device_pub == *id_b.public()));
     // FMKs are same
-    let entry_a = head_a.entries.iter().find(|e| e.device_pub == *id_a.public()).unwrap();
-    let fmk_a = ferry_crypto::folder_key::unwrap_folder_key(&entry_a.wrapped, &folder_id, &id_a).unwrap();
+    let entry_a = head_a
+        .entries
+        .iter()
+        .find(|e| e.device_pub == *id_a.public())
+        .unwrap();
+    let fmk_a =
+        ferry_crypto::folder_key::unwrap_folder_key(&entry_a.wrapped, &folder_id, &id_a).unwrap();
     assert_eq!(*fmk_a, *fmk_b);
 }
 
@@ -141,9 +183,14 @@ fn expiry_returns_pairing_expired() {
     let (folder_path, _) = create_test_folder_with_id(&home, &id_a, folder_id);
     let folder_id_hex = ferry_store::format::hex(&folder_id);
     let shared = new_shared_rendezvous();
-    let transport_a = PairingTransport::with_shared(home.clone(), id_a.clone(), Arc::clone(&shared));
+    let transport_a =
+        PairingTransport::with_shared(home.clone(), id_a.clone(), Arc::clone(&shared));
     transport_a.register_folder_path(folder_id_hex.clone(), folder_path);
-    let transport_b = PairingTransport::with_shared(home.clone(), DeviceIdentity::generate(), Arc::clone(&shared));
+    let transport_b = PairingTransport::with_shared(
+        home.clone(),
+        DeviceIdentity::generate(),
+        Arc::clone(&shared),
+    );
 
     let resp = transport_a.create_session(folder_id_hex).unwrap();
     // Force expiry by mutating the stored session's expires_at to past
@@ -169,7 +216,10 @@ fn uibackend_fakebackend_create_and_join_roundtrip() {
     use ferry_ipc::pairing::{CreatePairingRequest, JoinPairingRequest};
     use std::path::PathBuf;
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
         let backend = FakeBackend::new();
         let resp = backend
@@ -190,7 +240,10 @@ fn uibackend_fakebackend_create_and_join_roundtrip() {
         assert_eq!(err.code, "pairing-not-found");
         // Correct code -> paired
         let res = backend
-            .join_pairing_session(JoinPairingRequest::new(resp.code, PathBuf::from("/tmp/target-ok")))
+            .join_pairing_session(JoinPairingRequest::new(
+                resp.code,
+                PathBuf::from("/tmp/target-ok"),
+            ))
             .await
             .unwrap();
         assert_eq!(res.status, "paired");

@@ -46,7 +46,10 @@ pub fn default_socket_path() -> PathBuf {
 ///
 /// Deprecated: central daemon now lives at `default_socket_path()` regardless of folder.
 /// This remains for backward compatibility with single-folder `--listen` mode.
-#[deprecated(since = "0.1.0", note = "use default_socket_path() instead; socket is now device-global")]
+#[deprecated(
+    since = "0.1.0",
+    note = "use default_socket_path() instead; socket is now device-global"
+)]
 pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
     #[cfg(windows)]
     {

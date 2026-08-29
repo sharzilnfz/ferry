@@ -90,8 +90,8 @@ impl PairingCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use rand::SeedableRng;
     use std::collections::HashSet;
 
     #[test]

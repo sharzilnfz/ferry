@@ -1,7 +1,7 @@
 use ferry_crypto::pairing::PairingCode;
 use ferry_crypto::pairing_code::PairingCode as DirectPairingCode;
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::SeedableRng;
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
@@ -37,10 +37,7 @@ fn checksum_flip_fails() {
         let mut flipped: Vec<char> = s.chars().collect();
         flipped[pos] = sub;
         let flipped_str: String = flipped.into_iter().collect();
-        assert!(
-            !code.verify(&flipped_str),
-            "flipping pos {pos} should fail"
-        );
+        assert!(!code.verify(&flipped_str), "flipping pos {pos} should fail");
     }
 }
 
@@ -94,10 +91,7 @@ fn verify_uses_constant_time() {
     let verify_end = verify_section
         .find("\n    }")
         .map_or(verify_section, |p| &verify_section[..p]);
-    assert!(
-        verify_end.contains("ct_eq"),
-        "verify should use ct_eq"
-    );
+    assert!(verify_end.contains("ct_eq"), "verify should use ct_eq");
     let eq_count = verify_end.matches("==").count();
     assert_eq!(
         eq_count, 0,
@@ -109,7 +103,9 @@ fn verify_uses_constant_time() {
 #[test]
 fn system_time_now_not_in_verify() {
     let content = std::fs::read_to_string("crates/ferry-crypto/src/pairing_code.rs")
-        .unwrap_or_else(|_| std::fs::read_to_string("src/pairing_code.rs").expect("pairing_code.rs"));
+        .unwrap_or_else(|_| {
+            std::fs::read_to_string("src/pairing_code.rs").expect("pairing_code.rs")
+        });
     let verify_section = content
         .find("fn verify")
         .map_or(&content[..], |p| &content[p..p + 2000]);

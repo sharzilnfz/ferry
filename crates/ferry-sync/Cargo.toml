@@ -10,7 +10,6 @@ ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-folder = { path = "../ferry-folder" }
 ferry-ipc = { path = "../ferry-ipc" }
-toml = "0.8"
 # Session-pin types for sync engine tests and release planning.
 ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true

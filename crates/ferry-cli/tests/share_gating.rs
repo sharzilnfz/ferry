@@ -50,7 +50,10 @@ fn share_refuses_and_redacts_until_i_know() {
             assert!(out.json["code"].is_string(), "share code present");
             assert!(out.json["folder_id"].is_string());
             // New path does not write legacy offer file
-            assert!(!proj.join(".ferry/pair-offer.ferry-pair").exists() || proj.join(".ferry/pair-offer.ferry-pair").exists());
+            assert!(
+                !proj.join(".ferry/pair-offer.ferry-pair").exists()
+                    || proj.join(".ferry/pair-offer.ferry-pair").exists()
+            );
         }
         Err(err) => {
             assert_eq!(

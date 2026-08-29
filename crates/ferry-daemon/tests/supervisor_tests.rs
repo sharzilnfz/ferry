@@ -29,20 +29,34 @@ async fn supervisor_two_engines_distinct_status() {
     let dir_b = make_temp_folder();
     let mut sup = new_supervisor(&home);
     // register two folders via supervisor (needs runtime for spawn)
-    let rec_a = sup.handle_register(dir_a.path().to_path_buf()).expect("register a");
-    let rec_b = sup.handle_register(dir_b.path().to_path_buf()).expect("register b");
+    let rec_a = sup
+        .handle_register(dir_a.path().to_path_buf())
+        .expect("register a");
+    let rec_b = sup
+        .handle_register(dir_b.path().to_path_buf())
+        .expect("register b");
     assert_ne!(rec_a.folder_id, rec_b.folder_id);
     // wait for manifests
-    assert!(sup.wait_for_manifests(Duration::from_secs(5)), "engines should produce manifests");
-    let snap_a = sup.get_status(Some(rec_a.folder_id.clone())).expect("status a");
-    let snap_b = sup.get_status(Some(rec_b.folder_id.clone())).expect("status b");
+    assert!(
+        sup.wait_for_manifests(Duration::from_secs(5)),
+        "engines should produce manifests"
+    );
+    let snap_a = sup
+        .get_status(Some(rec_a.folder_id.clone()))
+        .expect("status a");
+    let snap_b = sup
+        .get_status(Some(rec_b.folder_id.clone()))
+        .expect("status b");
     assert_eq!(snap_a.folder_id, rec_a.folder_id);
     assert_eq!(snap_b.folder_id, rec_b.folder_id);
     assert_ne!(snap_a.folder_id, snap_b.folder_id);
     // manifest_id should be Some after scan
     assert!(snap_a.manifest_id.is_some(), "manifest a");
     assert!(snap_b.manifest_id.is_some(), "manifest b");
-    assert_ne!(snap_a.manifest_id, snap_b.manifest_id, "distinct manifests for distinct empty folders");
+    assert_ne!(
+        snap_a.manifest_id, snap_b.manifest_id,
+        "distinct manifests for distinct empty folders"
+    );
     sup.shutdown();
 }
 
@@ -57,13 +71,17 @@ async fn register_adds_and_list_returns_three() {
     assert_eq!(sup.list_folders().len(), 2);
     // third registration
     let dir_c = make_temp_folder();
-    let rec_c = sup.handle_register(dir_c.path().to_path_buf()).expect("register c");
+    let rec_c = sup
+        .handle_register(dir_c.path().to_path_buf())
+        .expect("register c");
     let list = sup.list_folders();
     assert_eq!(list.len(), 3);
     assert!(list.iter().any(|r| r.folder_id == rec_c.folder_id));
     // also verify folders.toml on disk has 3
-    let reg = ferry_daemon::registry::FolderRegistry::load(home.path()).unwrap();
-    assert_eq!(reg.folders.len(), 3);
+    let reg = ferry_folder::inventory::FolderInventory::new(home.path())
+        .list()
+        .unwrap();
+    assert_eq!(reg.len(), 3);
     sup.shutdown();
 }
 
@@ -89,8 +107,10 @@ async fn remove_stops_and_list_returns_two() {
     assert!(sup.get_engine_handle(&rec_b.folder_id).is_none());
     assert!(sup.get_engine_handle(&rec_a.folder_id).is_some());
     // folders.toml also 2
-    let reg = ferry_daemon::registry::FolderRegistry::load(home.path()).unwrap();
-    assert_eq!(reg.folders.len(), 2);
+    let reg = ferry_folder::inventory::FolderInventory::new(home.path())
+        .list()
+        .unwrap();
+    assert_eq!(reg.len(), 2);
     sup.shutdown();
 }
 
@@ -197,7 +217,10 @@ async fn resilience_restart_one_engine_other_unaffected() {
     let handle_a_after = sup.get_engine_handle(&rec_a.folder_id).unwrap();
     let handle_b_after = sup.get_engine_handle(&rec_b.folder_id).unwrap();
     let ptr_b_after = std::sync::Arc::as_ptr(&handle_b_after) as *const ();
-    assert_eq!(ptr_b_before, ptr_b_after, "other engine handle should be same Arc");
+    assert_eq!(
+        ptr_b_before, ptr_b_after,
+        "other engine handle should be same Arc"
+    );
     // a's handle should be new (different Arc)
     assert_ne!(
         std::sync::Arc::as_ptr(&handle_a_before) as *const (),
@@ -234,11 +257,10 @@ async fn supervisor_spawn_engines_from_existing_registry() {
     let home = tmp_home();
     let dir_a = make_temp_folder();
     let dir_b = make_temp_folder();
-    // manually create registry via FolderRegistry API
-    let mut reg = ferry_daemon::registry::FolderRegistry::empty();
-    reg.register(dir_a.path().to_path_buf()).unwrap();
-    reg.register(dir_b.path().to_path_buf()).unwrap();
-    reg.save(home.path()).unwrap();
+    // manually seed the registry through the FolderInventory seam
+    let inv = ferry_folder::inventory::FolderInventory::new(home.path());
+    inv.register(dir_a.path()).unwrap();
+    inv.register(dir_b.path()).unwrap();
 
     let mut sup = new_supervisor(&home);
     sup.spawn_engines().expect("spawn");

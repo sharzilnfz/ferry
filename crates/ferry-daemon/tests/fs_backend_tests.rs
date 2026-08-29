@@ -1,4 +1,10 @@
-#![allow(deprecated, clippy::await_holding_lock, clippy::assigning_clones, clippy::cmp_owned, clippy::unnecessary_semicolon)]
+#![allow(
+    deprecated,
+    clippy::await_holding_lock,
+    clippy::assigning_clones,
+    clippy::cmp_owned,
+    clippy::unnecessary_semicolon
+)]
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -76,7 +82,12 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         .await
         .expect("listing");
     assert_eq!(resp.absolute_path, root);
-    assert_eq!(resp.entries.len(), 20, "expected 20 entries, got {}", resp.entries.len());
+    assert_eq!(
+        resp.entries.len(),
+        20,
+        "expected 20 entries, got {}",
+        resp.entries.len()
+    );
 
     // Stable sort: dirs first, then name asc
     let mut is_dir_seen_false = false;
@@ -103,9 +114,17 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
     // Symlink detection
     #[cfg(unix)]
     {
-        let link = resp.entries.iter().find(|e| e.name == "link_to_dir").unwrap();
+        let link = resp
+            .entries
+            .iter()
+            .find(|e| e.name == "link_to_dir")
+            .unwrap();
         assert!(link.is_symlink, "link_to_dir should be symlink");
-        let link2 = resp.entries.iter().find(|e| e.name == "link_to_file").unwrap();
+        let link2 = resp
+            .entries
+            .iter()
+            .find(|e| e.name == "link_to_file")
+            .unwrap();
         assert!(link2.is_symlink);
     }
 }
@@ -140,10 +159,7 @@ added_at = "2026-08-28T12:00:00Z"
     std::fs::write(ferry_home.join("folders.toml"), folders_toml).unwrap();
 
     let adapter = InProcessAdapter::new(PathBuf::from("/tmp"));
-    let resp = adapter
-        .list_directory(Some(root.clone()))
-        .await
-        .unwrap();
+    let resp = adapter.list_directory(Some(root.clone())).await.unwrap();
     let a = resp.entries.iter().find(|e| e.name == "project_a").unwrap();
     assert!(a.is_already_synced, "project_a should be already_synced");
     // parent contains child_a, so other dirs that are not ancestors/descendants should not be synced? For root's children, only project_a itself is synced; but project_b is sibling, not synced.
@@ -152,12 +168,12 @@ added_at = "2026-08-28T12:00:00Z"
     assert!(!b.is_already_synced);
     // Also test descendant: list inside project_a should mark its children as already_synced (they are inside registered folder)
     std::fs::create_dir(child_a.join("sub")).unwrap();
-    let resp2 = adapter
-        .list_directory(Some(child_a.clone()))
-        .await
-        .unwrap();
+    let resp2 = adapter.list_directory(Some(child_a.clone())).await.unwrap();
     let sub = resp2.entries.iter().find(|e| e.name == "sub").unwrap();
-    assert!(sub.is_already_synced, "sub inside synced folder should be already_synced");
+    assert!(
+        sub.is_already_synced,
+        "sub inside synced folder should be already_synced"
+    );
     // Ancestor: root contains project_a, so root's parent check? Actually root is ancestor of project_a, so listing root's parent not needed. Check that listing root's entries: root itself not listed, but project_a is descendant. For ancestor detection: if we list a parent of registered folder, the ancestor itself (the registered folder) is descendant of parent? The helper checks both directions: candidate starts_with reg OR reg starts_with candidate. So a parent dir that contains registered folder will have is_already_synced false for its sibling entries, but the parent dir entry itself (when listing its parent) would be true if parent contains registered. Hard to test.
 
     // restore
@@ -198,8 +214,7 @@ async fn path_traversal_protection() {
     }
 
     // Also via AutoBackend (should validate before delegating)
-    let auto = AutoBackend::new(PathBuf::from("/tmp/nonexistent.sock"))
-        .with_fallback(root.clone());
+    let auto = AutoBackend::new(PathBuf::from("/tmp/nonexistent.sock")).with_fallback(root.clone());
     let err = auto
         .list_directory(Some(PathBuf::from("/tmp/../etc/passwd")))
         .await
@@ -310,8 +325,8 @@ async fn auto_backend_fallback_offline() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("hello.txt"), b"hi").unwrap();
 
-    let auto = AutoBackend::new(PathBuf::from("/tmp/no_such_daemon.sock"))
-        .with_fallback(root.clone());
+    let auto =
+        AutoBackend::new(PathBuf::from("/tmp/no_such_daemon.sock")).with_fallback(root.clone());
     // Daemon offline -> should fallback to InProcessAdapter and succeed
     let resp = auto
         .list_directory(Some(root.clone()))

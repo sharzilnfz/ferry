@@ -1902,9 +1902,12 @@ dependencies = [
  "ferry-ignore",
  "ferry-platform",
  "ferry-store",
+ "rand 0.8.7",
  "serde",
  "serde_json",
  "tempfile",
+ "toml 0.8.23",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1946,6 +1949,7 @@ dependencies = [
 name = "ferry-ipc"
 version = "0.1.0"
 dependencies = [
+ "ferry-folder",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -2104,7 +2108,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "toml 0.8.23",
  "x25519-dalek",
  "zeroize",
 ]

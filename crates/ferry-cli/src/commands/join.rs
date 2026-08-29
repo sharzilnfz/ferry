@@ -19,7 +19,9 @@ pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
             if p.as_os_str().is_empty() {
                 std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
             } else if p.is_relative() {
-                std::env::current_dir().map(|cwd| cwd.join(p)).unwrap_or_else(|_| p.to_path_buf())
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(p))
+                    .unwrap_or_else(|_| p.to_path_buf())
             } else {
                 p.to_path_buf()
             }
@@ -40,7 +42,13 @@ pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
 
     let home = crate::home::ferry_home()?;
     let identity = ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home))
-        .map_err(|e| CliError::new("identity-corrupt", e.to_string(), "check $FERRY_HOME permissions"))?;
+        .map_err(|e| {
+            CliError::new(
+                "identity-corrupt",
+                e.to_string(),
+                "check $FERRY_HOME permissions",
+            )
+        })?;
 
     let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
         home.clone(),
@@ -48,7 +56,8 @@ pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
         ferry_sync::pairing_transport::daemon_shared_store(),
     );
 
-    let req = ferry_ipc::pairing::JoinPairingRequest::new(normalized.clone(), canonical_target.clone());
+    let req =
+        ferry_ipc::pairing::JoinPairingRequest::new(normalized.clone(), canonical_target.clone());
     let result = match transport.join_session(req) {
         Ok(r) => r,
         Err(e) if e.code == "pairing-not-found" => {
@@ -91,7 +100,11 @@ fn global_rendezvous_path(code: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("ferry-rendezvous-{key}.json"))
 }
 
-fn try_global_rendezvous_join(code: &str, target: &Path, identity: &ferry_crypto::identity::DeviceIdentity) -> Option<CliResult<ferry_ipc::backend::PairResult>> {
+fn try_global_rendezvous_join(
+    code: &str,
+    target: &Path,
+    identity: &ferry_crypto::identity::DeviceIdentity,
+) -> Option<CliResult<ferry_ipc::backend::PairResult>> {
     let path = global_rendezvous_path(code);
     if !path.exists() {
         return None;
@@ -104,7 +117,11 @@ fn try_global_rendezvous_join(code: &str, target: &Path, identity: &ferry_crypto
     let fmk: [u8; 32] = ferry_store::format::unhex::<32>(fmk_hex)?;
     let folder_id: [u8; 16] = ferry_store::format::unhex::<16>(&folder_id_hex)?;
     if crate::folder::dot_dir(target).is_dir() {
-        return Some(Err(CliError::new("already-initialized", format!("{} already contains a .ferry store", target.display()), "pick an empty directory")));
+        return Some(Err(CliError::new(
+            "already-initialized",
+            format!("{} already contains a .ferry store", target.display()),
+            "pick an empty directory",
+        )));
     }
     let store = match crate::folder::adopt_folder(target, identity, folder_id, &fmk, poly) {
         Ok(s) => s,

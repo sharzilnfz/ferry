@@ -119,9 +119,13 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
     Ok(out)
 }
 
-fn try_pairing_code_share(opened: &folder::OpenFolder, findings: &[Finding]) -> Option<CliResult<Output>> {
+fn try_pairing_code_share(
+    opened: &folder::OpenFolder,
+    findings: &[Finding],
+) -> Option<CliResult<Output>> {
     let home = crate::home::ferry_home().ok()?;
-    let identity = ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).ok()?;
+    let identity =
+        ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).ok()?;
     let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
     let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
         home.clone(),
@@ -144,7 +148,10 @@ fn try_pairing_code_share(opened: &folder::OpenFolder, findings: &[Finding]) -> 
         eprintln!("{qr}");
     }
     eprintln!("Share code: {} (expires in 10m)", formatted);
-    eprintln!("On the other device run:\n  ferry join {} [DEST]", formatted);
+    eprintln!(
+        "On the other device run:\n  ferry join {} [DEST]",
+        formatted
+    );
 
     let json_doc = json!({
         "command": "share",
@@ -155,12 +162,20 @@ fn try_pairing_code_share(opened: &folder::OpenFolder, findings: &[Finding]) -> 
         "warnings_reviewed": !findings.is_empty(),
         "warnings": findings.iter().map(|f| json!({"path": f.path, "line": f.line, "class": f.class, "preview": f.preview})).collect::<Vec<_>>(),
     });
-    let mut human = format!("Share code: {} (expires in 10m)\nFolder: {}\n", formatted, opened.root.display());
+    let mut human = format!(
+        "Share code: {} (expires in 10m)\nFolder: {}\n",
+        formatted,
+        opened.root.display()
+    );
     if !findings.is_empty() {
         human = format!(
             "Proceeding WITH {} flagged secret risk(s) (--i-know given):\n{}\n---\n{}",
             findings.len(),
-            findings.iter().map(|f| format!("  [{}] {}", f.class, f.path)).collect::<Vec<_>>().join("\n"),
+            findings
+                .iter()
+                .map(|f| format!("  [{}] {}", f.class, f.path))
+                .collect::<Vec<_>>()
+                .join("\n"),
             human
         );
     }
@@ -168,17 +183,45 @@ fn try_pairing_code_share(opened: &folder::OpenFolder, findings: &[Finding]) -> 
 }
 
 fn global_rendezvous_path(code: &str) -> std::path::PathBuf {
-    let key = code.trim().to_ascii_uppercase().replace('-', "").replace(' ', "");
+    let key = code
+        .trim()
+        .to_ascii_uppercase()
+        .replace('-', "")
+        .replace(' ', "");
     std::env::temp_dir().join(format!("ferry-rendezvous-{key}.json"))
 }
 
-fn write_global_rendezvous(code: &str, opened: &folder::OpenFolder, identity: &ferry_crypto::identity::DeviceIdentity) {
+fn write_global_rendezvous(
+    code: &str,
+    opened: &folder::OpenFolder,
+    identity: &ferry_crypto::identity::DeviceIdentity,
+) {
     let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
     let config_path = opened.root.join(".ferry/config");
-    let cfg_bytes = match std::fs::read(&config_path) { Ok(b) => b, Err(_) => return };
-    let head = match ferry_crypto::config_head::parse_config_head(&cfg_bytes) { Ok(h) => h, Err(_) => return };
-    let entry = match head.entries.iter().find(|e| e.device_pub == *identity.public()) { Some(e) => e, None => return };
-    let fmk = match ferry_crypto::folder_key::unwrap_folder_key(&entry.wrapped, &head.folder_id, identity) { Ok(k) => k, Err(_) => return };
+    let cfg_bytes = match std::fs::read(&config_path) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let head = match ferry_crypto::config_head::parse_config_head(&cfg_bytes) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let entry = match head
+        .entries
+        .iter()
+        .find(|e| e.device_pub == *identity.public())
+    {
+        Some(e) => e,
+        None => return,
+    };
+    let fmk = match ferry_crypto::folder_key::unwrap_folder_key(
+        &entry.wrapped,
+        &head.folder_id,
+        identity,
+    ) {
+        Ok(k) => k,
+        Err(_) => return,
+    };
     let fmk_hex = ferry_store::format::hex(fmk.as_ref());
     let doc = serde_json::json!({
         "code": code,
@@ -206,7 +249,8 @@ fn format_code(code: &str) -> String {
 fn render_code_qr(code: &str) -> Result<String, String> {
     use qrcode::QrCode;
     let qr = QrCode::new(code.as_bytes()).map_err(|e| e.to_string())?;
-    let s = qr.render::<qrcode::render::unicode::Dense1x2>()
+    let s = qr
+        .render::<qrcode::render::unicode::Dense1x2>()
         .dark_color(qrcode::render::unicode::Dense1x2::Dark)
         .light_color(qrcode::render::unicode::Dense1x2::Light)
         .build();
