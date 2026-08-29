@@ -27,12 +27,41 @@ fn ferry_home_dir() -> PathBuf {
     PathBuf::from("/tmp/.ferry")
 }
 
+/// Socket the device daemon binds for a given home directory.
+/// Unix: `<home>/daemon.sock`. Windows: a per-home named pipe, so two homes
+/// on one machine run independent daemons. The daemon and every client that
+/// wants that daemon must derive the name through this function.
+pub fn daemon_socket_for_home(home: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        home.to_string_lossy().to_string().hash(&mut hasher);
+        PathBuf::from(format!(
+            r"{DEFAULT_WINDOWS_PIPE_PREFIX}-{:016x}-daemon",
+            hasher.finish()
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        home.join(DEFAULT_SOCKET_FILENAME)
+    }
+}
+
 /// Returns the default global daemon socket path:
 /// - Unix: `$FERRY_HOME/daemon.sock` (or `~/.ferry/daemon.sock` / `/tmp/.ferry/daemon.sock` fallback)
-/// - Windows: `\\.\pipe\ferry-daemon`
+/// - Windows: `\\.\pipe\ferry-daemon`, or a per-home pipe when `FERRY_HOME` is set
 pub fn default_socket_path() -> PathBuf {
     #[cfg(windows)]
     {
+        if let Some(v) = std::env::var_os("FERRY_HOME") {
+            let p = PathBuf::from(&v);
+            if !p.as_os_str().is_empty() {
+                return daemon_socket_for_home(&p);
+            }
+        }
         PathBuf::from(format!(r"{DEFAULT_WINDOWS_PIPE_PREFIX}-daemon"))
     }
     #[cfg(not(windows))]

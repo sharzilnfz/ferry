@@ -8,23 +8,20 @@ fn temp_home() -> tempfile::TempDir {
 fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
     let home = temp_home();
     let hp = home.path().to_path_buf();
-    // Ensure no socket exists
-    let sock = hp.join("daemon.sock");
-    assert!(!sock.exists());
+    let expected = ferry_ipc::paths::daemon_socket_for_home(&hp);
+    #[cfg(unix)]
+    assert!(!expected.exists(), "socket should not pre-exist");
 
     let p1 = ensure_daemon(&hp).expect("first ensure should spawn dummy daemon");
-    assert!(
-        p1.exists() || sock.exists(),
-        "socket should appear within 5s"
-    );
-    // Socket should be at home/daemon.sock
-    assert_eq!(p1, sock);
+    assert_eq!(p1, expected, "socket should appear at the home-scoped path");
+    #[cfg(unix)]
+    assert!(p1.exists(), "socket file should appear within 5s");
 
     // Second call should reuse without spawning second daemon (fast return)
     let start = std::time::Instant::now();
     let p2 = ensure_daemon(&hp).expect("second ensure reuses");
     let elapsed = start.elapsed();
-    assert_eq!(p2, sock);
+    assert_eq!(p2, expected);
     assert!(
         elapsed < std::time::Duration::from_millis(500),
         "second call should be fast (ping within 200ms), got {elapsed:?}"

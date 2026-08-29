@@ -36,22 +36,6 @@ impl From<BootstrapError> for crate::error::CliError {
     }
 }
 
-fn socket_path_for_home(home: &Path) -> PathBuf {
-    #[cfg(windows)]
-    {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        home.to_string_lossy().to_string().hash(&mut hasher);
-        let h = hasher.finish();
-        PathBuf::from(format!(r"\\.\pipe\ferry-{:016x}-daemon", h))
-    }
-    #[cfg(not(windows))]
-    {
-        home.join("daemon.sock")
-    }
-}
-
 fn ferry_bin() -> PathBuf {
     if let Ok(p) = std::env::var("FERRY_BIN") {
         let pb = PathBuf::from(p);
@@ -139,7 +123,7 @@ where
 }
 
 pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
-    let socket = socket_path_for_home(home);
+    let socket = ferry_ipc::paths::daemon_socket_for_home(home);
     if try_ping_sync(&socket) {
         return Ok(socket);
     }
