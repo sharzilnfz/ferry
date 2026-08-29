@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use ferry_store::diff::{join_path, ChangeSet, CompPath, EntryKind, EntryState};
 use ferry_store::format::hex;
@@ -840,7 +840,8 @@ impl<'a> Applier<'a> {
         if !md.is_dir() {
             return Ok(());
         }
-        let (cur_sec, cur_nsec) = split_unix_time(md.modified().map_err(|e| io_at(&abs, e))?);
+        let (cur_sec, cur_nsec) =
+            ferry_platform::split_unix(md.modified().map_err(|e| io_at(&abs, e))?);
         if cur_sec == sec && cur_nsec == nsec {
             return Ok(());
         }
@@ -931,8 +932,10 @@ impl<'a> Applier<'a> {
 
         // Durability + final mtime, both before the rename so the
         // destination never exists with wrong metadata.
-        file.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
-            .map_err(|e| io_at(tmp_path, e))?;
+        file.set_times(
+            std::fs::FileTimes::new().set_modified(ferry_platform::time::join_unix(sec, nsec)),
+        )
+        .map_err(|e| io_at(tmp_path, e))?;
         file.sync_all().map_err(|e| io_at(tmp_path, e))?;
 
         // 2. Pre-rename verification: re-read every chunk region from the
@@ -1028,7 +1031,7 @@ fn plan_upsert(
                 if cfg!(unix) {
                     if let (Some(md), Some((sec, nsec))) = (md.as_ref(), *times) {
                         let (lsec, lnsec) =
-                            split_unix_time(md.modified().map_err(|e| io_at(abs, e))?);
+                            ferry_platform::split_unix(md.modified().map_err(|e| io_at(abs, e))?);
                         if lsec != sec || lnsec != nsec {
                             up.mutation = Mutation::RestoreSymlinkMtime { sec, nsec };
                             return Ok(());
@@ -1072,7 +1075,8 @@ fn plan_upsert(
             if !content_matches(store, abs, &chunks)? {
                 return Ok(()); // divergent bytes: full rewrite
             }
-            let (lsec, lnsec) = split_unix_time(md.modified().map_err(|e| io_at(abs, e))?);
+            let (lsec, lnsec) =
+                ferry_platform::split_unix(md.modified().map_err(|e| io_at(abs, e))?);
             if lsec == sec && lnsec == nsec {
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
@@ -1934,8 +1938,10 @@ fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
             .read(true)
             .open(path)
             .map_err(|e| io_at(path, e))?;
-        f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
-            .map_err(|e| io_at(path, e))
+        f.set_times(
+            std::fs::FileTimes::new().set_modified(ferry_platform::time::join_unix(sec, nsec)),
+        )
+        .map_err(|e| io_at(path, e))
     }
     #[cfg(not(unix))]
     {
@@ -1949,30 +1955,6 @@ fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
 
 /// (sec, nsec) with nsec normalized non-negative, matching the manifest's
 /// pre-1970 convention.
-pub(crate) fn split_unix_time(t: SystemTime) -> (i64, u32) {
-    match t.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
-        Err(e) => {
-            let d = e.duration();
-            if d.subsec_nanos() == 0 {
-                (-(d.as_secs() as i64), 0)
-            } else {
-                (-(d.as_secs() as i64) - 1, 1_000_000_000 - d.subsec_nanos())
-            }
-        }
-    }
-}
-
-/// Inverse of [`split_unix_time`].
-pub(crate) fn system_time(sec: i64, nsec: u32) -> SystemTime {
-    let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
-    if total >= 0 {
-        SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
-    } else {
-        SystemTime::UNIX_EPOCH - Duration::from_nanos((-total) as u64)
-    }
-}
-
 #[cfg(unix)]
 fn fsync_dir(dir: &Path) -> Result<(), MaterializeError> {
     match std::fs::File::open(dir) {
@@ -2212,7 +2194,7 @@ mod tests {
     }
 
     fn mtime_of(md: &std::fs::Metadata) -> (i64, u32) {
-        split_unix_time(md.modified().unwrap())
+        ferry_platform::split_unix(md.modified().unwrap())
     }
 
     // NTFS stores FILETIMEs in 100ns units: sub-100ns digits cannot survive
@@ -2961,7 +2943,9 @@ mod tests {
     }
 
     #[test]
-    fn unix_time_helpers_round_trip_pre1970() {
+    fn shared_clock_helpers_round_trip_pre1970() {
+        // Guards the ferry-platform clock helpers this applier depends on
+        // for every mtime it writes and plans against.
         for (sec, nsec) in [
             (0i64, 0u32),
             // Stay within NS_GRAN: windows SystemTime is FILETIME-backed
@@ -2971,8 +2955,8 @@ mod tests {
             (-1, 500_000_000),
             (-5_000_000_000, 1 / NS_GRAN * NS_GRAN),
         ] {
-            let t = system_time(sec, nsec);
-            assert_eq!(split_unix_time(t), (sec, nsec), "({sec},{nsec})");
+            let t = ferry_platform::time::join_unix(sec, nsec);
+            assert_eq!(ferry_platform::split_unix(t), (sec, nsec), "({sec},{nsec})");
         }
     }
 

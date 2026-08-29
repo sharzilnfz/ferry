@@ -4,8 +4,10 @@
 //! `docs/store-format.md` (key-wrap envelope, `CONFIG_HEAD`, pack cipher) and
 //! ADR-0002 (E2E by default, explicit pairing, no recovery back door). This
 //! crate owns the parts the format spec deliberately leaves to T-007: the
-//! pairing ritual, short codes, QR payloads, identity persistence, and
-//! passphrase-wrapped recovery exports.
+//! pairing handshake, QR payloads, identity persistence, and passphrase-
+//! wrapped recovery exports — plus the raw primitives (base32 alphabet,
+//! CRC-32) behind the short codes minted by the user-facing ritual in
+//! `ferry-folder::pairing`.
 //!
 //! # Module map
 //!
@@ -19,7 +21,7 @@
 //!   the store format spec.
 //! - [`pack_cipher`]: the real ChaCha20-Poly1305 [`PackCipher`] that replaces
 //!   ferry-store's pass-through stub at the seam (T-008 does the swap).
-//! - [`pairing`]: offer/response payloads, short codes, QR content, and the
+//! - [`pairing`]: offer/response payloads, QR content, and the
 //!   HMAC-confirmed handshake.
 //! - [`recovery`]: Argon2id + ChaCha20-Poly1305 passphrase export/import.
 //!
@@ -64,7 +66,6 @@ pub mod folder_key;
 pub mod identity;
 pub mod pack_cipher;
 pub mod pairing;
-pub mod pairing_code;
 pub mod recovery;
 
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in

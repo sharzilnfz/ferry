@@ -6,7 +6,8 @@
 //!
 //! - **In-band short-code rendezvous.** [`PairingRitual::create_offer`]
 //!   generates a 6-character Base32 code (5 data symbols + 1 CRC checksum
-//!   symbol, [`ferry_crypto::pairing_code`]), registers an ephemeral session
+//!   symbol, ADR-0006, minted privately inside this module), registers an
+//!   ephemeral session
 //!   in a shared rendezvous map (in-process) and a one-time rendezvous file
 //!   (cross-process, same machine), and returns the code.
 //! - **Out-of-band payload exchange.** The same offer is also sealed into a
@@ -52,14 +53,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ferry_crypto::base32::ALPHABET;
+use ferry_crypto::crc32::crc32;
 use ferry_crypto::folder_key::{unwrap_folder_key, wrap_folder_key, Fmk, WRAPPED_LEN};
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_crypto::pairing::{
     complete_pairing, open_pair_grant, respond, seal_pair_grant, GrantError, PairingOffer,
     PairingResponse, OFFER_LEN,
 };
-use ferry_crypto::pairing_code::PairingCode;
+use rand::Rng;
 use serde_json::json;
+use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use crate::error::{CodeInto, FolderError, FolderResult};
 use crate::folder::{
@@ -240,6 +245,84 @@ pub fn parse_payload_envelope(text: &str) -> Option<PayloadEnvelope> {
 }
 
 // ---------------------------------------------------------------------------
+// short pairing code (ADR-0006, private to the ritual)
+// ---------------------------------------------------------------------------
+
+/// 24-hour code lifetime (ADR-0006).
+const CODE_EXPIRY: Duration = Duration::from_hours(24);
+
+/// The 6-character Base32 short code: 5 random symbols + 1 CRC32 checksum
+/// symbol (ADR-0006). Private to the ritual — callers only ever see codes
+/// through [`PendingOffer::short_code`] and answer through
+/// [`PairingRitual::accept_offer`]; there is no parallel public code
+/// workflow to bypass the ritual with. ferry-crypto keeps only the raw
+/// primitives (base32 alphabet, CRC-32, constant-time compare).
+struct PairingCode {
+    code: Zeroizing<String>,
+    expires_at: SystemTime,
+}
+
+impl std::fmt::Debug for PairingCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The code never appears in debug output.
+        f.debug_struct("PairingCode")
+            .field("code", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+impl PairingCode {
+    fn generate<R: Rng>(rng: &mut R) -> Self {
+        let mut chars = Vec::with_capacity(6);
+        for _ in 0..5 {
+            let idx = (rng.gen::<u32>() & 31) as usize;
+            chars.push(ALPHABET[idx] as char);
+        }
+        let data_str: String = chars.iter().collect();
+        let crc = crc32(data_str.as_bytes());
+        let checksum_idx = (crc % 32) as usize;
+        chars.push(ALPHABET[checksum_idx] as char);
+        let code_string: String = chars.into_iter().collect();
+        let expires_at = SystemTime::now() + CODE_EXPIRY;
+        PairingCode {
+            code: Zeroizing::new(code_string),
+            expires_at,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        self.code.as_str()
+    }
+
+    fn expires_at(&self) -> SystemTime {
+        self.expires_at
+    }
+
+    /// Structural verification of a typed code (ADR-0006): normalize
+    /// (separators stripped, uppercased), require the exact Base32
+    /// alphabet, then recompute the CRC32 checksum and compare it to the
+    /// sixth symbol in constant time. Full equality against a live session
+    /// is enforced by the rendezvous lookup's exact match, so a structurally
+    /// valid but unknown code fails with the same `pairing-not-found`
+    /// refusal the lookup would produce.
+    fn verify(input: &str) -> bool {
+        let bytes = code_key(input).into_bytes();
+        if bytes.len() != 6 || !bytes.iter().all(|&b| ALPHABET.contains(&b)) {
+            return false;
+        }
+        let expected = ALPHABET[(crc32(&bytes[0..5]) % 32) as usize];
+        bool::from(expected.ct_eq(&bytes[5]))
+    }
+}
+
+/// One expiry comparison shared by both transports: true once `now` has
+/// passed `expires_at`. No hidden clock — callers pass the instant.
+fn expired(expires_at: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(expires_at).is_ok()
+}
+
+// ---------------------------------------------------------------------------
 // the ritual
 // ---------------------------------------------------------------------------
 
@@ -397,9 +480,20 @@ impl PairingRitual {
         self.accept_payload(envelope, offer_file, target)
     }
 
-    /// Rendezvous transport: dial by code, adopt the folder.
+    /// Rendezvous transport: dial by code, adopt the folder. ADR-0006
+    /// verification (alphabet + constant-time checksum) runs before the
+    /// rendezvous lookup; a mistyped or corrupted code can never match a
+    /// live session, so the refusal is the same `pairing-not-found` the
+    /// lookup would produce.
     fn accept_code(&self, code: &str, target: Option<&Path>) -> FolderResult<PendingAcceptance> {
         let key = code_key(code);
+        if !PairingCode::verify(code) {
+            return Err(FolderError::new(
+                "pairing-not-found",
+                format!("pairing code {key} not found"),
+                "check the code and try again",
+            ));
+        }
         let record = self.take_session(&key)?;
         let accepted = self.join_via_session(&record, target)?;
         Ok(PendingAcceptance {
@@ -450,10 +544,7 @@ impl PairingRitual {
         offer_file: PathBuf,
         target: Option<&Path>,
     ) -> FolderResult<PendingAcceptance> {
-        if SystemTime::now()
-            .duration_since(envelope.expires_at)
-            .is_ok()
-        {
+        if expired(envelope.expires_at, SystemTime::now()) {
             return Err(FolderError::new(
                 "pairing-expired",
                 format!("offer {} expired", envelope.code),
@@ -521,7 +612,7 @@ impl PairingRitual {
     }
 
     fn consume_expired(&self, record: &SessionRecord) -> FolderResult<SessionRecord> {
-        if SystemTime::now().duration_since(record.expires_at).is_ok() {
+        if expired(record.expires_at, SystemTime::now()) {
             self.rendezvous
                 .lock()
                 .expect("rendezvous map")

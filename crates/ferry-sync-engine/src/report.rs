@@ -31,6 +31,19 @@ pub struct DeviceStamp {
     pub mtime_nsec: Option<u32>,
 }
 
+impl DeviceStamp {
+    /// Stamp one conflict side from its raw device id and optional
+    /// `(sec, nsec)` mtime — the single constructor the engine's reporting
+    /// and the report tests both build through.
+    pub(crate) fn new(device: [u8; 32], mtime: Option<(i64, u32)>) -> Self {
+        DeviceStamp {
+            device: ferry_store::format::hex(&device),
+            mtime_sec: mtime.map(|m| m.0),
+            mtime_nsec: mtime.map(|m| m.1),
+        }
+    }
+}
+
 /// One resolved conflict.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
@@ -169,12 +182,11 @@ pub fn list_conflicts(state_dir: &Path) -> Result<Vec<ConflictEntry>, LogError> 
 mod tests {
     use super::*;
 
-    fn stamp(dev: &str, sec: Option<i64>) -> DeviceStamp {
-        DeviceStamp {
-            device: dev.to_string(),
-            mtime_sec: sec,
-            mtime_nsec: sec.map(|_| 5),
-        }
+    fn stamp(dev_hex: &str, sec: Option<i64>) -> DeviceStamp {
+        DeviceStamp::new(
+            ferry_store::format::unhex::<32>(dev_hex).unwrap(),
+            sec.map(|s| (s, 5)),
+        )
     }
 
     fn entry(path: &str, kind: &str, quarantined: Option<&str>) -> ConflictEntry {

@@ -12,9 +12,11 @@ ferry-platform = { workspace = true }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 tempfile.workspace = true
 toml = "0.8"
 unicode-normalization.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

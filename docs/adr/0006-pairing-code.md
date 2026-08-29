@@ -24,6 +24,10 @@ Choose 6-char base32 with checksum.
 
 Rejected 6-word wordlist: more user-friendly for dictation but requires vendoring a 2048-entry static list, larger UI footprint, and word-boundary ambiguity (hyphens vs spaces). The deferred wordlist can be added as an alternative encoding without breaking the current 6-char verifier: both would share the same `PairingCode` newtype behind a feature flag.
 
+## Amendment (2026-08-29): mechanics moved behind the pairing ritual
+
+The deep-architecture consolidation moved the code mechanics out of the public `ferry-crypto::pairing_code` module into the unified `PairingRitual` (`ferry-folder::pairing`, private to the ritual). Every guarantee above is unchanged — same format, same CRC32 checksum, same constant-time verification (`subtle::ct_eq`), same 24h expiry, same zeroization — but the ritual is now the only way to mint or answer a code: there is no parallel public code workflow callers could use instead of `create_offer` / `accept_offer`. On the accept path, alphabet + checksum verification runs before the rendezvous lookup; final equality is enforced by the lookup's exact match. ferry-crypto keeps the raw primitives (base32 alphabet, CRC-32) only.
+
 ## Consequences
 
 - No wordlist asset, no extra dependency.
@@ -33,6 +37,6 @@ Rejected 6-word wordlist: more user-friendly for dictation but requires vendorin
 
 ## Verification
 
-- `cargo test -p ferry-crypto` includes `pairing_code_tests` vectors for round-trip, wrong-code, checksum-flip, 1000-code uniqueness, and expiry before/after.
-- `cargo clippy -p ferry-crypto -- -D warnings` clean.
+- `cargo test -p ferry-folder` includes `pairing_code_tests` (ritual-level ports of the old `pairing_code_tests` vectors: format + checksum recompute over 1000 codes, checksum-flip refusal, case/hyphen tolerance, 24h TTL, constant-time/zeroize source scan) and `ritual.rs` for round-trip, wrong-code, expiry-consumption, and one-time use.
+- `cargo clippy --workspace --all-targets` clean.
 - Grep for `==` inside `verify` returns zero; `ct_eq` is present.
