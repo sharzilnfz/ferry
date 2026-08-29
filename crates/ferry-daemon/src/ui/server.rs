@@ -407,18 +407,24 @@ async fn api_pair_accept(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(bad_body)?;
-    let Some(payload_path) = body.get("payload_path").and_then(Value::as_str) else {
+    // The unified contract takes either form in one field; keep accepting
+    // the older `payload_path` key for existing dashboard clients.
+    let code_or_payload = body
+        .get("code_or_payload")
+        .or_else(|| body.get("payload_path"))
+        .and_then(Value::as_str);
+    let Some(code_or_payload) = code_or_payload else {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "bad-request",
-            "payload_path is required",
-            "pass the pair-offer file written by the sharing device",
+            "code_or_payload is required",
+            "pass the 6-character pairing code or the pair-offer file written by the sharing device",
         ));
     };
     let dir = body.get("dir").and_then(Value::as_str).map(PathBuf::from);
     let res = server
         .backend
-        .pair_accept(PathBuf::from(payload_path), dir)
+        .pair_accept(code_or_payload.to_string(), dir)
         .await?;
     Ok(Json(json!({
         "command": "pair",

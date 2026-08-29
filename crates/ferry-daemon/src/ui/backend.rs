@@ -5,9 +5,7 @@ use std::sync::Arc;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_folder::folder::{dot_dir, load_rules, open_folder};
 use ferry_folder::inventory::{validate_path, ListDirectoryResponse};
-use ferry_folder::pairing::{
-    accept_begin, accept_complete, initiate_begin, GRANT_SUFFIX, OFFER_SUFFIX, RESPONSE_SUFFIX,
-};
+use ferry_folder::pairing::{PairingRitual, GRANT_SUFFIX, OFFER_SUFFIX, RESPONSE_SUFFIX};
 pub use ferry_ipc::backend::BoxFuture;
 use ferry_ipc::backend::{
     InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary,
@@ -92,6 +90,19 @@ fn folder_err(e: ferry_folder::FolderError) -> OpError {
     OpError::new(e.code, e.message, e.hint)
 }
 
+/// The unified pairing ritual for `home` + `identity`, joined to the
+/// process-wide rendezvous.
+fn pairing_ritual(home: PathBuf, identity: DeviceIdentity) -> PairingRitual {
+    PairingRitual::with_shared(home, identity, ferry_folder::pairing::shared_rendezvous())
+}
+
+fn expires_rfc3339(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_else(|_| {
+        std::time::Duration::from_secs(ferry_platform::time::now_unix().0 as u64)
+    });
+    ferry_platform::time::fmt_rfc3339(secs.as_secs() as i64)
+}
+
 fn log_err(e: ferry_sync_engine::LogError) -> OpError {
     match e {
         ferry_sync_engine::LogError::Corrupt { path, reason, .. } => OpError::new(
@@ -112,7 +123,7 @@ pub struct InProcessAdapter {
     folder: PathBuf,
     identity: Option<DeviceIdentity>,
     event_tx: tokio::sync::broadcast::Sender<UiEvent>,
-    pairing_store: ferry_sync::pairing_transport::SharedRendezvous,
+    pairing_store: ferry_folder::pairing::SharedRendezvous,
 }
 
 impl InProcessAdapter {
@@ -123,7 +134,7 @@ impl InProcessAdapter {
             folder: folder.into(),
             identity: None,
             event_tx,
-            pairing_store: ferry_sync::pairing_transport::daemon_shared_store(),
+            pairing_store: ferry_folder::pairing::shared_rendezvous(),
         }
     }
 
@@ -454,19 +465,20 @@ impl SessionDomain for InProcessAdapter {
                     .with_detail(json!({ "warnings": warnings_val })));
                 }
 
-                let pending = initiate_begin(&opened, &identity).map_err(folder_err)?;
+                let ritual = pairing_ritual(ferry_home_for_backend(), identity.clone());
+                let pending = ritual.create_offer(&opened).map_err(folder_err)?;
                 let dot = dot_dir(&opened.root);
                 let _ = std::fs::remove_file(dot.join(RESPONSE_SUFFIX));
                 let _ = std::fs::remove_file(dot.join(GRANT_SUFFIX));
-                std::fs::write(&pending.offer_path, &pending.offer_bytes)
-                    .map_err(|e| OpError::new("io", e.to_string(), "cannot write offer"))?;
+                pending.write_payload().map_err(folder_err)?;
 
+                let qr = pending.qr_payload();
                 Ok(ShareOffer {
                     folder: opened.root.display().to_string(),
                     token: pending.short_code.clone(),
-                    payload_path: Some(pending.offer_path),
-                    qr_payload: Some(pending.short_code),
-                    expires_at: None,
+                    payload_path: Some(pending.payload_path),
+                    qr_payload: Some(qr),
+                    expires_at: Some(expires_rfc3339(pending.expires_at)),
                     secret_warnings,
                 })
             })
@@ -495,13 +507,19 @@ impl SessionDomain for InProcessAdapter {
                     });
                 }
 
-                let short_code = if let Ok(offer_bytes) = std::fs::read(&offer_path) {
-                    ferry_crypto::pairing::PairingOffer::parse(&offer_bytes)
-                        .ok()
-                        .map(|o| o.short_code(ferry_crypto::pairing::TransportHints(0)))
-                } else {
-                    None
-                };
+                // The ritual's payload envelope carries the live short code.
+                let bytes = std::fs::read(&offer_path)
+                    .map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
+                let envelope =
+                    ferry_folder::pairing::parse_payload_envelope(&String::from_utf8_lossy(&bytes))
+                        .ok_or_else(|| {
+                            OpError::new(
+                                "bad-offer",
+                                "the offer file is not a FERRY1 pairing envelope",
+                                "re-run share to mint a fresh offer",
+                            )
+                        })?;
+                let short_code = Some(envelope.code);
 
                 let offer = Some(ShareOffer {
                     folder: opened.root.display().to_string(),
@@ -522,9 +540,8 @@ impl SessionDomain for InProcessAdapter {
                     });
                 }
 
-                match ferry_folder::pairing::initiate_check(&opened, &identity)
-                    .map_err(folder_err)?
-                {
+                let ritual = pairing_ritual(ferry_home_for_backend(), identity.clone());
+                match ritual.poll_offer(&opened).map_err(folder_err)? {
                     Some(completed) => Ok(ShareStatus {
                         folder: opened.root.display().to_string(),
                         status: "completed".to_string(),
@@ -548,15 +565,17 @@ impl SessionDomain for InProcessAdapter {
 
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let identity = self.get_identity();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let pending =
-                    accept_begin(&identity, &payload, dir.as_deref()).map_err(folder_err)?;
-                let accepted = accept_complete(pending, &identity, 120).map_err(folder_err)?;
+                let ritual = pairing_ritual(ferry_home_for_backend(), identity.clone());
+                let pending = ritual
+                    .accept_offer(&code_or_payload, dir.as_deref())
+                    .map_err(folder_err)?;
+                let accepted = pending.complete(120).map_err(folder_err)?;
                 Ok(PairResult {
                     folder_id: hex_str(&accepted.folder_id),
                     device_id: hex_str(identity.public()),
@@ -579,15 +598,24 @@ impl SessionDomain for InProcessAdapter {
         let folder = self.folder.clone();
         let store = self.pairing_store.clone();
         Box::pin(async move {
-            let transport =
-                ferry_sync::pairing_transport::PairingTransport::with_shared(home, identity, store);
+            let ritual = PairingRitual::with_shared(home, identity, store);
             // Ensure the folder_id maps to our current folder (InProcess is single-folder, but
-            // PairingTransport looks up via registry/override; registering our folder here makes
-            // create_session work without a pre-existing registry entry in tests).
-            transport.register_folder_path(req.folder_id.clone(), folder);
-            tokio::task::spawn_blocking(move || transport.create_session(req.folder_id))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+            // the ritual looks up via registry/override; registering our folder here makes
+            // create_offer_for_folder work without a pre-existing registry entry in tests).
+            ritual.register_folder_path(req.folder_id.clone(), folder);
+            tokio::task::spawn_blocking(move || {
+                ritual
+                    .create_offer_for_folder(&req.folder_id)
+                    .map(|pending| {
+                        ferry_ipc::pairing::CreatePairingResponse::new(
+                            pending.short_code,
+                            expires_rfc3339(pending.expires_at),
+                        )
+                    })
+                    .map_err(folder_err)
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
 
@@ -599,11 +627,22 @@ impl SessionDomain for InProcessAdapter {
         let identity = self.get_identity();
         let store = self.pairing_store.clone();
         Box::pin(async move {
-            let transport =
-                ferry_sync::pairing_transport::PairingTransport::with_shared(home, identity, store);
-            tokio::task::spawn_blocking(move || transport.join_session(req))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+            tokio::task::spawn_blocking(move || {
+                let ritual = PairingRitual::with_shared(home, identity.clone(), store);
+                let pending = ritual
+                    .accept_offer(&req.code, Some(&req.target_dir))
+                    .map_err(folder_err)?;
+                let accepted = pending.complete(0).map_err(folder_err)?;
+                Ok(PairResult {
+                    folder_id: hex_str(&accepted.folder_id),
+                    device_id: hex_str(identity.public()),
+                    folder_path: accepted.folder,
+                    status: "paired".to_string(),
+                    message: Some("pairing completed over in-band transport".to_string()),
+                })
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
 }
@@ -796,13 +835,13 @@ impl SessionDomain for DaemonIpcAdapter {
 
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let folder = dir.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
             InProcessAdapter::new(folder)
-                .pair_accept(payload, None)
+                .pair_accept(code_or_payload, None)
                 .await
         })
     }
@@ -1000,11 +1039,11 @@ impl SessionDomain for AutoBackend {
 
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let in_proc = self.in_process.clone();
-        Box::pin(async move { in_proc.pair_accept(payload, dir).await })
+        Box::pin(async move { in_proc.pair_accept(code_or_payload, dir).await })
     }
 
     fn create_pairing_session(
@@ -1262,19 +1301,20 @@ impl SessionDomain for DirectBackend {
                 .with_detail(json!({ "warnings": warnings_val })));
             }
 
-            let pending = initiate_begin(&opened, st.identity()).map_err(folder_err)?;
+            let ritual = pairing_ritual(ferry_home_for_backend(), st.identity().clone());
+            let pending = ritual.create_offer(&opened).map_err(folder_err)?;
             let dot = dot_dir(&opened.root);
             let _ = std::fs::remove_file(dot.join(RESPONSE_SUFFIX));
             let _ = std::fs::remove_file(dot.join(GRANT_SUFFIX));
-            std::fs::write(&pending.offer_path, &pending.offer_bytes)
-                .map_err(|e| OpError::new("io", e.to_string(), "cannot write offer"))?;
+            pending.write_payload().map_err(folder_err)?;
 
+            let qr = pending.qr_payload();
             Ok(ShareOffer {
                 folder: opened.root.display().to_string(),
                 token: pending.short_code.clone(),
-                payload_path: Some(pending.offer_path),
-                qr_payload: Some(pending.short_code),
-                expires_at: None,
+                payload_path: Some(pending.payload_path),
+                qr_payload: Some(qr),
+                expires_at: Some(expires_rfc3339(pending.expires_at)),
                 secret_warnings,
             })
         })
@@ -1299,13 +1339,19 @@ impl SessionDomain for DirectBackend {
                 });
             }
 
-            let short_code = if let Ok(offer_bytes) = std::fs::read(&offer_path) {
-                ferry_crypto::pairing::PairingOffer::parse(&offer_bytes)
-                    .ok()
-                    .map(|o| o.short_code(ferry_crypto::pairing::TransportHints(0)))
-            } else {
-                None
-            };
+            // The ritual's payload envelope carries the live short code.
+            let bytes = std::fs::read(&offer_path)
+                .map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
+            let envelope =
+                ferry_folder::pairing::parse_payload_envelope(&String::from_utf8_lossy(&bytes))
+                    .ok_or_else(|| {
+                        OpError::new(
+                            "bad-offer",
+                            "the offer file is not a FERRY1 pairing envelope",
+                            "re-run share to mint a fresh offer",
+                        )
+                    })?;
+            let short_code = Some(envelope.code);
 
             let offer = Some(ShareOffer {
                 folder: opened.root.display().to_string(),
@@ -1326,9 +1372,8 @@ impl SessionDomain for DirectBackend {
                 });
             }
 
-            match ferry_folder::pairing::initiate_check(&opened, st.identity())
-                .map_err(folder_err)?
-            {
+            let ritual = pairing_ritual(ferry_home_for_backend(), st.identity().clone());
+            match ritual.poll_offer(&opened).map_err(folder_err)? {
                 Some(completed) => Ok(ShareStatus {
                     folder: opened.root.display().to_string(),
                     status: "completed".to_string(),
@@ -1349,14 +1394,16 @@ impl SessionDomain for DirectBackend {
 
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let st = Arc::clone(&self.state);
         Box::pin(async move {
-            let pending =
-                accept_begin(st.identity(), &payload, dir.as_deref()).map_err(folder_err)?;
-            let accepted = accept_complete(pending, st.identity(), 120).map_err(folder_err)?;
+            let ritual = pairing_ritual(ferry_home_for_backend(), st.identity().clone());
+            let pending = ritual
+                .accept_offer(&code_or_payload, dir.as_deref())
+                .map_err(folder_err)?;
+            let accepted = pending.complete(120).map_err(folder_err)?;
             Ok(PairResult {
                 folder_id: hex_str(&accepted.folder_id),
                 device_id: st.device_hex().to_string(),

@@ -6,8 +6,6 @@
 //! - Pair Device Acceptance Workflow
 //! - Session Pinning Modal
 
-use std::path::PathBuf;
-
 use egui::{
     epaint::Shadow, vec2, Align, Align2, Area, Color32, Frame, Layout, Margin, Order, RichText,
     Rounding, ScrollArea, Stroke,
@@ -242,7 +240,7 @@ pub fn render_share_modal(
                     .inner_margin(Margin::same(12.0f32))
                     .show(ui, |ui| {
                         ui.label(
-                            RichText::new("32-Character Pairing Short Code:")
+                            RichText::new("6-Character Pairing Code:")
                                 .color(colors::TEXT_MUTED)
                                 .size(11.0),
                         );
@@ -390,7 +388,7 @@ pub fn render_pair_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
     pair_input: &mut String,
-    mut on_accept_pair: impl FnMut(PathBuf),
+    mut on_accept_pair: impl FnMut(String),
 ) {
     render_modal_frame(
         ctx,
@@ -400,7 +398,7 @@ pub fn render_pair_modal(
         |ui, open| {
             ui.label(
                 RichText::new(
-                    "Enter the filesystem path to the incoming `.ferry-pair` offer payload file:",
+                    "Enter the 6-character pairing code, or the path to the incoming `.ferry-pair` offer payload file:",
                 )
                 .color(colors::TEXT_SECONDARY)
                 .size(12.5),
@@ -409,7 +407,7 @@ pub fn render_pair_modal(
 
             ui.text_edit_singleline(pair_input);
             ui.label(
-                RichText::new("e.g. /home/user/downloads/pair-offer.ferry-pair")
+                RichText::new("e.g. ABCD-EF or /home/user/downloads/pair-offer.ferry-pair")
                     .color(colors::TEXT_MUTED)
                     .size(11.0),
             );
@@ -434,8 +432,8 @@ pub fn render_pair_modal(
                 });
 
                 if ui.add_enabled(is_valid, btn).clicked() {
-                    let path = PathBuf::from(pair_input.trim());
-                    on_accept_pair(path);
+                    let input = pair_input.trim().to_string();
+                    on_accept_pair(input);
                     *open = false;
                 }
 

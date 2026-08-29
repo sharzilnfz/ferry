@@ -240,6 +240,26 @@ fn registry_error(e: ferry_folder::FolderError) -> DaemonMessage {
     }
 }
 
+/// The unified pairing ritual on this daemon's home, joined to the
+/// process-wide rendezvous (CLI, GUI, and IPC clients share one map).
+fn pairing_ritual(
+    home: PathBuf,
+    identity: ferry_crypto::identity::DeviceIdentity,
+) -> ferry_folder::pairing::PairingRitual {
+    ferry_folder::pairing::PairingRitual::with_shared(
+        home,
+        identity,
+        ferry_folder::pairing::shared_rendezvous(),
+    )
+}
+
+fn expires_rfc3339(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_else(|_| {
+        std::time::Duration::from_secs(ferry_platform::time::now_unix().0 as u64)
+    });
+    ferry_platform::time::fmt_rfc3339(secs.as_secs() as i64)
+}
+
 /// Process a single client command and return the immediate response message.
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
@@ -358,33 +378,38 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
             }
         }
         ClientCommand::CreatePairingSession { req } => {
-            let home = ferry_home_for_registry();
-            let identity = state.identity().clone();
-            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                home,
-                identity,
-                ferry_sync::pairing_transport::daemon_shared_store(),
-            );
-            match transport.create_session(req.folder_id) {
-                Ok(resp) => DaemonMessage::PairingCreated { response: resp },
+            let ritual = pairing_ritual(ferry_home_for_registry(), state.identity().clone());
+            match ritual.create_offer_for_folder(&req.folder_id) {
+                Ok(pending) => DaemonMessage::PairingCreated {
+                    response: ferry_ipc::pairing::CreatePairingResponse::new(
+                        pending.short_code,
+                        expires_rfc3339(pending.expires_at),
+                    ),
+                },
                 Err(e) => DaemonMessage::Error {
-                    code: e.code,
+                    code: e.code.to_string(),
                     message: e.message,
                 },
             }
         }
         ClientCommand::JoinPairingSession { req } => {
-            let home = ferry_home_for_registry();
             let identity = state.identity().clone();
-            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                home,
-                identity,
-                ferry_sync::pairing_transport::daemon_shared_store(),
-            );
-            match transport.join_session(req) {
-                Ok(result) => DaemonMessage::PairingJoined { result },
+            let ritual = pairing_ritual(ferry_home_for_registry(), identity.clone());
+            match ritual
+                .accept_offer(&req.code, Some(&req.target_dir))
+                .and_then(|pending| pending.complete(0))
+            {
+                Ok(accepted) => DaemonMessage::PairingJoined {
+                    result: ferry_ipc::backend::PairResult {
+                        folder_id: ferry_store::format::hex(&accepted.folder_id),
+                        device_id: ferry_store::format::hex(identity.public()),
+                        folder_path: accepted.folder,
+                        status: "paired".to_string(),
+                        message: Some("pairing completed over in-band transport".to_string()),
+                    },
+                },
                 Err(e) => DaemonMessage::Error {
-                    code: e.code,
+                    code: e.code.to_string(),
                     message: e.message,
                 },
             }
@@ -434,29 +459,41 @@ pub fn dispatch_supervisor_command(
             }
         }
         ClientCommand::CreatePairingSession { req } => {
-            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
+            let ritual = pairing_ritual(
                 supervisor.home().to_path_buf(),
                 supervisor.identity().clone(),
-                ferry_sync::pairing_transport::daemon_shared_store(),
             );
-            match transport.create_session(req.folder_id) {
-                Ok(resp) => DaemonMessage::PairingCreated { response: resp },
+            match ritual.create_offer_for_folder(&req.folder_id) {
+                Ok(pending) => DaemonMessage::PairingCreated {
+                    response: ferry_ipc::pairing::CreatePairingResponse::new(
+                        pending.short_code,
+                        expires_rfc3339(pending.expires_at),
+                    ),
+                },
                 Err(e) => DaemonMessage::Error {
-                    code: e.code,
+                    code: e.code.to_string(),
                     message: e.message,
                 },
             }
         }
         ClientCommand::JoinPairingSession { req } => {
-            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                supervisor.home().to_path_buf(),
-                supervisor.identity().clone(),
-                ferry_sync::pairing_transport::daemon_shared_store(),
-            );
-            match transport.join_session(req) {
-                Ok(result) => DaemonMessage::PairingJoined { result },
+            let identity = supervisor.identity().clone();
+            let ritual = pairing_ritual(supervisor.home().to_path_buf(), identity.clone());
+            match ritual
+                .accept_offer(&req.code, Some(&req.target_dir))
+                .and_then(|pending| pending.complete(0))
+            {
+                Ok(accepted) => DaemonMessage::PairingJoined {
+                    result: ferry_ipc::backend::PairResult {
+                        folder_id: ferry_store::format::hex(&accepted.folder_id),
+                        device_id: ferry_store::format::hex(identity.public()),
+                        folder_path: accepted.folder,
+                        status: "paired".to_string(),
+                        message: Some("pairing completed over in-band transport".to_string()),
+                    },
+                },
                 Err(e) => DaemonMessage::Error {
-                    code: e.code,
+                    code: e.code.to_string(),
                     message: e.message,
                 },
             }

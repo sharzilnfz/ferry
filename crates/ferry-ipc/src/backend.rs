@@ -291,9 +291,12 @@ pub trait SessionDomain: Send + Sync + 'static {
         i_know: bool,
     ) -> BoxFuture<'_, Result<ShareOffer, OpError>>;
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>>;
+    /// Accept an incoming pairing offer given EITHER form: a 6-character
+    /// code or a `.ferry-pair` payload file path / `FERRY1:` envelope. The
+    /// backend picks the transport; callers never branch.
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>>;
     fn create_pairing_session(
@@ -568,7 +571,7 @@ impl SessionDomain for FakeBackend {
 
     fn pair_accept(
         &self,
-        payload: PathBuf,
+        code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         Box::pin(async move {
@@ -577,7 +580,7 @@ impl SessionDomain for FakeBackend {
                 device_id: "peer-device-id".to_string(),
                 folder_path: dir.unwrap_or_else(|| PathBuf::from("/test/folder")),
                 status: "paired".to_string(),
-                message: Some(format!("paired with {}", payload.display())),
+                message: Some(format!("paired with {code_or_payload}")),
             })
         })
     }
@@ -588,7 +591,7 @@ impl SessionDomain for FakeBackend {
     ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
         let sessions = Arc::clone(&self.pairing_sessions);
         Box::pin(async move {
-            // Validate folder_id shape (32 hex chars, like real pairing_transport)
+            // Validate folder_id shape (32 hex chars, like the unified ritual)
             let folder_id = req.folder_id.clone();
             if folder_id.len() < 32 {
                 return Err(OpError::new(

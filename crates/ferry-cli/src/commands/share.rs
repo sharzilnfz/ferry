@@ -127,21 +127,22 @@ fn try_pairing_code_share(
     let identity =
         ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).ok()?;
     let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
-    let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-        home.clone(),
-        identity.clone(),
-        ferry_sync::pairing_transport::daemon_shared_store(),
+    let ritual = ferry_folder::pairing::PairingRitual::with_shared(
+        home,
+        identity,
+        ferry_folder::pairing::shared_rendezvous(),
     );
-    transport.register_folder_path(folder_id_hex.clone(), opened.root.clone());
-    let resp = match transport.create_session(folder_id_hex.clone()) {
-        Ok(r) => r,
-        Err(_) => return None,
-    };
+    let pending = ritual.create_offer(opened).ok()?;
 
-    let code = resp.code.clone();
-    let expires_at = resp.expires_at.clone();
+    let code = pending.short_code.clone();
+    let expires_at = ferry_platform::time::fmt_rfc3339(
+        pending
+            .expires_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_else(|_| ferry_platform::time::now_unix().0),
+    );
 
-    write_global_rendezvous(&code, opened, &identity);
     let formatted = format_code(&code);
     let qr = render_code_qr(&code).unwrap_or_default();
     if !qr.is_empty() {
@@ -180,59 +181,6 @@ fn try_pairing_code_share(
         );
     }
     Some(Ok(Output::new(json_doc, human)))
-}
-
-fn global_rendezvous_path(code: &str) -> std::path::PathBuf {
-    let key = code
-        .trim()
-        .to_ascii_uppercase()
-        .replace('-', "")
-        .replace(' ', "");
-    std::env::temp_dir().join(format!("ferry-rendezvous-{key}.json"))
-}
-
-fn write_global_rendezvous(
-    code: &str,
-    opened: &folder::OpenFolder,
-    identity: &ferry_crypto::identity::DeviceIdentity,
-) {
-    let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
-    let config_path = opened.root.join(".ferry/config");
-    let cfg_bytes = match std::fs::read(&config_path) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-    let head = match ferry_crypto::config_head::parse_config_head(&cfg_bytes) {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let entry = match head
-        .entries
-        .iter()
-        .find(|e| e.device_pub == *identity.public())
-    {
-        Some(e) => e,
-        None => return,
-    };
-    let fmk = match ferry_crypto::folder_key::unwrap_folder_key(
-        &entry.wrapped,
-        &head.folder_id,
-        identity,
-    ) {
-        Ok(k) => k,
-        Err(_) => return,
-    };
-    let fmk_hex = ferry_store::format::hex(fmk.as_ref());
-    let doc = serde_json::json!({
-        "code": code,
-        "folder_id": folder_id_hex,
-        "poly": opened.poly,
-        "fmk_hex": fmk_hex,
-        "source_path": opened.root.display().to_string(),
-    });
-    let path = global_rendezvous_path(code);
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("/tmp")));
-    let _ = std::fs::write(&path, serde_json::to_string(&doc).unwrap_or_default());
 }
 
 fn format_code(code: &str) -> String {
