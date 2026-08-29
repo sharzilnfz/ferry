@@ -83,7 +83,6 @@ Create a clean demo workspace directory on both computers.
 
 #### Run on Mac (Right Pane):
 ```bash
-cd /Users/sharzilnafis/Projects/dumps/idea2
 mkdir -p /tmp/ferry-sync-demo
 ```
 
@@ -96,12 +95,20 @@ mkdir -p /tmp/ferry-sync-demo
 
 ### Step 2: Initialize Ferry Workspace on Mac
 
-Initialize the folder on your Mac. This creates the `.ferry/` repository identity and chunk store.
+Like `git init`, Ferry works either directly inside the current directory or by passing an explicit path.
 
-#### Run on Mac (Right Pane):
+#### Option A: In-directory execution (like `git init`):
+```bash
+cd /tmp/ferry-sync-demo
+/Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry init
+```
+
+#### Option B: Explicit path execution:
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry init /tmp/ferry-sync-demo
 ```
+
+Both options generate the `.ferry/` repository directory, cryptographic identity, and chunk store.
 
 ---
 
@@ -112,9 +119,9 @@ Ferry provides a zero-file rendezvous workflow. You share a 6-character code ins
 ```
        Mac (Sharer / Initiator)                           Arch Linux (Joiner / Acceptor)
    ┌──────────────────────────────┐                     ┌──────────────────────────────┐
-   │ 1. `ferry share <folder>`    │                     │                              │
+   │ 1. `ferry share`             │                     │                              │
    │    • Scans for secrets       │                     │                              │
-   │    • Emits short code & QR   │ ── Share code ────► │ 2. `ferry join <code> <dir>` │
+   │    • Emits short code & QR   │ ── Share code ────► │ 2. `ferry join <code>`       │
    │      (e.g., 7KQ4-2M)         │    (voice / chat)   │    • Auto-provisions store   │
    │                              │                     │    • Adopts folder ID & FMK  │
    └──────────────────────────────┘                     └──────────────────────────────┘
@@ -123,20 +130,32 @@ Ferry provides a zero-file rendezvous workflow. You share a 6-character code ins
 ```
 
 #### Action 3.1: Share the folder on Mac (Right Pane):
+You can run `ferry share` inside the directory or pass the folder path:
+
 ```bash
+# If already inside /tmp/ferry-sync-demo:
+/Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry share
+
+# Or with explicit path:
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry share /tmp/ferry-sync-demo
 ```
 Ferry runs a secret scan, prints an ASCII QR code, and outputs a 6-character pairing code (such as `7KQ4-2M`).
 
 #### Action 3.2: Join the folder on Arch Linux (Left Pane):
-Pass the code displayed on your Mac to `ferry join`:
+On Arch Linux, you do not need to run `ferry init` beforehand. `ferry join` automatically provisions the folder, sets up the database, and adopts the shared encryption key.
+
 ```bash
+# Option A: In-directory (inside /tmp/ferry-sync-demo):
+cd /tmp/ferry-sync-demo
+~/.cargo/bin/ferry join 7KQ4-2M
+
+# Option B: Explicit path:
 ~/.cargo/bin/ferry join 7KQ4-2M /tmp/ferry-sync-demo
 ```
-Arch Linux auto-provisions its local store, imports the folder identity and encryption key, and confirms the join.
+Arch Linux confirms the join and adopts the folder identity immediately.
 
 #### Action 3.3: Verify Identical Folder IDs:
-Run status on both machines:
+Check status on both machines:
 ```bash
 # On Mac:
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry status /tmp/ferry-sync-demo
@@ -342,15 +361,15 @@ rm -rf /tmp/ferry-sync-demo
 
 | Command | Environment | Description |
 | :--- | :--- | :--- |
-| `ferry init <folder>` | Mac and Arch | Initializes cryptographic folder identity and store |
-| `ferry share <folder>` | Mac (Sharer) | Scans for secrets and generates 30s pairing code and ASCII QR |
-| `ferry join <code> <dir>` | Arch (Joiner) | Adopts folder, provisions store, and establishes pairing |
-| `ferry daemon --listen 0.0.0.0:44001 <folder>` | Mac | Runs sync server listening for peer connections |
-| `ferry daemon --peer-url <IP:44001> <folder>` | Arch | Connects to peer listener daemon over Tailscale |
-| `ferry ui --gui <folder>` | Mac | Launches native desktop window (egui) with OS folder picker |
-| `ferry tui <folder>` | Mac or Arch | Launches retro terminal dashboard (ratatui) with in-TUI picker |
-| `ferry ui --web --port 8080 <folder>` | Mac or Arch | Launches browser dashboard with live SSE updates and web picker |
-| `ferry pin start --paths '<glob>' <folder>` | Mac or Arch | Holds remote writes during active editing |
-| `ferry pin stop <folder>` | Mac or Arch | Releases session hold |
-| `ferry conflicts list <folder>` | Mac or Arch | Lists quarantined conflict files |
-| `ferry status <folder>` | Mac or Arch | Displays current engine status and transfer metrics |
+| `ferry init [folder]` | Mac and Arch | Initializes cryptographic folder identity and store (defaults to current dir) |
+| `ferry share [folder]` | Mac (Sharer) | Scans for secrets and generates 30s pairing code and ASCII QR |
+| `ferry join <code> [dir]` | Arch (Joiner) | Adopts folder, auto-provisions store, and establishes pairing |
+| `ferry daemon --listen 0.0.0.0:44001 [folder]` | Mac | Runs sync server listening for peer connections |
+| `ferry daemon --peer-url <IP:44001> [folder]` | Arch | Connects to peer listener daemon over Tailscale |
+| `ferry ui --gui [folder]` | Mac | Launches native desktop window (egui) with OS folder picker |
+| `ferry tui [folder]` | Mac or Arch | Launches retro terminal dashboard (ratatui) with in-TUI picker |
+| `ferry ui --web --port 8080 [folder]` | Mac or Arch | Launches browser dashboard with live SSE updates and web picker |
+| `ferry pin start --paths '<glob>' [folder]` | Mac or Arch | Holds remote writes during active editing |
+| `ferry pin stop [folder]` | Mac or Arch | Releases session hold |
+| `ferry conflicts list [folder]` | Mac or Arch | Lists quarantined conflict files |
+| `ferry status [folder]` | Mac or Arch | Displays current engine status and transfer metrics |
