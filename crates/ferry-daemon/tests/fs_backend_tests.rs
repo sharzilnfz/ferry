@@ -82,10 +82,14 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         .await
         .expect("listing");
     assert_eq!(resp.absolute_path, root);
+    #[cfg(unix)]
+    let expected_entries = 20;
+    #[cfg(windows)]
+    let expected_entries = 18;
     assert_eq!(
         resp.entries.len(),
-        20,
-        "expected 20 entries, got {}",
+        expected_entries,
+        "expected {expected_entries} entries, got {}",
         resp.entries.len()
     );
 
@@ -147,14 +151,16 @@ async fn in_process_already_synced_detection() {
     let other = root.join("other");
     std::fs::create_dir_all(&other).unwrap();
 
-    // Write folders.toml with project_a registered
+    // Write folders.toml with project_a registered. Backslashes must be
+    // escaped inside TOML basic strings, or the parse fails and the
+    // best-effort registry read silently yields an empty set.
     let folders_toml = format!(
         r#"[[folders]]
 folder_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 path = "{}"
 added_at = "2026-08-28T12:00:00Z"
 "#,
-        child_a.display()
+        child_a.display().to_string().replace('\\', "\\\\")
     );
     std::fs::write(ferry_home.join("folders.toml"), folders_toml).unwrap();
 
