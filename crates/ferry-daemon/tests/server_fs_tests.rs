@@ -61,6 +61,17 @@ fn make_entry(name: &str, parent: &str, is_dir: bool) -> DirectoryEntry {
     }
 }
 
+/// Synthetic listing root for fixture-backed tests. Must be absolute under
+/// the platform's rules or `validate_path` rejects it before the fake
+/// backend is consulted.
+fn ls_root() -> &'static str {
+    if cfg!(windows) {
+        r"C:\tmp"
+    } else {
+        "/tmp"
+    }
+}
+
 #[tokio::test]
 async fn fs_ls_requires_auth() {
     let fake = Arc::new(FakeBackend::new());
@@ -95,11 +106,11 @@ async fn fs_ls_returns_200_for_valid_path() {
     let fake = Arc::new(FakeBackend::new());
     let mut fixture: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
     fixture.insert(
-        PathBuf::from("/tmp"),
+        PathBuf::from(ls_root()),
         vec![
-            make_entry("alpha", "/tmp", true),
-            make_entry("beta.txt", "/tmp", false),
-            make_entry("projects", "/tmp", true),
+            make_entry("alpha", ls_root(), true),
+            make_entry("beta.txt", ls_root(), false),
+            make_entry("projects", ls_root(), true),
         ],
     );
     fake.set_fs_fixture(fixture).await;
@@ -115,13 +126,13 @@ async fn fs_ls_returns_200_for_valid_path() {
     let (status, body, _) = send_http(
         addr,
         "GET",
-        "/api/fs/ls?path=/tmp",
+        &format!("/api/fs/ls?path={}", ls_root()),
         &[("Authorization", &auth)],
         None,
     )
     .await;
     assert_eq!(status, 200);
-    assert_eq!(body["absolute_path"], "/tmp");
+    assert_eq!(body["absolute_path"], ls_root());
     let entries = body["entries"].as_array().expect("entries array");
     assert_eq!(entries.len(), 3);
     let names: Vec<&str> = entries
@@ -344,12 +355,12 @@ async fn fs_ls_autocomplete_filter_via_prefix() {
     let fake = Arc::new(FakeBackend::new());
     let mut fixture: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
     fixture.insert(
-        PathBuf::from("/home"),
+        PathBuf::from(ls_root()),
         vec![
-            make_entry("projects", "/home", true),
-            make_entry("profile.txt", "/home", false),
-            make_entry("prototypes", "/home", true),
-            make_entry("other", "/home", true),
+            make_entry("projects", ls_root(), true),
+            make_entry("profile.txt", ls_root(), false),
+            make_entry("prototypes", ls_root(), true),
+            make_entry("other", ls_root(), true),
         ],
     );
     fake.set_fs_fixture(fixture).await;
@@ -365,7 +376,7 @@ async fn fs_ls_autocomplete_filter_via_prefix() {
     let (status, body, _) = send_http(
         addr,
         "GET",
-        "/api/fs/ls?path=/home",
+        &format!("/api/fs/ls?path={}", ls_root()),
         &[("Authorization", &auth)],
         None,
     )
