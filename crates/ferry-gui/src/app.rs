@@ -33,7 +33,7 @@ pub enum BackendAction {
         i_know: bool,
     },
     AcceptPair {
-        payload_path: std::path::PathBuf,
+        code_or_payload: String,
     },
     FetchStatus,
     FetchConflicts,
@@ -228,8 +228,8 @@ impl GuiApp {
                             }
                         }
                     }
-                    BackendAction::AcceptPair { payload_path } => {
-                        match b_actions.pair_accept(payload_path, None).await {
+                    BackendAction::AcceptPair { code_or_payload } => {
+                        match b_actions.pair_accept(code_or_payload, None).await {
                             Ok(res) => {
                                 let _ = ev_tx_actions.send(UiEvent::Error {
                                     code: "pair_success".to_string(),
@@ -1060,8 +1060,10 @@ impl GuiApp {
         if self.show_pair_modal {
             let mut pair_action = None;
             let mut pair_input = self.pair_path_input.clone();
-            render_pair_modal(ctx, &mut self.show_pair_modal, &mut pair_input, |path| {
-                pair_action = Some(BackendAction::AcceptPair { payload_path: path });
+            render_pair_modal(ctx, &mut self.show_pair_modal, &mut pair_input, |input| {
+                pair_action = Some(BackendAction::AcceptPair {
+                    code_or_payload: input,
+                });
             });
             self.pair_path_input = pair_input;
             if let Some(act) = pair_action {

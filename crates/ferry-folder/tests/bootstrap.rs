@@ -120,7 +120,7 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
     // The accepting frontend persists settings after adopting (the ritual
-    // does this inside accept_complete); mirror that here.
+    // does this inside PendingAcceptance::complete); mirror that here.
     ferry_folder::folder::save_settings(&target, &default_settings()).unwrap();
 
     // B opens its adopted copy; A cannot.

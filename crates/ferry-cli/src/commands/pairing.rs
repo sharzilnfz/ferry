@@ -1,12 +1,8 @@
-//! The pairing ritual as a CLI flow. The ritual itself (files, codes,
-//! ordering, wrap entries, grant sealing) lives in `ferry-folder`; this
-//! module adds only what the CLI owns: QR art, stderr instructions, and the
-//! `{command: "pair"}` output documents.
-//!
-//! File transport summary (full story in ferry-folder's pairing module):
-//! v0 uses PAYLOAD FILES standing in for the ~93-byte out-of-band channel a
-//! camera scan provides — `pair-offer.ferry-pair`,
-//! `pair-response.ferry-pair`, `pair-grant.ferry-grant`.
+//! The pairing ritual as a CLI flow. The ritual itself (codes, envelopes,
+//! files, ordering, wrap entries, grant sealing, transport selection) lives
+//! in `ferry-folder`'s unified `PairingRitual`; this module adds only what
+//! the CLI owns: QR art, stderr instructions, and the `{command: "pair"}`
+//! output documents.
 
 use std::path::Path;
 
@@ -17,29 +13,30 @@ use crate::folder::OpenFolder;
 use crate::out::Output;
 use ferry_crypto::identity::DeviceIdentity;
 
-/// Run the initiator side inside an opened folder. Prints short code + ASCII
-/// QR + instructions BEFORE the offer file exists (so nothing races a reader
-/// watching for it), then polls for the responder and completes the FMK
-/// wrap.
+/// Run the initiator side inside an opened folder. Prints the 6-char code +
+/// ASCII QR + instructions BEFORE the payload file exists (so nothing races
+/// a reader watching for it), then polls for the responder and completes
+/// the FMK wrap.
 pub fn initiate(
     opened: &OpenFolder,
     identity: &DeviceIdentity,
     timeout_secs: u64,
 ) -> CliResult<Output> {
-    let pending = ferry_folder::pairing::initiate_begin(opened, identity)?;
-    let qr = render_ascii_qr(&pending.offer_bytes)?;
+    let ritual = ritual_for(identity)?;
+    let pending = ritual.create_offer(opened)?;
+    let qr = render_ascii_qr(&pending.payload)?;
     eprintln!("{qr}");
     eprintln!(
-        "Short code (compare on the other device): {}\nOffer file: {}",
+        "Share code (compare on the other device): {}\nOffer file: {}",
         pending.short_code,
-        offer_path_display(&pending.offer_path)
+        offer_path_display(&pending.payload_path)
     );
     eprintln!(
         "On the other device run:\n  ferry pair --accept {}",
-        offer_path_display(&pending.offer_path)
+        offer_path_display(&pending.payload_path)
     );
 
-    let done = ferry_folder::pairing::initiate_complete(pending, opened, identity, timeout_secs)?;
+    let done = pending.complete(opened, identity, timeout_secs)?;
 
     let json_doc = json!({
         "command": "pair",
@@ -59,23 +56,27 @@ pub fn initiate(
     Ok(Output::new(json_doc, human))
 }
 
-/// Run the acceptor side against an offer file. Writes the response where
-/// the initiator looks for it, announces it + the expected code on stderr,
-/// then waits for the sealed grant and adopts the folder.
+/// Run the acceptor side against an offer payload. The ritual detects the
+/// input form (code, `FERRY1:` envelope, or payload file path) internally;
+/// for the file transport this prints the response path + the expected code
+/// on stderr, then waits for the sealed grant and adopts the folder.
 pub fn accept(
     identity: &DeviceIdentity,
     offer_file: &Path,
     dir: Option<&Path>,
     timeout_secs: u64,
 ) -> CliResult<Output> {
-    let pending = ferry_folder::pairing::accept_begin(identity, offer_file, dir)?;
-    eprintln!("Response written: {}", pending.response_path.display());
+    let ritual = ritual_for(identity)?;
+    let pending = ritual.accept_offer(&offer_file.display().to_string(), dir)?;
+    if let Some(ref response_path) = pending.response_path {
+        eprintln!("Response written: {}", response_path.display());
+    }
     eprintln!(
         "Expected short code: {} (compare against the other screen)",
         pending.expected_short_code
     );
     let expected_short_code = pending.expected_short_code.clone();
-    let accepted = ferry_folder::pairing::accept_complete(pending, identity, timeout_secs)?;
+    let accepted = pending.complete(timeout_secs)?;
 
     let json_doc = json!({
         "command": "pair",
@@ -91,6 +92,16 @@ pub fn accept(
         super::init::display_path(&accepted.folder)
     );
     Ok(Output::new(json_doc, human))
+}
+
+/// The unified ritual on this device's home + the process-wide rendezvous.
+fn ritual_for(identity: &DeviceIdentity) -> CliResult<ferry_folder::pairing::PairingRitual> {
+    let home = crate::home::ferry_home()?;
+    Ok(ferry_folder::pairing::PairingRitual::with_shared(
+        home,
+        identity.clone(),
+        ferry_folder::pairing::shared_rendezvous(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

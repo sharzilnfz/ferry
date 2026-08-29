@@ -67,10 +67,12 @@ local devices and asserts byte-for-byte convergence):
 ```sh
 # Device A — create a folder and prepare it for sharing
 ferry init
-ferry share --out /media/usb/payload.ferrypair
+ferry share            # prints a 6-character code + QR (expires in 10m)
+ferry pair             # or: write an offer file for out-of-band exchange
 
-# Device B — adopt the folder from the payload
-ferry pair --from /media/usb/payload.ferrypair
+# Device B — adopt the folder from the code, the QR payload, or the file
+ferry join <CODE>
+ferry pair --accept <path>/pair-offer.ferry-pair
 
 # Both devices — watch and exchange continuously
 ferry daemon

@@ -773,18 +773,20 @@ async fn test_async_pairing_workflow_and_status_polling() {
     assert_eq!(json["short_code"], short_code);
 
     // 4. Accept the pair from peer device (device B) to write pair-response
-    let (_home_b, id_b) = {
+    let (home_b, id_b) = {
         let dir = tempfile::tempdir().unwrap();
         let id = ferry_crypto::identity::load_or_create(&dir.path().join("id_b")).unwrap();
         (dir, id)
     };
     let target_b = tempfile::tempdir().unwrap();
-    let pending_b = ferry_folder::pairing::accept_begin(
-        &id_b,
-        std::path::Path::new(offer_file),
-        Some(target_b.path()),
-    )
-    .expect("accept_begin");
+    let ritual_b = ferry_folder::pairing::PairingRitual::with_shared(
+        home_b.path().to_path_buf(),
+        id_b.clone(),
+        ferry_folder::pairing::shared_rendezvous(),
+    );
+    let pending_b = ritual_b
+        .accept_offer(offer_file, Some(target_b.path()))
+        .expect("accept_offer");
     assert_eq!(pending_b.expected_short_code, short_code);
 
     // Response file should now exist at <work>/.ferry/pair-response.ferry-pair
@@ -807,8 +809,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
     assert_eq!(peer_device_id, ferry_store::format::hex(id_b.public()));
 
     // 6. Completing the accept side on device B with the written grant
-    let accepted =
-        ferry_folder::pairing::accept_complete(pending_b, &id_b, 5).expect("accept_complete");
+    let accepted = pending_b.complete(5).expect("accept complete");
     assert_eq!(accepted.folder, target_b.path());
 
     server_task.abort();
