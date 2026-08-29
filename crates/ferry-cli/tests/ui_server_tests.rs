@@ -642,7 +642,8 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         Some(manifest_a)
     );
 
-    // Now test divergence: introduce a local change on Node A
+    // Now test divergence: shut down node B and introduce a local change on Node A
+    handle_b.shutdown();
     std::fs::write(tree_a.join("diverge.txt"), b"divergent content on node A").unwrap();
     // Wait until Node A mints a new manifest
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

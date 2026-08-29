@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 
 use rand::SeedableRng;
 
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_pin::{HeldLedger, PinRecord, PinStore};
 use ferry_store::agreement::AgreementLedger;
-use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
+use ferry_store::crypto::KEY_LEN;
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
 use ferry_store::store::Store;
 use ferry_sync::format::{hex, unhex};
@@ -181,7 +182,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let store = Store::open(
         &fx._dir.path().join("a/store"),
         [0u8; KEY_LEN],
-        Box::new(PassthroughCipher),
+        Box::new(ChaChaCipher),
     )
     .unwrap();
     let poly =

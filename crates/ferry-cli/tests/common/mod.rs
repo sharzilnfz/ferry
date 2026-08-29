@@ -60,9 +60,12 @@ impl RunningDaemon {
         cfg.pin_state_dir = Some(opened.state_dir());
         cfg.poll_interval = std::time::Duration::from_millis(50);
 
-        let mut engine =
-            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
-                .expect("engine init");
+        let mut engine = ferry_sync::SyncEngine::with_store(
+            cfg,
+            std::sync::Arc::new(ferry_sync::TcpTransport),
+            std::sync::Arc::clone(&opened.store),
+        )
+        .expect("engine init");
         engine.set_identity(identity.clone());
         let handle = engine.start();
 
@@ -101,9 +104,12 @@ impl RunningDaemon {
         cfg.pin_state_dir = Some(opened.state_dir());
         cfg.poll_interval = std::time::Duration::from_millis(50);
 
-        let mut engine =
-            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
-                .expect("engine init");
+        let mut engine = ferry_sync::SyncEngine::with_store(
+            cfg,
+            std::sync::Arc::new(ferry_sync::TcpTransport),
+            std::sync::Arc::clone(&opened.store),
+        )
+        .expect("engine init");
         engine.set_identity(identity.clone());
         let handle = engine.start();
 

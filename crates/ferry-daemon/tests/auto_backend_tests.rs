@@ -58,7 +58,8 @@ impl TestRig {
         cfg.poly = ferry_store::chunker::ValidatedPoly::new(poly).expect("valid poly");
         cfg.pin_state_dir = Some(tree_dir.join(".ferry"));
 
-        let mut engine = SyncEngine::new(cfg, Arc::new(TcpTransport)).expect("engine init");
+        let mut engine = SyncEngine::with_store(cfg, Arc::new(TcpTransport), Arc::new(store))
+            .expect("engine init");
         engine.set_identity(identity.clone());
 
         Self {

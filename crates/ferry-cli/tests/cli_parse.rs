@@ -184,6 +184,7 @@ fn daemon_folders_listen_peer_transport_interval() {
     ]);
     match cli.command.unwrap() {
         Command::Daemon {
+            action: _,
             folders,
             listen,
             peer_url,

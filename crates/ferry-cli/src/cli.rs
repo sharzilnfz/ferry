@@ -141,9 +141,11 @@ pub enum Command {
         #[command(subcommand)]
         action: StoreAction,
     },
-    /// Watch folders and continuously exchange with one peer over TCP.
+    /// Watch folders and continuously exchange with one peer over TCP or iroh QUIC.
     #[command(after_help = DAEMON_AFTER_HELP)]
     Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonAction>,
         /// Folders to watch (default: current directory).
         folders: Vec<PathBuf>,
         /// Bind address to LISTEN on (e.g. 127.0.0.1:44001). The listener
@@ -154,8 +156,7 @@ pub enum Command {
         /// exchange rounds every --interval-secs.
         #[arg(long, value_name = "URL", alias = "peer")]
         peer_url: Option<String>,
-        /// Transport implementation. Only `tcp` exists today; iroh QUIC
-        /// lands with T-009/T-014 and any other value fails cleanly.
+        /// Transport implementation (default: tcp).
         #[arg(long, default_value = "tcp", value_name = "KIND")]
         transport: String,
         /// Seconds between scan+exchange rounds (dialer role).
@@ -271,4 +272,12 @@ pub enum PinAction {
         /// Folder to inspect (default: current directory).
         folder: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
+pub enum DaemonAction {
+    /// Stop the running background sync daemon.
+    Stop,
+    /// Inspect the status of the background sync daemon.
+    Status,
 }

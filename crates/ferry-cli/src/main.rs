@@ -222,19 +222,24 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             }
         },
         Command::Daemon {
+            action,
             folders,
             listen,
             peer_url,
             transport,
             interval_secs,
-        } => ferry_cli::commands::daemon::run(ferry_cli::commands::daemon::DaemonArgs {
-            folders,
-            listen: listen.as_deref(),
-            peer_url: peer_url.as_deref(),
-            transport,
-            interval_secs: *interval_secs,
-            json: cli.json,
-        }),
+        } => match action {
+            Some(ferry_cli::cli::DaemonAction::Stop) => ferry_cli::commands::daemon::stop(),
+            Some(ferry_cli::cli::DaemonAction::Status) => ferry_cli::commands::daemon::status(),
+            None => ferry_cli::commands::daemon::run(ferry_cli::commands::daemon::DaemonArgs {
+                folders,
+                listen: listen.as_deref(),
+                peer_url: peer_url.as_deref(),
+                transport,
+                interval_secs: *interval_secs,
+                json: cli.json,
+            }),
+        },
         Command::Sync {
             folder,
             peer_url,

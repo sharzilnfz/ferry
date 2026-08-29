@@ -23,7 +23,7 @@ use std::sync::Arc;
 use ferry_crypto::config_head::{parse_config_head, write_config_head, WrappedKeyEntry};
 use ferry_crypto::folder_key::{generate_fmk, unwrap_folder_key, wrap_folder_key, Fmk};
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
-use ferry_store::crypto::PassthroughCipher;
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ pub fn create_folder(
     let fmk = generate_fmk();
     // Store::create uses a non-recursive mkdir for `.ferry`; ensure parents.
     std::fs::create_dir_all(root).code("io", "check the path and permissions")?;
-    let store = Store::create(root, fmk, Box::new(PassthroughCipher))
+    let store = Store::create(root, fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
     store
@@ -130,7 +130,7 @@ pub fn adopt_folder(
     poly: u64,
 ) -> FolderResult<Store> {
     std::fs::create_dir_all(root).code("io", "check the path and permissions")?;
-    let store = Store::create(root, *fmk, Box::new(PassthroughCipher))
+    let store = Store::create(root, *fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
     store
@@ -282,7 +282,7 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
 }
 
 fn open_store(root: &Path, fmk: Fmk) -> FolderResult<Store> {
-    Store::open(root, fmk, Box::new(PassthroughCipher)).map_err(|e| match e {
+    Store::open(root, fmk, Box::new(ChaChaCipher)).map_err(|e| match e {
         StoreError::Io(io) => FolderError::new(
             "not-a-folder",
             format!("cannot open store under {}: {io}", root.display()),

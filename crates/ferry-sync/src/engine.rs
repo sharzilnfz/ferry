@@ -33,7 +33,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_store::crypto::PassthroughCipher;
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
 use ferry_store::manifest::{parse_manifest, serialize_manifest, RootManifest};
@@ -783,6 +783,7 @@ struct Ctx {
     /// the audit-grade walk for post-session ticks. Tests inject a single
     /// scripted source, so there is nothing to upgrade to.
     audit_source: Option<SnapshotSourceFn>,
+    dial_backoff: Mutex<(u32, Option<Instant>)>,
 }
 
 impl Ctx {
@@ -950,12 +951,25 @@ impl Ctx {
         let Some(addr) = self.cfg.connect_to else {
             return;
         };
+        {
+            let guard = self.dial_backoff.lock().unwrap();
+            if let Some(next) = guard.1 {
+                if Instant::now() < next {
+                    return;
+                }
+            }
+        }
         match self.transport.dial(addr) {
             Ok(mut conn) => match run_session_v1(conn.as_mut(), self, true) {
-                Ok(()) => self.bump_ok(),
+                Ok(()) => {
+                    let mut guard = self.dial_backoff.lock().unwrap();
+                    *guard = (0, None);
+                    self.bump_ok();
+                }
                 Err(e) => {
                     self.note_session_failure(&e);
                     self.status(&format!("SESSION failed (dial): {e}"));
+                    self.record_dial_failure();
                 }
             },
             Err(e) => {
@@ -963,8 +977,18 @@ impl Ctx {
                     self.shared.record_peer_connectivity(peer, "unreachable");
                 }
                 self.status(&format!("SESSION dial error: {e}"));
+                self.record_dial_failure();
             }
         }
+    }
+
+    fn record_dial_failure(&self) {
+        let mut guard = self.dial_backoff.lock().unwrap();
+        let failures = guard.0.saturating_add(1);
+        let shift = failures.min(6);
+        let millis = 500u64.saturating_mul(1 << shift).min(30_000);
+        let next = Instant::now() + Duration::from_millis(millis);
+        *guard = (failures, Some(next));
     }
 
     /// Failed-session bookkeeping: every failure counts once; verification
@@ -1001,9 +1025,15 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     let ledger = PeerLedger::new(ctx.store.store_dir());
     let (expect, is_tofu_fresh) = match &ctx.peer_policy {
         PeerPolicy::AllowList(set) => {
-            if set.len() == 1 {
-                let pin = *set.iter().next().unwrap();
-                (ExpectPeer::Pin(pin), false)
+            let remote_peers: Vec<BlobId> = set
+                .iter()
+                .copied()
+                .filter(|p| p != ctx.identity.public())
+                .collect();
+            if remote_peers.len() == 1 {
+                (ExpectPeer::Pin(remote_peers[0]), false)
+            } else if remote_peers.is_empty() {
+                (ExpectPeer::TrustOnFirstUse, true)
             } else {
                 (ExpectPeer::TrustOnFirstUse, false)
             }
@@ -1023,7 +1053,12 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
 
     match &ctx.peer_policy {
         PeerPolicy::AllowList(set) => {
-            if !set.contains(&est.peer) {
+            let remote_peers: Vec<BlobId> = set
+                .iter()
+                .copied()
+                .filter(|p| p != ctx.identity.public())
+                .collect();
+            if !remote_peers.is_empty() && !set.contains(&est.peer) {
                 let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
                 ctx.shared.record_peer_connectivity(est.peer, "unreachable");
                 ctx.status(&format!(
@@ -1188,11 +1223,20 @@ impl SyncEngine {
     /// (`ferry_materialize::sweep_stale_temps`). Failures are best-effort
     /// and never block startup.
     pub fn new(cfg: EngineConfig, transport: Arc<dyn Transport>) -> Result<Self, EngineError> {
+        let store = Arc::new(open_or_create_store(&cfg.store_dir)?);
+        Self::with_store(cfg, transport, store)
+    }
+
+    /// Build an engine around an already-opened `Store` (e.g. from `OpenFolder`).
+    pub fn with_store(
+        cfg: EngineConfig,
+        transport: Arc<dyn Transport>,
+        store: Arc<Store>,
+    ) -> Result<Self, EngineError> {
         std::fs::create_dir_all(&cfg.tree_dir)?;
         let stale = Duration::from_secs(ferry_materialize::DEFAULT_STALE_TEMP_AGE_SECS);
         let _ = ferry_materialize::sweep_stale_temps(&cfg.tree_dir, stale);
         let _ = ferry_store::reclaim::sweep_store_temps(&cfg.store_dir, stale);
-        let store = Arc::new(open_or_create_store(&cfg.store_dir)?);
         let listener = match cfg.bind_addr {
             Some(addr) => Some(Transport::listen(transport.as_ref(), addr)?),
             None => None,
@@ -1310,6 +1354,7 @@ impl SyncEngine {
             clock: self.clock.take().unwrap_or_else(system_clock),
             snapshot_source,
             audit_source,
+            dial_backoff: Mutex::new((0, None)),
         });
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1355,9 +1400,16 @@ fn open_or_create_store(store_dir: &std::path::Path) -> Result<Store, EngineErro
     // parent chain exists first.
     std::fs::create_dir_all(store_dir)?;
     if store_dir.join(ferry_store::store::STORE_DIR_NAME).is_dir() {
-        Ok(Store::open(store_dir, FMK, Box::new(PassthroughCipher))?)
+        if let Ok(s) = Store::open(store_dir, FMK, Box::new(ChaChaCipher)) {
+            return Ok(s);
+        }
+        Ok(Store::open(
+            store_dir,
+            FMK,
+            Box::new(ferry_store::crypto::PassthroughCipher),
+        )?)
     } else {
-        Ok(Store::create(store_dir, FMK, Box::new(PassthroughCipher))?)
+        Ok(Store::create(store_dir, FMK, Box::new(ChaChaCipher))?)
     }
 }
 
@@ -1736,6 +1788,7 @@ mod tests {
             clock,
             snapshot_source: source,
             audit_source: None,
+            dial_backoff: Mutex::new((0, None)),
         };
         (ctx, dir)
     }

@@ -132,26 +132,33 @@ impl IrohTransport {
             )
         })?;
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
-
-        let ep = rt.block_on(build_endpoint(&cfg, seed))?;
-        let my_id = ep.id();
+        let dial_timeout = cfg.dial_timeout;
         let relay_urls = match &cfg.relays {
             RelaySetting::Custom(urls) => urls.iter().filter_map(|u| u.parse().ok()).collect(),
             _ => Vec::new(),
         };
-        let routes = cfg.routes.unwrap_or_default();
+        let routes = cfg.routes.clone().unwrap_or_default();
+
+        let (rt, ep) = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
+
+            let ep = rt.block_on(build_endpoint(&cfg, seed))?;
+            Ok::<_, io::Error>((rt, ep))
+        })
+        .join()
+        .map_err(|_| io::Error::other("thread panicked building iroh transport"))??;
+        let my_id = ep.id();
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
                 rt,
                 ep,
                 my_id,
-                dial_timeout: cfg.dial_timeout,
+                dial_timeout,
                 closed: AtomicBool::new(false),
                 observations: Mutex::new(HashMap::new()),
                 relay_urls,

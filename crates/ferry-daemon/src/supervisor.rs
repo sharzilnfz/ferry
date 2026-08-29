@@ -37,16 +37,34 @@ pub struct Supervisor {
     identity: DeviceIdentity,
     engines: HashMap<String, SupervisedEngine>,
     broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+    transport: Arc<dyn ferry_sync::Transport>,
+    iroh_transport: Option<Arc<ferry_iroh::IrohTransport>>,
 }
 
 impl Supervisor {
     pub fn new(home: PathBuf, identity: DeviceIdentity) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(64);
+        let (transport, iroh_transport): (
+            Arc<dyn ferry_sync::Transport>,
+            Option<Arc<ferry_iroh::IrohTransport>>,
+        ) = match ferry_iroh::IrohTransport::new(
+            ferry_iroh::IrohConfig::builder()
+                .device_identity(&identity)
+                .build(),
+        ) {
+            Ok(t) => {
+                let arc = Arc::new(t);
+                (arc.clone(), Some(arc))
+            }
+            Err(_) => (Arc::new(TcpTransport), None),
+        };
         Self {
             home,
             identity,
             engines: HashMap::new(),
             broadcast_tx,
+            transport,
+            iroh_transport,
         }
     }
 
@@ -118,6 +136,33 @@ impl Supervisor {
             "ferry-{}",
             &record.folder_id[..8.min(record.folder_id.len())]
         );
+
+        let mut bind_addr = None;
+        let mut connect_to = None;
+        let mut expected_peer_id = None;
+
+        if let Some(ref iroh) = self.iroh_transport {
+            bind_addr = Some("127.0.0.1:0".parse().unwrap());
+            let config_path = record.path.join(".ferry").join("config");
+            if config_path.is_file() {
+                if let Ok(bytes) = std::fs::read(&config_path) {
+                    if let Ok(ferry_sync::PeerPolicy::AllowList(set)) =
+                        ferry_sync::PeerPolicy::from_config_head(&bytes)
+                    {
+                        let remote: Vec<[u8; 32]> = set
+                            .into_iter()
+                            .filter(|p| p != self.identity.public())
+                            .collect();
+                        if let Some(peer) = remote.first() {
+                            let alias = iroh.register_peer(*peer);
+                            connect_to = Some(alias);
+                            expected_peer_id = Some(*peer);
+                        }
+                    }
+                }
+            }
+        }
+
         let cfg = EngineConfig {
             tag: tag.clone(),
             store_dir: record.path.clone(),
@@ -126,14 +171,21 @@ impl Supervisor {
             folder_id: folder_id_bytes,
             poll_interval: Duration::from_millis(200),
             opportunistic_every: 50,
-            bind_addr: None,
-            connect_to: None,
-            expected_peer_id: None,
+            bind_addr,
+            connect_to,
+            expected_peer_id,
             pin_state_dir: Some(record.path.join(".ferry")),
             quiet: true,
         };
-        let transport: Arc<dyn ferry_sync::Transport> = Arc::new(TcpTransport);
-        let mut engine = SyncEngine::new(cfg, transport).map_err(|e| SupervisorError {
+        let transport = Arc::clone(&self.transport);
+        let mut engine = if let Ok(opened) =
+            ferry_folder::folder::open_folder(&record.path, &self.identity)
+        {
+            SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
+        } else {
+            SyncEngine::new(cfg, transport)
+        }
+        .map_err(|e| SupervisorError {
             code: "engine-init".to_string(),
             message: e.to_string(),
         })?;

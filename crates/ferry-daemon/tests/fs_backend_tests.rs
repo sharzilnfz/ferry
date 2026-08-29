@@ -49,7 +49,7 @@ fn rig_with_engine() -> (TempDir, PathBuf, DeviceIdentity, SyncEngine, [u8; 16])
     cfg.folder_id = folder_id;
     cfg.poly = ferry_store::chunker::ValidatedPoly::new(poly).unwrap();
     cfg.pin_state_dir = Some(tree.join(".ferry"));
-    let mut engine = SyncEngine::new(cfg, Arc::new(TcpTransport)).unwrap();
+    let mut engine = SyncEngine::with_store(cfg, Arc::new(TcpTransport), Arc::new(store)).unwrap();
     engine.set_identity(identity.clone());
     (tmp, tree, identity, engine, folder_id)
 }

@@ -47,6 +47,20 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     };
     if listen_addr.is_none() && peer_addr.is_none() {
         let home = crate::home::ferry_home()?;
+        let _lock = ferry_platform::ProcessLock::acquire(&home).map_err(|e| match e {
+            ferry_platform::ProcessLockError::AlreadyRunning(pid) => {
+                let pid_str = pid.map(|p| format!(" (PID {p})")).unwrap_or_default();
+                CliError::new(
+                    "daemon-already-running",
+                    format!("A Ferry daemon is already running{pid_str}"),
+                    "run `ferry daemon stop` first or check active processes",
+                )
+            }
+            ferry_platform::ProcessLockError::Io(err) => {
+                CliError::new("io", err.to_string(), "check permissions on FERRY_HOME")
+            }
+        })?;
+
         let identity = crate::ensure_identity()?;
         let mut supervisor =
             ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
@@ -95,21 +109,48 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             })?;
         rt.block_on(async move {
             let sup_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-            let _ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(
+            let ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(
                 socket_path.clone(),
                 std::sync::Arc::clone(&sup_arc),
             )
             .map_err(|e| e.to_string())
             .expect("ipc bind");
             eprintln!("ferry device daemon listening at {}", socket_path.display());
+
+            let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+            let s_tx = shutdown_tx.clone();
+            tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                let _ = s_tx.send(true);
+            });
+            #[cfg(unix)]
+            {
+                let s_tx2 = shutdown_tx.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                        sig.recv().await;
+                        let _ = s_tx2.send(true);
+                    }
+                });
+            }
+
             let mut interval = tokio::time::interval(Duration::from_millis(500));
             loop {
-                interval.tick().await;
-                let mut sup = sup_arc.lock().await;
-                sup.tick();
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let mut sup = sup_arc.lock().await;
+                        sup.tick();
+                    }
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            eprintln!("Shutting down ferry daemon cleanly...");
+                            break;
+                        }
+                    }
+                }
             }
+            ipc_handle.shutdown();
         });
-        #[allow(unreachable_code)]
         return Ok(Output::new(
             serde_json::json!({"command":"daemon","status":"stopped"}),
             "Daemon stopped.\n",
@@ -159,16 +200,17 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             quiet: true,
         };
 
-        let mut engine = SyncEngine::new(cfg, transport.clone()).map_err(|e| {
-            CliError::new(
-                "bind",
-                format!(
-                    "cannot initialize engine for {}: {e}",
-                    opened.root.display()
-                ),
-                "pick another port or free the existing listener",
-            )
-        })?;
+        let mut engine =
+            SyncEngine::with_store(cfg, transport.clone(), Arc::clone(&opened.store)).map_err(|e| {
+                CliError::new(
+                    "bind",
+                    format!(
+                        "cannot initialize engine for {}: {e}",
+                        opened.root.display()
+                    ),
+                    "pick another port or free the existing listener",
+                )
+            })?;
         // Same as `ferry sync`: run sessions under the real FERRY_HOME
         // identity so CONFIG_HEAD-seeded allow-lists recognize this device.
         engine.set_identity(identity.clone());
@@ -219,13 +261,99 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     ))
 }
 
+pub fn stop() -> CliResult<Output> {
+    let home = crate::home::ferry_home()?;
+    let pid_file = home.join("daemon.pid");
+    let socket_path = ferry_ipc::paths::default_socket_path();
+
+    let pid = if pid_file.is_file() {
+        std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+    } else {
+        None
+    };
+
+    if let Some(pid) = pid {
+        #[cfg(unix)]
+        {
+            let res = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            if res == 0 {
+                // Wait up to 2 seconds for process to exit
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_millis(100));
+                    let probe = unsafe { libc::kill(pid as i32, 0) };
+                    if probe != 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&pid_file);
+        let _ = std::fs::remove_file(&socket_path);
+        return Ok(Output::new(
+            serde_json::json!({"command": "daemon", "action": "stop", "status": "stopped", "pid": pid}),
+            format!("Ferry daemon (PID {pid}) stopped.\n"),
+        ));
+    }
+
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    Ok(Output::new(
+        serde_json::json!({"command": "daemon", "action": "stop", "status": "not_running"}),
+        "No Ferry daemon is running.\n",
+    ))
+}
+
+pub fn status() -> CliResult<Output> {
+    let home = crate::home::ferry_home()?;
+    let pid_file = home.join("daemon.pid");
+    let socket_path = ferry_ipc::paths::default_socket_path();
+
+    let pid = if pid_file.is_file() {
+        std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+    } else {
+        None
+    };
+
+    let is_alive = if let Some(pid) = pid {
+        #[cfg(unix)]
+        {
+            unsafe { libc::kill(pid as i32, 0) == 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    } else {
+        false
+    };
+
+    if is_alive {
+        let pid = pid.unwrap();
+        Ok(Output::new(
+            serde_json::json!({"command": "daemon", "action": "status", "status": "running", "pid": pid, "socket": socket_path}),
+            format!("Ferry daemon is running (PID {pid}, socket: {})\n", socket_path.display()),
+        ))
+    } else {
+        Ok(Output::new(
+            serde_json::json!({"command": "daemon", "action": "status", "status": "stopped"}),
+            "No Ferry daemon is running.\n",
+        ))
+    }
+}
+
 fn check_transport(kind: &str) -> CliResult<()> {
     match kind {
-        "tcp" => Ok(()),
+        "tcp" | "iroh" => Ok(()),
         other => Err(CliError::new(
             "transport-unavailable",
             format!("transport {other:?} is not implemented yet"),
-            "use --transport tcp today; iroh QUIC P2P lands with tickets T-009/T-014",
+            "use --transport tcp or --transport iroh",
         )),
     }
 }

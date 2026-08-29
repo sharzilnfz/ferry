@@ -36,7 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use ferry_store::diff::{diff_roots, CompPath, EntryKind, EntryState};
 use ferry_store::format::{BlobId, BlobKind};
 use ferry_store::manifest::{
-    parse_tree_node, serialize_tree_node, EntryPayload, ManifestError, RootManifest, TreeNode,
+    parse_manifest, parse_tree_node, serialize_manifest, serialize_tree_node, EntryPayload,
+    ManifestError, RootManifest, TreeNode,
 };
 use ferry_store::store::{Store, StoreError};
 use thiserror::Error;
@@ -277,6 +278,73 @@ fn collect_chunks(state: &EntryState, out: &mut BTreeMap<BlobId, u64>) {
     }
 }
 
+fn resolve_safe_base<'a>(
+    store: &Store,
+    _local: &'a RootManifest,
+    remote: &'a RootManifest,
+    base: Option<&'a RootManifest>,
+) -> Option<&'a RootManifest> {
+    let b = base?;
+    // If base matches remote, it is directly grounded.
+    if b.root_tree_id == remote.root_tree_id {
+        return Some(b);
+    }
+
+    let base_bytes = serialize_manifest(b);
+    let base_id = *blake3::hash(&base_bytes).as_bytes();
+
+    let remote_bytes = serialize_manifest(remote);
+    let remote_id = *blake3::hash(&remote_bytes).as_bytes();
+
+    // 1. Check if remote is a forward descendant of base:
+    let mut curr_parent = remote.parent_manifest_id;
+    let mut depth = 0;
+    let mut is_descendant = false;
+    while curr_parent != [0u8; 32] && depth < 256 {
+        if curr_parent == base_id {
+            is_descendant = true;
+            break;
+        }
+        match store.get(BlobKind::Manifest, &curr_parent) {
+            Ok(bytes) => match parse_manifest(&bytes) {
+                Ok(m) => curr_parent = m.parent_manifest_id,
+                Err(_) => break,
+            },
+            Err(_) => break,
+        }
+        depth += 1;
+    }
+
+    if is_descendant {
+        return Some(b);
+    }
+
+    // 2. Check if remote is an ancestor of base (remote rolled back / restored from backup).
+    let mut curr_parent = b.parent_manifest_id;
+    let mut depth = 0;
+    while curr_parent != [0u8; 32] && depth < 256 {
+        if curr_parent == remote_id {
+            // Remote is an ancestor of base. Downgrade base to remote to prevent false deletions.
+            return Some(remote);
+        }
+        match store.get(BlobKind::Manifest, &curr_parent) {
+            Ok(bytes) => match parse_manifest(&bytes) {
+                Ok(m) => curr_parent = m.parent_manifest_id,
+                Err(_) => break,
+            },
+            Err(_) => break,
+        }
+        depth += 1;
+    }
+
+    // 3. If remote is strictly older than base and not a proven successor, downgrade to remote.
+    if (remote.created_sec, remote.created_nsec) < (b.created_sec, b.created_nsec) {
+        return Some(remote);
+    }
+
+    Some(b)
+}
+
 /// Run one reconciliation and produce the internal execution plan.
 pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError> {
     let ReconcileInput {
@@ -286,13 +354,17 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         base,
     } = input;
 
+    // Lineage check: ensure base is a valid ancestor of both sides to prevent
+    // rollback-induced deletions of live local files.
+    let safe_base = resolve_safe_base(store, local, remote, base);
+
     // Base root: the agreed manifest's tree, or the empty tree for initial
     // sync (add-vs-add treats the empty tree as the ancestor).
     let empty_root = store.put_meta(
         BlobKind::TreeNode,
         &serialize_tree_node(&TreeNode::default()),
     )?;
-    let base_root = base.map_or(empty_root, |m| m.root_tree_id);
+    let base_root = safe_base.map_or(empty_root, |m| m.root_tree_id);
 
     let local_view = index_change_set(&diff_roots(store, &base_root, &local.root_tree_id)?);
     let remote_view = index_change_set(&diff_roots(store, &base_root, &remote.root_tree_id)?);
