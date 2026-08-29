@@ -1,7 +1,8 @@
-//! Three-way reconciliation and conflict quarantine (T-010).
+//! Three-way reconciliation and conflict quarantine (T-010), fused into one
+//! transactional convergence engine.
 //!
-//! The reconciler implements ADR-0004: every sync cycle is a three-way
-//! merge between the local tree, the remote tree, and the last-agreed base
+//! The engine implements ADR-0004: every sync cycle is a three-way merge
+//! between the local tree, the remote tree, and the last-agreed base
 //! manifest (Mutagen's model). Divergent paths never auto-merge. The newer
 //! side stays live; the loser's bytes survive as
 //! `path.ferry-conflict.<loser-device-short>-<ts>` next to the winner, and a
@@ -10,14 +11,14 @@
 //!
 //! Module map:
 //!
-//! - [`plan`]: the [`plan::ActionPlan`] the planner emits and the executor
-//!   runs: materialize transitions, quarantine saves, send/fetch blob lists,
-//!   planned conflicts.
-//! - [`reconcile`]: the pure decision engine. Manifests in, plan out; no
-//!   filesystem writes.
-//! - [`execute`]: runs a plan against a real tree through the
-//!   ferry-materialize applier (`Overwrite::Expect` guarded) after saving
-//!   quarantine copies.
+//! - [`converge`]: the [`converge::ConvergenceEngine`] — one call, one
+//!   transactional unit. Three-way diff, blob fetch, atomic temp-file
+//!   renames, conflict quarantine, `.ferry/conflicts.jsonl` appends, and
+//!   the `AgreementLedger` commit happen inside it; callers see only the
+//!   [`converge::ConvergenceResult`] and the filesystem.
+//! - [`reconcile`]: the pure decision core inside that unit. Manifests in,
+//!   internal plan out; no filesystem writes, and the plan type is
+//!   crate-private — callers never see intermediate action plans.
 //! - [`report`]: `conflicts.jsonl` append/read.
 //! - [`naming`]: conflict-file names and collision handling.
 //! - [`timefmt`]: fixed UTC time formatting used in names and reports.
@@ -55,23 +56,23 @@
 //!   [`ReconcileError::StructuralConflict`] before any mutation. Quarantining
 //!   a whole directory subtree is out of scope for v1.
 //!
-//! State location: every API takes an explicit `state_dir` (production will
-//! pass `<folder>/.ferry`). Tests keep it outside the synced trees because
+//! State location: conflicts.jsonl lives under the configured state dir
+//! (the folder's `.ferry` in production); the agreement ledger lives under
+//! the store directory. Tests keep both outside the synced trees because
 //! the scanner does not yet exclude `.ferry`.
 
-pub mod execute;
-pub mod naming;
-pub mod plan;
-pub mod reconcile;
+pub mod converge;
+mod naming;
+mod reconcile;
 pub mod report;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use execute::{execute, ExecuteStats};
+pub use converge::{
+    converge, BlobFetch, ConvergenceEngine, ConvergenceError, ConvergenceResult, HeldDecision,
+    HeldPath, LocalTree, Side,
+};
 pub use ferry_platform::time as timefmt;
 pub use naming::{conflict_display_name, device_short, unique_conflict_dest};
-pub use plan::{
-    ActionPlan, ConflictKind, LoserContent, MaterializeOp, PlannedConflict, QuarantineOp, Side,
-};
-pub use reconcile::{reconcile, ReconcileError};
+pub use reconcile::ReconcileError;
 pub use report::{append_entries, list_conflicts, ConflictEntry, DeviceStamp, LogError};

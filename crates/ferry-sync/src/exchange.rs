@@ -441,9 +441,11 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         self.close_stage()
     }
 
-    /// Tree walk + three-way reconciliation + data fetch + execution.
-    /// Evaluates concurrent unpinned edits against last-agreed base, quarantines
-    /// losing versions alongside winners, and records entries into conflicts.jsonl.
+    /// Tree walk + one transactional convergence. The engine (T-04) does
+    /// the three-way diff against last-agreed base, drives this session's
+    /// fetch hook for missing chunks, materializes winners via atomic
+    /// temp-file renames, quarantines losers, appends conflicts.jsonl, and
+    /// commits the agreement ledger on full adoption.
     fn pull_content(
         &mut self,
         man: &RootManifest,
@@ -489,105 +491,72 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             None => None,
         };
 
-        // 3. Three-way reconciliation against base manifest.
-        let plan =
-            ferry_sync_engine::reconcile::reconcile(ferry_sync_engine::reconcile::ReconcileInput {
-                store: self.store,
-                local: &self.cur.manifest,
-                remote: man,
-                base: base_manifest.as_ref(),
-            })
-            .map_err(|e| SessionError::Apply(format!("reconciliation failed: {e}")))?;
-
-        // 4. Collect chunks wanted from plan.fetch
-        let mut wanted_set: BTreeSet<BlobId> = BTreeSet::new();
-        for (chunk_id, _) in &plan.fetch {
-            if self.store.get(BlobKind::DataChunk, chunk_id).is_err() {
-                wanted_set.insert(*chunk_id);
-            }
-        }
-
-        // Fallback to diff chunks for any unreferenced edge cases
-        let diff_changes = ferry_store::diff::diff_manifests(self.store, &self.cur.manifest, man)?;
-        for chunk_id in crate::engine::collect_chunk_ids(&diff_changes) {
-            if self.store.get(BlobKind::DataChunk, &chunk_id).is_err() {
-                wanted_set.insert(chunk_id);
-            }
-        }
-
-        let wanted: Vec<BlobId> = wanted_set.into_iter().collect();
-        self.status(&format!(
-            "SESSION pulling: {} ops, {} conflicts, {} chunks wanted",
-            plan.materialize.len(),
-            plan.conflicts.len(),
-            wanted.len()
-        ));
-
-        // 5. Fetch packs / individual chunks
-        let satisfied = self.fetch_via_packs(&wanted)?;
-        let leftover: Vec<BlobId> = wanted
-            .iter()
-            .filter(|id| !satisfied.contains(*id))
-            .copied()
-            .collect();
-        if !leftover.is_empty() {
-            self.fetch_blobs(BlobKind::DataChunk, &leftover)?;
-        }
-
-        // 6. Partition plan if pin is active
-        let (plan_to_apply, held_count) = match self.host.pin_state_dir() {
-            Some(state_dir) => {
-                let now = crate::engine::now_parts();
-                match ferry_pin::hold_filter(
-                    state_dir,
-                    self.store,
-                    &plan,
-                    &self.cur.manifest,
-                    &hex(&self.est.peer),
-                    &hex(&remote_manifest_id),
-                    now,
-                )
-                .map_err(|e| SessionError::Apply(format!("hold filter: {e}")))?
-                {
-                    ferry_pin::HoldDecision::Pass => (plan, 0),
-                    ferry_pin::HoldDecision::Hold(split) => {
-                        let ledger = ferry_pin::HeldLedger::new(state_dir);
-                        ledger
-                            .append(&hex(&self.est.peer), &split.held)
-                            .map_err(|e| SessionError::Apply(format!("held ledger: {e}")))?;
-                        let count = split.held.len();
-                        (split.apply, count)
-                    }
-                }
-            }
-            None => (plan, 0),
-        };
-
-        // 7. Execute plan against working tree and conflict log
+        // 3. One transactional convergence. The engine owns the whole
+        //    pipeline: reconcile → fetch → materialize → quarantine →
+        //    report → agree. Disjoint field borrows: the wire hook takes
+        //    the session transport; the engine takes the store, tree root,
+        //    and current manifest.
+        let peer_hex = hex(&self.est.peer);
+        let remote_hex = hex(&remote_manifest_id);
         let now = crate::engine::now_parts();
         let state_dir = self
             .host
             .pin_state_dir()
             .unwrap_or_else(|| self.store.store_dir());
-        let stats = ferry_sync_engine::execute(
-            self.store,
-            self.host.tree_root(),
-            &plan_to_apply,
-            Some(state_dir),
-            now,
-        )
-        .map_err(|e| SessionError::Apply(format!("{e}")))?;
+        let result = {
+            let mut wire = WireFetch {
+                io: &mut self.est.io,
+                host: self.host,
+                store: self.store,
+                folder_id: self.folder_id,
+                max_retries: self.max_retries,
+                adverts: &self.peer_adverts,
+            };
+            let mut engine =
+                ferry_sync_engine::ConvergenceEngine::new(self.store, self.host.tree_root())
+                    .state_dir(state_dir)
+                    .at(now)
+                    .fetch_with(&mut wire);
+            if let Some(matcher) = ferry_pin::hold_matcher(state_dir)
+                .map_err(|e| SessionError::Apply(format!("hold filter: {e}")))?
+            {
+                engine = engine.hold(move |p| matcher.matches(p));
+            }
+            engine
+                .converge(&self.cur.manifest, man, base_manifest.as_ref())
+                .map_err(|e| SessionError::Apply(format!("{e}")))?
+        };
 
-        let has_mutations = stats.apply.mutations() > 0;
-        let has_quarantine = !stats.quarantined.is_empty();
-        let has_conflicts = !stats.conflicts.is_empty();
-        let has_local_send = !plan_to_apply.send.is_empty();
+        // 4. Ledger the pin-held decisions for status surfaces and release.
+        let held_count = if result.held.is_empty() {
+            0
+        } else {
+            ferry_pin::record_held(state_dir, &peer_hex, &remote_hex, &result.held, now)
+                .map_err(|e| SessionError::Apply(format!("held ledger: {e}")))?;
+            result.held.len()
+        };
 
-        if has_mutations || has_quarantine || has_conflicts {
+        let mutated = result.apply.mutations() > 0
+            || !result.quarantined.is_empty()
+            || !result.conflicts.is_empty();
+        if mutated {
             self.host.note_tree_mutation();
         }
+        if result.apply.mutations() > 0 || !result.quarantined.is_empty() {
+            self.status(&format!(
+                "SESSION converged: {} mutation(s), {} quarantined, {} conflict(s), {} held",
+                result.apply.mutations(),
+                result.quarantined.len(),
+                result.conflicts.len(),
+                held_count
+            ));
+        }
 
-        let diverged = has_quarantine || has_conflicts || has_local_send;
+        // Divergence (quarantines, conflicts, or content the peer lacks)
+        // means round-2 ids will not be equal: no session-level agreement.
+        let diverged = !result.quarantined.is_empty()
+            || !result.conflicts.is_empty()
+            || !result.send.is_empty();
 
         Ok(PullOutcome {
             held: held_count,
@@ -698,138 +667,15 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
     /// received item AFTER decryption, store only verified bytes, detect
     /// gaps, retry within budget. Missing ids at exhaustion fail cleanly.
     fn fetch_blobs(&mut self, kind: BlobKind, want: &[BlobId]) -> Result<(), SessionError> {
-        let mut outstanding: Vec<BlobId> = want.to_vec();
-        for _round in 0..=self.max_retries {
-            if outstanding.is_empty() {
-                return Ok(());
-            }
-            let mut got: BTreeSet<BlobId> = BTreeSet::new();
-            for group in outstanding.chunks(codec::MAX_REQUEST_ITEMS) {
-                self.est.io.send_frame(
-                    codec::MSG_REQUEST_ITEMS,
-                    RequestItems {
-                        folder_id: self.folder_id,
-                        items: group.iter().map(|id| (kind, *id)).collect(),
-                    }
-                    .encode()?,
-                )?;
-                got.extend(self.read_item_batches(kind)?);
-            }
-            outstanding.retain(|id| !got.contains(id));
-        }
-        if outstanding.is_empty() {
-            Ok(())
-        } else {
-            Err(ProtoError::MissingItems(outstanding.len()).into())
-        }
-    }
-
-    /// Read `ITEM_BATCH` frames until the terminator. Verify-after-decrypt:
-    /// BLAKE3(plaintext) MUST equal the claimed id BEFORE anything touches
-    /// the store; rejects are counted and re-requested by the retry loop.
-    fn read_item_batches(
-        &mut self,
-        expected_kind: BlobKind,
-    ) -> Result<BTreeSet<BlobId>, SessionError> {
-        let mut got = BTreeSet::new();
-        loop {
-            let fb = self.est.io.expect_frame(codec::MSG_ITEM_BATCH)?;
-            let batch = ItemBatch::parse(&fb.payload)?;
-            if batch.items.is_empty() {
-                return Ok(got);
-            }
-            for (kind, id, bytes) in batch.items {
-                if kind != expected_kind {
-                    return Err(ProtoError::ProtocolViolation("wrong blob kind in batch").into());
-                }
-                if *blake3::hash(&bytes).as_bytes() != id {
-                    self.host.bump_rejected();
-                    continue;
-                }
-                self.store.put_blob(kind, &bytes).map_err(wire_store_err)?;
-                got.insert(id);
-            }
-        }
-    }
-
-    /// Pack-granular fetch grouped through the SERVER'S advertised index
-    /// entries. Returns the wanted ids satisfied through packs. Pack
-    /// integrity: BLAKE3(ciphertext) == claimed name BEFORE storing or
-    /// decrypting anything.
-    fn fetch_via_packs(&mut self, wanted: &[BlobId]) -> Result<BTreeSet<BlobId>, SessionError> {
-        let mut satisfied = BTreeSet::new();
-        if wanted.is_empty() {
-            return Ok(satisfied);
-        }
-        let mut by_pack: BTreeMap<PackId, Vec<BlobId>> = BTreeMap::new();
-        for id in wanted {
-            if let Some(e) = self.peer_adverts.get(id) {
-                by_pack.entry(e.pack).or_default().push(*id);
-            }
-        }
-        // Auto granularity: whole pack only when >= 2 wanted chunks share it.
-        let packs: Vec<PackId> = by_pack
-            .into_iter()
-            .filter(|(_, ids)| ids.len() >= 2)
-            .map(|(p, _)| p)
-            .collect();
-
-        let mut landed_pack = false;
-        for group in packs.chunks(codec::MAX_REQUEST_PACKS) {
-            self.est.io.send_frame(
-                codec::MSG_REQUEST_PACKS,
-                RequestPacks {
-                    folder_id: self.folder_id,
-                    packs: group.to_vec(),
-                }
-                .encode()?,
-            )?;
-            loop {
-                let fb = self
-                    .est
-                    .io
-                    .expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
-                if fb.msg_type == codec::MSG_PACK_ITEM {
-                    let item = PackItem::parse(&fb.payload)?;
-                    if *blake3::hash(&item.bytes).as_bytes() != item.pack {
-                        self.host.bump_rejected();
-                        continue;
-                    }
-                    ingest_pack_verified(self.store, &item.pack, &item.bytes)?;
-                    landed_pack = true;
-                    for &id in wanted {
-                        if satisfied.contains(&id) {
-                            continue;
-                        }
-                        if self
-                            .peer_adverts
-                            .get(&id)
-                            .is_some_and(|e| e.pack == item.pack)
-                            && self.store.get(BlobKind::DataChunk, &id).is_ok()
-                        {
-                            satisfied.insert(id);
-                        }
-                    }
-                } else {
-                    let b = ItemBatch::parse(&fb.payload)?;
-                    if b.items.is_empty() {
-                        break;
-                    }
-                    return Err(ProtoError::ProtocolViolation(
-                        "unexpected nonempty batch during pack transfer",
-                    )
-                    .into());
-                }
-            }
-        }
-        if landed_pack {
-            // Delivered packs were folded into the location table (and an
-            // incremental INDEX record appended) at ingest time; flush only
-            // seals locally staged blobs. T-15: no full rebuild on the hot
-            // path.
-            self.store.flush().map_err(wire_store_err)?;
-        }
-        Ok(satisfied)
+        fetch_blobs(
+            &mut self.est.io,
+            self.host,
+            self.store,
+            self.folder_id,
+            self.max_retries,
+            kind,
+            want,
+        )
     }
 
     /// Adopt a fetched/settled manifest: persist the blob, hand the new
@@ -858,6 +704,209 @@ fn hex_short(b: &BlobId) -> String {
 
 fn wire_store_err(e: ferry_store::store::StoreError) -> ProtoError {
     ProtoError::Io(std::io::Error::other(e.to_string()))
+}
+
+/// The convergence engine's fetch hook, wired to this session's transport:
+/// pack-granular first (grouped through the server's advertised index
+/// entries), then individual chunk requests for whatever packs did not
+/// satisfy. Every received item is verified after decryption before it
+/// touches the store.
+struct WireFetch<'x, 'e, H: ExchangeHost> {
+    io: &'x mut SessionIo<'e>,
+    host: &'x H,
+    store: &'x Store,
+    folder_id: [u8; 16],
+    max_retries: u32,
+    adverts: &'x AdvertMap,
+}
+
+impl<H: ExchangeHost> ferry_sync_engine::BlobFetch for WireFetch<'_, '_, H> {
+    fn fetch(
+        &mut self,
+        want: &[(ferry_store::format::BlobId, u64)],
+    ) -> Result<(), ferry_sync_engine::ConvergenceError> {
+        let wanted: Vec<BlobId> = want.iter().map(|(id, _)| *id).collect();
+        let satisfied = fetch_via_packs(
+            self.io,
+            self.host,
+            self.store,
+            self.folder_id,
+            self.adverts,
+            &wanted,
+        )
+        .map_err(session_to_convergence)?;
+        let leftover: Vec<BlobId> = wanted
+            .iter()
+            .filter(|id| !satisfied.contains(*id))
+            .copied()
+            .collect();
+        if !leftover.is_empty() {
+            fetch_blobs(
+                self.io,
+                self.host,
+                self.store,
+                self.folder_id,
+                self.max_retries,
+                BlobKind::DataChunk,
+                &leftover,
+            )
+            .map_err(session_to_convergence)?;
+        }
+        Ok(())
+    }
+}
+
+fn session_to_convergence(e: SessionError) -> ferry_sync_engine::ConvergenceError {
+    ferry_sync_engine::ConvergenceError::Fetch(e.to_string())
+}
+
+/// Fetch blobs of one kind by id: request in batches, verify EVERY
+/// received item AFTER decryption, store only verified bytes, detect
+/// gaps, retry within budget. Missing ids at exhaustion fail cleanly.
+fn fetch_blobs<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    folder_id: [u8; 16],
+    max_retries: u32,
+    kind: BlobKind,
+    want: &[BlobId],
+) -> Result<(), SessionError> {
+    let mut outstanding: Vec<BlobId> = want.to_vec();
+    for _round in 0..=max_retries {
+        if outstanding.is_empty() {
+            return Ok(());
+        }
+        let mut got: BTreeSet<BlobId> = BTreeSet::new();
+        for group in outstanding.chunks(codec::MAX_REQUEST_ITEMS) {
+            io.send_frame(
+                codec::MSG_REQUEST_ITEMS,
+                RequestItems {
+                    folder_id,
+                    items: group.iter().map(|id| (kind, *id)).collect(),
+                }
+                .encode()?,
+            )?;
+            got.extend(read_item_batches(io, host, store, kind)?);
+        }
+        outstanding.retain(|id| !got.contains(id));
+    }
+    if outstanding.is_empty() {
+        Ok(())
+    } else {
+        Err(ProtoError::MissingItems(outstanding.len()).into())
+    }
+}
+
+/// Read `ITEM_BATCH` frames until the terminator. Verify-after-decrypt:
+/// BLAKE3(plaintext) MUST equal the claimed id BEFORE anything touches
+/// the store; rejects are counted and re-requested by the retry loop.
+fn read_item_batches<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    expected_kind: BlobKind,
+) -> Result<BTreeSet<BlobId>, SessionError> {
+    let mut got = BTreeSet::new();
+    loop {
+        let fb = io.expect_frame(codec::MSG_ITEM_BATCH)?;
+        let batch = ItemBatch::parse(&fb.payload)?;
+        if batch.items.is_empty() {
+            return Ok(got);
+        }
+        for (kind, id, bytes) in batch.items {
+            if kind != expected_kind {
+                return Err(ProtoError::ProtocolViolation("wrong blob kind in batch").into());
+            }
+            if *blake3::hash(&bytes).as_bytes() != id {
+                host.bump_rejected();
+                continue;
+            }
+            store.put_blob(kind, &bytes).map_err(wire_store_err)?;
+            got.insert(id);
+        }
+    }
+}
+
+/// Pack-granular fetch grouped through the SERVER'S advertised index
+/// entries. Returns the wanted ids satisfied through packs. Pack
+/// integrity: BLAKE3(ciphertext) == claimed name BEFORE storing or
+/// decrypting anything.
+fn fetch_via_packs<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    folder_id: [u8; 16],
+    adverts: &AdvertMap,
+    wanted: &[BlobId],
+) -> Result<BTreeSet<BlobId>, SessionError> {
+    let mut satisfied = BTreeSet::new();
+    if wanted.is_empty() {
+        return Ok(satisfied);
+    }
+    let mut by_pack: BTreeMap<PackId, Vec<BlobId>> = BTreeMap::new();
+    for id in wanted {
+        if let Some(e) = adverts.get(id) {
+            by_pack.entry(e.pack).or_default().push(*id);
+        }
+    }
+    // Auto granularity: whole pack only when >= 2 wanted chunks share it.
+    let packs: Vec<PackId> = by_pack
+        .into_iter()
+        .filter(|(_, ids)| ids.len() >= 2)
+        .map(|(p, _)| p)
+        .collect();
+
+    let mut landed_pack = false;
+    for group in packs.chunks(codec::MAX_REQUEST_PACKS) {
+        io.send_frame(
+            codec::MSG_REQUEST_PACKS,
+            RequestPacks {
+                folder_id,
+                packs: group.to_vec(),
+            }
+            .encode()?,
+        )?;
+        loop {
+            let fb = io.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
+            if fb.msg_type == codec::MSG_PACK_ITEM {
+                let item = PackItem::parse(&fb.payload)?;
+                if *blake3::hash(&item.bytes).as_bytes() != item.pack {
+                    host.bump_rejected();
+                    continue;
+                }
+                ingest_pack_verified(store, &item.pack, &item.bytes)?;
+                landed_pack = true;
+                for &id in wanted {
+                    if satisfied.contains(&id) {
+                        continue;
+                    }
+                    if adverts.get(&id).is_some_and(|e| e.pack == item.pack)
+                        && store.get(BlobKind::DataChunk, &id).is_ok()
+                    {
+                        satisfied.insert(id);
+                    }
+                }
+            } else {
+                let b = ItemBatch::parse(&fb.payload)?;
+                if b.items.is_empty() {
+                    break;
+                }
+                return Err(ProtoError::ProtocolViolation(
+                    "unexpected nonempty batch during pack transfer",
+                )
+                .into());
+            }
+        }
+    }
+    if landed_pack {
+        // Delivered packs were folded into the location table (and an
+        // incremental INDEX record appended) at ingest time; flush only
+        // seals locally staged blobs. T-15: no full rebuild on the hot
+        // path.
+        store.flush().map_err(wire_store_err)?;
+    }
+    Ok(satisfied)
 }
 
 /// Lineage comparison: newer creation timestamp wins; device id and root

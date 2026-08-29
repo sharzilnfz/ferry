@@ -270,7 +270,7 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                     ferry_pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
                     ferry_pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
                     ferry_pin::PinError::StructuralSplit { .. } => "structural-split",
-                    ferry_pin::PinError::Reconcile(_) => "pin-release-reconcile",
+                    ferry_pin::PinError::Converge(_) => "pin-release-reconcile",
                     _ => "pin_error",
                 };
                 DaemonMessage::Error {

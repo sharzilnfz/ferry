@@ -25,10 +25,8 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
-use ferry_sync_engine::execute;
-use ferry_sync_engine::plan::{ActionPlan, ConflictKind};
-use ferry_sync_engine::reconcile::{reconcile, ReconcileInput};
 use ferry_sync_engine::report::list_conflicts;
+use ferry_sync_engine::{ConvergenceEngine, ConvergenceError, ConvergenceResult};
 use rand::SeedableRng;
 
 const DEV_A: [u8; 32] = [0xA1; 32];
@@ -193,36 +191,50 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-fn plan_on(
+/// The convergence engine's fetch hook, wired to the peer's store (what
+/// the wire serves): every requested chunk lands in the executing device's
+/// store before the engine touches the tree.
+struct PeerFetch<'x> {
+    from: &'x Store,
+    to: &'x Store,
+}
+
+impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
+    fn fetch(&mut self, want: &[(BlobId, u64)]) -> Result<(), ConvergenceError> {
+        for (id, _) in want {
+            if self.to.get(BlobKind::DataChunk, id).is_err() {
+                let b = self
+                    .from
+                    .get(BlobKind::DataChunk, id)
+                    .expect("peer must hold a chunk it advertised");
+                self.to
+                    .put_blob(BlobKind::DataChunk, &b)
+                    .map_err(ConvergenceError::from)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One full convergence on `exec_dev`: remote = `remote_snap`, base as
+/// given. The engine drives its own fetch list against the peer's store.
+fn converge_on(
     exec_dev: &mut Dev,
     local: &SnapshotOutput,
     remote_snap: &SnapshotOutput,
     base: Option<&ferry_store::manifest::RootManifest>,
     other: &Dev,
-) -> ActionPlan {
-    let mut plan = reconcile(ReconcileInput {
-        store: &exec_dev.store,
-        local: &local.manifest,
-        remote: &remote_snap.manifest,
-        base,
-    })
-    .unwrap_or_else(|e| panic!("reconcile failed on {}: {e}", hex(&exec_dev.dev)));
-    // Simulate the wire: pull the blobs this plan needs before executing.
-    for (id, _) in &plan.fetch {
-        if exec_dev.store.get(BlobKind::DataChunk, id).is_err() {
-            let b = other
-                .store
-                .get(BlobKind::DataChunk, id)
-                .expect("peer must hold a chunk it advertised");
-            exec_dev.store.put_blob(BlobKind::DataChunk, &b).unwrap();
-        }
-    }
-    plan.guard_expected = Some(local.manifest.clone());
-    plan
-}
-
-fn run_plan(d: &mut Dev, plan: &ActionPlan) {
-    execute(&d.store, &d.tree, plan, Some(&d.state), NOW).expect("execute must succeed");
+) -> ConvergenceResult {
+    let mut fetch = PeerFetch {
+        from: &other.store,
+        to: &exec_dev.store,
+    };
+    let result = ConvergenceEngine::new(&exec_dev.store, &exec_dev.tree)
+        .state_dir(&exec_dev.state)
+        .at(NOW)
+        .fetch_with(&mut fetch)
+        .converge(&local.manifest, &remote_snap.manifest, base);
+    result.unwrap_or_else(|e| panic!("converge failed on {}: {e}", hex(&exec_dev.dev)))
 }
 
 fn record_agreement(recorder: &mut Dev, peer: [u8; 32], manifest_id: BlobId) {
@@ -322,29 +334,23 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     match order {
         Order::AFirst => {
             transfer_meta(&b.store, &a.store, &sb);
-            let pa = plan_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
-            run_plan(&mut a, &pa);
+            converge_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
             let sa2 = a.snap();
             transfer_meta(&a.store, &b.store, &sa2);
-            let pb = plan_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
-            run_plan(&mut b, &pb);
+            converge_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
         }
         Order::BFirst => {
             transfer_meta(&a.store, &b.store, &sa);
-            let pb = plan_on(&mut b, &sb, &sa, base_b.as_ref(), &a);
-            run_plan(&mut b, &pb);
+            converge_on(&mut b, &sb, &sa, base_b.as_ref(), &a);
             let sb2 = b.snap();
             transfer_meta(&b.store, &a.store, &sb2);
-            let pa = plan_on(&mut a, &sa, &sb2, base_a.as_ref(), &b);
-            run_plan(&mut a, &pa);
+            converge_on(&mut a, &sa, &sb2, base_a.as_ref(), &b);
         }
         Order::Simultaneous => {
             transfer_meta(&a.store, &b.store, &sa);
             transfer_meta(&b.store, &a.store, &sb);
-            let pa = plan_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
-            let pb = plan_on(&mut b, &sb, &sa, base_b.as_ref(), &a);
-            run_plan(&mut a, &pa);
-            run_plan(&mut b, &pb);
+            converge_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
+            converge_on(&mut b, &sb, &sa, base_b.as_ref(), &a);
         }
     }
 
@@ -365,10 +371,8 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         transfer_meta(&b.store, &a.store, &sb2);
         let ba = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
         let bb = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
-        let pa = plan_on(&mut a, &sa2, &sb2, ba.as_ref(), &b);
-        let pb = plan_on(&mut b, &sb2, &sa2, bb.as_ref(), &a);
-        run_plan(&mut a, &pa);
-        run_plan(&mut b, &pb);
+        converge_on(&mut a, &sa2, &sb2, ba.as_ref(), &b);
+        converge_on(&mut b, &sb2, &sa2, bb.as_ref(), &a);
     }
 
     // ---- zero silent data loss on EVERY device ----
@@ -488,11 +492,11 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         total_entries += entries.len();
         for e in &entries {
             let want_kind = match scenario {
-                Scenario::DeleteVsEdit => ConflictKind::DeleteVsEdit,
-                Scenario::AddVsAddDiff => ConflictKind::AddVsAdd,
-                _ => ConflictKind::BothChanged,
+                Scenario::DeleteVsEdit => "delete_vs_edit",
+                Scenario::AddVsAddDiff => "add_vs_add",
+                _ => "both_changed",
             };
-            assert_eq!(e.kind, kind_str(want_kind), "{d_label}");
+            assert_eq!(e.kind, want_kind, "{d_label}");
             assert_eq!(e.path, path);
             assert_eq!(
                 e.winner.device,
@@ -526,14 +530,12 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     transfer_meta(&b.store, &a.store, &fb);
     let ba = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     let bb = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
-    let pa = plan_on(&mut a, &fa, &fb, ba.as_ref(), &b);
-    let pb = plan_on(&mut b, &fb, &fa, bb.as_ref(), &a);
+    let ra = converge_on(&mut a, &fa, &fb, ba.as_ref(), &b);
+    let rb = converge_on(&mut b, &fb, &fa, bb.as_ref(), &a);
     assert!(
-        pa.is_empty() && pb.is_empty(),
-        "converged devices must produce zero-op plans"
+        ra.is_noop() && rb.is_noop(),
+        "converged devices must converge to zero-op results ({ra:?} / {rb:?})"
     );
-    run_plan(&mut a, &pa);
-    run_plan(&mut b, &pb);
     assert_eq!(collect_bytes(&a.tree), collect_bytes(&b.tree));
 
     // ---- agreement advance: record the converged pointer, reload it ----
@@ -542,14 +544,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     assert_eq!(load_agreed(&a, DEV_B).unwrap().manifest_id, fa.manifest_id);
 
     let _ = rounds; // surfaced in diagnostics above
-}
-
-fn kind_str(k: ConflictKind) -> &'static str {
-    match k {
-        ConflictKind::BothChanged => "both_changed",
-        ConflictKind::DeleteVsEdit => "delete_vs_edit",
-        ConflictKind::AddVsAdd => "add_vs_add",
-    }
 }
 
 fn winner_device_hex(direction: Direction, scenario: Scenario) -> String {

@@ -165,38 +165,40 @@ pub fn release(folder: &Path) -> CliResult<Output> {
     // tree AS IT IS NOW (the apply half of earlier rounds may have landed).
     let scan = crate::commands::status::scan_now(&opened)?;
 
-    let plans = pin_mgr
-        .plan_release(&opened.store, &scan.manifest)
-        .map_err(pin_error)?;
-
     let now = ferry_platform::time::now_unix();
-    let mut peers = Vec::with_capacity(plans.len());
+    let mut peers = Vec::new();
     let mut total_quarantined = 0usize;
     let mut total_conflicts = 0usize;
     let mut total_ops = 0usize;
-    for rp in &plans {
-        let stats = ferry_sync_engine::execute(
-            &opened.store,
-            &opened.root,
-            &rp.plan,
-            Some(&state_dir),
-            now,
-        )
-        .map_err(|e| cli("pin-release-execute", e))?;
-        // Clear ONLY after this plan executed: a failure leaves everything
+    for peer_hex in pin_mgr.held_peers().map_err(pin_error)? {
+        // One transactional convergence per peer; the ledger clears only
+        // after ITS convergence succeeded, so a failure leaves everything
         // retryable (re-running recomputes the same decisions).
-        pin_mgr.clear_peer(&rp.device_id).map_err(pin_error)?;
-        total_quarantined += stats.quarantined.len();
-        total_conflicts += stats.conflicts.len();
-        total_ops += stats.apply.mutations();
+        let rp = pin_mgr
+            .release_peer(
+                &peer_hex,
+                &opened.store,
+                &opened.root,
+                &scan.manifest,
+                None,
+                now,
+            )
+            .map_err(pin_error)?;
+        if rp.held_entries == 0 {
+            continue;
+        }
+        pin_mgr.clear_peer(&peer_hex).map_err(pin_error)?;
+        total_quarantined += rp.result.quarantined.len();
+        total_conflicts += rp.result.conflicts.len();
+        total_ops += rp.result.apply.mutations();
         peers.push(json!({
             "device_id": rp.device_id,
             "remote_manifest_id": rp.remote_manifest_id,
             "held_entries": rp.held_entries,
             "held_paths": rp.held_paths,
-            "ops_applied": stats.apply.mutations(),
-            "quarantined": stats.quarantined.len(),
-            "conflicts_recorded": stats.conflicts.len(),
+            "ops_applied": rp.result.apply.mutations(),
+            "quarantined": rp.result.quarantined.len(),
+            "conflicts_recorded": rp.result.conflicts.len(),
         }));
     }
 
@@ -224,7 +226,7 @@ pub fn release(folder: &Path) -> CliResult<Output> {
         "conflicts_total": conflicts_total,
     });
 
-    let human = if plans.is_empty() {
+    let human = if peers.is_empty() {
         String::from("Release    nothing held — no-op\n")
     } else {
         let mut h = String::new();
@@ -356,9 +358,9 @@ fn pin_error(e: ferry_pin::PinError) -> CliError {
             "structural-split",
             "widen or narrow --paths so pinned and unpinned changes do not nest",
         ),
-        E::Reconcile(_) => (
+        E::Converge(_) => (
             "pin-release-reconcile",
-            "three-way reconcile failed during release; nothing was discarded",
+            "three-way convergence failed during release; nothing was discarded",
         ),
         E::Store(_) | E::Io { .. } | E::Manifest(_) => ("store", "check .ferry permissions/disk"),
     };
