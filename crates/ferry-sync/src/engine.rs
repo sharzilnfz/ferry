@@ -1139,7 +1139,10 @@ pub(crate) fn now_parts() -> (i64, u32) {
     (d.as_secs() as i64, d.subsec_nanos())
 }
 
-/// Shared with the v1 exchange driver (`exchange::pull_content`).
+/// Chunk-id collector over a change set. The v1 exchange driver's pull
+/// path now computes its wanted set inside the convergence engine; this
+/// helper remains for the engine's own tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
     let mut seen: HashSet<BlobId> = HashSet::new();
     let mut out = Vec::new();

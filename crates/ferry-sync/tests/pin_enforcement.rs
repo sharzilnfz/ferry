@@ -7,7 +7,7 @@
 //! tree at the shared execution boundary and surfaced in
 //! `.ferry/held/<peer>.jsonl`, while unpinned changes still land. After
 //! the pin ends, the ordinary engine flow carries new peer changes again,
-//! and the offline release planner (`plan_release` + `execute`, the exact
+//! and the offline release path (`release_peer`, the exact
 //! machinery `ferry pin release` drives) recovers the held version from
 //! the bytes fetched during the hold — no peer required.
 
@@ -166,8 +166,9 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     }
 
     // And the HELD version recovers OFFLINE through the documented release
-    // path (plan_release + engine execute — what `ferry pin release` runs),
-    // reconciling against the last-agreed base frozen at pin start.
+    // path (`release_peer` — the exact machinery `ferry pin release`
+    // drives), reconciling against the last-agreed base frozen at pin
+    // start through the transactional convergence engine.
     let store = Store::open(
         &fx._dir.path().join("a/store"),
         [0u8; KEY_LEN],
@@ -189,21 +190,29 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         },
     )
     .unwrap();
-    let plans = ferry_pin::plan_release(&store, &snap.manifest, &bases, &ledger).unwrap();
-    let plan = plans
-        .iter()
-        .find(|p| p.device_id == b_hex)
-        .expect("release plan rebuilt for the pinning peer");
-    assert!(plan.held_paths.contains(&"notes.txt".to_string()));
+    let base_hex = bases.get(&b_hex).expect("pin-start agreement captured");
+    let base_bytes = store
+        .get(
+            ferry_store::format::BlobKind::Manifest,
+            &unhex::<32>(base_hex).unwrap(),
+        )
+        .expect("base manifest blob present");
+    let base = ferry_store::manifest::parse_manifest(&base_bytes).unwrap();
     let (rel_sec, rel_nsec) = ferry_platform_time();
-    let _stats = ferry_sync_engine::execute(
+    let released = ferry_pin::release_peer(
         &store,
         &fx.tree_a(),
-        &plan.plan,
-        Some(&a_ferry),
+        &a_ferry,
+        &snap.manifest,
+        &b_hex,
+        Some(&base),
         (rel_sec, rel_nsec),
     )
-    .expect("release plan executes");
+    .expect("release converges");
+    assert!(
+        released.held_paths.contains(&"notes.txt".to_string()),
+        "release reconciles the held path"
+    );
     assert!(ledger.clear_peer(&b_hex).unwrap());
 
     assert_eq!(

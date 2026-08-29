@@ -1,9 +1,11 @@
-//! The three-way reconciliation engine (ADR-0004).
+//! The three-way reconciliation decision core (ADR-0004).
 //!
 //! Inputs are three manifests — local current, remote current, last-agreed
 //! base (None = initial sync, empty-tree base) — all readable through one
-//! store. Output is an [`ActionPlan`](crate::plan::ActionPlan). This module
-//! never touches the live filesystem; mutation happens in [`crate::execute`].
+//! store. Output is the internal [`ActionPlan`] the [`crate::converge`]
+//! engine executes in one transactional step. This module never touches the
+//! live filesystem, and the plan type is crate-private: callers see only
+//! [`crate::converge::ConvergenceResult`].
 //!
 //! Per-path decision table (states are `Option<EntryState>`; "changed"
 //! means differs from base):
@@ -39,9 +41,7 @@ use ferry_store::manifest::{
 use ferry_store::store::{Store, StoreError};
 use thiserror::Error;
 
-use crate::plan::{
-    ActionPlan, ConflictKind, LoserContent, MaterializeOp, PlannedConflict, QuarantineOp, Side,
-};
+use crate::converge::Side;
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
@@ -59,15 +59,113 @@ pub enum ReconcileError {
     StructuralConflict { ancestor: String, path: String },
 }
 
+/// What made a divergent path a conflict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConflictKind {
+    /// Both sides changed the same path differently from base.
+    BothChanged,
+    /// One side deleted, the other edited; the edit resurrects.
+    DeleteVsEdit,
+    /// No base existed and the sides added different content.
+    AddVsAdd,
+}
+
+/// One planned transition for one path: from `base` (None = absent in the
+/// ancestor) to `result` (None = delete). The convergence engine folds
+/// these into a single change set for the applier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MaterializeOp {
+    pub(crate) path: CompPath,
+    pub(crate) base: Option<EntryState>,
+    pub(crate) result: Option<EntryState>,
+}
+
+/// Where a loser copy's bytes come from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LoserContent {
+    /// The local live FILE is the loser: read its bytes before any
+    /// overwrite, verifying them region-by-region against the chunk list
+    /// the local manifest declares. A mismatch surfaces as `Diverged`
+    /// before anything is written anywhere.
+    LiveLocal { expected_chunks: Vec<(BlobId, u64)> },
+    /// The local live SYMLINK is the loser: recreate it from the target the
+    /// local manifest declares after checking the live link still matches.
+    LiveLocalSymlink { expected_target: String },
+    /// The remote side is the loser: reassemble from blobs already in the
+    /// store (fetched with the plan's `fetch` list when local lacks them).
+    FromStore {
+        kind: ferry_store::diff::EntryKind,
+        exec: bool,
+        mtime_sec: i64,
+        mtime_nsec: u32,
+        chunks: Vec<(BlobId, u64)>,
+        target: Option<String>,
+    },
+}
+
+/// Save one losing version as `path.ferry-conflict.<loser-device>-<ts>`
+/// next to the winner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuarantineOp {
+    pub(crate) path: CompPath,
+    /// The loser device whose short id names the file.
+    pub(crate) loser_device: [u8; 32],
+    /// The loser entry's mtime (names the file AND stamps the copy).
+    pub(crate) loser_mtime_sec: i64,
+    pub(crate) loser_mtime_nsec: u32,
+    /// Exec bit of the loser entry (files only).
+    pub(crate) exec: bool,
+    pub(crate) content: LoserContent,
+}
+
+/// One conflict destined for the structured report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlannedConflict {
+    pub(crate) path: CompPath,
+    pub(crate) kind: ConflictKind,
+    pub(crate) winner: Side,
+    pub(crate) loser: Side,
+    /// Full device ids for the report line.
+    pub(crate) winner_device: [u8; 32],
+    pub(crate) loser_device: [u8; 32],
+    /// Winner entry mtime; always present (a resurrection winner is an
+    /// existing entry).
+    pub(crate) winner_mtime_sec: i64,
+    pub(crate) winner_mtime_nsec: u32,
+    /// Loser mtime; None means the loser is a deletion.
+    pub(crate) loser_mtime_sec: Option<i64>,
+    pub(crate) loser_mtime_nsec: Option<u32>,
+}
+
+/// Everything one reconcile cycle decided. Crate-private: the convergence
+/// engine is the only consumer, and callers never see this shape.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ActionPlan {
+    /// Ordered per-path transitions toward the merged result, executed via
+    /// the ferry-materialize applier guarded against the LOCAL manifest.
+    pub(crate) materialize: Vec<MaterializeOp>,
+    /// Loser copies to write before any overwrite happens.
+    pub(crate) quarantine: Vec<QuarantineOp>,
+    /// Data chunks this device must SEND so the peer converges: chunks the
+    /// merged result references that the remote manifest does not.
+    pub(crate) send: Vec<(BlobId, u64)>,
+    /// Data chunks to FETCH before executing: chunks the plan references
+    /// that the local store may lack (remote-origin winners). Computed as
+    /// "not referenced anywhere in the local manifest"; fetching these from
+    /// the peer first makes execution self-sufficient.
+    pub(crate) fetch: Vec<(BlobId, u64)>,
+    pub(crate) conflicts: Vec<PlannedConflict>,
+}
+
 /// One reconcile computation.
-pub struct ReconcileInput<'a> {
+pub(crate) struct ReconcileInput<'a> {
     /// Store holding both sides' metadata blobs (the transport puts received
     /// manifests and tree nodes here) plus data chunks.
-    pub store: &'a Store,
-    pub local: &'a RootManifest,
-    pub remote: &'a RootManifest,
+    pub(crate) store: &'a Store,
+    pub(crate) local: &'a RootManifest,
+    pub(crate) remote: &'a RootManifest,
     /// Last-agreed ancestor; `None` means initial sync against an empty tree.
-    pub base: Option<&'a RootManifest>,
+    pub(crate) base: Option<&'a RootManifest>,
 }
 
 /// What one side's diff says about one path.
@@ -179,8 +277,8 @@ fn collect_chunks(state: &EntryState, out: &mut BTreeMap<BlobId, u64>) {
     }
 }
 
-/// Run one reconciliation and produce the executable plan.
-pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError> {
+/// Run one reconciliation and produce the internal execution plan.
+pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError> {
     let ReconcileInput {
         store,
         local,
@@ -341,7 +439,6 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
                     winner_mtime_nsec: w_state.map_or(0, |s| s.mtime_nsec),
                     loser_mtime_sec: lost.as_ref().map(|s| s.mtime_sec),
                     loser_mtime_nsec: lost.as_ref().map(|s| s.mtime_nsec),
-                    quarantined_as: None,
                 });
                 match winner {
                     Side::Local => {
@@ -553,7 +650,6 @@ pub fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError
         send: send.into_iter().collect(),
         fetch: fetch.into_iter().collect(),
         conflicts,
-        guard_expected: Some(local.clone()),
     })
 }
 
@@ -640,9 +736,12 @@ mod tests {
         let p = pair(&build, &build);
         let plan = plan_on_a(&p);
         assert!(
-            plan.is_empty(),
-            "same content, same metadata → nothing anywhere (got {:?})",
-            (&plan.materialize, &plan.send, &plan.fetch, &plan.conflicts)
+            plan.materialize.is_empty()
+                && plan.quarantine.is_empty()
+                && plan.send.is_empty()
+                && plan.fetch.is_empty()
+                && plan.conflicts.is_empty(),
+            "same content, same metadata → nothing anywhere (got {plan:?})"
         );
     }
 

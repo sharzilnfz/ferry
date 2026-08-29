@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ferry_store::format::hex as hex_str;
 use ferry_store::manifest::RootManifest;
 use ferry_store::store::Store;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,7 @@ use crate::error::PinError;
 use crate::held::{distinct_paths, HeldEntry, HeldLedger};
 use crate::matcher::PathMatcher;
 use crate::pin::{PinRecord, PinStore, PIN_FORMAT_VERSION};
-use crate::release::{plan_release, ReleasePeerPlan};
+use crate::release::ReleasePeerPlan;
 
 /// Unified summary of active pin status and per-peer held sets.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,85 +221,46 @@ impl PinManager {
         self.store.mark_released()
     }
 
-    /// Plan release reconciliation for a specific peer.
+    /// Release one peer's held set through the transactional convergence
+    /// engine, reconciling the peer's freshest held manifest against the
+    /// tree as it is now. The caller clears the peer's ledger
+    /// ([`PinManager::clear_peer`]) after `Ok` — a failed release leaves
+    /// everything retryable.
     pub fn release_peer(
         &self,
-        peer: &[u8; 32],
+        peer_hex: &str,
         store: &Store,
-        agreed_base: Option<&RootManifest>,
+        root: &Path,
         local_manifest: &RootManifest,
+        agreed_base: Option<&RootManifest>,
+        now: (i64, u32),
     ) -> Result<ReleasePeerPlan, PinError> {
-        let peer_hex = hex_str(peer);
-        let entries = self.ledger.load_peer(&peer_hex)?;
-        if entries.is_empty() {
-            return Ok(ReleasePeerPlan {
-                device_id: peer_hex,
-                remote_manifest_id: String::new(),
-                held_entries: 0,
-                held_paths: Vec::new(),
-                plan: ferry_sync_engine::ActionPlan::default(),
-            });
-        }
-        let manifest_hex = entries
-            .last()
-            .expect("non-empty checked above")
-            .remote_manifest_id
-            .clone();
-        let remote = crate::release::load_manifest(
-            store,
-            &manifest_hex,
-            &peer_hex,
-            format!("held by peer {peer_hex}"),
-        )?;
         let base_owned = match agreed_base {
             Some(_) => None,
             None => {
                 let rec = self.store.load()?;
-                if let Some(r) = rec {
-                    if let Some(b_hex) = r.base_agreements.get(&peer_hex) {
-                        Some(crate::release::load_manifest(
+                rec.as_ref().and_then(|r| {
+                    r.base_agreements.get(peer_hex).and_then(|b_hex| {
+                        crate::release::load_manifest(
                             store,
                             b_hex,
-                            &peer_hex,
+                            peer_hex,
                             "captured as last-agreed at pin start".to_string(),
-                        )?)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+                        )
+                        .ok()
+                    })
+                })
             }
         };
-        let effective_base = agreed_base.or(base_owned.as_ref());
-        let plan = ferry_sync_engine::reconcile::reconcile(
-            ferry_sync_engine::reconcile::ReconcileInput {
-                store,
-                local: local_manifest,
-                remote: &remote,
-                base: effective_base,
-            },
-        )?;
-        Ok(ReleasePeerPlan {
-            device_id: peer_hex,
-            remote_manifest_id: manifest_hex,
-            held_entries: entries.len(),
-            held_paths: distinct_paths(&entries),
-            plan,
-        })
-    }
-
-    /// Build release plans for every peer with a held ledger.
-    pub fn plan_release(
-        &self,
-        store: &Store,
-        local_manifest: &RootManifest,
-    ) -> Result<Vec<ReleasePeerPlan>, PinError> {
-        let bases = match self.store.load()? {
-            Some(rec) => rec.base_agreements,
-            None => BTreeMap::new(),
-        };
-        plan_release(store, local_manifest, &bases, &self.ledger)
+        crate::release::release_peer(
+            store,
+            root,
+            &self.state_dir,
+            local_manifest,
+            peer_hex,
+            agreed_base.or(base_owned.as_ref()),
+            now,
+        )
     }
 
     /// Clear one peer's held ledger after successful release.
@@ -430,17 +390,24 @@ mod tests {
     }
 
     #[test]
-    fn release_peer_and_plan_release() {
+    fn release_peer_noops_without_ledger() {
         let rig = Rig::rig_one_file();
         let mgr = PinManager::new(&rig.a_state);
+        let peer = ferry_store::format::hex(&rig.b_dev);
 
-        // Empty release
-        let empty_plan = mgr
-            .release_peer(&rig.b_dev, &rig.a.store, None, &rig.local_manifest)
+        let out = mgr
+            .release_peer(
+                &peer,
+                &rig.a.store,
+                &rig.a.tree,
+                &rig.local_manifest,
+                None,
+                (1_787_574_896, 0),
+            )
             .unwrap();
-        assert_eq!(empty_plan.held_entries, 0);
+        assert_eq!(out.held_entries, 0);
 
-        let plans = mgr.plan_release(&rig.a.store, &rig.local_manifest).unwrap();
+        let plans = mgr.held_peers().unwrap();
         assert!(plans.is_empty());
     }
 
