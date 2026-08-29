@@ -11,6 +11,11 @@ fn test_restore_terminal_writer_emits_expected_escapes() {
     // Check that buffer contains crossterm escape sequences for leave alternate screen,
     // disable mouse capture, and show cursor.
     let output = String::from_utf8_lossy(&buffer);
+    eprintln!(
+        "[DEBUG-b2] TERM={:?} buffer={:?}",
+        std::env::var("TERM"),
+        output
+    );
     // Alternate screen leave sequence: \x1b[?1049l
     assert!(
         output.contains("\x1b[?1049l"),

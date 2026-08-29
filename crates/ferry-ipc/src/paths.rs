@@ -8,6 +8,7 @@ pub const DEFAULT_SOCKET_FILENAME: &str = "daemon.sock";
 /// Default Windows named pipe prefix.
 pub const DEFAULT_WINDOWS_PIPE_PREFIX: &str = r"\\.\pipe\ferry";
 
+#[cfg(not(windows))]
 fn ferry_home_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
         let p = PathBuf::from(&v);
