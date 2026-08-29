@@ -1,21 +1,21 @@
-# The Complete Beginner's Guide to Ferry: Architecture, Concepts & Manual UI Testing
+# The Complete Guide to Ferry: Architecture, Concepts and Manual Testing
 
-Welcome! If this is your first time working with a Rust-based distributed system, don't worry. This guide explains **what everything is**, **where everything lives**, **why each command exists**, and **which terminal pane to run each command in**.
-
----
-
-## 1. The Big Picture: What is Ferry?
-
-Think of **Ferry** as your own private, encrypted **Dropbox + AirDrop** designed specifically for developers.
-
-- **The Problem**: You write code on your **Mac**, but want to test or compile on your **Arch Linux laptop** without having to commit half-finished work to Git or upload sensitive files to a third-party cloud.
-- **The Solution**: Ferry watches a designated folder on your Mac and the matching folder on your Arch Linux laptop. When you save a file on your Mac, Ferry encrypts the changed pieces and beams them directly to your Arch laptop over your private **Tailscale** mesh network in milliseconds.
+Welcome to Ferry. This guide explains how Ferry works, where each component lives, and how to verify every feature across macOS and Linux.
 
 ---
 
-## 2. System Topology: Where Does Everything Live?
+## 1. The Big Picture
 
-You have two physical computers connected over Tailscale:
+Ferry is a fast, encrypted, peer-to-peer folder synchronization engine built for developers.
+
+- **The Problem**. You write code on macOS, but compile and run tests on an Arch Linux laptop. Moving code with Git commits or third-party clouds adds latency and leaks secrets.
+- **The Solution**. Ferry continuously watches a local workspace directory. When you edit a file, Ferry splits changes into content-addressed chunks, encrypts them with a shared folder key, and beams them over your private Tailscale network in milliseconds.
+
+---
+
+## 2. System Topology and Architecture
+
+Ferry connects two physical or virtual machines directly over Tailscale WireGuard tunnels.
 
 ```
 ┌────────────────────────────────────────────────────────┐   Tailscale WireGuard Mesh   ┌────────────────────────────────────────────────────────┐
@@ -29,23 +29,27 @@ You have two physical computers connected over Tailscale:
 └────────────────────────────────────────────────────────┘                              └────────────────────────────────────────────────────────┘
 ```
 
-### Your Herdr Screen Setup:
-- **Left Pane**: Connected to your **Arch Linux** machine via SSH (`sharzil@sharzilx`).
-- **Right Pane**: Connected to your **Mac** local shell.
+### Herdr Terminal Setup
+- **Left Pane**. Connected to your Arch Linux machine over SSH (`sharzil@sharzilx`).
+- **Right Pane**. Connected to your local macOS shell.
 
-### What is inside a Synced Folder?
-When you initialize a folder with Ferry (e.g. `/tmp/ferry-sync-demo`), Ferry creates a hidden `.ferry/` folder:
-- `.ferry/identity`: Your device's cryptographic keypair (Ed25519 public/private keys).
-- `.ferry/config.toml`: The settings, folder ID, and trusted peer list.
-- `.ferry/store/`: The content-addressable chunk store (where encrypted file blocks live).
-- `.ferry/ignore`: Files that Ferry should ignore (like `.git`, `node_modules/`, `target/`).
-- `.ferry/daemon.sock`: An IPC Unix socket that Ferry's UIs use to talk to the running background engine.
+### Centralized Device Daemon and Folder Structure
+Ferry runs a centralized device daemon per user.
+- `$FERRY_HOME/daemon.sock`. IPC Unix domain socket used by CLI and frontends to communicate with the supervisor.
+- `$FERRY_HOME/folders.toml`. Registry recording all synced folders, folder IDs, and root paths.
+- `$FERRY_HOME/identity`. The device Ed25519 cryptographic keypair.
+
+Inside each synced folder (e.g. `/tmp/ferry-sync-demo`), Ferry maintains a hidden `.ferry/` state directory:
+- `.ferry/config`. Cryptographic header containing the encrypted Folder Master Key (FMK).
+- `.ferry/settings.toml`. Folder-specific synchronization settings and ignore rules.
+- `.ferry/store/`. Content-addressable chunk store.
+- `.ferry/pin-state.json`. Active session hold and pinning status.
 
 ---
 
-## 3. The 3 UI Faces Explained
+## 3. The Three UI Faces
 
-Ferry has one underlying engine (the **Daemon**) and three different frontends:
+Ferry provides three frontend interfaces connected to the daemon over IPC:
 
 ```
                                ┌────────────────────────────────┐
@@ -61,96 +65,78 @@ Ferry has one underlying engine (the **Daemon**) and three different frontends:
        └───────────────┘               └───────────────┘               └───────────────┘
 ```
 
-1. **Desktop GUI (`ferry ui --gui`)**:
-   - Built with **`egui`** (a native Rust immediate-mode GUI framework).
-   - Opens as a native macOS window on your Mac.
-   - Shows a glowing status beacon (**Green** = Synced, **Blue** = Syncing, **Purple** = Pinned/Holding, **Red** = Conflict), peer fleet table, and clickable modals.
-2. **Terminal TUI (`ferry tui`)**:
-   - Built with **`ratatui`** (a Rust terminal UI library).
-   - Runs directly inside your terminal screen (perfect for remote SSH on Arch or inside Herdr).
-   - Shows live transfer progress bars, recent activity log, and supports keyboard hotkeys (`C`, `P`, `R`, `Q`).
-3. **Web Dashboard (`ferry ui --web`)**:
-   - Built with **`axum`** (a Rust async web server).
-   - Serves an embedded single-page application with dark Obsidian glass styling.
-   - Uses **Server-Sent Events (SSE)** so the webpage updates live without needing page refreshes.
-   - Protected by a single-use cryptographically random token in the URL.
+1. **Desktop GUI (`ferry ui --gui`)**. Native macOS/Linux desktop application built with `egui`. Features Obsidian Dark styling, glowing status beacons, peer table, session pinning controls, and native OS folder selection dialogs via `rfd`.
+2. **Terminal TUI (`ferry tui`)**. Retro terminal dashboard built with `ratatui`. Features live throughput meters, activity logs, keyboard shortcuts (`O`, `P`, `R`, `C`, `Q`), and an in-terminal filesystem browser.
+3. **Web Dashboard (`ferry ui --web`)**. Browser interface built with `axum`. Delivers real-time updates via Server-Sent Events (SSE), directory exploration, and token-based URL authentication.
 
 ---
 
 ## 4. Step-by-Step Hands-On Tutorial
 
-Let's test everything from scratch in 10 clear, easy steps.
+Follow these steps to test Ferry from scratch.
 
 ---
 
-### Step 1: Create the Test Folder on Both Machines
+### Step 1: Prepare the Test Environment
 
-We will create a clean test folder `/tmp/ferry-sync-demo` on both your Mac and your Arch laptop.
+Create a clean demo workspace directory on both computers.
 
-#### 👉 Run on Mac [Right Pane]:
+#### Run on Mac (Right Pane):
 ```bash
-# 1. Go to your repo folder
 cd /Users/sharzilnafis/Projects/dumps/idea2
-
-# 2. Create the test folder
 mkdir -p /tmp/ferry-sync-demo
 ```
 
-#### 👉 Run on Arch Linux [Left Pane]:
+#### Run on Arch Linux (Left Pane):
 ```bash
 mkdir -p /tmp/ferry-sync-demo
 ```
 
 ---
 
-### Step 2: Initialize Ferry in the Test Folder
+### Step 2: Initialize Ferry Workspace on Mac
 
-This command generates your device's cryptographic identity and local database.
+Initialize the folder on your Mac. This creates the `.ferry/` repository identity and chunk store.
 
-#### 👉 Run on Mac [Right Pane]:
+#### Run on Mac (Right Pane):
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry init /tmp/ferry-sync-demo
 ```
 
-#### 👉 Run on Arch Linux [Left Pane]:
-```bash
-~/.cargo/bin/ferry init /tmp/ferry-sync-demo
-```
-
 ---
 
-### Step 3: Pair the Mac and Arch Laptop (30-Second Seamless Onboarding)
+### Step 3: 30-Second Seamless Onboarding (Zero-File Pairing)
 
-Ferry provides a **zero-file 30-second rendezvous flow** with human-friendly 6-character pairing codes, secret scanning, and automated mutual onboarding.
+Ferry provides a zero-file rendezvous workflow. You share a 6-character code instead of copying manual files.
 
 ```
        Mac (Sharer / Initiator)                           Arch Linux (Joiner / Acceptor)
    ┌──────────────────────────────┐                     ┌──────────────────────────────┐
    │ 1. `ferry share <folder>`    │                     │                              │
    │    • Scans for secrets       │                     │                              │
-   │    • Emits short code & QR   │ ── Tell code ─────► │ 2. `ferry join <code> <dir>` │
-   │      (e.g., 7KQ4-2M)         │    (over voice,     │    • Auto-provisions store   │
-   │                              │     chat, or QR)    │    • Adopts folder ID & FMK  │
+   │    • Emits short code & QR   │ ── Share code ────► │ 2. `ferry join <code> <dir>` │
+   │      (e.g., 7KQ4-2M)         │    (voice / chat)   │    • Auto-provisions store   │
+   │                              │                     │    • Adopts folder ID & FMK  │
    └──────────────────────────────┘                     └──────────────────────────────┘
                   ▼                                                    ▼
        [ Shared Folder Master Key (FMK) & Identical Folder ID Established in <30s ]
 ```
 
-#### Action 3.1: Share the folder on Mac [Right Pane]:
+#### Action 3.1: Share the folder on Mac (Right Pane):
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry share /tmp/ferry-sync-demo
 ```
-*(Ferry runs an automatic credential/secret scan, emits a short 6-character share code like `7KQ4-2M`, displays an ASCII QR code, and registers the session.)*
+Ferry runs a secret scan, prints an ASCII QR code, and outputs a 6-character pairing code (such as `7KQ4-2M`).
 
-#### Action 3.2: Join the folder on Arch Linux [Left Pane]:
+#### Action 3.2: Join the folder on Arch Linux (Left Pane):
 Pass the code displayed on your Mac to `ferry join`:
 ```bash
 ~/.cargo/bin/ferry join 7KQ4-2M /tmp/ferry-sync-demo
 ```
-*(Arch adopts the folder identity, imports the encrypted folder master key, initializes its local database, and prints `Joined <folder_id> at /tmp/ferry-sync-demo`!)*
+Arch Linux auto-provisions its local store, imports the folder identity and encryption key, and confirms the join.
 
-#### Action 3.3: Verify Shared Identity:
-Run this on both panes:
+#### Action 3.3: Verify Identical Folder IDs:
+Run status on both machines:
 ```bash
 # On Mac:
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry status /tmp/ferry-sync-demo
@@ -158,37 +144,33 @@ Run this on both panes:
 # On Arch:
 ~/.cargo/bin/ferry status /tmp/ferry-sync-demo
 ```
-👉 *Both computers will report the exact same `folder_id`!*
+Both machines report the exact same `folder_id`.
 
 ---
 
-### Step 4: Start the Sync Daemons (Live P2P Connection)
+### Step 4: Start Background Sync Daemons
 
-Now we turn on continuous background synchronization.
+Turn on peer-to-peer synchronization between both devices.
 
-#### 👉 Run on Mac [Right Pane]:
-Tell Mac to listen on port `44001`:
+#### Run on Mac (Right Pane):
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry daemon --listen 0.0.0.0:44001 /tmp/ferry-sync-demo
 ```
-*(You will see: `[INFO] Ferry daemon listening on 0.0.0.0:44001`)*
 
-#### 👉 Run on Arch Linux [Left Pane]:
-Tell Arch to connect to your Mac's Tailscale IP (`100.91.38.24`):
+#### Run on Arch Linux (Left Pane):
+Connect Arch Linux to your Mac Tailscale IP (`100.91.38.24`):
 ```bash
 ~/.cargo/bin/ferry daemon --peer-url 100.91.38.24:44001 /tmp/ferry-sync-demo
 ```
-*(You will see: `[INFO] Connected to peer 100.91.38.24:44001`)*
-
-**Congratulations! Your two machines are now live-syncing!**
+Both daemons confirm peer handshake and enter active synchronization.
 
 ---
 
-### Step 5: Test Live File Syncing
+### Step 5: Verify Live File Synchronization
 
-Open another terminal or split pane on Mac and Arch to play with files:
+Open new terminal splits to test file propagation.
 
-#### Test 5.1: Create a file on Mac and watch it appear on Arch:
+#### Test 5.1: Create a file on Mac and verify on Arch:
 ```bash
 # On Mac:
 echo "Hello from MacBook Air!" > /tmp/ferry-sync-demo/hello.txt
@@ -196,9 +178,9 @@ echo "Hello from MacBook Air!" > /tmp/ferry-sync-demo/hello.txt
 # On Arch:
 cat /tmp/ferry-sync-demo/hello.txt
 ```
-👉 *The file appears immediately on Arch!*
+The file appears immediately on Arch Linux.
 
-#### Test 5.2: Create a deep folder tree on Arch and watch it appear on Mac:
+#### Test 5.2: Create nested source code on Arch and verify on Mac:
 ```bash
 # On Arch:
 mkdir -p /tmp/ferry-sync-demo/backend/src
@@ -207,11 +189,11 @@ echo 'pub fn add(a: i32, b: i32) -> i32 { a + b }' > /tmp/ferry-sync-demo/backen
 # On Mac:
 cat /tmp/ferry-sync-demo/backend/src/lib.rs
 ```
-👉 *The Rust file appears on Mac!*
+The Rust source file appears immediately on Mac.
 
-#### Test 5.3: Sync a large binary file:
+#### Test 5.3: Sync large binary payload:
 ```bash
-# On Mac (create a 5MB random binary):
+# On Mac (generate 5MB binary):
 dd if=/dev/urandom of=/tmp/ferry-sync-demo/large_asset.bin bs=1M count=5
 
 # On Arch (verify hash):
@@ -220,32 +202,26 @@ sha256sum /tmp/ferry-sync-demo/large_asset.bin
 
 ---
 
-### Step 6: Test UI Face 1 — The Desktop GUI App (`egui`) & Folder Picker
+### Step 6: Test Desktop GUI and Native Folder Picker
 
-In a new Mac terminal window or pane, launch the GUI:
+Launch the desktop GUI on your Mac:
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry ui --gui /tmp/ferry-sync-demo
 ```
 
-#### What to observe & test:
-1. A sleek **Obsidian Dark** desktop window opens.
-2. At the top right, see the **Status Beacon** glowing **GREEN (SYNCED)**.
-3. In the **Connected Peers** table, see your Arch Linux laptop listed as **online**.
-4. **Folder Picker & Add Folder**:
-   - Click **Open Folder / Pick Directory** to trigger the interactive folder browser modal.
-   - Navigate directories with instant breadcrumb path updates and single-click selection. Already synced folders are dimmed with an `already synced` badge.
-5. Click **Pin Session** at the top:
-   - Type `backend/**` in the path input.
-   - Click Confirm.
-   - Watch the Status Beacon turn **PURPLE (HOLDING)**! This declares to your Arch laptop that you are currently editing files under `backend/` and holds remote changes.
-6. Click **Pair Device / Share** to view the 6-character short code and ASCII QR code generator modal.
+#### What to observe and test:
+1. An Obsidian Dark desktop window opens.
+2. The Status Beacon at the top right glows **GREEN (SYNCED)**.
+3. The peer table lists your Arch Linux laptop as online.
+4. Click **Select Folder** at the top right. A native OS directory selection dialog opens. Choosing a folder registers it in Ferry.
+5. Click **Pin Session**. Enter `backend/**` and confirm. The beacon turns **PURPLE (HOLDING)**. Remote inbound writes to `backend/` are held while you edit.
+6. Click **Pair Device** to display the pairing code modal and ASCII QR code.
 
 ---
 
-### Step 7: Test UI Face 2 — The Interactive Terminal TUI (`ratatui`) & In-TUI Picker
+### Step 7: Test Terminal TUI and In-TUI File Explorer
 
-On your Arch Linux machine (or in a Mac terminal), launch the TUI:
-
+Launch the retro terminal dashboard on Arch Linux or Mac:
 ```bash
 # On Arch Linux:
 ~/.cargo/bin/ferry tui /tmp/ferry-sync-demo
@@ -270,65 +246,83 @@ On your Arch Linux machine (or in a Mac terminal), launch the TUI:
  [O] Open/Pick  [P] Pin  [R] Rescan  [C] Conflicts  [Q] Quit
 ```
 
-#### Interactive Keys to try:
-- Press **`O`**: Opens the interactive in-TUI Folder Picker modal.
-  - Use **`Up`/`Down`** arrows to browse directories.
-  - Type characters for instant fuzzy/substring search filtering.
-  - Press **`Enter`** to drill into a directory.
-  - Press **`Space`** to select the highlighted directory (dimmed if already synced).
-  - Press **`Esc`** to clear filter or exit the picker modal.
-- Press **`P`**: Instantly toggles Session Pinning on/off. Notice the badge change to `[ PINNED ]`.
-- Press **`R`**: Forces a fast full re-scan of the directory.
-- Press **`C`**: Opens the Conflicts inspection popup.
-- Press **`Esc`**: Closes the popup.
-- Press **`Q`**: Safely quits the TUI and cleanly restores your terminal screen.
+#### Keyboard actions to test:
+- Press **`O`**. Opens the interactive in-terminal Folder Picker modal.
+  - Use **`Up`/`Down`** arrows to browse directory items.
+  - Type characters for real-time substring filtering.
+  - Press **`Enter`** to descend into a folder.
+  - Press **`Space`** to select the active folder. Already synced directories are marked with an `already synced` badge.
+  - Press **`Esc`** to dismiss the picker modal.
+- Press **`P`**. Toggles Session Pinning. The header updates to `[ PINNED ]`.
+- Press **`R`**. Triggers an immediate rescan of the workspace.
+- Press **`C`**. Opens the Conflict inspection modal.
+- Press **`Q`**. Quits the TUI and restores terminal state.
 
 ---
 
-### Step 8: Test UI Face 3 — The Web Dashboard
+### Step 8: Test Web Dashboard with Live SSE Updates
 
-Launch the web dashboard on Mac:
+Launch the web interface on Mac:
 ```bash
 /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry ui --web --port 8080 /tmp/ferry-sync-demo
 ```
-*(Your Mac will automatically open Safari or Chrome to `http://127.0.0.1:8080/?token=...`)*
+Your browser opens automatically to `http://127.0.0.1:8080/?token=...`.
 
 #### What to test:
-1. Look at the live status numbers (Files, Scanned Bytes, Active Peers).
-2. Test the Web Folder Browser / Picker interface to inspect directories without leaving the browser.
-3. Create a new file in `/tmp/ferry-sync-demo/test.txt` from your terminal.
-4. Look at your browser: **it updates automatically without you pressing Refresh!** (Powered by Server-Sent Events).
-5. Try opening `http://127.0.0.1:8080/api/status` in an incognito window without the token — you will receive a `403 Forbidden` error because Ferry secures every API call.
+1. Verify live storage statistics and connected peer status.
+2. Test the Web Folder Browser to explore directories from your browser.
+3. Write a new file to `/tmp/ferry-sync-demo/test.txt` in your terminal. Watch the web dashboard update automatically without page refreshes through Server-Sent Events.
+4. Open `http://127.0.0.1:8080/api/status` in an incognito window without the token. The server returns `403 Forbidden` because API endpoints require authentication tokens.
 
 ---
 
-### Step 9: How to Test Conflict Resolution
+### Step 9: Test Conflict Handling and Quarantine
 
-What happens if you edit the exact same line on both computers at the exact same second?
+Verify how Ferry handles concurrent edits safely without data loss.
 
-1. Stop the daemons on both sides (`Ctrl+C`).
-2. On Mac:
+1. Stop both daemons with `Ctrl+C`.
+2. Edit the same file on Mac:
    ```bash
-   echo "Mac version of title" > /tmp/ferry-sync-demo/title.txt
+   echo "Mac version" > /tmp/ferry-sync-demo/conflict_test.txt
    ```
-3. On Arch:
+3. Edit the same file on Arch:
    ```bash
-   echo "Arch version of title" > /tmp/ferry-sync-demo/title.txt
+   echo "Arch version" > /tmp/ferry-sync-demo/conflict_test.txt
    ```
 4. Restart both daemons.
-5. Ferry automatically resolves the conflict deterministically (latest timestamp wins), but **never deletes your data**. The losing version is safely quarantined as:
-   `/tmp/ferry-sync-demo/title.txt.ferry-conflict.<device-id>-<timestamp>`
-6. Run:
+5. Ferry deterministically selects the winner based on timestamp. The losing version is quarantined under:
+   `/tmp/ferry-sync-demo/conflict_test.txt.ferry-conflict.<device-id>-<timestamp>`
+6. Inspect conflicts via CLI:
    ```bash
    /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry conflicts list /tmp/ferry-sync-demo
    ```
-7. Open the TUI (`ferry tui`) or GUI (`ferry ui --gui`) and see the **RED CONFLICT** beacon and inspect the conflict report!
+7. Open the GUI or TUI. The status beacon turns **RED (CONFLICT)** and displays the conflict entry.
 
 ---
 
-### Step 10: Clean Up
+### Step 10: Test Secret Risk Gating
 
-When you are done testing, stop the running daemons and delete the test sandbox:
+Ferry scans for leaked API keys, tokens, and private keys before sharing.
+
+1. Create a dummy secret file:
+   ```bash
+   echo "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLEKEY" > /tmp/ferry-sync-demo/.env
+   ```
+2. Try sharing the folder:
+   ```bash
+   /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry share /tmp/ferry-sync-demo
+   ```
+3. Ferry refuses to emit a pairing code and prints a redacted warning of the detected secret.
+4. Add the file to ignore rules or pass `--i-know` to proceed:
+   ```bash
+   /Users/sharzilnafis/Projects/dumps/idea2/target/release/ferry ignore add '.env' /tmp/ferry-sync-demo
+   ```
+
+---
+
+### Step 11: Clean Up
+
+Stop background processes and remove temporary test files:
 
 ```bash
 # On Mac:
@@ -346,17 +340,17 @@ rm -rf /tmp/ferry-sync-demo
 
 ## 5. Command Quick Reference
 
-| Command | Where to Run | What it Does |
+| Command | Environment | Description |
 | :--- | :--- | :--- |
-| `ferry init <folder>` | Mac & Arch | Initializes cryptographic identity & store |
-| `ferry share <folder>` | Mac (Sharer) | Scans for secrets and generates 30s pairing code & ASCII QR |
-| `ferry join <code> <dir>` | Arch (Joiner) | Adopts folder, initializes store, and joins sync session |
-| `ferry daemon --listen 0.0.0.0:44001 <folder>` | Mac | Runs background sync server listening for connections |
-| `ferry daemon --peer-url <IP:44001> <folder>` | Arch | Connects to the listener daemon over Tailscale |
-| `ferry ui --gui <folder>` | Mac | Launches native desktop window (egui) with folder picker |
+| `ferry init <folder>` | Mac and Arch | Initializes cryptographic folder identity and store |
+| `ferry share <folder>` | Mac (Sharer) | Scans for secrets and generates 30s pairing code and ASCII QR |
+| `ferry join <code> <dir>` | Arch (Joiner) | Adopts folder, provisions store, and establishes pairing |
+| `ferry daemon --listen 0.0.0.0:44001 <folder>` | Mac | Runs sync server listening for peer connections |
+| `ferry daemon --peer-url <IP:44001> <folder>` | Arch | Connects to peer listener daemon over Tailscale |
+| `ferry ui --gui <folder>` | Mac | Launches native desktop window (egui) with OS folder picker |
 | `ferry tui <folder>` | Mac or Arch | Launches retro terminal dashboard (ratatui) with in-TUI picker |
-| `ferry ui --web --port 8080 <folder>` | Mac or Arch | Launches browser dashboard with live SSE updates & web picker |
-| `ferry pin start --paths '<glob>' <folder>` | Mac or Arch | Holds remote writes for your active coding session |
+| `ferry ui --web --port 8080 <folder>` | Mac or Arch | Launches browser dashboard with live SSE updates and web picker |
+| `ferry pin start --paths '<glob>' <folder>` | Mac or Arch | Holds remote writes during active editing |
 | `ferry pin stop <folder>` | Mac or Arch | Releases session hold |
-| `ferry conflicts list <folder>` | Mac or Arch | Displays quarantined conflict files |
-| `ferry status <folder>` | Mac or Arch | Prints current engine state and sync statistics |
+| `ferry conflicts list <folder>` | Mac or Arch | Lists quarantined conflict files |
+| `ferry status <folder>` | Mac or Arch | Displays current engine status and transfer metrics |
