@@ -126,7 +126,8 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             timeout_secs,
         } => match accept {
             None => {
-                let opened = ferry_cli::folder::open_folder(&PathBuf::from("."))?;
+                let p = dir.clone().unwrap_or_else(|| PathBuf::from("."));
+                let opened = ferry_cli::folder::open_folder(&p)?;
                 let identity = ferry_cli::ensure_identity()?;
                 ferry_cli::commands::pairing::initiate(&opened, &identity, *timeout_secs)
             }
