@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ferry_ipc::{
-    backend::{FakeBackend, UiBackend},
+    backend::{FakeBackend, InventoryDomain, SessionDomain, UiBackend},
     pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode},
     ClientCommand, DaemonMessage, DirectoryEntry, FolderRecord, ListDirectoryRequest,
     ListDirectoryResponse, OpError,

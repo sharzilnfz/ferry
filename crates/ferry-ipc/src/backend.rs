@@ -24,6 +24,11 @@ use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDire
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Error code used when the daemon socket cannot be reached or the persistent
+/// connection drops. `AutoBackend` routes on exactly this code to fall back to
+/// the in-process adapter; daemon-originated domain errors never trigger it.
+pub const DAEMON_UNREACHABLE: &str = "daemon-unreachable";
+
 /// Coded folder-inventory failures flow into the frontend error taxonomy
 /// unchanged (same `code`/`message`/`hint` discipline).
 impl From<ferry_folder::FolderError> for OpError {
@@ -77,6 +82,13 @@ impl OpError {
     #[must_use]
     pub fn bad_request(message: impl Into<String>, hint: impl Into<String>) -> Self {
         Self::new("bad-request", message, hint)
+    }
+
+    /// True when the error is a transport-level failure (daemon unreachable),
+    /// as opposed to a domain error reported by the daemon or local logic.
+    #[must_use]
+    pub fn is_transport(&self) -> bool {
+        self.code == DAEMON_UNREACHABLE
     }
 }
 
@@ -242,10 +254,30 @@ impl Stream for UiEventStream {
     }
 }
 
-/// The unified asynchronous UI backend contract.
-pub trait UiBackend: Send + Sync + 'static {
+/// Status and telemetry domain: engine snapshots, conflict listings, manual
+/// rescans, and the push-event stream.
+pub trait StatusDomain: Send + Sync + 'static {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>>;
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>>;
+    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
+    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
+}
+
+/// Folder inventory domain: directory inspection and `$FERRY_HOME` registry
+/// operations.
+pub trait InventoryDomain: Send + Sync + 'static {
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>>;
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>>;
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>>;
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>>;
+}
+
+/// Session domain: pairing and pinning lifecycle (pins, share offers, pair
+/// acceptance, and rendezvous pairing sessions).
+pub trait SessionDomain: Send + Sync + 'static {
     fn start_pin(
         &self,
         paths: Vec<String>,
@@ -264,42 +296,23 @@ pub trait UiBackend: Send + Sync + 'static {
         payload: PathBuf,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>>;
-    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
-    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
-
-    fn list_directory(
-        &self,
-        _path: Option<PathBuf>,
-    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
-
-    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
-
-    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
-
-    fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
-
     fn create_pairing_session(
         &self,
-        _req: CreatePairingRequest,
-    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
-
+        req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>>;
     fn join_pairing_session(
         &self,
-        _req: JoinPairingRequest,
-    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
-        Box::pin(async { unimplemented!() })
-    }
+        req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>>;
 }
+
+/// The unified asynchronous UI backend contract: the three cohesive session
+/// domains (`status`, `inventory`, `session`) composed into one seam. Every
+/// frontend consumes `Arc<dyn UiBackend>`; every adapter implements the three
+/// domain traits and gets this seam for free.
+pub trait UiBackend: StatusDomain + InventoryDomain + SessionDomain {}
+
+impl<T: StatusDomain + InventoryDomain + SessionDomain> UiBackend for T {}
 
 #[derive(Debug, Clone)]
 struct InMemPairingSession {
@@ -392,7 +405,7 @@ impl FakeBackend {
     }
 }
 
-impl UiBackend for FakeBackend {
+impl StatusDomain for FakeBackend {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
         let snap = Arc::clone(&self.snapshot);
         Box::pin(async move { Ok(snap.read().await.clone()) })
@@ -403,6 +416,24 @@ impl UiBackend for FakeBackend {
         Box::pin(async move { Ok(confs.read().await.clone()) })
     }
 
+    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>> {
+        let snap = Arc::clone(&self.snapshot);
+        let tx = self.event_tx.clone();
+        Box::pin(async move {
+            let mut st = snap.write().await;
+            st.scanned.files += 1;
+            let _ = tx.send(UiEvent::State(st.clone()));
+            Ok(())
+        })
+    }
+
+    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
+        let rx = self.event_tx.subscribe();
+        Box::pin(async move { Ok(UiEventStream::new(rx)) })
+    }
+}
+
+impl SessionDomain for FakeBackend {
     fn start_pin(
         &self,
         paths: Vec<String>,
@@ -551,61 +582,6 @@ impl UiBackend for FakeBackend {
         })
     }
 
-    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>> {
-        let snap = Arc::clone(&self.snapshot);
-        let tx = self.event_tx.clone();
-        Box::pin(async move {
-            let mut st = snap.write().await;
-            st.scanned.files += 1;
-            let _ = tx.send(UiEvent::State(st.clone()));
-            Ok(())
-        })
-    }
-
-    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
-        let rx = self.event_tx.subscribe();
-        Box::pin(async move { Ok(UiEventStream::new(rx)) })
-    }
-
-    fn list_directory(
-        &self,
-        path: Option<PathBuf>,
-    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
-        let fixture = Arc::clone(&self.fs_fixture);
-        Box::pin(async move {
-            let validated = validate_path(path)?;
-            let map = fixture.read().await;
-            // Preserve wave 0 stub for tests that never configure a fixture.
-            if map.is_empty() && !map.contains_key(&validated) {
-                return Err(OpError::not_found("not-implemented", "wave 0 stub"));
-            }
-            match map.get(&validated) {
-                Some(entries) => {
-                    let mut out = entries.clone();
-                    sort_entries(&mut out);
-                    Ok(ListDirectoryResponse::new(out, validated))
-                }
-                None => Err(OpError::new(
-                    "not-found",
-                    format!("no such directory: {}", validated.display()),
-                    "check path",
-                )),
-            }
-        })
-    }
-
-    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
-        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
-    }
-
-    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
-        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
-    }
-
-    fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
-        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
-    }
-
     fn create_pairing_session(
         &self,
         req: CreatePairingRequest,
@@ -691,5 +667,46 @@ impl UiBackend for FakeBackend {
                 message: Some("paired via in-memory rendezvous".to_string()),
             })
         })
+    }
+}
+
+impl InventoryDomain for FakeBackend {
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        let fixture = Arc::clone(&self.fs_fixture);
+        Box::pin(async move {
+            let validated = validate_path(path)?;
+            let map = fixture.read().await;
+            // Preserve wave 0 stub for tests that never configure a fixture.
+            if map.is_empty() && !map.contains_key(&validated) {
+                return Err(OpError::not_found("not-implemented", "wave 0 stub"));
+            }
+            match map.get(&validated) {
+                Some(entries) => {
+                    let mut out = entries.clone();
+                    sort_entries(&mut out);
+                    Ok(ListDirectoryResponse::new(out, validated))
+                }
+                None => Err(OpError::new(
+                    "not-found",
+                    format!("no such directory: {}", validated.display()),
+                    "check path",
+                )),
+            }
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
+    }
+
+    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
+    }
+
+    fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
     }
 }

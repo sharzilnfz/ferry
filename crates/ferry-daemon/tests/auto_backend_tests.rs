@@ -9,7 +9,7 @@ use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
 use ferry_daemon::ui::backend::{AutoBackend, DaemonIpcAdapter};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
-use ferry_ipc::backend::UiBackend;
+use ferry_ipc::backend::{SessionDomain, StatusDomain};
 use ferry_ipc::protocol::PinView;
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
@@ -161,9 +161,9 @@ async fn test_daemon_ipc_adapter_direct() {
 
     let ipc_adapter = DaemonIpcAdapter::new(socket_path.clone());
 
-    // Offline fails with not-found
+    // Offline fails with the transport error code (fallback routing key)
     let err = ipc_adapter.get_status().await.unwrap_err();
-    assert_eq!(err.code, "not-found");
+    assert_eq!(err.code, "daemon-unreachable");
 
     // Start daemon
     let handle = rig.engine.start();

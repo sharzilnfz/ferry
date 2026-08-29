@@ -274,6 +274,8 @@ async fn test_endpoint_proxying_over_ipc() {
                 while let Ok(Some(cmd)) = conn.recv_command().await {
                     match cmd {
                         ferry_ipc::protocol::ClientCommand::GetStatus => {
+                            // Mirror the real daemon: GetStatus answers with a
+                            // FULL snapshot (same shape as the initial one).
                             let mut snap = EngineSnapshot::new(
                                 "/mock/folder",
                                 "0123456789abcdef0123456789abcdef",
@@ -281,6 +283,8 @@ async fn test_endpoint_proxying_over_ipc() {
                                 "idle",
                             );
                             snap.manifest_id = Some("manifest_from_ipc".to_string());
+                            snap.scanned = ScanStatsView::new(42, 7, 1, 1024);
+                            snap.conflicts = 3;
                             let _ = conn.send_message(&DaemonMessage::Snapshot(snap)).await;
                         }
                         ferry_ipc::protocol::ClientCommand::ListConflicts => {

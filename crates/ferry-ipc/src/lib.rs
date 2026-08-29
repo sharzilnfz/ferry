@@ -4,6 +4,7 @@
 //! Windows named pipes, and in-memory duplex streams.
 
 pub mod backend;
+pub mod client;
 pub mod error;
 pub mod framing;
 pub mod pairing;
@@ -12,9 +13,11 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::{
-    BoxFuture, FakeBackend, OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary,
-    ShareOffer, ShareStatus, UiBackend, UiEvent, UiEventStream,
+    BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary,
+    PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiBackend, UiEvent,
+    UiEventStream,
 };
+pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;
 // The folder inventory data shapes and guards live in `ferry-folder` (single
 // owner of registry persistence and inspection); re-exported here so the

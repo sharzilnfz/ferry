@@ -10,7 +10,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "sync", "macros"] }
+tokio = { workspace = true, features = ["io-util", "net", "sync", "macros", "rt", "time"] }
 tokio-stream = { workspace = true }
 
 [dev-dependencies]

@@ -212,7 +212,7 @@ fn expiry_returns_pairing_expired() {
 #[test]
 fn uibackend_fakebackend_create_and_join_roundtrip() {
     // Tests UiBackend seam: FakeBackend create + join via same instance (in-memory rendezvous)
-    use ferry_ipc::backend::{FakeBackend, UiBackend};
+    use ferry_ipc::backend::{FakeBackend, SessionDomain};
     use ferry_ipc::pairing::{CreatePairingRequest, JoinPairingRequest};
     use std::path::PathBuf;
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferry_daemon::ui::server::DashboardServer;
-use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
+use ferry_ipc::backend::{FakeBackend, StatusDomain, UiEvent};
 use ferry_ipc::protocol::{ScanStatsView, TransferDirection};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
