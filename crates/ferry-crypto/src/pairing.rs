@@ -46,8 +46,6 @@
 //! [`TransportHints`]); they ride the code so both humans see identical
 //! context while comparing screens.
 
-pub use crate::pairing_code::PairingCode;
-
 use crate::base32::{self, Base32Error};
 use crate::crc32::crc32;
 use crate::folder_key::{wrap_folder_key, Fmk, FolderKeyError, WRAPPED_LEN};

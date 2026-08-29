@@ -44,7 +44,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use ferry_materialize::temp::{fresh_entropy, temp_name_for, TempStyle};
 use ferry_materialize::{
@@ -165,8 +164,16 @@ pub struct ConvergenceResult {
     pub send: Vec<(BlobId, u64)>,
     /// Paths an active pin held back (empty without a pin).
     pub held: Vec<HeldPath>,
-    /// Set when this run converged the local tree exactly onto the remote
-    /// manifest and committed that agreement to the `AgreementLedger`.
+    /// Set only when this run converged the local tree EXACTLY onto the
+    /// remote manifest, and then holding the committed remote manifest id.
+    ///
+    /// The commit condition is `plan.conflicts.is_empty() &&
+    /// held.is_empty() && plan.send.is_empty()`: no quarantined losers, no
+    /// pin-held paths, and no chunks to send. Any of those means the local
+    /// tree is a MERGED state, not the remote manifest — recording the
+    /// remote id as "agreed" would let the next exchange skip bytes that
+    /// were never adopted (or advertise winners a pin still withholds), so
+    /// the next manifest exchange settles that agreement instead.
     pub agreed_manifest_id: Option<BlobId>,
 }
 
@@ -251,7 +258,9 @@ impl<'a> ConvergenceEngine<'a> {
 
     /// Run one full convergence: three-way diff of `local` against
     /// `remote` over `base`, fetch, materialize, quarantine, report,
-    /// agree.
+    /// agree. The agreement commits only when the run converged exactly
+    /// (see [`ConvergenceResult::agreed_manifest_id`] for the precise
+    /// condition and its rationale).
     pub fn converge(
         &mut self,
         local: &RootManifest,
@@ -376,11 +385,11 @@ impl<'a> ConvergenceEngine<'a> {
                 folder_id: folder_id.clone(),
                 path: join_path(&c.path),
                 kind: kind_str(c.kind).to_string(),
-                winner: stamp(
+                winner: DeviceStamp::new(
                     c.winner_device,
                     Some((c.winner_mtime_sec, c.winner_mtime_nsec)),
                 ),
-                loser: stamp(
+                loser: DeviceStamp::new(
                     c.loser_device,
                     c.loser_mtime_sec
                         .map(|s| (s, c.loser_mtime_nsec.unwrap_or(0))),
@@ -667,14 +676,6 @@ fn kind_str(k: ConflictKind) -> &'static str {
     }
 }
 
-fn stamp(device: [u8; 32], mtime: Option<(i64, u32)>) -> DeviceStamp {
-    DeviceStamp {
-        device: hex(&device),
-        mtime_sec: mtime.map(|m| m.0),
-        mtime_nsec: mtime.map(|m| m.1),
-    }
-}
-
 fn rel_under(root: &Path, abs: &Path) -> Vec<String> {
     abs.strip_prefix(root)
         .unwrap_or(Path::new(""))
@@ -950,21 +951,11 @@ fn write_bytes_with_meta(
             .map_err(|e| io_at(tmp, e))?;
         }
         f.write_all(bytes).map_err(|e| io_at(tmp, e))?;
-        f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
+        f.set_times(std::fs::FileTimes::new().set_modified(timefmt::join_unix(sec, nsec)))
             .map_err(|e| io_at(tmp, e))?;
         f.sync_all().map_err(|e| io_at(tmp, e))?;
     }
     Ok(())
-}
-
-/// (sec, nsec) → `SystemTime`, matching the manifest's pre-1970 convention.
-fn system_time(sec: i64, nsec: u32) -> SystemTime {
-    let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
-    if total >= 0 {
-        SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
-    } else {
-        SystemTime::UNIX_EPOCH - Duration::from_nanos((-total) as u64)
-    }
 }
 
 /// Encode one base→result transition into applier buckets. The applier plans
@@ -1145,48 +1136,31 @@ mod tests {
     fn racing_writer_at_landing_time_cannot_be_overwritten() {
         // T-08: another executor (CLI sync while daemon runs) resolves the
         // same conflict name free, then claims it AFTER our resolution but
-        // BEFORE our landing. The exclusive landing must regenerate the
-        // name and never overwrite the racer's bytes.
+        // BEFORE our landing. Driven through the engine: the exclusive
+        // landing must regenerate the name, never overwrite the racer's
+        // bytes, and report the name that actually landed.
         let rig = rig();
-        let plan = reconcile(ReconcileInput {
-            store: &rig.b.store,
-            local: &rig.local,
-            remote: &rig.remote,
-            base: Some(&rig.base),
-        })
-        .unwrap();
-        let op = &plan.quarantine[0];
-        let base = naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
-        let resolved = naming::unique_conflict_dest(&rig.b.tree, &[], &base).unwrap();
+        let base = "f.txt.ferry-conflict.b2b2b2b2-19700101-000230";
+        let claimed = rig.b.tree.join(base);
+        std::fs::write(&claimed, b"racer's loser copy").unwrap();
 
-        // The racer wins the name in the resolution→landing window.
-        std::fs::write(&resolved, b"racer's loser copy").unwrap();
+        let result = converge_on_b(&rig, NOW).unwrap();
 
-        let landed = write_loser_copy(
-            &rig.b.store,
-            &rig.b.tree,
-            op,
-            resolved.parent().unwrap(),
-            resolved.file_name().unwrap().to_str().unwrap(),
-            Some(b"loser on B" as &[u8]),
-        )
-        .unwrap();
-
-        assert!(
-            landed
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .ends_with("-2"),
-            "loser copy regenerated past the claimed name: {landed:?}"
+        assert_eq!(result.quarantined.len(), 1);
+        let q = &result.quarantined[0];
+        assert_eq!(
+            q.as_str(),
+            format!("{base}-2"),
+            "loser copy regenerated past the claimed name"
         );
         assert_eq!(
-            std::fs::read(&resolved).unwrap(),
+            std::fs::read(&claimed).unwrap(),
             b"racer's loser copy",
             "the racing writer's copy must survive byte-for-byte"
         );
-        assert_eq!(std::fs::read(&landed).unwrap(), b"loser on B");
+        assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
+        let log = list_conflicts(&rig.b.state_dir).unwrap();
+        assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
         // No temp residue from the collision retry.
         let residue: Vec<_> = std::fs::read_dir(&rig.b.tree)
             .unwrap()
@@ -1197,40 +1171,16 @@ mod tests {
     }
 
     #[test]
-    fn converges_where_a_contended_landing_actually_went() {
-        // Same race end-to-end through the engine: pre-create the first
-        // choice so the report's quarantined_as follows the regenerated
-        // name, and both copies keep their own bytes.
-        let rig = rig();
-        let plan = reconcile(ReconcileInput {
-            store: &rig.b.store,
-            local: &rig.local,
-            remote: &rig.remote,
-            base: Some(&rig.base),
-        })
-        .unwrap();
-        let op = &plan.quarantine[0];
-        let base = naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
-        let claimed = rig.b.tree.join(&base);
-        std::fs::write(&claimed, b"racer's loser copy").unwrap();
-
-        let result = converge_on_b(&rig, NOW).unwrap();
-
-        assert_eq!(result.quarantined.len(), 1);
-        let q = &result.quarantined[0];
-        assert_eq!(
-            q.as_str(),
-            format!("{base}-2"),
-            "report uses the real landing name"
-        );
-        assert_eq!(std::fs::read(&claimed).unwrap(), b"racer's loser copy");
-        assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
-        let log = list_conflicts(&rig.b.state_dir).unwrap();
-        assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
-    }
-
-    #[test]
     fn exhausted_landing_fails_loudly_without_clobbering_or_residue() {
+        // Kept against `write_loser_copy` directly (spec "Testing
+        // Decisions" carve-out): the engine resolves a free destination
+        // with `unique_conflict_dest` — unbounded — immediately before
+        // landing, so a single-threaded run through `converge()` can never
+        // reach the bounded retry's exhaustion; the resolved name is always
+        // free at landing time. Only this unit-level call can occupy every
+        // bounded candidate deterministically. The contended-landing path
+        // itself IS covered through the seam by
+        // `racing_writer_at_landing_time_cannot_be_overwritten`.
         let rig = rig();
         let plan = reconcile(ReconcileInput {
             store: &rig.b.store,
