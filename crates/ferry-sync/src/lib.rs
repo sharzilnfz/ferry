@@ -24,8 +24,8 @@
 //!    used by reference-interop tests.
 //! 2. **Protocol** ([`session`], [`exchange`]) — the v1 inventory: mutual
 //!    AUTH handshake (possession proofs, no signatures), version
-//!    negotiation with BYE(1) on major mismatch, FOLDER_OFFER /
-//!    INDEX_ADVERT rounds, REQUEST_ITEMS/PACKS → ITEM_BATCH/PACK_ITEM
+//!    negotiation with BYE(1) on major mismatch, `FOLDER_OFFER` /
+//!    `INDEX_ADVERT` rounds, `REQUEST_ITEMS/PACKS` → `ITEM_BATCH/PACK_ITEM`
 //!    pulls, local last-agreed records, BYE; unknown-message policy per
 //!    the normative skip-if-flagged rule. ([`proto`] holds the retired
 //!    plaintext set behind the dev flag.)
@@ -36,19 +36,19 @@
 //!    individual blobs otherwise; manifests/tree nodes always move as
 //!    individual metadata blobs because the puller needs them before it
 //!    can even compute what it wants. See [`exchange`].
-//! 4. **[`materialize::Materializer`] + [`materialize::BlobSource`]** — the
-//!    applier seam. The inline implementation is ugly-but-correct (temp +
-//!    atomic rename, parents-first creation, children-first deletion, exec
-//!    bit, exact mtimes incl. symlink times). The puller applies the diff
-//!    durably BEFORE round 2 observes equality — under v1, round 2 plays
-//!    AGREED's role.
-//! 5. **Agreement bookkeeping** ([`state::AgreementStore`] plus
-//!    `ferry_proto::agreement::AgreementLedger`) — after each concluded
-//!    session both sides record the agreed manifest id per peer in THE
-//!    canonical 77-byte spec serialization (byte-exact on both sides), and
-//!    keep the M0 convenience record carrying the full manifest for
-//!    offline baseline recovery. T-010's three-way reconciliation consumes
-//!    these as base state.
+//! 4. **[`ferry_materialize::Applier`]** — the applier boundary. Direct
+//!    materialization with [`ferry_materialize::Applier::with_pin_gate`]:
+//!    temp + atomic rename, parents-first creation, children-first deletion,
+//!    exec bit, exact mtimes (files, symlinks AND directories, restored from
+//!    the target tree), NFC live-name folding, and the untrusted-symlink-target
+//!    policy that refuses hostile targets loudly. The puller applies the
+//!    diff durably BEFORE round 2 observes equality — under v1, round 2
+//!    plays AGREED's role.
+//! 5. **Agreement bookkeeping** (`ferry_store::agreement::AgreementLedger`,
+//!    the ONE canonical codec + ledger workspace-wide since T-10) — after
+//!    each concluded session both sides record the agreed manifest id per
+//!    peer in THE canonical 77-byte spec serialization (byte-exact on both
+//!    sides). T-010's three-way reconciliation consumes these as base state.
 //! 6. **Winner selection** — donor election collapsed into v1's symmetric
 //!    pull stages: each side pulls what it lacks; adoption follows lineage
 //!    (last-writer-wins) with M0's empty-vs-nonempty bootstrap guard
@@ -72,10 +72,7 @@
 
 pub mod engine;
 pub mod exchange;
-pub mod materialize;
-pub mod proto;
 pub mod session;
-pub mod state;
 pub mod transport;
 
 // Re-exports so tests, bins, and future crates reach the vocabulary through
@@ -86,11 +83,10 @@ pub use engine::{
 };
 pub use exchange::{ingest_pack_verified, run_v1_session, CurrentState, ExchangeHost};
 pub use ferry_crypto::identity::DeviceIdentity;
+pub use ferry_materialize::{ApplyOutcome, MaterializeError as ApplyError};
 pub use ferry_store::format;
 pub use ferry_store::{BlobId, BlobKind};
-pub use materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
 pub use session::{Established, ExpectPeer};
-pub use state::{device_id_from_tag, AgreementStore};
 pub use transport::{Connection, Listener, TcpTransport, Transport};
 
 /// M0's default folder id (both daemons must share one folder id; the real

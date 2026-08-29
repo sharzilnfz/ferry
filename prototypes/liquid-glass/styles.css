@@ -1,0 +1,632 @@
+/* ==========================================================================
+   FERRY · DESKTOP SYNC DASHBOARD
+   Clean Solid Minimalist UI (Non-Glassy, Squarish High-Density Cards)
+   ========================================================================== */
+
+:root {
+  /* Dark (Monochrome Minimalist) */
+  --bg: #0d0d0d;
+  --card-bg: #161616;
+  --card-border: #262626;
+  --card-border-hover: #383838;
+  --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --card-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  --item-bg: #1f1f1f;
+  --item-border: #2a2a2a;
+  --item-hover: #282828;
+
+  --input-bg: #121212;
+  --input-border: #2a2a2a;
+
+  --text-1: #f2f2f2;
+  --text-2: #8c8c8c;
+  --text-3: #5c5c5c;
+  --text-mono: #d9d9d9;
+
+  --status-green: #30d158;
+  --status-amber: #ff9f0a;
+  --status-red: #ff453a;
+  --status-blue: #0a84ff;
+
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
+
+  --radius-card: 14px;
+  --radius-item: 8px;
+  --radius-btn: 7px;
+  --radius-input: 7px;
+
+  --spring-butter: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="light"] {
+  /* Full Clean White Desktop Mode */
+  --bg: #f5f6fa;
+  --card-bg: #ffffff;
+  --card-border: #e2e5ec;
+  --card-border-hover: #c9cedc;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+  --card-shadow-hover: 0 6px 20px rgba(0, 0, 0, 0.07);
+
+  --item-bg: #f8fafc;
+  --item-border: #eaedf3;
+  --item-hover: #f1f4f9;
+
+  --input-bg: #f8fafc;
+  --input-border: #dbe0ea;
+
+  --text-1: #0f172a;
+  --text-2: #5b677a;
+  --text-3: #94a3b8;
+  --text-mono: #334155;
+
+  --status-green: #22c55e;
+  --status-amber: #f59e0b;
+  --status-red: #ef4444;
+  --status-blue: #3b82f6;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background-color: var(--bg);
+  color: var(--text-1);
+  font-family: var(--font-display);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 20px 48px;
+  background-color: var(--bg);
+}
+
+/* Container with tight spacing */
+.container {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Header */
+.header {
+  width: 100%;
+  max-width: 800px;
+  padding: 18px 0 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  color: var(--text-2);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Solid Modern Card Primitive (Squarish, Compact, Solid Background) */
+.glass-card, .card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--card-shadow);
+  padding: 16px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.glass-card:hover, .card:hover {
+  border-color: var(--card-border-hover);
+  box-shadow: var(--card-shadow-hover);
+}
+
+/* Top Row: 3 Squarish Cards Side-by-Side */
+.grid-3col {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.grid-3col .glass-card {
+  min-height: 220px;
+}
+
+/* Bottom Row: 2 Balanced Squarish Cards */
+.grid-2col-bottom {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 8px;
+}
+
+.grid-2col-bottom .glass-card {
+  min-height: 235px;
+}
+
+/* Card Header */
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+}
+
+.badge-status {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+.badge-active {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--status-green);
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* Status Card Components */
+.status-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hero-heading {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-green);
+  flex-shrink: 0;
+}
+
+.status-dot.dot-holding { background: var(--status-amber); }
+.status-dot.dot-conflict { background: var(--status-red); }
+.status-dot.dot-syncing { background: var(--status-blue); }
+.status-dot.dot-offline { background: var(--text-3); }
+
+.hero-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+/* Metric Strip */
+.metric-strip-compact {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--item-border);
+}
+
+.metric-box-sm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 4px;
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  border-radius: var(--radius-item);
+  gap: 1px;
+  text-align: center;
+}
+
+.metric-num-sm {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-1);
+}
+
+.metric-tag-sm {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Buttons */
+.btn {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--card-border);
+  background: var(--item-bg);
+  color: var(--text-1);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.16s ease;
+  user-select: none;
+}
+
+.btn:hover {
+  background: var(--item-hover);
+  border-color: var(--card-border-hover);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background: var(--text-1);
+  color: var(--bg);
+  border-color: var(--text-1);
+}
+
+.btn-primary:hover {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #000000;
+}
+
+[data-theme="light"] .btn-primary {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+[data-theme="light"] .btn-primary:hover {
+  background: #1e293b;
+  border-color: #1e293b;
+  color: #ffffff;
+}
+
+.btn-icon {
+  padding: 6px;
+  border-radius: 7px;
+  width: 30px;
+  height: 30px;
+}
+
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* Inputs */
+.input {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 7px 10px;
+  border-radius: var(--radius-input);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-1);
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input:focus {
+  border-color: var(--text-2);
+  box-shadow: 0 0 0 1px var(--text-2);
+}
+
+/* Device Fleet List */
+.fleet-list-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+}
+
+.device-item-compact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  border-radius: var(--radius-item);
+}
+
+.device-name-compact {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+.device-sub-compact {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-top: 1px;
+}
+
+.device-state-compact {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+
+/* Work Protection Card */
+.pin-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+}
+
+/* Activity Feed */
+.activity-feed-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.activity-feed-grid::-webkit-scrollbar {
+  width: 4px;
+}
+
+.activity-feed-grid::-webkit-scrollbar-thumb {
+  background: var(--item-border);
+  border-radius: 4px;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 9px;
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  border-radius: var(--radius-item);
+  transition: all 0.15s ease;
+  animation: slideInItem 0.18s ease;
+}
+
+.activity-item:hover {
+  background: var(--item-hover);
+  border-color: var(--card-border-hover);
+}
+
+@keyframes slideInItem {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.activity-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity-icon-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--card-bg);
+  border: 1px solid var(--item-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.activity-icon-badge svg {
+  width: 11px;
+  height: 11px;
+  stroke: var(--text-1);
+  fill: none;
+  stroke-width: 2.2;
+}
+
+.activity-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.activity-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.activity-detail {
+  font-size: 10px;
+  color: var(--text-2);
+}
+
+.activity-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+/* System Stats Card */
+.stat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  justify-content: center;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  border-radius: var(--radius-item);
+}
+
+.stat-label {
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.stat-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* Simulator Bar */
+.sim-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--card-shadow);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.sim-group {
+  display: flex;
+  gap: 5px;
+}
+
+.sim-pill {
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sim-pill:hover {
+  background: var(--item-hover);
+  color: var(--text-1);
+}
+
+.sim-pill.active {
+  background: var(--text-1);
+  color: var(--bg);
+  border-color: var(--text-1);
+}
+
+/* Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.modal-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.3);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .grid-3col {
+    grid-template-columns: 1fr;
+  }
+  .grid-2col-bottom {
+    grid-template-columns: 1fr;
+  }
+}

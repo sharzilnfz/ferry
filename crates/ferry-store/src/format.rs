@@ -63,7 +63,7 @@ impl BlobKind {
         self as u8
     }
 
-    /// Metadata blobs ride PACK_META; data chunks ride PACK_DATA.
+    /// Metadata blobs ride `PACK_META`; data chunks ride `PACK_DATA`.
     pub fn is_meta(self) -> bool {
         !matches!(self, BlobKind::DataChunk)
     }
@@ -219,8 +219,8 @@ impl<'a> Reader<'a> {
 pub fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+        s.push(char::from_digit(u32::from(b >> 4), 16).unwrap());
+        s.push(char::from_digit(u32::from(b & 0xf), 16).unwrap());
     }
     s
 }

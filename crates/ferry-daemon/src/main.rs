@@ -34,14 +34,12 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use ferry_crypto::identity as crypto_identity;
-use ferry_store::format::unhex;
+#[cfg(feature = "web-ui")]
+use ferry_daemon::ui;
+use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
 
-/// Fixed route-key label for iroh-mode dialing: `--addr` is meaningless on
-/// the wire there, so the connector uses one reserved alias registered to
-/// `--peer`'s public key before the engine starts.
-const IROH_DIAL_ALIAS: &str = "127.0.0.1:65534";
-/// Same for listeners: port 0 makes the transport mint a unique alias.
+/// Port 0 makes the transport mint a unique alias.
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
 
 const USAGE: &str = "\
@@ -68,6 +66,17 @@ IROH TRANSPORT (default):
 TCP TRANSPORT (--transport tcp; M0 throwaway, tests only):
     ferry-sync daemon --role listen  --addr HOST:PORT
     ferry-sync daemon --role connect --addr HOST:PORT
+
+IPC SERVER:
+    The daemon always runs an IPC server on the folder socket
+    (<store>/.ferry/daemon.sock or --socket PATH) broadcasting live
+    snapshots, engine state changes, transfers, and conflicts.
+
+WEB DASHBOARD (optional):
+    ferry-sync daemon ... [--ui [HOST:PORT]]   (default 127.0.0.1:8098)
+    Loopback binds only, no auth (v0 stance); serves the embedded UI plus
+    /api/status, /api/conflicts, /api/share, /api/pair/accept and
+    /api/pin/start|stop|release per .scratch/web-dashboard/spec.md.
 
 Roles: exactly one side runs `listen`; the other runs `connect` and drives
 all sessions.";
@@ -127,7 +136,60 @@ fn cmd_genpoly(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn ferry_home() -> std::path::PathBuf {
+    if let Some(v) = std::env::var_os("FERRY_HOME") {
+        let p = std::path::PathBuf::from(&v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+    {
+        if !home.as_os_str().is_empty() {
+            return home.join(".ferry");
+        }
+    }
+    std::path::PathBuf::from("/tmp/.ferry")
+}
+
 fn cmd_daemon(args: &[String]) -> ExitCode {
+    // Central supervisor mode: `ferry daemon` without legacy flags runs Supervisor.
+    // Preserve `--listen` single-folder deprecated wrapper by routing to legacy when --store/--role present.
+    let is_legacy = has_flag(args, "--store")
+        || has_flag(args, "--tree")
+        || has_flag(args, "--role")
+        || has_flag(args, "--transport");
+    if !is_legacy {
+        match run_central_daemon(args) {
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    // Legacy single-folder path (also used for `ferry daemon --listen` deprecated wrapper)
+    if has_flag(args, "--listen") {
+        eprintln!(
+            "warning: --listen is deprecated; use `ferry daemon` without args for device daemon"
+        );
+        // If --listen is given with a path arg, register it before falling through to legacy
+        if let Some(p) = flag(args, "--listen") {
+            let home = ferry_home();
+            let _ = std::fs::create_dir_all(&home);
+            if let Ok(rec) = ferry_folder::inventory::FolderInventory::new(&home)
+                .register(&std::path::PathBuf::from(&p))
+            {
+                eprintln!(
+                    "registered folder {} -> {}",
+                    rec.path.display(),
+                    rec.folder_id
+                );
+            }
+        }
+    }
     match parse_and_run_daemon(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -135,6 +197,80 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn run_central_daemon(args: &[String]) -> Result<(), String> {
+    let home = ferry_home();
+    std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
+    // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
+    let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
+        .or_else(|_| {
+            ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
+        })
+        .map_err(|e| format!("device identity: {e}"))?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))?;
+    let mut supervisor = ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
+    // Register any folder args before spawning (e.g., `ferry daemon /tmp/a /tmp/b`)
+    for arg in args {
+        if arg.starts_with('-') {
+            continue;
+        }
+        if arg == "daemon" {
+            continue;
+        }
+        let p = std::path::PathBuf::from(arg);
+        if p.as_os_str().is_empty() {
+            continue;
+        }
+        let abs = if p.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&p))
+                .unwrap_or(p.clone())
+        } else {
+            p.clone()
+        };
+        // handle_register may need tokio runtime for engine spawn; run inside runtime
+        let rec = rt.block_on(async { supervisor.handle_register(abs.clone()) });
+        match rec {
+            Ok(r) => eprintln!("registered {} -> {}", r.path.display(), r.folder_id),
+            Err(e) if e.code == "already-synced" => {
+                eprintln!("already-synced {}: {}", p.display(), e.message);
+            }
+            Err(e) => return Err(format!("register {}: {}", p.display(), e.message)),
+        }
+    }
+    rt.block_on(async {
+        supervisor
+            .spawn_engines()
+            .map_err(|e| format!("spawn engines: {}: {}", e.code, e.message))
+    })?;
+    let socket_path = ferry_ipc::paths::default_socket_path();
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let supervisor_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
+    let sup_for_ipc = std::sync::Arc::clone(&supervisor_arc);
+    let _ipc_handle = rt
+        .block_on(async {
+            ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
+        })
+        .map_err(|e| format!("ipc server: {e}"))?;
+    eprintln!("ferry device daemon listening at {}", socket_path.display());
+    // Supervision loop with backoff — runs until killed
+    rt.block_on(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            let mut sup = supervisor_arc.lock().await;
+            sup.tick();
+        }
+    });
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 enum TransportKind {
@@ -157,6 +293,24 @@ struct DaemonArgs {
     folder_id: [u8; 16],
     poll_ms: u64,
     opportunistic_every: u32,
+    ui_addr: Option<std::net::SocketAddr>,
+    socket_path: Option<std::path::PathBuf>,
+}
+
+/// `--ui [ADDR]`: bare flag means the documented default; any non-loopback
+/// address is refused at startup (v0 auth stance: localhost only).
+fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String> {
+    if !has_flag(args, "--ui") {
+        return Ok(None);
+    }
+    let raw = flag(args, "--ui").unwrap_or_else(|| "127.0.0.1:8098".to_string());
+    let addr = std::net::SocketAddr::from_str(&raw).map_err(|e| format!("--ui {raw:?}: {e}"))?;
+    if !addr.ip().is_loopback() {
+        return Err(format!(
+            "--ui {addr}: refusing non-loopback bind; the dashboard serves localhost only"
+        ));
+    }
+    Ok(Some(addr))
 }
 
 fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
@@ -206,12 +360,22 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
         opportunistic_every: flag(args, "--opportunistic-every")
             .and_then(|s| s.parse().ok())
             .unwrap_or(ferry_sync::engine::DEFAULT_OPPORTUNISTIC_EVERY),
+        ui_addr: parse_ui_addr(args)?,
+        socket_path: flag(args, "--socket").map(std::path::PathBuf::from),
     };
     run_daemon(parsed)
 }
 
+fn validate_tag(tag: &str) -> Result<(), String> {
+    if tag.is_empty() || tag.len() > 64 || tag.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err("tag must be 1..64 non-whitespace chars".to_string());
+    }
+    Ok(())
+}
+
 fn run_daemon(d: DaemonArgs) -> Result<(), String> {
-    ferry_sync::proto::validate_tag(&d.tag).map_err(|e| format!("--tag: {e}"))?;
+    validate_tag(&d.tag).map_err(|e| format!("--tag: {e}"))?;
     if d.role != "listen" && d.role != "connect" {
         return Err(format!("--role must be listen|connect, got {:?}", d.role));
     }
@@ -220,7 +384,10 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         tag: d.tag.clone(),
         store_dir: d.store_dir.clone(),
         tree_dir: d.tree_dir.clone(),
-        poly: d.poly,
+        // T-02: validate the user-supplied --poly HERE, at config load. A
+        // typo used to surface as a chunker .expect() panic mid-scan.
+        poly: ferry_store::chunker::ValidatedPoly::new(d.poly)
+            .map_err(|e| format!("--poly: {e}"))?,
         folder_id: d.folder_id,
         poll_interval: Duration::from_millis(d.poll_ms),
         opportunistic_every: d.opportunistic_every,
@@ -229,11 +396,21 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         // Strict peer pinning arrives with T-007's pairing ritual; the
         // skeleton accepts whichever identity proves key possession.
         expected_peer_id: None,
-        // Protocol v1 with encryption ON is the only production path; the
-        // retired plaintext framing is reachable programmatically only.
-        legacy_m0_proto: false,
+        // T-06: production daemons enforce session pins at the engine's
+        // execution boundary. The --store dir IS the folder root whose
+        // `.ferry/` holds pin-state.json and the held ledgers.
+        pin_state_dir: Some(d.store_dir.join(".ferry")),
         quiet: false,
     };
+
+    // ONE device-identity source for every transport (ticket 12): a real
+    // keypair persisted under `<store>/.device-identity`, loaded or created
+    // exactly once. Tag-derived ids are test-only and unreachable here.
+    // NOTE: the file lives in a SIBLING of the store's `.ferry/` — that
+    // directory belongs to the store layout, and creating it early would
+    // flip Store::create into Store::open on first run.
+    let device = crypto_identity::load_or_create(&d.store_dir.join(".device-identity"))
+        .map_err(|e| format!("device identity: {e}"))?;
 
     let transport: Arc<dyn ferry_sync::Transport> = match d.kind {
         TransportKind::Tcp => {
@@ -248,13 +425,6 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         TransportKind::Iroh => {
             // Stable endpoint identity derived from THIS store's device
             // identity (ferry-crypto): restart-safe public addressing.
-            // NOTE: lives in a SIBLING of the store's `.ferry/` — that
-            // directory belongs to the store layout, and creating it early
-            // would flip Store::create into Store::open on first run.
-            let identity_root = d.store_dir.join(".device-identity");
-            let device = crypto_identity::load_or_create(&identity_root)
-                .map_err(|e| format!("device identity: {e}"))?;
-
             let mut builder = ferry_iroh::IrohConfig::builder().device_identity(&device);
             if !d.relays.is_empty() {
                 builder = builder.relays(ferry_iroh::RelaySetting::Custom(d.relays.clone()));
@@ -282,8 +452,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
                         "--peer HEX64 is required to connect (it is \
                         the listener's ENDPOINT id)",
                     )?;
-                    let alias = std::net::SocketAddr::from_str(IROH_DIAL_ALIAS).expect("constant");
-                    t.with_route(alias, peer);
+                    let alias = t.register_peer(peer);
                     cfg.connect_to = Some(alias);
                 }
                 _ => unreachable!("validated above"),
@@ -295,16 +464,44 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         }
     };
 
-    let engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    let mut engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    engine.set_identity(device.clone());
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");
     }
     // Run until killed; EngineHandle shutdown happens on drop.
     let handle = engine.start();
-    handle.join_until_signal();
-    Ok(())
-}
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
+    let daemon_state = Arc::new(ferry_daemon::state::DaemonState::new(
+        handle.clone(),
+        d.store_dir.clone(),
+        d.tree_dir.clone(),
+        d.folder_id,
+        device.clone(),
+        broadcast_tx,
+    ));
+
+    #[allow(deprecated)]
+    let socket_path = d
+        .socket_path
+        .unwrap_or_else(|| ferry_ipc::paths::socket_path_for_dir(&d.store_dir));
+    let ipc_handle =
+        ferry_daemon::ipc::spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state))
+            .map_err(|e| format!("ipc server: {e}"))?;
+    #[cfg(feature = "web-ui")]
+    if let Some(addr) = d.ui_addr {
+        let state = ui::UiState::new(handle.clone(), d.store_dir, d.tree_dir, d.folder_id, device);
+        ui::spawn(addr, Arc::new(state)).map_err(|e| format!("--ui: {e}"))?;
+    }
+    #[cfg(not(feature = "web-ui"))]
+    if d.ui_addr.is_some() {
+        return Err(
+            "web dashboard disabled in this build (compiled with --features lean)".to_string(),
+        );
+    }
+
+    handle.join_until_signal();
+    ipc_handle.shutdown();
+    Ok(())
 }

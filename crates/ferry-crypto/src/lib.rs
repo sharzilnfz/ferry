@@ -1,11 +1,13 @@
 //! Ferry device identity, pairing, and key wrapping (ticket T-007).
 //!
 //! The byte-level contracts this crate implements live in
-//! `docs/store-format.md` (key-wrap envelope, CONFIG_HEAD, pack cipher) and
+//! `docs/store-format.md` (key-wrap envelope, `CONFIG_HEAD`, pack cipher) and
 //! ADR-0002 (E2E by default, explicit pairing, no recovery back door). This
 //! crate owns the parts the format spec deliberately leaves to T-007: the
-//! pairing ritual, short codes, QR payloads, identity persistence, and
-//! passphrase-wrapped recovery exports.
+//! pairing handshake, QR payloads, identity persistence, and passphrase-
+//! wrapped recovery exports — plus the raw primitives (base32 alphabet,
+//! CRC-32) behind the short codes minted by the user-facing ritual in
+//! `ferry-folder::pairing`.
 //!
 //! # Module map
 //!
@@ -15,11 +17,11 @@
 //!   loud error on corruption.
 //! - [`folder_key`]: FMK generation and the normative X25519 wrap envelope
 //!   (`wrapped_len == 80`).
-//! - [`config_head`]: CONFIG_HEAD container serialization, byte-for-byte per
+//! - [`config_head`]: `CONFIG_HEAD` container serialization, byte-for-byte per
 //!   the store format spec.
 //! - [`pack_cipher`]: the real ChaCha20-Poly1305 [`PackCipher`] that replaces
 //!   ferry-store's pass-through stub at the seam (T-008 does the swap).
-//! - [`pairing`]: offer/response payloads, short codes, QR content, and the
+//! - [`pairing`]: offer/response payloads, QR content, and the
 //!   HMAC-confirmed handshake.
 //! - [`recovery`]: Argon2id + ChaCha20-Poly1305 passphrase export/import.
 //!
@@ -69,12 +71,7 @@ pub mod recovery;
 /// First 8 bytes of `data` as lowercase hex, for non-secret display in
 /// Debug impls and logs.
 pub(crate) fn hex_short(data: &[u8]) -> String {
-    let mut s = String::new();
-    for b in &data[..8.min(data.len())] {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
-    }
-    s
+    ferry_store::format::hex(&data[..8.min(data.len())])
 }
 
 /// Shared test fixtures. Compiled only for tests within this crate.

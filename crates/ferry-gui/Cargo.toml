@@ -1,0 +1,32 @@
+[package]
+name = "ferry-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+gui = ["dep:rfd"]
+
+[dependencies]
+egui.workspace = true
+eframe.workspace = true
+ferry-ipc.workspace = true
+ferry-platform.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+qrcode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rfd = { version = "0.14", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+ferry-tui = { path = "../ferry-tui" }
+ferry-daemon = { path = "../ferry-daemon", features = ["web-ui"] }
+ferry-platform = { path = "../ferry-platform" }
+axum = { workspace = true }
+
+[lints]
+workspace = true
+

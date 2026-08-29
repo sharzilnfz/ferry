@@ -1,8 +1,10 @@
-//! Injectable endpoint configuration: relays, discovery, identity, forcing.
+//! Injectable endpoint configuration: relays, discovery, identity, forcing, routing.
 
 use std::time::Duration;
 
 use ferry_crypto::identity::DeviceIdentity;
+
+use crate::directory::RouteTable;
 
 /// Which relay servers endpoints may use (ADR-0003: relay-first, fallback).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -46,7 +48,7 @@ pub struct IrohConfig {
     /// of the two must be set.
     pub secret: Option<[u8; 32]>,
     /// Device identity whose X25519 secret deterministically derives the
-    /// EndpointId. Ignored when [`IrohConfig::secret`] is set directly.
+    /// `EndpointId`. Ignored when [`IrohConfig::secret`] is set directly.
     pub device_identity: Option<DeviceIdentity>,
     pub relays: RelaySetting,
     pub mdns: Option<MdnsSetting>,
@@ -60,6 +62,8 @@ pub struct IrohConfig {
     /// How long a dial may take before failing typed (`TimedOut`). iroh has
     /// its own ~10s QUIC connect budget underneath this.
     pub dial_timeout: Duration,
+    /// Explicit route table. If None, a fresh isolated `RouteTable` is created.
+    pub routes: Option<RouteTable>,
 }
 
 impl Default for IrohConfig {
@@ -71,6 +75,7 @@ impl Default for IrohConfig {
             mdns: None,
             force_relay: false,
             dial_timeout: Duration::from_secs(10),
+            routes: None,
         }
     }
 }
@@ -96,7 +101,7 @@ impl IrohConfig {
 pub struct IrohConfigBuilder(IrohConfig);
 
 impl IrohConfigBuilder {
-    /// Derive the stable EndpointId from this device identity.
+    /// Derive the stable `EndpointId` from this device identity.
     pub fn device_identity(mut self, id: &DeviceIdentity) -> Self {
         self.0.device_identity = Some(id.clone());
         self
@@ -125,6 +130,11 @@ impl IrohConfigBuilder {
 
     pub fn dial_timeout(mut self, d: Duration) -> Self {
         self.0.dial_timeout = d;
+        self
+    }
+
+    pub fn routes(mut self, routes: RouteTable) -> Self {
+        self.0.routes = Some(routes);
         self
     }
 

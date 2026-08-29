@@ -8,6 +8,7 @@
 
 pub mod corrupt;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -67,16 +68,19 @@ pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
 pub struct EngineFixture {
     pub _dir: tempfile::TempDir,
     listen_addr: std::net::SocketAddr,
-    poly: u64,
+    pub poly: u64,
     name: String,
     pub a: EngineHandle,
     pub b: EngineHandle,
 }
 
+/// Config hook passed to [`EngineFixture::start_with_cfg_a`].
+type CfgHook = Box<dyn FnOnce(&mut EngineConfig)>;
+
 impl EngineFixture {
     /// Node A listens; node B connects. Both poll fast for snappy tests.
     pub fn start(name: &str, seed: u64) -> Self {
-        Self::start_inner(name, seed, None)
+        Self::start_inner(name, seed, None, None)
     }
 
     /// Like [`start`], but node B dials through the given transport (test
@@ -86,13 +90,24 @@ impl EngineFixture {
         seed: u64,
         transport_b: Arc<dyn ferry_sync::Transport>,
     ) -> Self {
-        Self::start_inner(name, seed, Some(transport_b))
+        Self::start_inner(name, seed, Some(transport_b), None)
+    }
+
+    /// Like [`start`], but node A's config passes through `hook_cfg_a`
+    /// before the engine builds (e.g. to set `pin_state_dir`, T-06).
+    pub fn start_with_cfg_a(
+        name: &str,
+        seed: u64,
+        hook_cfg_a: impl FnOnce(&mut EngineConfig) + 'static,
+    ) -> Self {
+        Self::start_inner(name, seed, None, Some(Box::new(hook_cfg_a)))
     }
 
     fn start_inner(
         name: &str,
         seed: u64,
         transport_b: Option<Arc<dyn ferry_sync::Transport>>,
+        hook_cfg_a: Option<CfgHook>,
     ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let poly = generate_polynomial(&mut StdRng::seed_from_u64(seed));
@@ -101,6 +116,9 @@ impl EngineFixture {
         fs::create_dir_all(dir.path().join("b/tree")).unwrap();
 
         let mut cfg_a = self_cfg(dir.path(), "a", format!("{name}-a"), poly);
+        if let Some(hook) = hook_cfg_a {
+            hook(&mut cfg_a);
+        }
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
         let engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
         let addr = engine_a
@@ -222,9 +240,9 @@ impl TreeBuilder {
             let dir_depth = self.rng.gen_range(0..=2);
             let mut rel = String::new();
             for _ in 0..dir_depth {
-                rel.push_str(&format!("d{}/", self.rng.gen_range(1..=3)));
+                let _ = write!(rel, "d{}/", self.rng.gen_range(1..=3));
             }
-            rel.push_str(&format!("file-{i:03}.bin"));
+            let _ = write!(rel, "file-{i:03}.bin");
             self.write_random(&rel, 8192);
             out.push(rel);
         }

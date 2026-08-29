@@ -15,7 +15,7 @@
 //!   platform.
 //! - Overflow: if prefix + name + suffix would push the component past the
 //!   conservative length limit, a hash-substituted short name
-//!   `<prefix><16 hex of BLAKE3(rel path)>`.tmp` replaces it (Syncthing does
+//!   `<prefix><16 hex of BLAKE3(rel path)>.tmp` replaces it (Syncthing does
 //!   the same when prefix+extension would overflow path limits).
 //!
 //! The optional `.<entropy>` tail is 8 lowercase hex chars so two writers
@@ -44,7 +44,7 @@ pub const TEMP_SUFFIX: &str = ".tmp";
 /// Length of the random entropy tail (hex chars).
 pub const ENTROPY_HEX_LEN: usize = 8;
 
-/// Conservative single-component length cap. Stays under NAME_MAX (255) on
+/// Conservative single-component length cap. Stays under `NAME_MAX` (255) on
 /// Linux/macOS with room for the prefix/suffix/entropy overhead, and under
 /// typical Windows per-component limits.
 const NAME_LEN_LIMIT: usize = 200;
@@ -138,9 +138,8 @@ pub fn is_temp_name(name: &str) -> bool {
 }
 
 fn matches_style(name: &str, style: TempStyle) -> bool {
-    let rest = match name.strip_prefix(style.prefix()) {
-        Some(r) => r,
-        None => return false,
+    let Some(rest) = name.strip_prefix(style.prefix()) else {
+        return false;
     };
     // Plain form: some nonempty body then exactly ".tmp".
     if rest.len() > TEMP_SUFFIX.len() && rest.ends_with(TEMP_SUFFIX) {
@@ -159,7 +158,11 @@ fn hex_entropy() -> String {
     use rand::Rng;
     let mut bytes = [0u8; ENTROPY_HEX_LEN / 2];
     rand::thread_rng().fill(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut out, b| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 /// Draw a fresh entropy tail for one temp file.
@@ -333,7 +336,7 @@ mod tests {
                 .unwrap();
         }
 
-        let removed = sweep_stale_temps(root, Duration::from_secs(60)).unwrap();
+        let removed = sweep_stale_temps(root, Duration::from_mins(1)).unwrap();
         let names: Vec<String> = removed
             .iter()
             .map(|p| {
@@ -366,7 +369,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".ferry.gone.tmp"), b"x").unwrap();
         // No panic when the entry disappears between listing and stat.
-        let removed = sweep_stale_temps(dir.path(), Duration::from_secs(3600)).unwrap();
+        let removed = sweep_stale_temps(dir.path(), Duration::from_hours(1)).unwrap();
         // Its mtime is now, so nothing should be removed anyway.
         assert!(removed.is_empty());
     }

@@ -4,6 +4,7 @@
 //! Layer order (ferry-ignore crate docs, mirrored verbatim here):
 //! defaults < root ferry.ignore < applied presets < user overrides.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde_json::json;
@@ -151,7 +152,7 @@ fn show_layers(root: &Path, settings: &Settings) -> CliResult<Output> {
             "defaults (built-in)",
             ferry_ignore::defaults::DEFAULT_RULES
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect(),
         ),
         ("file ferry.ignore", read_lines(&root.join("ferry.ignore"))),
@@ -193,9 +194,9 @@ fn show_layers(root: &Path, settings: &Settings) -> CliResult<Output> {
         if lines.is_empty() {
             continue;
         }
-        human.push_str(&format!("\n[{name}]\n"));
+        let _ = writeln!(human, "\n[{name}]");
         for l in lines {
-            human.push_str(&format!("  {l}\n"));
+            let _ = writeln!(human, "  {l}");
         }
     }
 

@@ -137,24 +137,29 @@ fn wrong_key_dial_fails_cleanly_typed() {
 }
 
 #[test]
-fn self_dial_wakes_listener_with_clean_eof_probe() {
-    // The M0 engine unblocks its accept loop by dialing its own listener
-    // address. Over iroh we reproduce that observable behavior: dial
-    // succeeds, the accepted side reads immediate clean EOF.
+fn self_dial_is_cleanly_refused() {
     let a = test_transport(0xE0);
     let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let own = lst.local_addr().unwrap();
 
-    let server = std::thread::spawn(move || {
-        let mut probe = lst.accept().expect("probe wakes accept");
-        let err = probe.recv_frame().unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::UnexpectedEof, "{err}");
+    let err = a.dial(own).err().expect("self-dial must fail");
+    assert_eq!(err.kind(), ErrorKind::ConnectionRefused);
+    assert!(err.to_string().contains("self-dial"), "{err}");
+}
+
+#[test]
+fn listener_close_unblocks_accept() {
+    let a = test_transport(0xE1);
+    let lst: std::sync::Arc<dyn ferry_sync::Listener> =
+        std::sync::Arc::from(a.listen("127.0.0.1:0".parse().unwrap()).unwrap());
+
+    let server_lst = std::sync::Arc::clone(&lst);
+    let server = std::thread::spawn(move || match server_lst.accept() {
+        Err(e) => assert_eq!(e.kind(), ErrorKind::ConnectionAborted),
+        Ok(_) => panic!("expected accept to fail after close"),
     });
 
-    let mut probe_dialer = a.dial(own).expect("self-dial returns a probe connection");
-    assert_eq!(
-        probe_dialer.recv_frame().unwrap_err().kind(),
-        ErrorKind::UnexpectedEof
-    );
+    std::thread::sleep(Duration::from_millis(50));
+    lst.close().unwrap();
     server.join().unwrap();
 }

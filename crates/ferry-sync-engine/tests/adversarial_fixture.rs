@@ -21,7 +21,7 @@
 //! Platform notes:
 //! - The deep branch (>260 chars total) is created through
 //!   `ferry_platform::extend_path`, so Windows runners can build it
-//!   regardless of the host's LongPathsEnabled registry state.
+//!   regardless of the host's `LongPathsEnabled` registry state.
 //! - Symlinks are probe-gated (`symlink_creation_works`): hosts that forbid
 //!   creating them skip the chain rather than fail setup; the pure policy
 //!   tests cover the refused cases everywhere.
@@ -34,8 +34,7 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
-use ferry_sync_engine::reconcile::{reconcile, ReconcileInput};
-use ferry_sync_engine::{agree, execute};
+use ferry_sync_engine::{ConvergenceEngine, ConvergenceError, ConvergenceResult};
 
 use rand::SeedableRng;
 
@@ -54,8 +53,8 @@ fn fmk() -> [u8; 32] {
     core::array::from_fn(|i| (i * 13 + 1) as u8)
 }
 
-fn poly(seed: u64) -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut rand::rngs::StdRng::seed_from_u64(seed))
+fn poly(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(seed))
 }
 
 fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
@@ -90,14 +89,12 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        let f = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-            .unwrap();
-        stamp(&f, mt);
+        // std set_times through a read handle cannot stamp directories
+        // here: SetFileTime requires FILE_WRITE_ATTRIBUTES on the handle,
+        // which GENERIC_READ (+ even FILE_FLAG_BACKUP_SEMANTICS) does not
+        // carry. filetime opens the directory with the right access —
+        // same approach as ferry-store's and ferry-materialize's fixtures.
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -113,14 +110,14 @@ fn symlink_creation_works(root: &Path) -> bool {
         let probe = root.join(".ferry-symlink-probe");
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink("target", &probe).is_ok_and(|_| {
+            std::os::unix::fs::symlink("target", &probe).is_ok_and(|()| {
                 let _ = std::fs::remove_file(&probe);
                 true
             })
         }
         #[cfg(windows)]
         {
-            std::os::windows::fs::symlink_file("target", &probe).is_ok_and(|_| {
+            std::os::windows::fs::symlink_file("target", &probe).is_ok_and(|()| {
                 let _ = std::fs::remove_file(&probe);
                 true
             })
@@ -227,7 +224,7 @@ fn build_fixture(root: &Path) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push(e.path());
             }
         }
@@ -343,7 +340,7 @@ impl Dev {
             folder_id: [7; 16],
             device_id: self.dev,
             parent_manifest_id: self.parent,
-            created_sec: NOW.0 + self.parent[0] as i64,
+            created_sec: NOW.0 + i64::from(self.parent[0]),
             created_nsec: 0,
         };
         let out = snapshot_dir(&self.store, poly(42), &self.tree, &idn).unwrap();
@@ -381,47 +378,68 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-fn plan_on(
+/// The convergence engine's fetch hook, wired to the peer's store (what
+/// the wire serves).
+struct PeerFetch<'x> {
+    from: &'x Store,
+    to: &'x Store,
+}
+
+impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
+    fn fetch(&mut self, want: &[(BlobId, u64)]) -> Result<(), ConvergenceError> {
+        for (id, _) in want {
+            if self.to.get(BlobKind::DataChunk, id).is_err() {
+                let b = self
+                    .from
+                    .get(BlobKind::DataChunk, id)
+                    .expect("peer must hold a chunk it advertised");
+                self.to
+                    .put_blob(BlobKind::DataChunk, &b)
+                    .map_err(ConvergenceError::from)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One full convergence on `exec_dev` through the engine seam.
+fn converge_on(
     exec_dev: &mut Dev,
     local: &SnapshotOutput,
     remote_snap: &SnapshotOutput,
     base: Option<&ferry_store::manifest::RootManifest>,
     other: &Dev,
-) -> ferry_sync_engine::plan::ActionPlan {
-    let mut plan = reconcile(ReconcileInput {
-        store: &exec_dev.store,
-        local: &local.manifest,
-        remote: &remote_snap.manifest,
-        base,
-    })
-    .unwrap_or_else(|e| panic!("reconcile failed on {}: {e}", hex(&exec_dev.dev)));
-    for (id, _) in &plan.fetch {
-        if exec_dev.store.get(BlobKind::DataChunk, id).is_err() {
-            let b = other.store.get(BlobKind::DataChunk, id).unwrap();
-            exec_dev.store.put_blob(BlobKind::DataChunk, &b).unwrap();
-        }
-    }
-    plan.guard_expected = Some(local.manifest.clone());
-    plan
-}
-
-fn run_plan(d: &mut Dev, plan: &ferry_sync_engine::plan::ActionPlan) {
-    execute(&d.store, &d.tree, plan, Some(&d.state), NOW).expect("execute must succeed");
+) -> ConvergenceResult {
+    let mut fetch = PeerFetch {
+        from: &other.store,
+        to: &exec_dev.store,
+    };
+    let result = ConvergenceEngine::new(&exec_dev.store, &exec_dev.tree)
+        .state_dir(&exec_dev.state)
+        .at(NOW)
+        .fetch_with(&mut fetch)
+        .converge(&local.manifest, &remote_snap.manifest, base);
+    result.unwrap_or_else(|e| panic!("converge failed on {}: {e}", hex(&exec_dev.dev)))
 }
 
 fn record_agreement(recorder: &mut Dev, peer: [u8; 32], manifest_id: BlobId) {
-    agree::PeerState::new(&recorder.state)
-        .record(&agree::AgreedRecord {
-            peer_device_id: peer,
-            manifest_id,
-            agreed_sec: NOW.0,
-            agreed_nsec: 0,
-        })
+    ferry_store::agreement::AgreementLedger::new(&recorder.state)
+        .record(
+            &[7; 16],
+            &ferry_store::agreement::AgreedRecord {
+                peer_device_id: peer,
+                manifest_id,
+                agreed_sec: NOW.0,
+                agreed_nsec: 0,
+            },
+        )
         .unwrap();
 }
 
-fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<agree::AgreedRecord> {
-    agree::PeerState::new(&d.state).load(&peer).unwrap()
+fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<ferry_store::agreement::AgreedRecord> {
+    ferry_store::agreement::AgreementLedger::new(&d.state)
+        .get(&[7; 16], &peer)
+        .unwrap()
 }
 
 fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
@@ -600,13 +618,11 @@ fn reconciliation_conflict_inside_fixture() {
     // One full exchange round, A first.
     let base_a = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     transfer_meta(&b.store, &a.store, &sb);
-    let pa = plan_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
-    run_plan(&mut a, &pa);
+    converge_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
     let sa2 = a.snap();
     let base_b = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
     transfer_meta(&a.store, &b.store, &sa2);
-    let pb = plan_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
-    run_plan(&mut b, &pb);
+    converge_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
 
     // Converge.
     let mut rounds = 1;
@@ -622,10 +638,8 @@ fn reconciliation_conflict_inside_fixture() {
         transfer_meta(&b.store, &a.store, &sb3);
         let ba = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
         let bb = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
-        let pa2 = plan_on(&mut a, &sa3, &sb3, ba.as_ref(), &b);
-        let pb2 = plan_on(&mut b, &sb3, &sa3, bb.as_ref(), &a);
-        run_plan(&mut a, &pa2);
-        run_plan(&mut b, &pb2);
+        converge_on(&mut a, &sa3, &sb3, ba.as_ref(), &b);
+        converge_on(&mut b, &sb3, &sa3, bb.as_ref(), &a);
     }
 
     // Zero silent data loss on every device.
@@ -661,10 +675,10 @@ fn reconciliation_conflict_inside_fixture() {
     let sb4 = b.snap();
     transfer_meta(&a.store, &b.store, &sa4);
     transfer_meta(&b.store, &a.store, &sb4);
-    let pa3 = plan_on(&mut a, &sa4, &sb4, None, &b);
-    let pb3 = plan_on(&mut b, &sb4, &sa4, None, &a);
+    let ra3 = converge_on(&mut a, &sa4, &sb4, None, &b);
+    let rb3 = converge_on(&mut b, &sb4, &sa4, None, &a);
     assert!(
-        pa3.materialize.is_empty() && pb3.materialize.is_empty(),
-        "fixed point violated: ops remain after convergence"
+        ra3.is_noop() && rb3.is_noop(),
+        "fixed point violated: ops remain after convergence ({ra3:?} / {rb3:?})"
     );
 }

@@ -219,6 +219,7 @@ mod tests {
     /// same lengths everywhere, so swapping the implementation cannot shift
     /// any offset the format promises (T-008's format-neutrality proof).
     #[test]
+    #[allow(clippy::large_stack_arrays)] // fixed-size stack scratch; heap boxing would only slow the test
     fn passthrough_and_chacha_framing_lengths_are_identical() {
         let passthrough = PassthroughCipher;
         let real = cipher();

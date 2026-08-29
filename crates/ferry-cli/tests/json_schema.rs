@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::Env;
+use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
 
@@ -54,7 +54,7 @@ fn schema_of(v: &Value) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Compare-or-bless. Set FERRY_UPDATE_EXPECTED=1 to rewrite the file.
+/// Compare-or-bless. Set `FERRY_UPDATE_EXPECTED=1` to rewrite the file.
 fn assert_matches_expected(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));
@@ -148,6 +148,44 @@ fn ignore_mutations_share_one_document_shape() {
 }
 
 #[test]
+fn store_gc_document_schema_is_stable() {
+    let env = Env::new("schema-store-gc");
+    let proj = env.work().join("proj");
+    commands::init::run(&proj, "init").unwrap();
+
+    // Orphan content: blobs with no manifest referencing them must show up
+    // as garbage in the dry-run report (and pin the array element shape).
+    let opened = ferry_cli::folder::open_folder(&proj).unwrap();
+    opened
+        .store
+        .put_data(b"orphan bytes nobody references")
+        .unwrap();
+    opened.store.flush().unwrap();
+    opened.store.write_index_snapshot().unwrap();
+
+    let dry = commands::store::run(commands::store::GcArgs {
+        folder: &proj,
+        dry_run: true,
+        grace_secs: 24 * 60 * 60,
+    })
+    .unwrap();
+    assert_eq!(dry.json["command"], "store");
+    assert_eq!(dry.json["dry_run"], true);
+    assert!(!dry.json["garbage_packs"].as_array().unwrap().is_empty());
+    assert_matches_expected("store-gc-dry", &schema_of(&dry.json));
+
+    // The delete path behind the report shares the document skeleton.
+    let real = commands::store::run(commands::store::GcArgs {
+        folder: &proj,
+        dry_run: false,
+        grace_secs: 0,
+    })
+    .unwrap();
+    assert_eq!(real.json["dry_run"], false);
+    assert_matches_expected("store-gc", &schema_of(&real.json));
+}
+
+#[test]
 fn pin_documents_are_stable_across_the_lifecycle() {
     let env = Env::new("schema-pin");
     let proj = env.work().join("proj");
@@ -155,7 +193,8 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
 
-    let started = commands::pin::start(&proj, &["src/**".to_string()]).unwrap();
+    let _daemon = RunningDaemon::start(&proj);
+    let started = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 
     // While pinned with held changes absent, status still pins the shape.

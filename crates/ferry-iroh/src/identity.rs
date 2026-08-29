@@ -12,17 +12,17 @@
 //!
 //! Properties this buys:
 //!
-//! - One device identity → one stable EndpointId across restarts. Pairing
+//! - One device identity → one stable `EndpointId` across restarts. Pairing
 //!   once with a peer means its public key never changes underneath you.
 //! - The iroh secret never exists as user-visible state; it is recomputed.
-//!   Losing the device identity file loses the EndpointId too — one backup
+//!   Losing the device identity file loses the `EndpointId` too — one backup
 //!   story, not two.
 //! - The curves are unrelated, so deriving does not weaken either key.
 
 use ferry_crypto::identity::DeviceIdentity;
 
 /// Domain-separation label for the derivation. Changing it changes every
-/// EndpointId; treat it as protocol constant.
+/// `EndpointId`; treat it as protocol constant.
 pub const DERIVE_LABEL: &[u8] = b"FERRY-IROH-ED25519-V1";
 
 /// Deterministically derive iroh endpoint secret bytes from a device
@@ -46,12 +46,7 @@ pub fn endpoint_seed_from_device_identity(dev: &DeviceIdentity) -> [u8; 32] {
 /// Short display form of an endpoint id (first 8 hex bytes + ellipsis),
 /// for logs and Debug output. Never the full key.
 pub fn id_short(id: &[u8; 32]) -> String {
-    let mut s = String::new();
-    for b in &id[..4] {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s.push('\u{2026}');
-    s
+    format!("{}\u{2026}", ferry_store::format::hex(&id[..4]))
 }
 
 #[cfg(test)]

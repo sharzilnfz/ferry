@@ -84,7 +84,7 @@ pub struct RecoveryExport<'a> {
     pub device_secret: &'a [u8; 32],
 }
 
-impl<'a> RecoveryExport<'a> {
+impl RecoveryExport<'_> {
     /// Serialize + encrypt under `passphrase`. Fresh random salt/nonce from
     /// OS randomness on every call; two exports of identical state differ in
     /// ciphertext (no codebook to mine).
@@ -163,6 +163,7 @@ impl<'a> RecoveryExport<'a> {
     /// import it back into a FRESH identity directory, reconstructing both
     /// the device secret file and returning the FMK. Refuses if `identity_dir`
     /// already holds an identity (callers wiping state should have removed it).
+    #[cfg(test)]
     pub fn round_trip_through_files(
         &self,
         passphrase: &str,
@@ -177,6 +178,7 @@ impl<'a> RecoveryExport<'a> {
     }
 }
 
+#[cfg(test)]
 fn io_err(e: crate::identity::IdentityError) -> RecoveryError {
     match e {
         crate::identity::IdentityError::Io(io) => RecoveryError::Io(io),

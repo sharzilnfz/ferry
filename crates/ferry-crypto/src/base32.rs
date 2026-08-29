@@ -27,7 +27,7 @@ pub fn encode(data: &[u8]) -> String {
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
     for &b in data {
-        acc = (acc << 8) | b as u32;
+        acc = (acc << 8) | u32::from(b);
         bits += 8;
         while bits >= 5 {
             bits -= 5;
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn output_never_contains_ambiguous_characters() {
         // Exhaustively over the alphabet itself...
-        for &sym in ALPHABET.iter() {
+        for &sym in ALPHABET {
             assert!(!matches!(sym, b'0' | b'1' | b'I' | b'O'));
         }
         assert_eq!(ALPHABET.len(), 32);

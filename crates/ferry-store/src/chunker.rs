@@ -3,6 +3,7 @@
 //! constants and MUST NOT change without bumping the store format version.
 
 use std::fmt;
+use std::sync::Mutex;
 
 use rand::Rng;
 use thiserror::Error;
@@ -11,9 +12,9 @@ use thiserror::Error;
 pub const WINDOW_SIZE: usize = 64;
 /// No natural cut may fire before this many bytes.
 pub const MIN_SIZE: usize = 524_288;
-/// Average target is 2^AVG_BITS bytes.
+/// Average target is `2^AVG_BITS` bytes.
 pub const AVG_BITS: u32 = 20;
-/// Cut when the fingerprint's low AVG_BITS bits are all zero.
+/// Cut when the fingerprint's low `AVG_BITS` bits are all zero.
 pub const SPLIT_MASK: u64 = (1 << AVG_BITS) - 1; // 1_048_575
 /// Hard upper bound for one chunk.
 pub const MAX_SIZE: usize = 8_388_608;
@@ -27,12 +28,56 @@ const SLIDE_OUT_X: u32 = 504;
 #[error("polynomial {0:#x} is not monic irreducible of degree 53")]
 pub struct PolynomialError(pub u64);
 
+/// A polynomial that has passed [`is_irreducible`], validated exactly once
+/// at folder-open/config-load time. Scan/snapshot APIs take this type so
+/// downstream code cannot hold an invalid poly and panic mid-scan on it.
+///
+/// Construct from raw storage/CLI input with [`ValidatedPoly::new`] (or
+/// `TryFrom<u64>`); generate fresh ones with [`ValidatedPoly::generate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValidatedPoly(u64);
+
+impl ValidatedPoly {
+    /// Validate once; every later use is infallible by construction.
+    pub fn new(p: u64) -> Result<Self, PolynomialError> {
+        if !is_irreducible(p) {
+            return Err(PolynomialError(p));
+        }
+        Ok(ValidatedPoly(p))
+    }
+
+    /// Draw a fresh valid polynomial from an RNG (see
+    /// [`generate_polynomial`]).
+    pub fn generate(rng: &mut impl Rng) -> Self {
+        ValidatedPoly(generate_polynomial(rng))
+    }
+
+    /// The raw bitfield, for wire/storage serialization.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for ValidatedPoly {
+    type Error = PolynomialError;
+
+    fn try_from(p: u64) -> Result<Self, Self::Error> {
+        ValidatedPoly::new(p)
+    }
+}
+
+impl From<ValidatedPoly> for u64 {
+    fn from(p: ValidatedPoly) -> u64 {
+        p.0
+    }
+}
+
 /// Degree of a nonzero GF(2)[x] polynomial stored in a u64 bitfield.
 fn poly_degree(v: u64) -> Option<u32> {
     if v == 0 {
         None
     } else {
-        Some(63 - v.leading_zeros())
+        Some(v.ilog2())
     }
 }
 
@@ -74,7 +119,7 @@ fn poly_degree128(v: u128) -> u32 {
     if v == 0 {
         0
     } else {
-        127 - v.leading_zeros()
+        v.ilog2()
     }
 }
 
@@ -162,9 +207,9 @@ pub fn generate_polynomial(rng: &mut impl Rng) -> u64 {
 /// Why a byte ended a chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cut {
-    /// Fingerprint low bits were zero past MIN_SIZE.
+    /// Fingerprint low bits were zero past `MIN_SIZE`.
     Natural,
-    /// Hard clamp at MAX_SIZE.
+    /// Hard clamp at `MAX_SIZE`.
     Max,
 }
 
@@ -179,9 +224,12 @@ impl fmt::Display for Cut {
 
 /// Streaming CDC state machine for one file, bound to one folder polynomial.
 ///
-/// Feed bytes with [`Chunker::push`]; a returned `Some(len)` ends a chunk of
-/// exactly `len` bytes ending at the byte just pushed. State resets fully
-/// between chunks; fingerprints never carry across boundaries.
+/// Feed bytes with [`Chunker::push`] (one byte, yields a boundary) or
+/// [`Chunker::feed`] (a block, yields every boundary completed inside it);
+/// [`Chunker::finish`] reports the trailing unterminated chunk. A returned
+/// length ends a chunk of exactly that many bytes ending at the last byte
+/// fed. State resets fully between chunks; fingerprints never carry across
+/// boundaries.
 pub struct Chunker {
     poly: u64,
     win: [u8; WINDOW_SIZE],
@@ -189,7 +237,36 @@ pub struct Chunker {
     filled: usize,
     fp: u64,
     len: usize,
+    tables: &'static DerivedTables,
+}
+
+/// Per-polynomial constants derived from `p`: the slide-out power and the
+/// byte fold-down table. Computed once per polynomial for the life of the
+/// process (memoized behind a mutex) instead of once per chunker instance —
+/// a walk builds one chunker per file, and the derivation alone costs more
+/// than chunking a small file.
+struct DerivedTables {
     out_table: [u64; 256],
+}
+
+fn derived_tables(p: u64) -> &'static DerivedTables {
+    type Memo = std::collections::HashMap<u64, &'static DerivedTables>;
+    static MEMO: std::sync::OnceLock<Mutex<Memo>> = std::sync::OnceLock::new();
+    let memo = MEMO.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = memo
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.entry(p).or_insert_with(|| {
+        let slide_out = gf_pow_x(SLIDE_OUT_X, p);
+        let mut out_table = [0u64; 256];
+        for (i, slot) in out_table.iter_mut().enumerate() {
+            // The raw product reaches degree <= 60; it MUST be reduced back
+            // under degree 53 or every later fold inherits garbage high
+            // terms and the fingerprint stops being window-local.
+            *slot = gf_mod(gf_mul(i as u64, slide_out), p);
+        }
+        Box::leak(Box::new(DerivedTables { out_table }))
+    })
 }
 
 impl Chunker {
@@ -200,14 +277,6 @@ impl Chunker {
         if !is_irreducible(p) {
             return Err(PolynomialError(p));
         }
-        let slide_out = gf_pow_x(SLIDE_OUT_X, p);
-        let mut out_table = [0u64; 256];
-        for (i, slot) in out_table.iter_mut().enumerate() {
-            // The raw product reaches degree <= 60; it MUST be reduced back
-            // under degree 53 or every later fold inherits garbage high
-            // terms and the fingerprint stops being window-local.
-            *slot = gf_mod(gf_mul(i as u64, slide_out), p);
-        }
         Ok(Chunker {
             poly: p,
             win: [0; WINDOW_SIZE],
@@ -215,7 +284,7 @@ impl Chunker {
             filled: 0,
             fp: 0,
             len: 0,
-            out_table,
+            tables: derived_tables(p),
         })
     }
 
@@ -259,6 +328,30 @@ impl Chunker {
         }
     }
 
+    /// Feed a block of bytes; returns the lengths of every chunk COMPLETED
+    /// inside this block, in order. Byte-identical boundaries to pushing the
+    /// same bytes one at a time — block edges never influence cutting.
+    ///
+    /// This is the whole-file-buffer-free entry point (T-09): callers stream
+    /// a bounded read buffer through here and keep only the current chunk's
+    /// bytes resident.
+    pub fn feed(&mut self, data: &[u8]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for &b in data {
+            if let Some(len) = self.push(b) {
+                out.push(len);
+            }
+        }
+        out
+    }
+
+    /// End of stream: the length of the trailing unterminated chunk (0 when
+    /// the input was empty or ended exactly on a boundary). The caller owns
+    /// those trailing bytes; this only reports how many there are.
+    pub fn finish(&self) -> usize {
+        self.pending_len()
+    }
+
     /// Fingerprint update for one appended byte, exactly as specified:
     /// during warm-up just fold the byte in; afterwards remove the outgoing
     /// byte's contribution (`out * x^504`) via the precomputed table, then
@@ -268,40 +361,47 @@ impl Chunker {
             self.win[self.wpos] = b;
             self.wpos = (self.wpos + 1) % WINDOW_SIZE;
             self.filled += 1;
-            self.fp = gf_mod((self.fp << 8) | b as u64, self.poly);
+            self.fp = gf_mod((self.fp << 8) | u64::from(b), self.poly);
         } else {
             let out = self.win[self.wpos];
             self.win[self.wpos] = b;
             self.wpos = (self.wpos + 1) % WINDOW_SIZE;
-            self.fp ^= self.out_table[out as usize];
-            self.fp = gf_mod((self.fp << 8) | b as u64, self.poly);
+            self.fp ^= self.tables.out_table[out as usize];
+            self.fp = gf_mod((self.fp << 8) | u64::from(b), self.poly);
         }
     }
 }
 
 /// Chunk boundaries of `data`: (offset, length) pairs tiling the input.
-pub fn chunk_offsets(poly: u64, data: &[u8]) -> Vec<(usize, usize)> {
-    let mut c = Chunker::new(poly).expect("chunk_offsets called with invalid polynomial");
+///
+/// Returns a [`PolynomialError`] instead of panicking when `poly` is not
+/// monic irreducible of degree 53 — the daemon accepts `--poly HEX16` from
+/// the CLI, so a typo must surface as a typed error, not a mid-scan panic.
+/// Prefer threading a validated [`ValidatedPoly`] through your APIs and
+/// calling `.get()` here.
+pub fn chunk_offsets(poly: u64, data: &[u8]) -> Result<Vec<(usize, usize)>, PolynomialError> {
+    // Thin wrapper over the streaming state machine (T-09): one code path,
+    // so buffered and streamed boundaries cannot drift.
+    let mut c = Chunker::new(poly)?;
     let mut out = Vec::new();
     let mut start = 0usize;
-    for &b in data {
-        if let Some(l) = c.push(b) {
-            out.push((start, l));
-            start += l;
-        }
+    for len in c.feed(data) {
+        out.push((start, len));
+        start += len;
     }
-    if c.pending_len() > 0 {
-        out.push((start, c.pending_len()));
+    let tail = c.finish();
+    if tail > 0 {
+        out.push((start, tail));
     }
-    out
+    Ok(out)
 }
 
 /// Slice view of [`chunk_offsets`].
-pub fn chunk(poly: u64, data: &[u8]) -> Vec<&[u8]> {
-    chunk_offsets(poly, data)
+pub fn chunk(poly: u64, data: &[u8]) -> Result<Vec<&[u8]>, PolynomialError> {
+    Ok(chunk_offsets(poly, data)?
         .into_iter()
         .map(|(off, len)| &data[off..off + len])
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -366,15 +466,16 @@ mod tests {
             assert!(poly_degree(r).unwrap_or(0) < POLY_DEGREE || r == 0);
             // Independent wide reduction: same long division in u128, which
             // cannot overflow for these operand sizes.
-            let mut wide = v as u128;
-            let pw = p as u128;
+            let mut wide = u128::from(v);
+            let pw = u128::from(p);
             while poly_degree128(wide) >= POLY_DEGREE {
                 wide ^= pw << (poly_degree128(wide) - POLY_DEGREE);
             }
-            assert_eq!(r as u128, wide, "gf_mod({v:#x})");
+            assert_eq!(u128::from(r), wide, "gf_mod({v:#x})");
         }
     }
 
+    #[allow(clippy::many_single_char_names)] // a/b/c/r mirror the algebra in the comments
     #[test]
     fn gf_mulmod_matches_gf_mul_then_mod() {
         let p = test_poly(11);
@@ -420,7 +521,7 @@ mod tests {
     fn rabin_test_agrees_with_trial_division_on_all_small_prime_degrees() {
         // Generic Rabin test for prime degree d vs exhaustive trial division.
         fn rabin_generic(p: u64, d: u32) -> bool {
-            if poly_degree(p).map(|dd| dd != d).unwrap_or(true) {
+            if poly_degree(p) != Some(d) {
                 return false;
             }
             // x^(2^d) ≡ x (mod p)
@@ -523,6 +624,21 @@ mod tests {
         assert!(Chunker::new(0x1234).is_err()); // not degree 53
     }
 
+    /// T-02 acceptance: the free functions must return the typed error for a
+    /// user-supplied reducible polynomial instead of `.expect()`-panicking
+    /// mid-scan (the daemon accepts `--poly HEX16` from the CLI).
+    #[test]
+    fn free_functions_return_typed_error_on_reducible_polynomial() {
+        // Reducible (divisible by x): monic degree 53 but zero constant term.
+        let bad = 1u64 << 53;
+        let err = chunk_offsets(bad, b"hello ferry").unwrap_err();
+        assert_eq!(err.0, bad, "the error names the offending polynomial");
+        assert!(matches!(chunk(bad, &[1, 2, 3]), Err(PolynomialError(p)) if p == bad));
+        // A valid poly still chunks fine through the same entry points.
+        let good = test_poly(41);
+        assert!(chunk_offsets(good, b"hello ferry").is_ok());
+    }
+
     // --- Cut decision and clamping order ---
 
     #[test]
@@ -565,9 +681,9 @@ mod tests {
 
     #[test]
     fn empty_input_yields_zero_chunks() {
-        let offs = chunk_offsets(test_poly(21), &[]);
+        let offs = chunk_offsets(test_poly(21), &[]).unwrap();
         assert!(offs.is_empty());
-        assert!(chunk(test_poly(21), &[]).is_empty());
+        assert!(chunk(test_poly(21), &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -575,7 +691,7 @@ mod tests {
         let p = test_poly(22);
         for size in [1usize, 2, 63, 64, 65, 4096, MIN_SIZE - 1] {
             let data = prng_bytes(size as u64, size);
-            let ch = chunk(p, &data);
+            let ch = chunk(p, &data).unwrap();
             assert_eq!(ch.len(), 1, "size {size}");
             assert_eq!(ch[0], &data[..]);
         }
@@ -585,7 +701,7 @@ mod tests {
     fn exactly_min_is_one_chunk() {
         let p = test_poly(23);
         let data = prng_bytes(99, MIN_SIZE);
-        let ch = chunk(p, &data);
+        let ch = chunk(p, &data).unwrap();
         assert_eq!(ch.len(), 1);
         assert_eq!(ch[0].len(), MIN_SIZE);
     }
@@ -596,7 +712,7 @@ mod tests {
         // full, so every natural cut lands at exactly MIN_SIZE.
         let p = test_poly(24);
         let data = vec![0u8; MIN_SIZE * 4 + 12345];
-        let ch = chunk(p, &data);
+        let ch = chunk(p, &data).unwrap();
         assert_eq!(ch.len(), 5);
         for c in &ch[..4] {
             assert_eq!(c.len(), MIN_SIZE);
@@ -632,7 +748,7 @@ mod tests {
         ];
         for (i, size) in sizes.iter().enumerate() {
             let data = prng_bytes(1000 + i as u64, *size);
-            let parts = chunk(p, &data);
+            let parts = chunk(p, &data).unwrap();
             // Reassembly is byte-identical.
             let rejoined: Vec<u8> = parts.concat();
             assert_eq!(rejoined, data, "round trip failed at size {size}");
@@ -669,7 +785,7 @@ mod tests {
         let data = prng_bytes(27, MIN_SIZE * 2 + 4096);
 
         // Bulk.
-        let bulk = chunk_offsets(p, &data);
+        let bulk = chunk_offsets(p, &data).unwrap();
 
         // Streaming byte by byte through a fresh chunker.
         let mut c = Chunker::new(p).unwrap();
@@ -689,12 +805,85 @@ mod tests {
         assert_eq!(streamed, bulk);
     }
 
+    /// T-09 acceptance: block-fed `feed`/`finish` must produce byte-identical
+    /// boundaries to the buffered slice functions, for every input size
+    /// around the min/avg/max clamp boundaries and every feed block size —
+    /// including blocks that split a cut decision's window state across two
+    /// feeds.
+    #[test]
+    fn streaming_feed_boundaries_are_identical_to_slice_output() {
+        let p = test_poly(46);
+        let avg = 1usize << AVG_BITS;
+        // Sizes span: empty, sub-window, window edges, sub-MIN, exactly MIN,
+        // around AVG, multi-MIN, around MAX, MAX+1 and one past a max clamp.
+        let sizes = [
+            0usize,
+            1,
+            63,
+            64,
+            65,
+            MIN_SIZE - 1,
+            MIN_SIZE,
+            MIN_SIZE + 1,
+            avg - 1,
+            avg,
+            avg + 1,
+            MIN_SIZE * 2 + 777,
+            MAX_SIZE - 1,
+            MAX_SIZE,
+            MAX_SIZE + 1,
+        ];
+
+        fn stream_in_blocks(p: u64, data: &[u8], block: usize) -> Vec<(usize, usize)> {
+            let mut c = Chunker::new(p).unwrap();
+            let mut out = Vec::new();
+            let mut start = 0usize;
+            for piece in data.chunks(block.max(1)) {
+                for len in c.feed(piece) {
+                    out.push((start, len));
+                    start += len;
+                }
+            }
+            let tail = c.finish();
+            if tail > 0 {
+                out.push((start, tail));
+            }
+            out
+        }
+
+        for (i, size) in sizes.iter().enumerate() {
+            let data = prng_bytes(2000 + i as u64, *size);
+            let expected = chunk_offsets(p, &data).unwrap();
+
+            // Reassembly identity holds through the streaming path too.
+            let total: usize = expected.iter().map(|(_, l)| l).sum();
+            assert_eq!(total, *size, "slice tiling broke at size {size}");
+
+            // Block sizes: 1, window edge ±1, page-ish, and a big block that
+            // swallows whole chunks at once.
+            for block in [
+                1usize,
+                WINDOW_SIZE - 1,
+                WINDOW_SIZE,
+                WINDOW_SIZE + 1,
+                4096,
+                256 * 1024,
+            ] {
+                assert_eq!(
+                    stream_in_blocks(p, &data, block),
+                    expected,
+                    "streamed boundaries diverged at size {size}, block {block}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn chunking_is_deterministic_per_polynomial() {
         let p = test_poly(28);
         let data = prng_bytes(29, MIN_SIZE * 3 + 11);
-        let a = chunk_offsets(p, &data);
-        let b = chunk_offsets(p, &data);
+        let a = chunk_offsets(p, &data).unwrap();
+        let b = chunk_offsets(p, &data).unwrap();
         assert_eq!(a, b);
     }
 
@@ -705,8 +894,8 @@ mod tests {
         assert_ne!(pa, pb);
         let data = prng_bytes(33, MIN_SIZE * 4);
         assert_ne!(
-            chunk_offsets(pa, &data),
-            chunk_offsets(pb, &data),
+            chunk_offsets(pa, &data).unwrap(),
+            chunk_offsets(pb, &data).unwrap(),
             "two unrelated degree-53 polynomials agreeing on 4 MiB of cuts \
              would indicate broken fingerprinting"
         );
@@ -726,8 +915,8 @@ mod tests {
         let c: Vec<u8> = (0..4 * 1024 * 1024).map(|_| rng.gen()).collect();
 
         let total = 12 * 1024 * 1024;
-        let a = chunk_offsets(poly, &[p1.as_slice(), c.as_slice()].concat());
-        let b = chunk_offsets(poly, &[p2.as_slice(), c.as_slice()].concat());
+        let a = chunk_offsets(poly, &[p1.as_slice(), c.as_slice()].concat()).unwrap();
+        let b = chunk_offsets(poly, &[p2.as_slice(), c.as_slice()].concat()).unwrap();
 
         // Boundaries expressed as distance-from-end are prefix-independent.
         let ends_a: std::collections::HashSet<usize> = a.iter().map(|(o, _)| total - o).collect();

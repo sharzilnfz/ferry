@@ -84,8 +84,8 @@ fn main() -> ExitCode {
             let _ = tokio::signal::ctrl_c().await;
         };
         tokio::select! {
-            _ = shutdown => {}
-            _ = park_forever() => {}
+            () = shutdown => {}
+            () = park_forever() => {}
         }
         relay.shutdown().await;
         eprintln!("relay shut down");
@@ -95,6 +95,6 @@ fn main() -> ExitCode {
 
 async fn park_forever() {
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        tokio::time::sleep(std::time::Duration::from_hours(1)).await;
     }
 }

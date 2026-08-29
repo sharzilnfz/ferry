@@ -42,13 +42,18 @@ pub fn conflict_display_name(
     format!(
         "{nfc}.ferry-conflict.{}-{}",
         device_short(loser_device),
-        crate::timefmt::fmt_compact(loser_mtime_sec)
+        ferry_platform::time::fmt_compact(loser_mtime_sec)
     )
 }
 
 /// Resolve the first free candidate — `NAME`, then `NAME-2`, `NAME-3`,
 /// ... with an incrementing counter — inside the destination directory, and
 /// return it as an absolute path. Does not create anything.
+///
+/// This probe is advisory only: another executor can claim the returned
+/// name before the copy lands. The executor enforces real exclusivity at
+/// landing time (see `execute::write_loser_copy`), regenerating counter
+/// names until an exclusive placement succeeds.
 ///
 /// `relative_parent` is the quarantined file's parent as stored components;
 /// pass `&[]` for the root.

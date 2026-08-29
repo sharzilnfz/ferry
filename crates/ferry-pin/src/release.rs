@@ -1,4 +1,4 @@
-//! Release: turn a held set back into ordinary three-way reconciliation.
+//! Release: turn a held set back into ordinary three-way convergence.
 //!
 //! Per peer with a ledger:
 //!
@@ -8,101 +8,114 @@
 //! 2. The three-way base is the agreement captured at PIN START
 //!    (`base_agreements` in the pin record) — exactly "last-agreed before
 //!    pin". A peer unknown at start reconciles against an empty ancestor.
-//! 3. [`ferry_sync_engine::reconcile`] decides every path; the returned
-//!    plan is executed by the CALLER through the ordinary engine, so
-//!    outcomes are exactly ADR-0004 outcomes: winner live, loser
-//!    quarantined as `path.ferry-conflict.<loser>-<ts>` plus a report
-//!    entry. Nothing is merged, nothing is lost.
+//! 3. [`ferry_sync_engine::ConvergenceEngine`] decides every path and
+//!    executes in one transactional step, so outcomes are exactly ADR-0004
+//!    outcomes: winner live, loser quarantined as
+//!    `path.ferry-conflict.<loser>-<ts>`, report entry, ledger commit on
+//!    full adoption. Nothing is merged, nothing is lost.
 //!
-//! Idempotence: after the release plan runs and the ledgers clear, a second
-//! release finds no peers → empty plan list → a no-op. Re-running before
-//! clearing (e.g. after an execution error) recomputes the same decisions;
-//! quarantine name collision counters make re-execution safe.
+//! Idempotence: after the release convergence succeeds and the ledgers
+//! clear, a second release finds no peers → nothing to do. Re-running
+//! before clearing (e.g. after an execution error) recomputes the same
+//! decisions; quarantine name collision counters make re-execution safe.
 
-use std::collections::BTreeMap;
+use std::path::Path;
 
 use ferry_store::format::{unhex, BlobKind};
-use ferry_store::manifest::parse_manifest;
+use ferry_store::manifest::{parse_manifest, RootManifest};
 use ferry_store::store::Store;
-use ferry_sync_engine::reconcile::{reconcile, ReconcileInput};
-use ferry_sync_engine::ActionPlan;
+use ferry_sync_engine::{ConvergenceEngine, ConvergenceError, ConvergenceResult};
 
 use crate::error::PinError;
 use crate::held::{distinct_paths, HeldLedger};
 
-/// One peer's reconstructed release plan.
+/// One peer's executed release.
 #[derive(Debug)]
 pub struct ReleasePeerPlan {
     /// Peer device id (64 lowercase hex) — also its ledger file stem.
     pub device_id: String,
-    /// Manifest id (hex) whose changes were held; the plan reconciles
+    /// Manifest id (hex) whose changes were held; the release reconciles
     /// against this as the remote side.
     pub remote_manifest_id: String,
     /// Ledger lines seen for this peer.
     pub held_entries: usize,
     /// Distinct held paths, sorted.
     pub held_paths: Vec<String>,
-    /// The executable three-way plan (run via `ferry_sync_engine::execute`).
-    pub plan: ActionPlan,
+    /// What the release convergence actually did.
+    pub result: ConvergenceResult,
 }
 
-/// Build release plans for every peer with a ledger under `state_dir`.
-///
-/// Pure: reads stores/ledgers, writes nothing. The caller executes each
-/// plan, then clears ledgers ([`HeldLedger::clear_peer`]) and marks the pin
-/// released — in that order, so a failed execution leaves everything
-/// retryable.
-pub fn plan_release(
-    store: &Store,
-    local: &ferry_store::manifest::RootManifest,
-    bases: &BTreeMap<String, String>,
-    ledger: &HeldLedger,
-) -> Result<Vec<ReleasePeerPlan>, PinError> {
-    let mut out = Vec::new();
-    for peer in ledger.peers()? {
-        let entries = ledger.load_peer(&peer)?;
-        if entries.is_empty() {
-            continue;
+impl ReleasePeerPlan {
+    /// Nothing was ledgered for this peer; the release is a no-op.
+    pub(crate) fn noop(device_id: String) -> Self {
+        ReleasePeerPlan {
+            device_id,
+            remote_manifest_id: String::new(),
+            held_entries: 0,
+            held_paths: Vec::new(),
+            result: ConvergenceResult::default(),
         }
-        // Latest arrival wins: later entries carry fresher peer manifests.
-        let manifest_hex = entries
-            .last()
-            .expect("non-empty checked above")
-            .remote_manifest_id
-            .clone();
-        let remote = load_manifest(store, &manifest_hex, &peer, format!("held by peer {peer}"))?;
-        let base = match bases.get(&peer) {
-            Some(base_hex) => Some(load_manifest(
-                store,
-                base_hex,
-                &peer,
-                "captured as last-agreed at pin start".to_string(),
-            )?),
-            None => None,
-        };
-        let plan = reconcile(ReconcileInput {
-            store,
-            local,
-            remote: &remote,
-            base: base.as_ref(),
-        })?;
-        out.push(ReleasePeerPlan {
-            device_id: peer.clone(),
-            remote_manifest_id: manifest_hex,
-            held_entries: entries.len(),
-            held_paths: distinct_paths(&entries),
-            plan,
-        });
     }
-    Ok(out)
 }
 
-fn load_manifest(
+/// Release one peer's held set through the transactional convergence
+/// engine. The caller clears the peer's ledger ([`HeldLedger::clear_peer`])
+/// AFTER this returns `Ok` — a failed convergence leaves everything
+/// retryable (re-running recomputes the same decisions).
+#[allow(clippy::too_many_arguments)]
+pub fn release_peer(
+    store: &Store,
+    root: &Path,
+    state_dir: &Path,
+    local: &RootManifest,
+    peer_hex: &str,
+    base: Option<&RootManifest>,
+    now: (i64, u32),
+) -> Result<ReleasePeerPlan, PinError> {
+    let ledger = HeldLedger::new(state_dir);
+    let entries = ledger.load_peer(peer_hex)?;
+    if entries.is_empty() {
+        return Ok(ReleasePeerPlan::noop(peer_hex.to_string()));
+    }
+    // Latest arrival wins: later entries carry fresher peer manifests.
+    let manifest_hex = entries
+        .last()
+        .expect("non-empty checked above")
+        .remote_manifest_id
+        .clone();
+    let remote = load_manifest(
+        store,
+        &manifest_hex,
+        peer_hex,
+        format!("held by peer {peer_hex}"),
+    )?;
+    let result = ConvergenceEngine::new(store, root)
+        .state_dir(state_dir)
+        .at(now)
+        .converge(local, &remote, base)
+        .map_err(pin_convergence)?;
+    Ok(ReleasePeerPlan {
+        device_id: peer_hex.to_string(),
+        remote_manifest_id: manifest_hex,
+        held_entries: entries.len(),
+        held_paths: distinct_paths(&entries),
+        result,
+    })
+}
+
+/// Map an engine failure onto the release error surface. The message keeps
+/// the full engine vocabulary (reconcile, divergence, missing blobs); the
+/// hint is the caller's job.
+pub(crate) fn pin_convergence(e: ConvergenceError) -> PinError {
+    PinError::Converge(e)
+}
+
+pub(crate) fn load_manifest(
     store: &Store,
     id_hex: &str,
     peer: &str,
     context: String,
-) -> Result<ferry_store::manifest::RootManifest, PinError> {
+) -> Result<RootManifest, PinError> {
     let id = unhex::<32>(id_hex).ok_or_else(|| PinError::ManifestMissing {
         peer: peer.to_string(),
         manifest_id: context.clone(),
@@ -125,26 +138,28 @@ mod tests {
     fn missing_held_manifest_is_a_loud_error_naming_peer_and_id() {
         let rig = Rig::rig_one_file();
         let b_hex = ferry_store::format::hex(&rig.b_dev);
-        let mut bases = BTreeMap::new();
-        bases.insert(
-            b_hex.clone(),
-            "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-        );
-        let ledger = HeldLedger::new(&rig.a_state);
-        let entries = vec![held_entry_for("f.txt", b_hex.clone(), &"cc".repeat(32))];
-        ledger.append(&b_hex, &entries).unwrap();
 
-        let err = plan_release(&rig.a.store, &rig.local_manifest, &bases, &ledger).unwrap_err();
+        // The held manifest id does not exist in the store.
+        let err = load_manifest(&rig.a.store, &"cc".repeat(32), &b_hex, "held".into()).unwrap_err();
         assert!(matches!(err, PinError::ManifestMissing { .. }), "{err}");
     }
 
     #[test]
-    fn no_ledgers_means_an_empty_noop_plan_list() {
+    fn no_ledger_means_an_empty_noop_release() {
         let rig = Rig::rig_one_file();
-        let ledger = HeldLedger::new(&rig.a_state);
-        let plans =
-            plan_release(&rig.a.store, &rig.local_manifest, &BTreeMap::new(), &ledger).unwrap();
-        assert!(plans.is_empty(), "second release is a no-op");
+        let peer = ferry_store::format::hex(&rig.b_dev);
+        let out = release_peer(
+            &rig.a.store,
+            &rig.a.tree,
+            &rig.a_state,
+            &rig.local_manifest,
+            &peer,
+            None,
+            (1_787_574_896, 0),
+        )
+        .unwrap();
+        assert_eq!(out.held_entries, 0);
+        assert!(out.result.is_noop());
     }
 }
 
@@ -153,7 +168,6 @@ mod tests {
 /// harness because cfg(test) items are not visible across crate lines.)
 #[cfg(test)]
 pub(crate) mod ferry_pin_testutil {
-    use ferry_store::chunker::generate_polynomial;
     use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     use ferry_store::store::Store;
@@ -178,8 +192,6 @@ pub(crate) mod ferry_pin_testutil {
 
     pub struct DeviceParts {
         pub store: Store,
-        /// Kept for rig readability; the unit tests only exercise stores.
-        #[allow(dead_code)]
         pub tree: PathBuf,
     }
 
@@ -187,8 +199,8 @@ pub(crate) mod ferry_pin_testutil {
         core::array::from_fn(|i| (i * 17 + 3) as u8)
     }
 
-    pub fn poly_of(seed: u64) -> u64 {
-        generate_polynomial(&mut StdRng::seed_from_u64(seed))
+    pub fn poly_of(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+        ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
     }
 
     impl Rig {

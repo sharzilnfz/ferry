@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use ferry_ignore::secrets::WarningClass;
 use ferry_ignore::{FerryIgnore, IgnoreConfig};
-use ferry_scan::{IgnorePolicy, ScanConfig, ScanEngine, StoreHandle, WatchSignal};
+use ferry_scan::{EntryKind, IgnorePolicy, ScanConfig, ScanEngine, StoreHandle, WatchSignal};
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::manifest::{parse_tree_node, EntryPayload};
 use ferry_store::store::Store;
@@ -22,8 +22,8 @@ fn key() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| i as u8)
 }
 
-fn poly() -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(4242))
+fn poly() -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(4242))
 }
 
 fn write_file(path: &std::path::Path, bytes: &[u8]) {
@@ -103,7 +103,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
 
     let scan_cfg = ScanConfig {
         quiet_window: Duration::from_millis(10),
-        audit_interval: Duration::from_secs(3600),
+        audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(50),
     };
     let engine = ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();
@@ -188,7 +188,10 @@ fn policy_filters_poll_sweeps_like_walker_events() {
     write_file(&root.join("cache/blob.bin"), b"cached junk v1");
 
     let policy = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-    assert!(policy.ignored(&rel("cache")));
-    assert!(policy.ignored(&rel("cache/blob.bin")));
-    assert!(!policy.ignored(&rel("keep.txt")));
+    // Kinds are explicit at the seam now: cache/ is a real directory,
+    // blob.bin a file — the same verdicts the old disk-resolving adapter
+    // produced.
+    assert!(policy.ignored(&rel("cache"), EntryKind::Dir));
+    assert!(policy.ignored(&rel("cache/blob.bin"), EntryKind::File));
+    assert!(!policy.ignored(&rel("keep.txt"), EntryKind::File));
 }

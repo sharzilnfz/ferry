@@ -8,7 +8,7 @@
 //! stores and trees, nothing shared but TCP. `scripts/skeleton-e2e.sh` is
 //! the process-level twin of this file.
 //!
-//! N defaults to 30 seconds; override with FERRY_SYNC_TEST_TIMEOUT_SECS.
+//! N defaults to 30 seconds; override with `FERRY_SYNC_TEST_TIMEOUT_SECS`.
 
 mod common;
 
@@ -44,7 +44,7 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
 
     // --- assert convergence within N seconds of quiescence.
     let deadline = std::time::Instant::now() + timeout;
-    loop {
+    let agreed = loop {
         assert!(
             std::time::Instant::now() < deadline,
             "no convergence within {:?}; state A={:?} B={:?}",
@@ -52,15 +52,15 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
             fx.a.stats(),
             fx.b.stats()
         );
-        if fx.converged() && trees_byte_equal(&fx) {
-            break;
+        if let (Some(a), Some(b)) = (fx.a.agreed_id(), fx.b.agreed_id()) {
+            if a == b && a != [0u8; 32] && fx.converged() && trees_byte_equal(&fx) {
+                break a;
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
-    }
+    };
 
     // Manifest ids agree on both sides and are recorded against each peer.
-    let agreed = fx.a.agreed_id().expect("A agreed");
-    assert_eq!(agreed, fx.b.agreed_id().expect("B agreed"));
     assert_ne!(agreed, [0u8; 32]);
 
     // The complete log tail: every appended line, no tearing.
@@ -111,6 +111,7 @@ fn edits_on_either_side_converge_both_directions() {
     assert!(trees_byte_equal(&fx), "phase 1 (A->B)");
 
     // Phase 2: edit on B only.
+    std::thread::sleep(Duration::from_millis(1100));
     let mut b2 = TreeBuilder::new(fx.tree_b(), SEED + 3);
     b2.write("from-b.txt", b"written on node B");
     b2.write("from-a.txt", b"edited on node B"); // overwrite of A's file

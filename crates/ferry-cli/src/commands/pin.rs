@@ -8,63 +8,90 @@
 //! ledgers: a later `release` still recovers them. Discarding held changes
 //! is never an implicit side effect.
 
-use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
-use ferry_pin::{plan_release, HeldEntry, HeldLedger, PathMatcher, PinRecord, PinStore};
+use ferry_pin::PinManager;
 use ferry_store::format::hex;
-use ferry_sync_engine::{list_conflicts, PeerState};
+use ferry_sync_engine::list_conflicts;
 use serde_json::json;
 
 use crate::error::{CliError, CliResult};
 use crate::folder;
 use crate::out::Output;
 
-pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
+pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let device_id = device_hex()?;
     let state_dir = opened.state_dir();
 
-    // Validate BEFORE writing anything: a stored pin must always compile.
-    if let Err(e) = PathMatcher::new(paths) {
-        return Err(pin_error(e));
-    }
     let scope: Vec<String> = if paths.is_empty() {
         vec!["*".to_string()]
     } else {
         paths.to_vec()
     };
 
-    // Freeze the last-agreed base per peer NOW: release's three-way
-    // ancestor is exactly "last agreed before the pin started".
-    let ps = PeerState::new(&state_dir);
-    let mut base_agreements = BTreeMap::new();
-    if let Ok(rd) = std::fs::read_dir(state_dir.join("peers")) {
-        for path in rd.flatten().map(|e| e.path()) {
-            if let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) {
-                if let Ok(Some(rec)) = ps.load(&dev) {
-                    base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
-                }
+    // Try dispatching over IPC to running daemon first.
+    let ipc_res = crate::ipc::send_command(
+        folder,
+        ferry_ipc::ClientCommand::StartPin {
+            paths: scope.clone(),
+            duration_hours: Some(hours),
+        },
+    );
+
+    let (pid, started_sec, base_peers_recorded) = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { .. }) => {
+            let pin_mgr = PinManager::new(&state_dir);
+            if let Ok(Some(rec)) = pin_mgr.record() {
+                (rec.pid, rec.started_sec, rec.base_agreements.len())
+            } else {
+                let (sec, _) = ferry_platform::time::now_unix();
+                (std::process::id(), sec, 0)
             }
         }
-    }
-
-    let (sec, nsec) = ferry_sync_engine::timefmt::now_unix();
-    let pid = std::process::id();
-    let base_peers_recorded = base_agreements.len();
-    let store = PinStore::new(&state_dir);
-    store
-        .start(&PinRecord {
-            format_version: ferry_pin::PIN_FORMAT_VERSION,
-            device_id: device_id.clone(),
-            pid,
-            started_sec: sec,
-            started_nsec: nsec,
-            paths: scope.clone(),
-            released: false,
-            base_agreements,
-        })
-        .map_err(pin_error)?;
+        Some(ferry_ipc::DaemonMessage::Error { code, message }) => match code.as_str() {
+            "bad-pattern" => {
+                return Err(CliError::new(
+                    "bad-pattern",
+                    message,
+                    "check the glob syntax (same rules as ferry.ignore)",
+                ));
+            }
+            "pin-active" => {
+                return Err(CliError::new(
+                    "pin-active",
+                    message,
+                    "run `ferry pin stop` first (or `ferry pin status` to inspect)",
+                ));
+            }
+            "pin_error" => {
+                if message.contains("pattern")
+                    || message.contains("syntax")
+                    || message.contains("invalid")
+                {
+                    return Err(CliError::new(
+                        "bad-pattern",
+                        message,
+                        "check the glob syntax (same rules as ferry.ignore)",
+                    ));
+                }
+                return Err(CliError::new(
+                    "pin-active",
+                    message,
+                    "run `ferry pin stop` first (or `ferry pin status` to inspect)",
+                ));
+            }
+            _ => return Err(CliError::new("pin-error", message, "check pin state")),
+        },
+        _ => {
+            return Err(CliError::new(
+                "daemon-not-running",
+                "no active background daemon is running for this folder",
+                "start the background daemon with `ferry daemon` to enable session protection",
+            ));
+        }
+    };
 
     let json_doc = json!({
         "command": "pin",
@@ -73,7 +100,7 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
         "device_id": device_id,
         "pid": pid,
         "paths": scope,
-        "started_at": ferry_sync_engine::timefmt::fmt_rfc3339(sec),
+        "started_at": ferry_platform::time::fmt_rfc3339(started_sec),
         "base_peers_recorded": base_peers_recorded,
     });
 
@@ -88,30 +115,43 @@ pub fn start(folder: &Path, paths: &[String]) -> CliResult<Output> {
 pub fn stop(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let state_dir = opened.state_dir();
-    let store = PinStore::new(&state_dir);
-    let existed = store.mark_released().map_err(pin_error)?;
+    let pin_mgr = PinManager::new(&state_dir);
+
+    // Try dispatching over IPC to running daemon first.
+    let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
+    let existed = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { message, .. }) => {
+            message.as_deref() != Some("no active pin")
+        }
+        _ => pin_mgr.stop_session().map_err(pin_error)?,
+    };
 
     // Surface what remains held so nobody mistakes stop for reconciliation.
-    let held = held_summary(&state_dir)?;
+    let summary = pin_mgr.summary().map_err(pin_error)?;
+    let mut by_peer = serde_json::Map::new();
+    for (peer, paths) in &summary.held_by_peer {
+        by_peer.insert(peer.clone(), json!(paths.len()));
+    }
 
     let json_doc = json!({
         "command": "pin",
         "action": "stop",
         "folder": opened.root.display().to_string(),
         "was_pinned": existed,
-        "held_changes": held.total_paths,
-        "held_by_peer": held.by_peer,
+        "held_changes": summary.total_held_paths,
+        "held_by_peer": by_peer,
     });
     let mut human = if existed {
         String::from("Unpinned   session ended; incoming edits apply again\n")
     } else {
         String::from("No pin     nothing was pinned here\n")
     };
-    if held.total_paths > 0 {
-        human.push_str(&format!(
-            "Held       {} path(s) still ledgered — run `ferry pin release` to reconcile\n",
-            held.total_paths
-        ));
+    if summary.total_held_paths > 0 {
+        let _ = writeln!(
+            human,
+            "Held       {} path(s) still ledgered — run `ferry pin release` to reconcile",
+            summary.total_held_paths
+        );
     }
     Ok(Output::new(json_doc, human))
 }
@@ -119,54 +159,55 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
 pub fn release(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let state_dir = opened.state_dir();
-
-    let bases = match PinStore::new(&state_dir).load().map_err(pin_error)? {
-        Some(rec) => rec.base_agreements,
-        None => BTreeMap::new(),
-    };
+    let pin_mgr = PinManager::new(&state_dir);
 
     // Fresh scan: release reconciles the peer's held manifest against the
     // tree AS IT IS NOW (the apply half of earlier rounds may have landed).
     let scan = crate::commands::status::scan_now(&opened)?;
-    let ledger = HeldLedger::new(&state_dir);
 
-    let plans = plan_release(&opened.store, &scan.manifest, &bases, &ledger).map_err(pin_error)?;
-
-    let now = ferry_sync_engine::timefmt::now_unix();
-    let mut peers = Vec::with_capacity(plans.len());
+    let now = ferry_platform::time::now_unix();
+    let mut peers = Vec::new();
     let mut total_quarantined = 0usize;
     let mut total_conflicts = 0usize;
     let mut total_ops = 0usize;
-    for rp in &plans {
-        let stats = ferry_sync_engine::execute(
-            &opened.store,
-            &opened.root,
-            &rp.plan,
-            Some(&state_dir),
-            now,
-        )
-        .map_err(|e| cli("pin-release-execute", e))?;
-        // Clear ONLY after this plan executed: a failure leaves everything
+    for peer_hex in pin_mgr.held_peers().map_err(pin_error)? {
+        // One transactional convergence per peer; the ledger clears only
+        // after ITS convergence succeeded, so a failure leaves everything
         // retryable (re-running recomputes the same decisions).
-        ledger.clear_peer(&rp.device_id).map_err(pin_error)?;
-        total_quarantined += stats.quarantined.len();
-        total_conflicts += stats.conflicts.len();
-        total_ops += stats.apply.mutations();
+        let rp = pin_mgr
+            .release_peer(
+                &peer_hex,
+                &opened.store,
+                &opened.root,
+                &scan.manifest,
+                None,
+                now,
+            )
+            .map_err(pin_error)?;
+        if rp.held_entries == 0 {
+            continue;
+        }
+        pin_mgr.clear_peer(&peer_hex).map_err(pin_error)?;
+        total_quarantined += rp.result.quarantined.len();
+        total_conflicts += rp.result.conflicts.len();
+        total_ops += rp.result.apply.mutations();
         peers.push(json!({
             "device_id": rp.device_id,
             "remote_manifest_id": rp.remote_manifest_id,
             "held_entries": rp.held_entries,
             "held_paths": rp.held_paths,
-            "ops_applied": stats.apply.mutations(),
-            "quarantined": stats.quarantined.len(),
-            "conflicts_recorded": stats.conflicts.len(),
+            "ops_applied": rp.result.apply.mutations(),
+            "quarantined": rp.result.quarantined.len(),
+            "conflicts_recorded": rp.result.conflicts.len(),
         }));
     }
 
-    // End the marker too (absent/released/stale pins are all fine here).
-    let ended = PinStore::new(&state_dir)
-        .mark_released()
-        .map_err(pin_error)?;
+    // End the marker too. Dispatch over IPC if daemon running, otherwise local mark_released.
+    let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
+    let ended = match ipc_res {
+        Some(ferry_ipc::DaemonMessage::Ack { .. }) => true,
+        _ => pin_mgr.stop_session().map_err(pin_error)?,
+    };
 
     let conflicts_total = list_conflicts(&state_dir)
         .map(|e| e.len())
@@ -185,22 +226,24 @@ pub fn release(folder: &Path) -> CliResult<Output> {
         "conflicts_total": conflicts_total,
     });
 
-    let human = if plans.is_empty() {
+    let human = if peers.is_empty() {
         String::from("Release    nothing held — no-op\n")
     } else {
         let mut h = String::new();
         for p in &peers {
-            h.push_str(&format!(
-                "Released   peer {}… held={} quarantined={} conflict(s)={}\n",
+            let _ = writeln!(
+                h,
+                "Released   peer {}… held={} quarantined={} conflict(s)={}",
                 p["device_id"].as_str().unwrap().get(..8).unwrap_or(""),
                 p["held_entries"],
                 p["quarantined"],
                 p["conflicts_recorded"],
-            ));
+            );
         }
-        h.push_str(&format!(
-            "Total      {total_quarantined} loser copy/copies, {total_conflicts} conflict entr(y/ies) in conflicts.jsonl\n"
-        ));
+        let _ = writeln!(
+            h,
+            "Total      {total_quarantined} loser copy/copies, {total_conflicts} conflict entr(y/ies) in conflicts.jsonl"
+        );
         h
     };
 
@@ -210,40 +253,15 @@ pub fn release(folder: &Path) -> CliResult<Output> {
 pub fn status(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let state_dir = opened.state_dir();
-    let record = PinStore::new(&state_dir).load().map_err(pin_error)?;
+    let pin_mgr = PinManager::new(&state_dir);
+    let summary = pin_mgr.summary().map_err(pin_error)?;
 
-    let (state, paths, device_id, pid, started_at): (
-        &str,
-        Vec<String>,
-        Option<String>,
-        Option<u32>,
-        Option<String>,
-    ) = match &record {
-        None => ("none", Vec::new(), None, None, None),
-        Some(rec) => {
-            let s = if rec.released {
-                "released"
-            } else if rec.holding() {
-                "active"
-            } else {
-                "stale"
-            };
-            (
-                s,
-                rec.paths.clone(),
-                Some(rec.device_id.clone()),
-                Some(rec.pid),
-                Some(ferry_sync_engine::timefmt::fmt_rfc3339(rec.started_sec)),
-            )
-        }
-    };
-
-    let held = held_summary(&state_dir)?;
+    let started_at = summary.started_sec.map(ferry_platform::time::fmt_rfc3339);
 
     // Documented shape for `pin status`: peer → DISTINCT PATHS (the actual
     // held set), not counts.
     let mut held_by_peer = serde_json::Map::new();
-    for (peer, list) in &held.by_peer_list {
+    for (peer, list) in &summary.held_by_peer {
         held_by_peer.insert(peer.clone(), json!(list));
     }
 
@@ -251,81 +269,39 @@ pub fn status(folder: &Path) -> CliResult<Output> {
         "command": "pin",
         "action": "status",
         "folder": opened.root.display().to_string(),
-        "state": state,
-        "device_id": device_id,
-        "pid": pid,
+        "state": summary.state,
+        "device_id": summary.device_id,
+        "pid": summary.pid,
         "started_at": started_at,
-        "paths": paths,
-        "holding": record.as_ref().is_some_and(|r| r.holding()),
-        "held_changes": held.total_paths,
+        "paths": summary.paths,
+        "holding": summary.holding,
+        "held_changes": summary.total_held_paths,
         "held_by_peer": held_by_peer,
     });
 
-    let mut human = match state {
+    let mut human = match summary.state.as_str() {
         "none" => {
             String::from("Pin        none — `ferry pin start [--paths <glob>...]` to begin\n")
         }
         s => format!("Pin        {s}\n"),
     };
-    if !json_doc["paths"].as_array().unwrap().is_empty() {
-        human.push_str(&format!(
-            "Scope      {}\n",
-            json_doc["paths"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| v.as_str().unwrap())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+    if !summary.paths.is_empty() {
+        let _ = writeln!(human, "Scope      {}", summary.paths.join(", "));
     }
-    if held.total_paths == 0 {
+    if summary.total_held_paths == 0 {
         human.push_str("Held       nothing\n");
     } else {
-        human.push_str(&format!("Held       {} path(s):\n", held.total_paths));
-        for (peer, list) in &held.by_peer_list {
-            human.push_str(&format!("  {}…\n", &peer[..8.min(peer.len())]));
+        let _ = writeln!(human, "Held       {} path(s):", summary.total_held_paths);
+        for (peer, list) in &summary.held_by_peer {
+            let _ = writeln!(human, "  {}…", &peer[..8.min(peer.len())]);
             for p in list {
-                human.push_str(&format!("    {p}\n"));
+                let _ = writeln!(human, "    {p}");
             }
         }
         human.push_str("           `ferry pin release` reconciles these explicitly.\n");
     }
 
     Ok(Output::new(json_doc, human))
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-struct HeldSummary {
-    /// Distinct held paths across every peer.
-    total_paths: usize,
-    /// peer hex → distinct path count (JSON-friendly).
-    by_peer: serde_json::Map<String, serde_json::Value>,
-    /// Sorted (peer, sorted distinct paths) pairs for human rendering.
-    by_peer_list: Vec<(String, Vec<String>)>,
-}
-
-fn held_summary(state_dir: &Path) -> CliResult<HeldSummary> {
-    let ledger = HeldLedger::new(state_dir);
-    let mut by_peer = serde_json::Map::new();
-    let mut by_peer_list = Vec::new();
-    let mut total = 0usize;
-    for peer in ledger.peers().map_err(pin_error)? {
-        let entries: Vec<HeldEntry> = ledger.load_peer(&peer).map_err(pin_error)?;
-        let paths = ferry_pin::distinct_paths(&entries);
-        total += paths.len();
-        by_peer.insert(peer.clone(), json!(paths.len()));
-        by_peer_list.push((peer, paths));
-    }
-    by_peer_list.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(HeldSummary {
-        total_paths: total,
-        by_peer,
-        by_peer_list,
-    })
 }
 
 fn device_hex() -> CliResult<String> {
@@ -382,9 +358,9 @@ fn pin_error(e: ferry_pin::PinError) -> CliError {
             "structural-split",
             "widen or narrow --paths so pinned and unpinned changes do not nest",
         ),
-        E::Reconcile(_) => (
+        E::Converge(_) => (
             "pin-release-reconcile",
-            "three-way reconcile failed during release; nothing was discarded",
+            "three-way convergence failed during release; nothing was discarded",
         ),
         E::Store(_) | E::Io { .. } | E::Manifest(_) => ("store", "check .ferry permissions/disk"),
     };

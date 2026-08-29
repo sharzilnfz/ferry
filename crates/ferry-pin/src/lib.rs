@@ -8,23 +8,27 @@
 //!   mark-released / stale detection via pid liveness).
 //! - [`matcher`]: compiled gitignore-style globs scoping the pin.
 //! - [`held`]: the `.ferry/held/<peer>.jsonl` ledgers of held changes.
-//! - [`split`]: the hold filter — partitions an [`ActionPlan`] into an
-//!   apply-now half and a held half; [`hold_filter`] is the seam the
-//!   exchange loop consults pre-apply.
-//! - [`release`]: rebuilds three-way reconcile inputs from the ledgers
-//!   (base = last agreement captured at pin start) and returns executable
-//!   plans; outcomes are exactly ADR-0004 outcomes.
+//! - [`hold`]: the hold seam — [`hold_matcher`] compiles the active pin's
+//!   scope into the path gate the convergence engine applies, and
+//!   [`record_held`] ledgers the engine's held decisions after a pinned
+//!   convergence.
+//! - [`release`]: rebuilds three-way inputs from the ledgers (base = last
+//!   agreement captured at pin start) and executes the release through the
+//!   transactional convergence engine; outcomes are exactly ADR-0004
+//!   outcomes.
 
 pub mod error;
 pub mod held;
+pub mod hold;
+pub mod manager;
 pub mod matcher;
 pub mod pin;
 pub mod release;
-pub mod split;
 
 pub use error::PinError;
 pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
+pub use hold::{hold_matcher, record_held};
+pub use manager::{HeldSummary, PinManager};
 pub use matcher::PathMatcher;
 pub use pin::{Liveness, PinRecord, PinStore, PIN_FORMAT_VERSION};
-pub use release::{plan_release, ReleasePeerPlan};
-pub use split::{hold_filter, split_plan, HoldDecision, SplitPlan};
+pub use release::{release_peer, ReleasePeerPlan};

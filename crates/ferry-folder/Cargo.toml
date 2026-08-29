@@ -1,0 +1,22 @@
+[package]
+name = "ferry-folder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferry-store = { path = "../ferry-store" }
+ferry-crypto = { path = "../ferry-crypto" }
+ferry-ignore = { path = "../ferry-ignore" }
+ferry-platform = { workspace = true }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+tempfile.workspace = true
+toml = "0.8"
+unicode-normalization.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

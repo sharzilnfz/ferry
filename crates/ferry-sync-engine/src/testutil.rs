@@ -4,7 +4,6 @@
 
 #![cfg(test)]
 
-use ferry_store::chunker::generate_polynomial;
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
@@ -16,8 +15,8 @@ pub fn fmk() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| (i * 11 + 5) as u8)
 }
 
-pub fn poly_of(seed: u64) -> u64 {
-    generate_polynomial(&mut StdRng::seed_from_u64(seed))
+pub fn poly_of(seed: u64) -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
 }
 
 pub fn identity(device_id: [u8; 32], at: (i64, u32), parent: [u8; 32]) -> SnapshotIdentity {
@@ -56,14 +55,26 @@ pub fn set_mtime(path: &Path, sec: i64, nsec: u32) {
     .unwrap();
 }
 
-/// Directories need a read-only handle for futimens.
+/// Directories need a read-only handle for futimens on unix. Windows
+/// cannot open directory handles for time writes at all (`SetFileTime`
+/// needs `FILE_FLAG_BACKUP_SEMANTICS`, which std does not expose), so the
+/// windows branch goes through filetime like ferry-store's fixture.
 pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
-    let f = std::fs::File::open(path).unwrap();
-    f.set_times(
-        std::fs::FileTimes::new()
-            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
-    )
-    .unwrap();
+    #[cfg(unix)]
+    {
+        let f = std::fs::File::open(path).unwrap();
+        f.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::new(sec as u64, nsec)),
+        )
+        .unwrap();
+    }
+    #[cfg(windows)]
+    {
+        filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(sec, nsec)).unwrap();
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = (path, sec, nsec);
 }
 
 pub struct Device {
@@ -74,14 +85,14 @@ pub struct Device {
     pub tree: PathBuf,
     pub state_dir: PathBuf,
     pub device_id: [u8; 32],
-    pub poly: u64,
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub parent: [u8; 32],
     pub clock: i64,
 }
 
 impl Device {
     /// A device rooted in its own temp dir: `store/`, `tree/`, `state/`.
-    pub fn new(tag: u8, device_id: [u8; 32], poly: u64) -> Device {
+    pub fn new(tag: u8, device_id: [u8; 32], poly: ferry_store::chunker::ValidatedPoly) -> Device {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let store_root = root.join("store");
@@ -97,7 +108,7 @@ impl Device {
             device_id,
             poly,
             parent: [0; 32],
-            clock: 1_787_000_000 + tag as i64,
+            clock: 1_787_000_000 + i64::from(tag),
         }
     }
 

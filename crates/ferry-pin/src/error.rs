@@ -20,8 +20,8 @@ pub enum PinError {
     #[error("invalid pin glob {line:?}: {reason}")]
     BadPattern { line: String, reason: String },
     #[error(
-        "cannot split the plan safely under this pin: pinned path {pinned} sits inside \
-         apply-path {other}; one half would move an ancestor of the other. Widen or narrow \
+        "cannot converge safely under this pin: pinned path {pinned} sits inside \
+         change path {other}; one half would move an ancestor of the other. Widen or narrow \
          --paths so pinned and unpinned changes do not nest."
     )]
     StructuralSplit { pinned: String, other: String },
@@ -33,8 +33,8 @@ pub enum PinError {
         line: usize,
         reason: String,
     },
-    #[error("reconcile failed during release: {0}")]
-    Reconcile(#[from] ferry_sync_engine::ReconcileError),
+    #[error("release convergence failed: {0}")]
+    Converge(#[from] ferry_sync_engine::ConvergenceError),
     #[error("store: {0}")]
     Store(#[from] ferry_store::store::StoreError),
     #[error("manifest decode failed: {0}")]

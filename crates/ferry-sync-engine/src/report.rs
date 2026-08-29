@@ -31,6 +31,19 @@ pub struct DeviceStamp {
     pub mtime_nsec: Option<u32>,
 }
 
+impl DeviceStamp {
+    /// Stamp one conflict side from its raw device id and optional
+    /// `(sec, nsec)` mtime — the single constructor the engine's reporting
+    /// and the report tests both build through.
+    pub(crate) fn new(device: [u8; 32], mtime: Option<(i64, u32)>) -> Self {
+        DeviceStamp {
+            device: ferry_store::format::hex(&device),
+            mtime_sec: mtime.map(|m| m.0),
+            mtime_nsec: mtime.map(|m| m.1),
+        }
+    }
+}
+
 /// One resolved conflict.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
@@ -71,8 +84,18 @@ pub fn log_path(state_dir: &Path) -> PathBuf {
     state_dir.join("conflicts.jsonl")
 }
 
+/// T-20 storage discipline: the report is append-only history, but it must
+/// not grow forever. Past [`COMPACT_MAX_LINES`] entries, the oldest lines
+/// are dropped down to [`COMPACT_KEEP_LINES`]. The quarantined FILES the
+/// report points at are never touched — only this human/machine report is
+/// capped. The rewrite is atomic (temp + rename in `.ferry/`), so readers
+/// see either the whole old file or the whole new one; line format and key
+/// set are unchanged, and tolerant readers need nothing new.
+pub const COMPACT_MAX_LINES: usize = 4096;
+pub const COMPACT_KEEP_LINES: usize = 1024;
+
 /// Append entries, one JSON object per line. Creates the file and its
-/// parent directory on first use.
+/// parent directory on first use. Compacts on threshold (see above).
 pub fn append_entries(state_dir: &Path, entries: &[ConflictEntry]) -> Result<(), LogError> {
     if entries.is_empty() {
         return Ok(());
@@ -97,6 +120,32 @@ pub fn append_entries(state_dir: &Path, entries: &[ConflictEntry]) -> Result<(),
         line.push(b'\n');
         f.write_all(&line).map_err(|e| io_at(&path, e))?;
     }
+    drop(f);
+    compact_if_needed(&path)
+}
+
+fn compact_if_needed(path: &Path) -> Result<(), LogError> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return Err(io_at(path, e)),
+    };
+    let text = String::from_utf8(bytes).map_err(|_| LogError::Corrupt {
+        path: path.to_path_buf(),
+        line: 0,
+        reason: "not valid UTF-8".to_string(),
+    })?;
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= COMPACT_MAX_LINES {
+        return Ok(());
+    }
+    let kept = &lines[lines.len() - COMPACT_KEEP_LINES..];
+    let mut body = kept.join("\n");
+    body.push('\n');
+    // Atomic replace within the same directory; the temp name carries the
+    // ".tmp" marker so a crash mid-compaction leaves sweepable residue.
+    let tmp = path.with_file_name("conflicts.jsonl.tmp.compacting");
+    std::fs::write(&tmp, body.as_bytes()).map_err(|e| io_at(&tmp, e))?;
+    std::fs::rename(&tmp, path).map_err(|e| io_at(path, e))?;
     Ok(())
 }
 
@@ -133,12 +182,11 @@ pub fn list_conflicts(state_dir: &Path) -> Result<Vec<ConflictEntry>, LogError> 
 mod tests {
     use super::*;
 
-    fn stamp(dev: &str, sec: Option<i64>) -> DeviceStamp {
-        DeviceStamp {
-            device: dev.to_string(),
-            mtime_sec: sec,
-            mtime_nsec: sec.map(|_| 5),
-        }
+    fn stamp(dev_hex: &str, sec: Option<i64>) -> DeviceStamp {
+        DeviceStamp::new(
+            ferry_store::format::unhex::<32>(dev_hex).unwrap(),
+            sec.map(|s| (s, 5)),
+        )
     }
 
     fn entry(path: &str, kind: &str, quarantined: Option<&str>) -> ConflictEntry {
@@ -202,6 +250,45 @@ mod tests {
             Err(LogError::Corrupt { line, .. }) => assert_eq!(line, 2),
             other => panic!("expected loud corruption error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn append_compacts_on_threshold_keeping_the_newest_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let sd = dir.path();
+        // Plant a log over the compaction threshold (raw lines, valid JSON).
+        let path = log_path(sd);
+        let mut raw = String::new();
+        for i in 0..COMPACT_MAX_LINES {
+            raw.push_str(
+                &serde_json::to_string(&entry(&format!("f{i}.txt"), "both_changed", None)).unwrap(),
+            );
+            raw.push('\n');
+        }
+        std::fs::create_dir_all(sd).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+
+        // One more entry trips the threshold.
+        append_entries(sd, &[entry("newest.txt", "add_vs_add", None)]).unwrap();
+
+        let listed = list_conflicts(sd).unwrap();
+        assert_eq!(listed.len(), COMPACT_KEEP_LINES);
+        assert_eq!(listed.last().unwrap().path, "newest.txt", "newest survives");
+        assert_eq!(
+            listed.first().unwrap().path,
+            format!("f{}.txt", COMPACT_MAX_LINES + 1 - COMPACT_KEEP_LINES),
+            "oldest dropped, middle kept in order"
+        );
+        assert!(
+            !path
+                .with_file_name("conflicts.jsonl.tmp.compacting")
+                .exists(),
+            "compaction temp is renamed away"
+        );
+
+        // Under the threshold: no compaction, nothing lost.
+        append_entries(sd, &[entry("again.txt", "both_changed", None)]).unwrap();
+        assert_eq!(list_conflicts(sd).unwrap().len(), COMPACT_KEEP_LINES + 1);
     }
 
     #[test]

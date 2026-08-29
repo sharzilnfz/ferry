@@ -9,7 +9,7 @@
 //! is symmetric and role-serialized: offers with adverts first (initiator
 //! announces, responder mirrors), then at most one pull stage per side —
 //! initiator pulls first, responder second — each ended by an empty
-//! REQUEST_ITEMS marker answered by a bare empty ITEM_BATCH. A second
+//! `REQUEST_ITEMS` marker answered by a bare empty `ITEM_BATCH`. A second
 //! offer round without adverts makes post-pull equality observable;
 //! equal, nonzero manifest ids record the last-agreed pointer LOCALLY on
 //! each side (no wire message). BYE closes: initiator sends, responder
@@ -51,14 +51,18 @@ use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload, RootM
 use ferry_store::store::Store;
 
 use crate::engine::{IngestError, SessionError};
-use crate::materialize::Materializer;
-use crate::materialize::{BlobSource, InlineMaterializer};
 use crate::session::{Established, SessionIo};
 
-/// Zero folder_id marks "end of announcement list" in offer rounds.
+/// Outcome of a pull stage execution.
+struct PullOutcome {
+    held: usize,
+    diverged: bool,
+}
+
+/// Zero `folder_id` marks "end of announcement list" in offer rounds.
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 
-/// Payload flush threshold for ITEM_BATCH frames (8 MiB, normative limit).
+/// Payload flush threshold for `ITEM_BATCH` frames (8 MiB, normative limit).
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
 /// BFS round guard for remote tree walks.
@@ -76,8 +80,20 @@ pub trait ExchangeHost {
     fn bump_rejected(&self);
     /// The working tree materialization applies to.
     fn tree_root(&self) -> &Path;
+    /// The folder's `.ferry` directory whose pin record gates
+    /// materialization; `None` = no-pin policy (default). Consulted fresh
+    /// at the execution boundary AFTER fetch, immediately before apply,
+    /// which is what closes the fetch-to-apply TOCTOU (T-06).
+    fn pin_state_dir(&self) -> Option<&Path> {
+        None
+    }
     /// Adopt `manifest` as our current folder state (no agreement yet).
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError>;
+    /// The session mutated the local tree (remote entries applied, possibly
+    /// partially under a pin). Implementations must force one audit-grade
+    /// scan next tick: apply restores recorded mtimes, so stat-based reuse
+    /// cannot be trusted against the post-apply tree.
+    fn note_tree_mutation(&self) {}
     /// Record the last-agreed pointer against `peer`, locally.
     fn agree(&self, peer: DeviceId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError>;
 }
@@ -92,8 +108,8 @@ pub struct CurrentState {
 
 /// Run one full v1 conversation on an established session: offers → pull
 /// stages → round 2 → local agreement → BYE.
-pub fn run_v1_session<'x, 'e, H: ExchangeHost>(
-    est: &'x mut Established<'e>,
+pub fn run_v1_session<'x, H: ExchangeHost>(
+    est: &'x mut Established<'_>,
     host: &'x H,
     store: &'x Store,
     folder_id: [u8; 16],
@@ -188,7 +204,7 @@ struct Exchange<'x, 'e, H: ExchangeHost> {
     peer_adverts: AdvertMap,
 }
 
-impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
+impl<H: ExchangeHost> Exchange<'_, '_, H> {
     fn status(&self, line: &str) {
         self.host.status(line);
     }
@@ -404,27 +420,38 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         } else if theirs_empty && !mine_empty {
             // Bootstrap guard: never trade content for emptiness.
             self.status("SESSION skipping empty peer offer (bootstrap guard)");
-        } else if !mine_empty && !lineage_newer(&man, &self.cur.manifest) {
-            // Stale offer: the peer announced a manifest OLDER than what
-            // we already hold (it announced before it saw our latest, or
-            // it still runs our own earlier state). Adopting would
-            // REGRESS; skip and let the peer catch up from us instead —
-            // this is M0's single-direction flow, recovered through
-            // lineage instead of a donor message. A FRESH device (empty
-            // tree) bypasses this guard: bootstrap adoption ignores the
-            // clock, exactly like pick_donor's rule 1.
-            self.status("SESSION skipping stale peer offer (lineage guard)");
         } else {
-            self.pull_content(&man)?;
-            self.adopt(target, man_bytes, man)?;
+            let outcome = self.pull_content(&man, target)?;
+            if outcome.held == 0 && !outcome.diverged {
+                self.adopt(target, man_bytes, man)?;
+            } else if outcome.held > 0 {
+                // An active pin withheld part of the peer state: do NOT
+                // adopt (or locally agree to) a manifest whose tree we do
+                // not fully hold. Our next scan mints a child of OUR own
+                // lineage; the withheld decisions stay ledgered under
+                // `.ferry/held/<peer>.jsonl` until release reconciles them.
+                self.status(&format!(
+                    "pin: held {} path(s) from peer {} (release with `ferry pin release`)",
+                    outcome.held,
+                    hex_short(&self.est.peer)
+                ));
+            }
         }
 
         self.close_stage()
     }
 
-    /// Tree walk + diff + packs-first data fetch + durable materialize.
-    fn pull_content(&mut self, man: &RootManifest) -> Result<(), SessionError> {
-        // 2. Breadth-first walk of the peer's tree: fetch missing nodes.
+    /// Tree walk + one transactional convergence. The engine (T-04) does
+    /// the three-way diff against last-agreed base, drives this session's
+    /// fetch hook for missing chunks, materializes winners via atomic
+    /// temp-file renames, quarantines losers, appends conflicts.jsonl, and
+    /// commits the agreement ledger on full adoption.
+    fn pull_content(
+        &mut self,
+        man: &RootManifest,
+        remote_manifest_id: BlobId,
+    ) -> Result<PullOutcome, SessionError> {
+        // 1. Breadth-first walk of the peer's tree: fetch missing nodes.
         let mut queue = vec![man.root_tree_id];
         let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
         let mut rounds = 0usize;
@@ -452,48 +479,94 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
             }
         }
 
-        // 3. What we actually want: the diff's chunks, minus what we hold.
-        //    Entries outside the diff buckets are identical in both
-        //    manifests (same chunk lists), and anything in OUR manifest
-        //    was ingested locally, so diff coverage is sound.
-        let changes = ferry_store::diff::diff_manifests(self.store, &self.cur.manifest, man)?;
-        let wanted: Vec<BlobId> = crate::engine::collect_chunk_ids_public(&changes)
-            .into_iter()
-            .filter(|id| self.store.get(BlobKind::DataChunk, id).is_err())
-            .collect();
-        self.status(&format!(
-            "SESSION pulling: {} added / {} removed / {} modified / {} metadata, {} chunks wanted",
-            changes.added.len(),
-            changes.removed.len(),
-            changes.content_modified.len() + changes.type_changed.len(),
-            changes.metadata_modified.len(),
-            wanted.len()
-        ));
+        // 2. Read last-agreed base manifest from AgreementLedger if present.
+        let base_rec = ferry_store::agreement::AgreementLedger::new(self.store.store_dir())
+            .get(&self.folder_id, &self.est.peer)
+            .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
+        let base_manifest = match base_rec {
+            Some(rec) => match self.store.get(BlobKind::Manifest, &rec.manifest_id) {
+                Ok(bytes) => parse_manifest(&bytes).ok(),
+                Err(_) => None,
+            },
+            None => None,
+        };
 
-        // 4. Packs first where the ADVERTISED grouping pays off (Auto
-        //    granularity: >= 2 wanted chunks share one pack).
-        let satisfied = self.fetch_via_packs(&wanted)?;
+        // 3. One transactional convergence. The engine owns the whole
+        //    pipeline: reconcile → fetch → materialize → quarantine →
+        //    report → agree. Disjoint field borrows: the wire hook takes
+        //    the session transport; the engine takes the store, tree root,
+        //    and current manifest.
+        let peer_hex = hex(&self.est.peer);
+        let remote_hex = hex(&remote_manifest_id);
+        let now = crate::engine::now_parts();
+        let state_dir = self
+            .host
+            .pin_state_dir()
+            .unwrap_or_else(|| self.store.store_dir());
+        let result = {
+            let mut wire = WireFetch {
+                io: &mut self.est.io,
+                host: self.host,
+                store: self.store,
+                folder_id: self.folder_id,
+                max_retries: self.max_retries,
+                adverts: &self.peer_adverts,
+            };
+            let mut engine =
+                ferry_sync_engine::ConvergenceEngine::new(self.store, self.host.tree_root())
+                    .state_dir(state_dir)
+                    .at(now)
+                    .fetch_with(&mut wire);
+            if let Some(matcher) = ferry_pin::hold_matcher(state_dir)
+                .map_err(|e| SessionError::Apply(format!("hold filter: {e}")))?
+            {
+                engine = engine.hold(move |p| matcher.matches(p));
+            }
+            engine
+                .converge(&self.cur.manifest, man, base_manifest.as_ref())
+                .map_err(|e| SessionError::Apply(format!("{e}")))?
+        };
 
-        // 5. Remainder item-level.
-        let leftover: Vec<BlobId> = wanted
-            .iter()
-            .filter(|id| !satisfied.contains(*id))
-            .copied()
-            .collect();
-        if !leftover.is_empty() {
-            self.fetch_blobs(BlobKind::DataChunk, &leftover)?;
+        // 4. Ledger the pin-held decisions for status surfaces and release.
+        let held_count = if result.held.is_empty() {
+            0
+        } else {
+            ferry_pin::record_held(state_dir, &peer_hex, &remote_hex, &result.held, now)
+                .map_err(|e| SessionError::Apply(format!("held ledger: {e}")))?;
+            result.held.len()
+        };
+
+        let mutated = result.apply.mutations() > 0
+            || !result.quarantined.is_empty()
+            || !result.conflicts.is_empty();
+        if mutated {
+            self.host.note_tree_mutation();
+        }
+        if result.apply.mutations() > 0 || !result.quarantined.is_empty() {
+            self.status(&format!(
+                "SESSION converged: {} mutation(s), {} quarantined, {} conflict(s), {} held",
+                result.apply.mutations(),
+                result.quarantined.len(),
+                result.conflicts.len(),
+                held_count
+            ));
         }
 
-        // 6. Materialize durably into the working tree BEFORE round 2.
-        InlineMaterializer::new(self.host.tree_root())
-            .apply(man, &changes, &LocalBlobSource { store: self.store })
-            .map_err(|e| SessionError::Apply(format!("{e}")))?;
-        Ok(())
+        // Divergence (quarantines, conflicts, or content the peer lacks)
+        // means round-2 ids will not be equal: no session-level agreement.
+        let diverged = !result.quarantined.is_empty()
+            || !result.conflicts.is_empty()
+            || !result.send.is_empty();
+
+        Ok(PullOutcome {
+            held: held_count,
+            diverged,
+        })
     }
 
-    /// Close MY stage: the empty REQUEST_ITEMS marker. Per the reference
+    /// Close MY stage: the empty `REQUEST_ITEMS` marker. Per the reference
     /// conversation, the server answers NOTHING — it returns to listening
-    /// (only item/pack responses carry ITEM_BATCH terminators). Matching
+    /// (only item/pack responses carry `ITEM_BATCH` terminators). Matching
     /// those bytes is what keeps us interoperable with
     /// `ferry_proto::run_engine`.
     fn close_stage(&mut self) -> Result<(), SessionError> {
@@ -511,9 +584,8 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
     /// THEIR stage: answer requests until the end-of-stage marker arrives.
     fn serve_peer_stage(&mut self) -> Result<(), SessionError> {
         loop {
-            let fb = match self.est.io.recv_frame()? {
-                Some(fb) => fb,
-                None => continue,
+            let Some(fb) = self.est.io.recv_frame()? else {
+                continue;
             };
             match fb.msg_type {
                 codec::MSG_REQUEST_ITEMS => {
@@ -533,7 +605,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         }
     }
 
-    /// Serve REQUEST_ITEMS from the store, batching at the normative caps;
+    /// Serve `REQUEST_ITEMS` from the store, batching at the normative caps;
     /// unserved ids are omitted (the requester detects gaps and retries).
     fn serve_items(&mut self, r: RequestItems) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
@@ -565,7 +637,7 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
         Ok(())
     }
 
-    /// Serve REQUEST_PACKS: whole ciphertext files under their names, and
+    /// Serve `REQUEST_PACKS`: whole ciphertext files under their names, and
     /// only when the bytes hash to the name (never serve damaged packs).
     fn serve_packs(&mut self, r: RequestPacks) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
@@ -595,141 +667,15 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
     /// received item AFTER decryption, store only verified bytes, detect
     /// gaps, retry within budget. Missing ids at exhaustion fail cleanly.
     fn fetch_blobs(&mut self, kind: BlobKind, want: &[BlobId]) -> Result<(), SessionError> {
-        let mut outstanding: Vec<BlobId> = want.to_vec();
-        for _round in 0..=self.max_retries {
-            if outstanding.is_empty() {
-                return Ok(());
-            }
-            let mut got: BTreeSet<BlobId> = BTreeSet::new();
-            for group in outstanding.chunks(codec::MAX_REQUEST_ITEMS) {
-                self.est.io.send_frame(
-                    codec::MSG_REQUEST_ITEMS,
-                    RequestItems {
-                        folder_id: self.folder_id,
-                        items: group.iter().map(|id| (kind, *id)).collect(),
-                    }
-                    .encode()?,
-                )?;
-                got.extend(self.read_item_batches(kind)?);
-            }
-            outstanding.retain(|id| !got.contains(id));
-        }
-        if outstanding.is_empty() {
-            Ok(())
-        } else {
-            Err(ProtoError::MissingItems(outstanding.len()).into())
-        }
-    }
-
-    /// Read ITEM_BATCH frames until the terminator. Verify-after-decrypt:
-    /// BLAKE3(plaintext) MUST equal the claimed id BEFORE anything touches
-    /// the store; rejects are counted and re-requested by the retry loop.
-    fn read_item_batches(
-        &mut self,
-        expected_kind: BlobKind,
-    ) -> Result<BTreeSet<BlobId>, SessionError> {
-        let mut got = BTreeSet::new();
-        loop {
-            let fb = self.est.io.expect_frame(codec::MSG_ITEM_BATCH)?;
-            let batch = ItemBatch::parse(&fb.payload)?;
-            if batch.items.is_empty() {
-                return Ok(got);
-            }
-            for (kind, id, bytes) in batch.items {
-                if kind != expected_kind {
-                    return Err(ProtoError::ProtocolViolation("wrong blob kind in batch").into());
-                }
-                if *blake3::hash(&bytes).as_bytes() != id {
-                    self.host.bump_rejected();
-                    continue;
-                }
-                self.store.put_blob(kind, &bytes).map_err(wire_store_err)?;
-                got.insert(id);
-            }
-        }
-    }
-
-    /// Pack-granular fetch grouped through the SERVER'S advertised index
-    /// entries. Returns the wanted ids satisfied through packs. Pack
-    /// integrity: BLAKE3(ciphertext) == claimed name BEFORE storing or
-    /// decrypting anything.
-    fn fetch_via_packs(&mut self, wanted: &[BlobId]) -> Result<BTreeSet<BlobId>, SessionError> {
-        let mut satisfied = BTreeSet::new();
-        if wanted.is_empty() {
-            return Ok(satisfied);
-        }
-        let mut by_pack: BTreeMap<PackId, Vec<BlobId>> = BTreeMap::new();
-        for id in wanted {
-            if let Some(e) = self.peer_adverts.get(id) {
-                by_pack.entry(e.pack).or_default().push(*id);
-            }
-        }
-        // Auto granularity: whole pack only when >= 2 wanted chunks share it.
-        let packs: Vec<PackId> = by_pack
-            .into_iter()
-            .filter(|(_, ids)| ids.len() >= 2)
-            .map(|(p, _)| p)
-            .collect();
-
-        let mut landed_pack = false;
-        for group in packs.chunks(codec::MAX_REQUEST_PACKS) {
-            self.est.io.send_frame(
-                codec::MSG_REQUEST_PACKS,
-                RequestPacks {
-                    folder_id: self.folder_id,
-                    packs: group.to_vec(),
-                }
-                .encode()?,
-            )?;
-            loop {
-                let fb = self
-                    .est
-                    .io
-                    .expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
-                if fb.msg_type == codec::MSG_PACK_ITEM {
-                    let item = PackItem::parse(&fb.payload)?;
-                    if *blake3::hash(&item.bytes).as_bytes() != item.pack {
-                        self.host.bump_rejected();
-                        continue;
-                    }
-                    ingest_pack_verified(self.store, &item.pack, &item.bytes)?;
-                    landed_pack = true;
-                    for &id in wanted {
-                        if satisfied.contains(&id) {
-                            continue;
-                        }
-                        if self
-                            .peer_adverts
-                            .get(&id)
-                            .map(|e| e.pack == item.pack)
-                            .unwrap_or(false)
-                            && self.store.get(BlobKind::DataChunk, &id).is_ok()
-                        {
-                            satisfied.insert(id);
-                        }
-                    }
-                } else {
-                    let b = ItemBatch::parse(&fb.payload)?;
-                    if b.items.is_empty() {
-                        break;
-                    }
-                    return Err(ProtoError::ProtocolViolation(
-                        "unexpected nonempty batch during pack transfer",
-                    )
-                    .into());
-                }
-            }
-        }
-        if landed_pack {
-            // Fold freshly landed packs into the location table once per
-            // stage (M0 shortcut; T-002/T-008 replace with incremental).
-            self.store.flush().map_err(wire_store_err)?;
-            let (_, skipped) = self.store.rebuild_index().map_err(wire_store_err)?;
-            if !skipped.is_empty() {
-                return Err(IngestError::RebuildSkipped(skipped).into());
-            }
-        }
-        Ok(satisfied)
+        fetch_blobs(
+            &mut self.est.io,
+            self.host,
+            self.store,
+            self.folder_id,
+            self.max_retries,
+            kind,
+            want,
+        )
     }
 
     /// Adopt a fetched/settled manifest: persist the blob, hand the new
@@ -750,23 +696,6 @@ impl<'x, 'e, H: ExchangeHost> Exchange<'x, 'e, H> {
     }
 }
 
-/// Store-backed [`BlobSource`] for the inline materializer.
-struct LocalBlobSource<'x> {
-    store: &'x Store,
-}
-
-impl BlobSource for LocalBlobSource<'_> {
-    fn get(
-        &self,
-        kind: BlobKind,
-        id: &BlobId,
-    ) -> Result<Vec<u8>, crate::materialize::MaterializeError> {
-        self.store.get(kind, id).map_err(|e| {
-            crate::materialize::MaterializeError::MissingBlob(format!("{kind:?} {}: {e}", hex(id)))
-        })
-    }
-}
-
 // --- shared helpers ---------------------------------------------------------------
 
 fn hex_short(b: &BlobId) -> String {
@@ -775,6 +704,209 @@ fn hex_short(b: &BlobId) -> String {
 
 fn wire_store_err(e: ferry_store::store::StoreError) -> ProtoError {
     ProtoError::Io(std::io::Error::other(e.to_string()))
+}
+
+/// The convergence engine's fetch hook, wired to this session's transport:
+/// pack-granular first (grouped through the server's advertised index
+/// entries), then individual chunk requests for whatever packs did not
+/// satisfy. Every received item is verified after decryption before it
+/// touches the store.
+struct WireFetch<'x, 'e, H: ExchangeHost> {
+    io: &'x mut SessionIo<'e>,
+    host: &'x H,
+    store: &'x Store,
+    folder_id: [u8; 16],
+    max_retries: u32,
+    adverts: &'x AdvertMap,
+}
+
+impl<H: ExchangeHost> ferry_sync_engine::BlobFetch for WireFetch<'_, '_, H> {
+    fn fetch(
+        &mut self,
+        want: &[(ferry_store::format::BlobId, u64)],
+    ) -> Result<(), ferry_sync_engine::ConvergenceError> {
+        let wanted: Vec<BlobId> = want.iter().map(|(id, _)| *id).collect();
+        let satisfied = fetch_via_packs(
+            self.io,
+            self.host,
+            self.store,
+            self.folder_id,
+            self.adverts,
+            &wanted,
+        )
+        .map_err(session_to_convergence)?;
+        let leftover: Vec<BlobId> = wanted
+            .iter()
+            .filter(|id| !satisfied.contains(*id))
+            .copied()
+            .collect();
+        if !leftover.is_empty() {
+            fetch_blobs(
+                self.io,
+                self.host,
+                self.store,
+                self.folder_id,
+                self.max_retries,
+                BlobKind::DataChunk,
+                &leftover,
+            )
+            .map_err(session_to_convergence)?;
+        }
+        Ok(())
+    }
+}
+
+fn session_to_convergence(e: SessionError) -> ferry_sync_engine::ConvergenceError {
+    ferry_sync_engine::ConvergenceError::Fetch(e.to_string())
+}
+
+/// Fetch blobs of one kind by id: request in batches, verify EVERY
+/// received item AFTER decryption, store only verified bytes, detect
+/// gaps, retry within budget. Missing ids at exhaustion fail cleanly.
+fn fetch_blobs<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    folder_id: [u8; 16],
+    max_retries: u32,
+    kind: BlobKind,
+    want: &[BlobId],
+) -> Result<(), SessionError> {
+    let mut outstanding: Vec<BlobId> = want.to_vec();
+    for _round in 0..=max_retries {
+        if outstanding.is_empty() {
+            return Ok(());
+        }
+        let mut got: BTreeSet<BlobId> = BTreeSet::new();
+        for group in outstanding.chunks(codec::MAX_REQUEST_ITEMS) {
+            io.send_frame(
+                codec::MSG_REQUEST_ITEMS,
+                RequestItems {
+                    folder_id,
+                    items: group.iter().map(|id| (kind, *id)).collect(),
+                }
+                .encode()?,
+            )?;
+            got.extend(read_item_batches(io, host, store, kind)?);
+        }
+        outstanding.retain(|id| !got.contains(id));
+    }
+    if outstanding.is_empty() {
+        Ok(())
+    } else {
+        Err(ProtoError::MissingItems(outstanding.len()).into())
+    }
+}
+
+/// Read `ITEM_BATCH` frames until the terminator. Verify-after-decrypt:
+/// BLAKE3(plaintext) MUST equal the claimed id BEFORE anything touches
+/// the store; rejects are counted and re-requested by the retry loop.
+fn read_item_batches<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    expected_kind: BlobKind,
+) -> Result<BTreeSet<BlobId>, SessionError> {
+    let mut got = BTreeSet::new();
+    loop {
+        let fb = io.expect_frame(codec::MSG_ITEM_BATCH)?;
+        let batch = ItemBatch::parse(&fb.payload)?;
+        if batch.items.is_empty() {
+            return Ok(got);
+        }
+        for (kind, id, bytes) in batch.items {
+            if kind != expected_kind {
+                return Err(ProtoError::ProtocolViolation("wrong blob kind in batch").into());
+            }
+            if *blake3::hash(&bytes).as_bytes() != id {
+                host.bump_rejected();
+                continue;
+            }
+            store.put_blob(kind, &bytes).map_err(wire_store_err)?;
+            got.insert(id);
+        }
+    }
+}
+
+/// Pack-granular fetch grouped through the SERVER'S advertised index
+/// entries. Returns the wanted ids satisfied through packs. Pack
+/// integrity: BLAKE3(ciphertext) == claimed name BEFORE storing or
+/// decrypting anything.
+fn fetch_via_packs<H: ExchangeHost>(
+    io: &mut SessionIo<'_>,
+    host: &H,
+    store: &Store,
+    folder_id: [u8; 16],
+    adverts: &AdvertMap,
+    wanted: &[BlobId],
+) -> Result<BTreeSet<BlobId>, SessionError> {
+    let mut satisfied = BTreeSet::new();
+    if wanted.is_empty() {
+        return Ok(satisfied);
+    }
+    let mut by_pack: BTreeMap<PackId, Vec<BlobId>> = BTreeMap::new();
+    for id in wanted {
+        if let Some(e) = adverts.get(id) {
+            by_pack.entry(e.pack).or_default().push(*id);
+        }
+    }
+    // Auto granularity: whole pack only when >= 2 wanted chunks share it.
+    let packs: Vec<PackId> = by_pack
+        .into_iter()
+        .filter(|(_, ids)| ids.len() >= 2)
+        .map(|(p, _)| p)
+        .collect();
+
+    let mut landed_pack = false;
+    for group in packs.chunks(codec::MAX_REQUEST_PACKS) {
+        io.send_frame(
+            codec::MSG_REQUEST_PACKS,
+            RequestPacks {
+                folder_id,
+                packs: group.to_vec(),
+            }
+            .encode()?,
+        )?;
+        loop {
+            let fb = io.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
+            if fb.msg_type == codec::MSG_PACK_ITEM {
+                let item = PackItem::parse(&fb.payload)?;
+                if *blake3::hash(&item.bytes).as_bytes() != item.pack {
+                    host.bump_rejected();
+                    continue;
+                }
+                ingest_pack_verified(store, &item.pack, &item.bytes)?;
+                landed_pack = true;
+                for &id in wanted {
+                    if satisfied.contains(&id) {
+                        continue;
+                    }
+                    if adverts.get(&id).is_some_and(|e| e.pack == item.pack)
+                        && store.get(BlobKind::DataChunk, &id).is_ok()
+                    {
+                        satisfied.insert(id);
+                    }
+                }
+            } else {
+                let b = ItemBatch::parse(&fb.payload)?;
+                if b.items.is_empty() {
+                    break;
+                }
+                return Err(ProtoError::ProtocolViolation(
+                    "unexpected nonempty batch during pack transfer",
+                )
+                .into());
+            }
+        }
+    }
+    if landed_pack {
+        // Delivered packs were folded into the location table (and an
+        // incremental INDEX record appended) at ingest time; flush only
+        // seals locally staged blobs. T-15: no full rebuild on the hot
+        // path.
+        store.flush().map_err(wire_store_err)?;
+    }
+    Ok(satisfied)
 }
 
 /// Lineage comparison: newer creation timestamp wins; device id and root
@@ -795,27 +927,29 @@ pub(crate) fn lineage_newer(candidate: &RootManifest, incumbent: &RootManifest) 
     ka > kb
 }
 
-/// Verify a pack's name against its ciphertext, then write it into the
-/// store's packs directory atomically. The single receiver-side ingest
-/// path shared by the v1 driver, tests, and the engine facade.
+/// Verify a pack's name against its ciphertext, then hand it to the store
+/// for incremental adoption (T-15): atomic disk write, short-lock table
+/// merge, per-pack INDEX record. The single receiver-side ingest path
+/// shared by the v1 driver, tests, and the engine facade.
 pub fn ingest_pack_verified(
     store: &Store,
     claimed_name: &PackId,
     bytes: &[u8],
 ) -> Result<(), IngestError> {
-    let found = ferry_store::pack::pack_name_of(bytes);
-    if found != *claimed_name {
-        return Err(IngestError::NameMismatch {
-            claimed: hex(claimed_name),
-            found: hex(&found),
-        });
+    match store.adopt_pack(claimed_name, bytes) {
+        Ok(()) => Ok(()),
+        Err(ferry_store::store::StoreError::Pack(ferry_store::pack::PackError::NameMismatch {
+            expected,
+            found,
+        })) => Err(IngestError::NameMismatch {
+            claimed: expected,
+            found,
+        }),
+        Err(other) => Err(IngestError::Other(other.to_string())),
     }
-    let dot = store.store_dir();
-    ferry_store::pack::write_pack_atomically(&dot.join("tmp"), &dot.join("packs"), bytes)?;
-    Ok(())
 }
 
-/// Chunk one folder's index rows into INDEX_ADVERT frames at the
+/// Chunk one folder's index rows into `INDEX_ADVERT` frames at the
 /// normative cap; at least one advert always goes out, even when empty.
 fn send_adverts_of(io: &mut SessionIo, entries: Vec<IndexEntry>) -> Result<(), SessionError> {
     if entries.is_empty() {

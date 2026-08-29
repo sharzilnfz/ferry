@@ -6,12 +6,15 @@
 //! - Connectivity is best-effort TCP reachability of the last known peer
 //!   address; without a recorded address it is "unknown".
 
-use std::path::{Path, PathBuf};
+use std::fmt::Write as _;
+use std::path::Path;
 use std::time::Duration;
 
-use ferry_pin::{HeldLedger, PinStore};
+use ferry_pin::PinManager;
+use ferry_platform::time::fmt_rfc3339;
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
-use ferry_sync_engine::{list_conflicts, PeerState};
+use ferry_sync_engine::list_conflicts;
 use serde_json::json;
 
 use crate::error::CliResult;
@@ -23,10 +26,79 @@ struct PeerRow {
     device_id: String,
     last_agreed_manifest_id: Option<String>,
     agreed_at: Option<String>,
-    connectivity: &'static str,
+    connectivity: String,
 }
 
 pub fn run(folder: &Path) -> CliResult<Output> {
+    if let Some(snap) = crate::ipc::query_status(folder) {
+        return Ok(output_from_snapshot(&snap));
+    }
+
+    run_offline(folder)
+}
+
+fn output_from_snapshot(snap: &ferry_ipc::EngineSnapshot) -> Output {
+    let manifest_id = snap.manifest_id.clone().unwrap_or_default();
+    let json_doc = json!({
+        "command": "status",
+        "folder": snap.folder,
+        "folder_id": snap.folder_id,
+        "device_id": snap.device_id,
+        "manifest_id": manifest_id,
+        "scanned": {
+            "files": snap.scanned.files,
+            "dirs": snap.scanned.dirs,
+            "symlinks": snap.scanned.symlinks,
+            "bytes_chunked": snap.scanned.bytes_chunked,
+        },
+        "pending_changes": snap.pending_changes,
+        "pin": {
+            "state": snap.pin.state,
+            "holding": snap.pin.holding,
+            "paths": snap.pin.paths,
+        },
+        "held_changes": snap.held_changes,
+        "held_by_peer": snap.held_by_peer,
+        "peers": snap.peers.iter().map(|p| json!({
+            "device_id": p.device_id,
+            "last_agreed_manifest_id": p.last_agreed_manifest_id,
+            "agreed_at": p.agreed_at,
+            "connectivity": p.connectivity,
+        })).collect::<Vec<_>>(),
+        "conflicts": snap.conflicts,
+    });
+
+    let peer_rows: Vec<PeerRow> = snap
+        .peers
+        .iter()
+        .map(|p| PeerRow {
+            device_id: p.device_id.clone(),
+            last_agreed_manifest_id: p.last_agreed_manifest_id.clone(),
+            agreed_at: p.agreed_at.clone(),
+            connectivity: p.connectivity.clone(),
+        })
+        .collect();
+
+    let human = render_human(
+        &snap.folder,
+        &snap.folder_id,
+        &snap.device_id,
+        snap.scanned.files,
+        snap.scanned.dirs,
+        snap.scanned.symlinks,
+        &manifest_id,
+        snap.pending_changes,
+        snap.conflicts,
+        &snap.pin.state,
+        &snap.pin.paths,
+        snap.held_changes,
+        &peer_rows,
+    );
+
+    Output::new(json_doc, human)
+}
+
+fn run_offline(folder: &Path) -> CliResult<Output> {
     let opened = folder::open_folder(folder)?;
     let identity = {
         let home = crate::home::ferry_home()?;
@@ -60,67 +132,44 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         BaseLookup::NoAgreement => None,
         BaseLookup::Unreadable => Some(-1),
         BaseLookup::Base(base_manifest) => Some(
-            ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest)
-                .map(|cs| {
+            ferry_store::diff::diff_manifests(&opened.store, &base_manifest, manifest).map_or(
+                -1,
+                |cs| {
                     (cs.added.len()
                         + cs.removed.len()
                         + cs.content_modified.len()
                         + cs.type_changed.len()
                         + cs.metadata_modified.len()) as i64
-                })
-                .unwrap_or(-1),
+                },
+            ),
         ),
     };
 
     // Session pinning (T-015): surface the pin state and the full held set
     // so held changes are visible, never silently parked.
-    let (pin_state, pin_paths, pin_holding) =
-        match PinStore::new(opened.state_dir()).load().map_err(|e| {
-            crate::error::CliError::new(
-                "pin-state-corrupt",
-                e.to_string(),
-                "inspect .ferry/pin-state.json",
-            )
-        })? {
-            None => ("none", Vec::<String>::new(), false),
-            Some(rec) => (
-                if rec.released {
-                    "released"
-                } else if rec.holding() {
-                    "active"
-                } else {
-                    "stale"
-                },
-                rec.paths.clone(),
-                rec.holding(),
-            ),
-        };
-    let held_ledger = HeldLedger::new(opened.state_dir());
-    let mut held_by_peer = serde_json::Map::new();
-    let mut held_total = 0usize;
-    for peer in held_ledger.peers().map_err(|e| {
+    let pin_summary = PinManager::new(opened.state_dir()).summary().map_err(|e| {
         crate::error::CliError::new(
-            "held-ledger-corrupt",
+            "pin-state-corrupt",
             e.to_string(),
-            "run `ferry pin status` for detail",
+            "inspect .ferry/pin-state.json",
         )
-    })? {
-        let entries = held_ledger.load_peer(&peer).map_err(|e| {
-            crate::error::CliError::new(
-                "held-ledger-corrupt",
-                e.to_string(),
-                "run `ferry pin release` to recover what remains readable",
-            )
-        })?;
-        let paths = ferry_pin::distinct_paths(&entries);
-        held_total += paths.len();
+    })?;
+    let pin_state = pin_summary.state;
+    let pin_paths = pin_summary.paths;
+    let pin_holding = pin_summary.holding;
+    let held_total = pin_summary.total_held_paths;
+    let mut held_by_peer = serde_json::Map::new();
+    for (peer, paths) in pin_summary.held_by_peer {
         held_by_peer.insert(peer, json!(paths));
     }
 
+    let folder_str = opened.root.display().to_string();
+    let folder_id_str = hex(&opened.folder_id);
+
     let json_doc = json!({
         "command": "status",
-        "folder": opened.root.display().to_string(),
-        "folder_id": hex(&opened.folder_id),
+        "folder": folder_str,
+        "folder_id": folder_id_str,
         "device_id": device_id,
         "manifest_id": manifest_id,
         "scanned": {
@@ -146,62 +195,92 @@ pub fn run(folder: &Path) -> CliResult<Output> {
         "conflicts": conflicts.len(),
     });
 
+    let human = render_human(
+        &folder_str,
+        &folder_id_str,
+        &device_id,
+        scan.stats.files as u64,
+        scan.stats.dirs as u64,
+        scan.stats.symlinks as u64,
+        &manifest_id,
+        pending,
+        conflicts.len(),
+        &pin_state,
+        &pin_paths,
+        held_total,
+        &peers,
+    );
+
+    Ok(Output::new(json_doc, human))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_human(
+    folder: &str,
+    folder_id: &str,
+    device_id: &str,
+    scanned_files: u64,
+    scanned_dirs: u64,
+    scanned_symlinks: u64,
+    manifest_id: &str,
+    pending: Option<i64>,
+    conflicts: usize,
+    pin_state: &str,
+    pin_paths: &[String],
+    held_total: usize,
+    peers: &[PeerRow],
+) -> String {
     let mut human = String::new();
-    human.push_str(&format!(
-        "Folder     {} ({})\n",
-        display(opened.root.display()),
-        hex(&opened.folder_id)
-    ));
-    human.push_str(&format!("Device     {}\n", device_id));
-    human.push_str(&format!(
-        "Scan       {} files, {} dirs, {} symlinks\n",
-        scan.stats.files, scan.stats.dirs, scan.stats.symlinks
-    ));
-    human.push_str(&format!("Manifest   {manifest_id}\n"));
+    let _ = writeln!(human, "Folder     {folder} ({folder_id})");
+    let _ = writeln!(human, "Device     {device_id}");
+    let _ = writeln!(
+        human,
+        "Scan       {scanned_files} files, {scanned_dirs} dirs, {scanned_symlinks} symlinks"
+    );
+    let _ = writeln!(human, "Manifest   {manifest_id}");
     match pending {
         Some(n) if n >= 0 => {
-            human.push_str(&format!("Pending    {n} change(s) vs last agreement\n"))
+            let _ = writeln!(human, "Pending    {n} change(s) vs last agreement");
         }
         Some(_) => human.push_str("Pending    unknown (base manifest unreadable)\n"),
         None => human.push_str("Pending    no agreement yet\n"),
     }
-    human.push_str(&format!("Conflicts  {}\n", conflicts.len()));
+    let _ = writeln!(human, "Conflicts  {conflicts}");
     match pin_state {
         "none" => human.push_str("Pin        none\n"),
-        s => human.push_str(&format!("Pin        {} ({})\n", s, pin_paths.join(", "))),
+        s => {
+            let _ = writeln!(human, "Pin        {} ({})", s, pin_paths.join(", "));
+        }
     }
     if held_total == 0 {
         human.push_str("Held       nothing\n");
     } else {
-        human.push_str(&format!(
-            "Held       {held_total} path(s) — `ferry pin release` reconciles them\n"
-        ));
+        let _ = writeln!(
+            human,
+            "Held       {held_total} path(s) — `ferry pin release` reconciles them"
+        );
     }
     if peers.is_empty() {
         human.push_str("Peers      none yet — run `ferry pair`\n");
     } else {
         human.push_str("Peers:\n");
-        for p in &peers {
+        for p in peers {
             let agreed = p
                 .last_agreed_manifest_id
                 .clone()
                 .unwrap_or_else(|| "-".into());
             let at = p.agreed_at.clone().unwrap_or_else(|| "-".into());
-            human.push_str(&format!(
-                "  {}  agreed={} at={} link={}\n",
+            let _ = writeln!(
+                human,
+                "  {}  agreed={} at={} link={}",
                 p.device_id,
                 &agreed[..24.min(agreed.len())],
                 at,
                 p.connectivity
-            ));
+            );
         }
     }
-
-    Ok(Output::new(json_doc, human))
-}
-
-fn display(d: std::path::Display<'_>) -> String {
-    d.to_string()
+    human
 }
 
 /// A fresh policy-aware scan into the folder's store.
@@ -222,55 +301,47 @@ pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
 /// Every peer this folder has agreement state for, plus best-effort
 /// connectivity.
 fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
-    let ps = PeerState::new(opened.state_dir());
+    let ledger = AgreementLedger::new(opened.state_dir());
     let mut rows = Vec::new();
-    let dir = opened.state_dir().join("peers");
-    let mut names: Vec<PathBuf> = match std::fs::read_dir(&dir) {
-        Ok(rd) => rd.flatten().map(|e| e.path()).collect(),
-        Err(_) => Vec::new(),
-    };
-    names.sort();
-    for path in names {
-        let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
-            continue;
-        };
-        let rec = ps.load(&dev).ok().flatten();
+    for (dev, rec) in ledger.list_folder(&opened.folder_id).map_err(|e| {
+        crate::error::CliError::new(
+            "agreement-state",
+            e.to_string(),
+            "check .ferry/agreement permissions",
+        )
+    })? {
         let dev_hex = hex(&dev);
         let connectivity = probe_peer(opened, &dev_hex);
         rows.push(PeerRow {
             device_id: dev_hex,
-            last_agreed_manifest_id: rec.as_ref().map(|r| hex(&r.manifest_id)),
-            agreed_at: rec.as_ref().map(format_agreed_time),
-            connectivity,
+            last_agreed_manifest_id: Some(hex(&rec.manifest_id)),
+            agreed_at: Some(format_agreed_time(&rec)),
+            connectivity: connectivity.to_string(),
         });
     }
     Ok(rows)
 }
 
 fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
-    let ps = PeerState::new(opened.state_dir());
-    let dir = opened.state_dir().join("peers");
-    let mut best: Option<(i64, u32)> = None;
-    let mut best_id: Option<[u8; 32]> = None;
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for path in rd.flatten().map(|e| e.path()) {
-            let Some(dev) = ferry_sync_engine::agree::peer_from_path(&path) else {
-                continue;
-            };
-            if let Ok(Some(rec)) = ps.load(&dev) {
-                if best.is_none_or(|(s, n)| (rec.agreed_sec, rec.agreed_nsec) > (s, n)) {
-                    best = Some((rec.agreed_sec, rec.agreed_nsec));
-                    best_id = Some(rec.manifest_id);
-                }
-            }
-        }
-    }
-    let Some(mid) = best_id else {
+    let ledger = AgreementLedger::new(opened.state_dir());
+    let records = ledger.list_folder(&opened.folder_id).map_err(|e| {
+        crate::error::CliError::new(
+            "agreement-state",
+            e.to_string(),
+            "check .ferry/agreement permissions",
+        )
+    })?;
+    // Most recent by (sec, nsec); the list is peer-sorted so ties resolve
+    // deterministically to the last peer id.
+    let best = records
+        .into_iter()
+        .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec));
+    let Some((_, rec)) = best else {
         return Ok(BaseLookup::NoAgreement);
     };
     match opened
         .store
-        .get(ferry_store::format::BlobKind::Manifest, &mid)
+        .get(ferry_store::format::BlobKind::Manifest, &rec.manifest_id)
     {
         Ok(bytes) => match ferry_store::manifest::parse_manifest(&bytes) {
             Ok(m) => Ok(BaseLookup::Base(m)),
@@ -316,6 +387,6 @@ fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
 }
 
 /// Fixed UTC rendering of an agreement timestamp (no local timezone drift).
-pub fn format_agreed_time(rec: &ferry_sync_engine::AgreedRecord) -> String {
-    ferry_sync_engine::timefmt::fmt_rfc3339(rec.agreed_sec)
+pub fn format_agreed_time(rec: &ferry_store::agreement::AgreedRecord) -> String {
+    fmt_rfc3339(rec.agreed_sec)
 }

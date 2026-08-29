@@ -9,30 +9,46 @@ ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-ignore = { path = "../ferry-ignore" }
-# The M0 crate supplies two reusable seams this CLI drives directly:
-# `proto` (HELLO/OFFER/REQ_META/REQ_DATA/ITEM message codecs) and
-# `transport` (the Transport/Listener/Connection trait + TcpTransport).
-# T-009/T-014 swap the implementation under these same seams.
+# One owner for folder bootstrap + the pairing ritual (ticket 08); this
+# crate is only a presentation adapter over it.
+ferry-folder.workspace = true
+# Ferry engine: daemon and sync commands run SyncEngine directly (T-14).
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
-# Session pinning: the exchange loop consults the hold filter pre-apply and
-# `ferry pin` drives start/stop/release/status on top of its ledgers.
 ferry-pin = { path = "../ferry-pin" }
+ferry-ipc = { path = "../ferry-ipc" }
+ferry-tui = { path = "../ferry-tui", optional = true }
+ferry-gui = { path = "../ferry-gui", optional = true }
+ferry-daemon = { path = "../ferry-daemon", default-features = false }
+ferry-platform.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+axum = { workspace = true, optional = true }
 clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-blake3 = "1.5"
-rand = "0.8"
-thiserror = "2"
-# Pair-grant sealing only (offer/accept file channel); the store cipher
-# comes from ferry-crypto::pack_cipher.
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-qrcode = "0.14"
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+# Terminal QR rendering only (ASCII art over the matrix). All pairing and
+# key-handling crypto lives behind ferry-crypto (T-03).
+qrcode.workspace = true
+subtle.workspace = true
+
+[features]
+default = ["web-ui", "tui", "gui"]
+web-ui = ["dep:axum", "ferry-daemon/web-ui"]
+tui = ["dep:ferry-tui"]
+gui = ["dep:ferry-gui"]
+lean = []
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
+# Test fixtures spawn a cross-platform sleeper child (see ferry-platform).
+ferry-platform = { path = "../ferry-platform" }
+axum = { workspace = true }
+ferry-tui = { path = "../ferry-tui" }
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "ferry"

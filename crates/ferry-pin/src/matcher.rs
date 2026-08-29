@@ -8,7 +8,7 @@
 //! ticket and not exercised as a scenario).
 //!
 //! The literal pattern `*` is special-cased to match EVERY path — the
-//! ticket's "paths: glob list or [\"*\"]" whole-folder pin — because plain
+//! ticket's `paths` glob-list-or-star whole-folder pin — because plain
 //! gitignore `*` would not cross directory separators cleanly for every
 //! shape of input.
 //!
@@ -83,7 +83,13 @@ mod tests {
     }
 
     fn m(patterns: &[&str]) -> PathMatcher {
-        PathMatcher::new(&patterns.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
+        PathMatcher::new(
+            &patterns
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
     }
 
     #[test]

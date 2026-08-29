@@ -2,3 +2,7 @@
 # Cargo.lock is committed: this is an application workspace.
 .worktrees/
 .DS_Store
+.pi/
+.agents
+new-session-*.json
+.playwright-mcp/

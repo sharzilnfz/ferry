@@ -42,7 +42,7 @@ pub enum WatchSignal {
     /// attribute the pass to polling.
     PolledChanged(Vec<RelPath>),
     /// Kernel-level event loss or anything unclassifiable: inotify
-    /// `Q_OVERFLOW`, Windows buffer overrun, FSEvents history drop, a
+    /// `Q_OVERFLOW`, Windows buffer overrun, `FSEvents` history drop, a
     /// watcher error that cannot be proven benign.
     Overflow { reason: String },
     /// A watch could not be established for this subtree (descriptor
@@ -157,7 +157,7 @@ mod tests {
     use super::*;
 
     fn p(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

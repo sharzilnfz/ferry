@@ -11,7 +11,7 @@
 //!   Syncthing's five-year `casefs` saga is the cautionary tale
 //!   (`research/landscape.md`, "Cross-platform pitfalls").
 //! - [`winpath`]: Windows long-path handling via `\\?\` extended-length
-//!   prefixes. Lifting MAX_PATH properly needs BOTH a registry value and an
+//!   prefixes. Lifting `MAX_PATH` properly needs BOTH a registry value and an
 //!   application manifest (Microsoft docs), neither of which a sync tool
 //!   controls on the host — so paths are prefixed mechanically instead,
 //!   regardless of host opt-in.
@@ -28,12 +28,17 @@
 
 pub mod casefold;
 pub mod links;
+pub mod procs;
 pub mod reserved;
 pub mod time;
 pub mod winpath;
 
 pub use casefold::{find_case_conflict, fold_key, host_folds_case, CaseConflict, CaseFoldIndex};
 pub use links::{allow_windows_dir_links, classify_link, LinkDecision, LinkRefusal};
+pub use procs::{process_start_token, spawn_sleeper};
 pub use reserved::is_reserved_device_name;
-pub use time::{join_unix, split_unix};
+pub use time::{
+    civil_from_days, civil_utc, current_time_str, days_from_civil, fmt_compact, fmt_rfc3339,
+    fmt_time_utc, join_unix, now_unix, parse_rfc3339_to_unix, split_unix,
+};
 pub use winpath::{extend_path, needs_extended_length, MAX_PATH};

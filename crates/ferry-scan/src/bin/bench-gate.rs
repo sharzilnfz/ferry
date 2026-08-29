@@ -19,7 +19,7 @@
 //!   (`scan_once` after events have settled), not notification latency or
 //!   the debounce window. Both are engine-quality concerns measured
 //!   elsewhere; the SPEC risk is scan throughput.
-//! - PassthroughCipher isolates scan/chunking cost from encryption cost;
+//! - `PassthroughCipher` isolates scan/chunking cost from encryption cost;
 //!   ChaCha20-Poly1305 would add a near-constant per-byte multiplier and is
 //!   not part of this gate.
 //! - Machine info is printed for the record; gates are absolute per ticket.
@@ -65,8 +65,10 @@ fn machine_info() -> String {
             .args(["-n", "machdep.cpu.brand_string"])
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+            .map_or_else(
+                || "unknown".into(),
+                |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            );
         let ram = std::process::Command::new("sysctl")
             .args(["-n", "hw.memsize"])
             .output()
@@ -77,14 +79,18 @@ fn machine_info() -> String {
                     .parse::<u64>()
                     .ok()
             })
-            .map(|b| format!("{:.0} GiB", b as f64 / 1024.0 / 1024.0 / 1024.0))
-            .unwrap_or_else(|| "unknown".into());
+            .map_or_else(
+                || "unknown".into(),
+                |b| format!("{:.0} GiB", b as f64 / 1024.0 / 1024.0 / 1024.0),
+            );
         let cores = std::process::Command::new("sysctl")
             .args(["-n", "hw.ncpu"])
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "?".into());
+            .map_or_else(
+                || "?".into(),
+                |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            );
         let ver = std::process::Command::new("sw_vers")
             .args(["-productVersion"])
             .output()
@@ -137,7 +143,8 @@ fn main() {
     let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
-        poly: 0x0025_b468_838d_cb75 | (1 << 53),
+        poly: ferry_store::chunker::ValidatedPoly::new(0x0025_b468_838d_cb75 | (1 << 53))
+            .expect("bench polynomial constant is monic irreducible of degree 53"),
         folder_id: [7; 16],
         device_id: [8; 32],
     };
@@ -145,7 +152,7 @@ fn main() {
     // ---- 3. GATE: initial full scan ----------------------------------------
     let cfg = ScanConfig {
         quiet_window: Duration::from_millis(150),
-        audit_interval: Duration::from_secs(3600),
+        audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_secs(10),
     };
     let t0 = Instant::now();

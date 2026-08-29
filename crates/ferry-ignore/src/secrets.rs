@@ -16,8 +16,6 @@ use std::sync::LazyLock;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-use ferry_scan::IgnorePolicy;
-
 use crate::policy::FerryIgnore;
 
 /// What kind of risk a warning describes: either the PATH itself is
@@ -77,7 +75,7 @@ impl Warning {
     /// Loud, human-readable rendering (the CLI will print this at share time).
     pub fn message(&self) -> String {
         let loc = match self.line {
-            Some(n) => format!(":{} ", n),
+            Some(n) => format!(":{n} "),
             None => " ".to_string(),
         };
         format!(
@@ -96,6 +94,9 @@ pub fn classify_path(basename: &str) -> Option<WarningClass> {
     if name == ".env" || (name.starts_with(".env.") && name.len() > ".env.".len()) {
         return Some(WarningClass::EnvFile);
     }
+    // Extension match stays case-sensitive on purpose: real key files are
+    // lowercase, and flagging "KEY" variants would change existing behavior.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if name.ends_with(".pem") || name.ends_with(".key") || name.starts_with("id_rsa") {
         return Some(WarningClass::PrivateKeyFile);
     }
@@ -169,12 +170,12 @@ pub fn scan_for_secrets(rules: &FerryIgnore, root: &Path) -> Vec<Warning> {
 }
 
 fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Warning>) {
-    let entries = match std::fs::read_dir(abs) {
-        Ok(rd) => rd,
-        Err(_) => return, // unreadable subtree: nothing to warn about here
+    // Unreadable subtree: nothing to warn about here.
+    let Ok(entries) = std::fs::read_dir(abs) else {
+        return;
     };
     let mut names: Vec<String> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
     names.sort();
@@ -183,15 +184,17 @@ fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Wa
         let component: String = name.nfc().collect();
         let mut child_abs = abs.to_path_buf();
         child_abs.push(&name);
-        let meta = match std::fs::symlink_metadata(&child_abs) {
-            Ok(m) => m,
-            Err(_) => continue, // vanished mid-walk
+        // Vanished mid-walk.
+        let Ok(meta) = std::fs::symlink_metadata(&child_abs) else {
+            continue;
         };
         rel.push(component.clone());
         if meta.is_dir() {
             // Prune exactly like the scanner: ignored dirs are never synced,
-            // so their contents can never leak at share time either.
-            if !rules.ignored(rel) {
+            // so their contents can never leak at share time either. The
+            // kind is already known from the stat above, so this consults
+            // `decided` directly (T-12: no re-resolution at the seam).
+            if !rules.decided(rel, true) {
                 walk(rules, &child_abs, rel, out);
             }
         } else if meta.is_file() {
@@ -209,7 +212,7 @@ fn scan_file_if_risky(
     meta: &std::fs::Metadata,
     out: &mut Vec<Warning>,
 ) {
-    if rules.ignored(rel) {
+    if rules.decided(rel, false) {
         return; // would NOT sync → nothing leaves → no warning
     }
     let Some(path_class) = rel.last().and_then(|n| classify_path(n)) else {
@@ -223,15 +226,14 @@ fn scan_file_if_risky(
         class: path_class,
         preview: format!(
             "{} included in sync ({} bytes)",
-            rel.last().map(String::as_str).unwrap_or(""),
+            rel.last().map_or("", String::as_str),
             meta.len()
         ),
     });
 
     // Content-level warnings: likely credentials inside.
-    let mut bytes = match std::fs::read(abs) {
-        Ok(b) => b,
-        Err(_) => return,
+    let Ok(mut bytes) = std::fs::read(abs) else {
+        return;
     };
     bytes.truncate(SCAN_BYTE_CAP as usize);
     let text = String::from_utf8_lossy(&bytes);

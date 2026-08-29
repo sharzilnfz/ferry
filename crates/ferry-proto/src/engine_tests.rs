@@ -6,11 +6,11 @@
 
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, FLAG_EXTENSION_AWARE};
-use crate::engine::Session;
+use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, IndexAdvert, FLAG_EXTENSION_AWARE};
+use crate::engine::{ingest_pack, recv_advert_map, MAX_ADVERT_ROWS_TOTAL};
 use crate::error::ByeReason;
 use crate::frame::{read_body, write_body};
-use crate::secure::{kdf_handshake, traffic_keys, transcript_hash};
+use crate::secure::{kdf_handshake, traffic_keys, transcript_hash, SecureSession};
 use crate::stream::{duplex_pair, DuplexHalf};
 use crate::version::ProtocolVersion;
 use crate::{run_engine, EngineConfig, Granularity, ProtoError, Role};
@@ -196,27 +196,27 @@ fn replayed_hello_cannot_complete_authentication() {
 
 /// Build a live post-auth `Session` over a duplex half using the REAL key
 /// schedule (fabricated DH terms), so sealed frames authenticate normally.
-fn policy_session<'a>(
-    io: &'a mut DuplexHalf,
+fn policy_session(
+    io: DuplexHalf,
     peer_max: ProtocolVersion,
     peer_flags: u64,
-) -> Session<'a, DuplexHalf> {
+) -> SecureSession<DuplexHalf> {
     // tx/rx None = plaintext frames: isolates the TYPE policy from sealing.
-    Session {
+    SecureSession::from_parts(
         io,
-        version: ProtocolVersion::V1_0,
+        ProtocolVersion::V1_0,
         peer_max,
         peer_flags,
-        peer_id: [0; 32],
-        tx: None,
-        rx: None,
-    }
+        [0; 32],
+        None,
+        None,
+    )
 }
 
 #[test]
 fn unknown_type_same_version_is_a_protocol_violation() {
-    let (mut inject, mut inbox) = duplex_pair();
-    let mut sess = policy_session(&mut inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
@@ -227,9 +227,9 @@ fn unknown_type_same_version_is_a_protocol_violation() {
 
 #[test]
 fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
-    let (mut inject, mut inbox) = duplex_pair();
+    let (mut inject, inbox) = duplex_pair();
     let mut sess = policy_session(
-        &mut inbox,
+        inbox,
         ProtocolVersion::new(1, 5),
         FLAG_EXTENSION_AWARE | (1 << 6), // flag we do not know
     );
@@ -249,8 +249,8 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
 
 #[test]
 fn unknown_type_higher_minor_without_new_flags_still_violates() {
-    let (mut inject, mut inbox) = duplex_pair();
-    let mut sess = policy_session(&mut inbox, ProtocolVersion::new(1, 5), FLAG_EXTENSION_AWARE);
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::new(1, 5), FLAG_EXTENSION_AWARE);
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![]),
@@ -262,23 +262,146 @@ fn unknown_type_higher_minor_without_new_flags_still_violates() {
 fn skipped_unknown_types_must_be_sealed_correctly_too() {
     // A "skippable" frame still has to authenticate under the session keys:
     // garbage wrapped in an unknown type is an auth failure, not a skip.
-    let (mut inject, mut inbox) = duplex_pair();
+    let (mut inject, inbox) = duplex_pair();
     let (_, _, prk) = kdf_handshake(&[0; 32], &[1; 32], &[2; 32], &[3; 32]);
     let th_final = transcript_hash(&[]);
     let (ka, kb) = traffic_keys(&prk, &th_final);
-    let mut sess = Session {
-        io: &mut inbox,
-        version: ProtocolVersion::V1_0,
-        peer_max: ProtocolVersion::new(1, 5),
-        peer_flags: FLAG_EXTENSION_AWARE | (1 << 6),
-        peer_id: [0; 32],
-        tx: Some(kb.cipher()),
-        rx: Some(ka.cipher()),
-    };
+    let mut sess = SecureSession::from_parts(
+        inbox,
+        ProtocolVersion::V1_0,
+        ProtocolVersion::new(1, 5),
+        FLAG_EXTENSION_AWARE | (1 << 6),
+        [0; 32],
+        Some(kb.cipher()),
+        Some(ka.cipher()),
+    );
     // Write the frame UNSEALED while the session expects sealing. Payload
     // is large enough that the failure is the TAG check, not a length guard.
     let body = FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![1u8; 64]).encode();
     write_body(&mut inject, &body).unwrap();
     let err = sess.recv_frame().unwrap_err();
     assert!(matches!(err, ProtoError::Auth(_)), "{err}");
+}
+
+// --- T-016: session-wide receive budgets + crash-safe pack ingest -------------
+
+#[test]
+fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
+    // A hostile peer streams MAX_ROWS-row advert frames with more=1 forever.
+    // recv_advert_map must stop at the session-wide row budget with a typed
+    // ResourceLimit (→ BYE(ResourceLimit) on the wire), never OOM.
+    let (mut inject, inbox) = duplex_pair();
+    let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
+
+    // Distinct ids per row: the index-table encoder sorts AND dedups
+    // (kind,id) pairs, so repeated rows would collapse to one and never
+    // trip any budget.
+    let entries_for = |frame: usize| -> Vec<ferry_store::index::IndexEntry> {
+        (0..IndexAdvert::MAX_ROWS)
+            .map(|j| {
+                let n = (frame * IndexAdvert::MAX_ROWS + j) as u64;
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&n.to_be_bytes());
+                ferry_store::index::IndexEntry {
+                    kind: ferry_store::format::BlobKind::DataChunk,
+                    id,
+                    pack: [0u8; 32],
+                    plain_off: 0,
+                    plain_len: 0,
+                }
+            })
+            .collect()
+    };
+    // One frame PAST the budget: 129 full frames = 264_192 rows > 262_144.
+    let frames = MAX_ADVERT_ROWS_TOTAL / IndexAdvert::MAX_ROWS + 1;
+    for f in 0..frames {
+        write_frame(
+            &mut inject,
+            &FrameBody::new(
+                codec::MSG_INDEX_ADVERT,
+                ProtocolVersion::V1_0,
+                IndexAdvert {
+                    entries: entries_for(f),
+                    more: true,
+                }
+                .encode(),
+            ),
+        );
+    }
+
+    let err = recv_advert_map(&mut sess).unwrap_err();
+    match err {
+        ProtoError::ResourceLimit { limit, .. } => assert_eq!(limit, MAX_ADVERT_ROWS_TOTAL),
+        other => panic!("expected ResourceLimit, got {other}"),
+    }
+}
+
+#[test]
+fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(
+        ferry_store::store::Store::create(
+            dir.path(),
+            [7u8; 32],
+            Box::new(ferry_store::crypto::PassthroughCipher),
+        )
+        .unwrap(),
+    );
+
+    // A real sealed pack (T-15: ingest verifies the BLAKE3 name AND parses
+    // the footer before anything touches disk, so raw bytes are rejected).
+    let body: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let chunk_id = *blake3::hash(&body).as_bytes();
+    let entries = vec![ferry_store::pack::FooterEntry {
+        kind: ferry_store::format::BlobKind::DataChunk,
+        id: chunk_id,
+        plain_off: 0,
+        plain_len: body.len() as u64,
+    }];
+    let salt: [u8; ferry_store::crypto::SALT_LEN] = core::array::from_fn(|i| i as u8);
+    let bytes = ferry_store::pack::seal_pack_bytes(
+        ferry_store::format::ContainerKind::PackData,
+        &[7u8; 32],
+        &salt,
+        &body,
+        &entries,
+        &ferry_store::crypto::PassthroughCipher,
+    )
+    .unwrap();
+
+    // Two "processes" racing on the same store dir. The unique entropy temp
+    // names mean neither writer's bytes can interleave into the other's
+    // file; both must succeed and the final pack must match its name.
+    let s2 = Arc::clone(&store);
+    let b2 = bytes.clone();
+    let racer = std::thread::spawn(move || ingest_pack(&s2, &b2));
+    let here = ingest_pack(&store, &bytes).unwrap();
+    let there = racer.join().unwrap().unwrap();
+    assert_eq!(here, there, "same bytes ⇒ same verified BLAKE3 name");
+
+    let name = ferry_store::format::hex(&here);
+    let store_dir = dir.path().join(ferry_store::store::STORE_DIR_NAME);
+    let on_disk = std::fs::read(store_dir.join("packs").join(format!("{name}.pack"))).unwrap();
+    assert_eq!(*blake3::hash(&on_disk).as_bytes(), here);
+    assert_eq!(on_disk, bytes);
+
+    // Concurrent adoption left exactly one valid location behind: the chunk
+    // is readable through the merged table.
+    assert_eq!(
+        store
+            .get(ferry_store::format::BlobKind::DataChunk, &chunk_id)
+            .unwrap(),
+        body
+    );
+
+    // No orphaned temps survive a successful ingest — and the error path
+    // removes its temp too (best-effort cleanup in ingest_pack); crash
+    // residue is ticket 20's sweeper.
+    let residue: Vec<_> = std::fs::read_dir(store_dir.join("tmp"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(residue.is_empty(), "{residue:?}");
 }

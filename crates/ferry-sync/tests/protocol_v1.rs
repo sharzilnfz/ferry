@@ -14,8 +14,6 @@
 //!   any agreement.
 //! - [`unknown_message_type_is_a_clean_protocol_violation`] exercises the
 //!   normative unknown-type rule (v1.0 peers never skip).
-//! - [`legacy_dev_flag_still_converges`] proves the retired plaintext M0
-//!   framing still syncs behind `EngineConfig::legacy_m0_proto`.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -32,15 +30,12 @@ use ferry_proto::{duplex_pair, EngineConfig as RefConfig, FolderState as RefFold
 use ferry_store::manifest::RootManifest;
 use ferry_store::store::Store;
 use ferry_sync::session::{establish, RawLink};
-use ferry_sync::{
-    run_v1_session, CurrentState, EngineConfig, EngineHandle, Established, ExchangeHost,
-    SyncEngine, TcpTransport, DEFAULT_FOLDER_ID,
-};
+use ferry_sync::{run_v1_session, CurrentState, Established, ExchangeHost, DEFAULT_FOLDER_ID};
 
 const POLY_SEED: u64 = 20260824;
 
-fn poly() -> u64 {
-    ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(POLY_SEED))
+fn poly() -> ferry_store::chunker::ValidatedPoly {
+    ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(POLY_SEED))
 }
 
 fn open_store(dir: &Path) -> Arc<Store> {
@@ -137,13 +132,12 @@ impl ExchangeHost for TestHost {
         if let Some(dot) = &self.ledger_dot {
             let (sec, nsec) = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| (d.as_secs() as i64, d.subsec_nanos()))
-                .unwrap_or((0, 0));
-            ferry_proto::agreement::AgreementLedger::new(dot)
+                .map_or((0, 0), |d| (d.as_secs() as i64, d.subsec_nanos()));
+            ferry_store::agreement::AgreementLedger::new(dot)
                 .record(
                     &DEFAULT_FOLDER_ID,
-                    &ferry_proto::agreement::AgreementRecord {
-                        peer,
+                    &ferry_store::agreement::AgreedRecord {
+                        peer_device_id: peer,
                         manifest_id,
                         agreed_sec: sec,
                         agreed_nsec: nsec,
@@ -285,12 +279,12 @@ fn ferry_sync_stack_interops_with_reference_engine() {
     let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id())).expect("our-side ledger exists");
     assert_eq!(rb.len(), 77);
     assert_eq!(mb.len(), 77);
-    let rrec = ferry_proto::agreement::AgreementRecord::from_canonical(&rb).unwrap();
-    let mrec = ferry_proto::agreement::AgreementRecord::from_canonical(&mb).unwrap();
+    let rrec = ferry_store::agreement::parse_agreed_record(&rb).unwrap();
+    let mrec = ferry_store::agreement::parse_agreed_record(&mb).unwrap();
     assert_eq!(rrec.manifest_id, ref_manifest_id);
     assert_eq!(mrec.manifest_id, ref_manifest_id);
-    assert_eq!(rrec.peer, *id_my.device_id());
-    assert_eq!(mrec.peer, *id_ref.device_id());
+    assert_eq!(rrec.peer_device_id, *id_my.device_id());
+    assert_eq!(mrec.peer_device_id, *id_ref.device_id());
 }
 
 #[test]
@@ -390,9 +384,9 @@ fn reference_initiator_ferry_sync_responder_interop() {
     );
 }
 
-/// A Read+Write wrapper around DuplexHalf that corrupts the Nth outbound
-/// record: record 1 = HELLO, record 2 = AUTH_INIT, record 3 = first
-/// post-auth frame (sealed FOLDER_OFFER). Flipping a ciphertext byte there
+/// A Read+Write wrapper around `DuplexHalf` that corrupts the Nth outbound
+/// record: record 1 = HELLO, record 2 = `AUTH_INIT`, record 3 = first
+/// post-auth frame (sealed `FOLDER_OFFER`). Flipping a ciphertext byte there
 /// must break AEAD authentication on the REFERENCE receiver.
 struct TamperNthWrite {
     inner: DuplexHalf,
@@ -486,11 +480,11 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
     assert!(
         matches!(
             res,
-            Err(ProtoError::Auth(_))
-                | Err(ProtoError::ByeReceived {
+            Err(ProtoError::Auth(_)
+                | ProtoError::ByeReceived {
                     reason: ferry_proto::error::ByeReason::AuthFailed
-                })
-                | Err(ProtoError::Io(_))
+                }
+                | ProtoError::Io(_))
         ),
         "reference rejected the tampered frame: {res:?}"
     );
@@ -498,7 +492,7 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
 
 /// Normative unknown-message rule, v1.0 ↔ v1.0: unknown types are NEVER
 /// skipped (no higher minor advertised); the session dies cleanly with
-/// UnknownMessage.
+/// `UnknownMessage`.
 #[test]
 fn unknown_message_type_is_a_clean_protocol_violation() {
     let id_a = ident("unk-a");
@@ -536,57 +530,11 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
     // then hits the policy check.
     est.io.send_frame(0x7F, vec![1, 2, 3]).unwrap();
 
-    let got = match hb.join().unwrap() {
-        Err(e) => e,
-        Ok(()) => panic!("receiver accepted an unknown message type"),
+    let Err(got) = hb.join().unwrap() else {
+        panic!("receiver accepted an unknown message type")
     };
     assert!(
         matches!(got, ProtoError::UnknownMessage { msg_type: 0x7F }),
         "{got}"
     );
-}
-
-/// The retired plaintext framing still syncs behind the dev flag.
-#[test]
-fn legacy_dev_flag_still_converges() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let mk_cfg = |slot: &str| {
-        let mut cfg = EngineConfig::default_for_test(POLY_SEED);
-        cfg.tag = format!("leg-{slot}");
-        cfg.store_dir = dir.path().join(format!("{slot}/store"));
-        cfg.tree_dir = dir.path().join(format!("{slot}/tree"));
-        cfg.poly = poly();
-        cfg.quiet = true;
-        cfg.legacy_m0_proto = true; // THE flag under test
-        fs::create_dir_all(&cfg.tree_dir).unwrap();
-        cfg
-    };
-
-    let mut cfg_a = mk_cfg("a");
-    cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
-    let addr = engine_a.listen_addr().unwrap();
-    let a: EngineHandle = engine_a.start();
-
-    let mut cfg_b = mk_cfg("b");
-    cfg_b.connect_to = Some(addr);
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
-    let b = engine_b.start();
-
-    fs::write(dir.path().join("a/tree/legacy.txt"), b"legacy bytes").unwrap();
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let target = dir.path().join("b/tree/legacy.txt");
-    while !(a.agreed_id().is_some() && a.agreed_id() == b.agreed_id() && target.exists()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "legacy mode did not converge"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert_eq!(fs::read(&target).unwrap(), b"legacy bytes");
-
-    a.shutdown();
-    b.shutdown();
 }

@@ -11,13 +11,26 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// comment; this constant backs the `--help` epilog with the five-minute
 /// path.
 pub const AFTER_HELP: &str = "\
-Five-minute path:
+Two-minute path (zero-config):
+  ferry                         launch UI (auto-detects GUI/Web/TUI, bootstraps daemon)
+  ferry share [FOLDER]          create a share code for FOLDER (prints code + QR)
+  ferry join <CODE> [DEST]      join a shared folder at DEST using CODE
+Five-minute path (legacy):
   ferry init            inside your project
   ferry pair            on this machine; follow the printed steps on the other device
   ferry daemon --listen 127.0.0.1:44001        (device A)
   ferry daemon --peer-url 127.0.0.1:44001      (device B)
 Every command accepts --json for stable machine-readable output
 (schemas: docs/cli-json.md).";
+
+/// Long-form help shown by `ferry daemon --help`.
+pub const DAEMON_AFTER_HELP: &str = "\
+Web dashboard (v0):
+  ferry daemon --ui [HOST:PORT]        (default 127.0.0.1:8098)
+--ui serves the local web dashboard over HTTP while syncing runs.
+v0 stance: LOOPBACK BIND ONLY and no auth token — anyone who can reach
+the port can read folder state, so keep the default 127.0.0.1 address.
+Design notes: .scratch/web-dashboard/spec.md.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -39,7 +52,7 @@ pub struct Cli {
     pub verbose: bool,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -59,7 +72,7 @@ pub enum Command {
     /// `ferry pair` prints a short code + QR and writes an offer file;
     /// `ferry pair --accept <file>` (run on the other device) completes the
     /// exchange. The payload FILE stands in for QR-camera transport across
-    /// machines: move it however you move secrets (AirDrop, scp, USB).
+    /// machines: move it however you move secrets (`AirDrop`, scp, USB).
     Pair {
         /// Accept mode: path to the offer file written by the other device.
         #[arg(long, value_name = "PAYLOAD_FILE")]
@@ -81,6 +94,13 @@ pub enum Command {
         /// Seconds to wait for the accepting device's response.
         #[arg(long, default_value_t = 120, value_name = "SECONDS")]
         timeout_secs: u64,
+    },
+    /// Join a shared folder using a pairing code.
+    Join {
+        /// Pairing code (6 chars, case-insensitive, dashes/spaces ignored).
+        code: String,
+        /// Destination folder (default: current directory).
+        dest: Option<PathBuf>,
     },
     /// Show what Ferry knows about a folder right now.
     Status {
@@ -112,8 +132,17 @@ pub enum Command {
         /// Show the effective rule layers with precedence annotations.
         #[arg(long)]
         list: bool,
+        /// Folder to target (default: current directory).
+        #[arg(value_name = "FOLDER")]
+        folder: Option<PathBuf>,
+    },
+    /// Store maintenance: garbage-collect unreferenced packs (T-20).
+    Store {
+        #[command(subcommand)]
+        action: StoreAction,
     },
     /// Watch folders and continuously exchange with one peer over TCP.
+    #[command(after_help = DAEMON_AFTER_HELP)]
     Daemon {
         /// Folders to watch (default: current directory).
         folders: Vec<PathBuf>,
@@ -147,12 +176,66 @@ pub enum Command {
         #[arg(long, default_value = "tcp", value_name = "KIND")]
         transport: String,
     },
+    #[cfg(feature = "tui")]
+    /// Launch the interactive terminal user interface dashboard.
+    Tui {
+        /// Folder to monitor (default: current directory).
+        folder: Option<PathBuf>,
+    },
+    /// Launch Ferry graphical, web, or terminal user interface.
+    Ui {
+        /// Folder to monitor/serve (default: current directory).
+        folder: Option<PathBuf>,
+        /// Launch native desktop graphical interface.
+        #[arg(long)]
+        gui: bool,
+        /// Launch ephemeral web dashboard in browser.
+        #[arg(long)]
+        web: bool,
+        /// Launch interactive terminal dashboard.
+        #[arg(long)]
+        tui: bool,
+        /// Bind host for web UI (default: 127.0.0.1).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to bind for web UI (default: 0 for random ephemeral port).
+        #[arg(short, long, default_value_t = 0)]
+        port: u16,
+        /// Do not open the browser automatically.
+        #[arg(long)]
+        no_open: bool,
+        /// Test mode: start server/frontend, verify startup, and exit immediately.
+        #[arg(long, hide = true)]
+        test: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum ConflictsAction {
     /// List recorded conflicts, oldest first.
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StoreAction {
+    /// Collect packs no live manifest can reach.
+    ///
+    /// Liveness roots: every last-agreed manifest recorded for this folder
+    /// plus every held-change manifest still awaiting `ferry pin release`.
+    /// Explicit user action only — nothing is ever auto-deleted; packs
+    /// younger than --grace-secs are never removed, so an in-flight writer
+    /// or a just-published manifest is always safe. Quarantined conflict
+    /// copies are ordinary tree files (ADR-0004) and are untouched.
+    Gc {
+        /// Report what would be collected without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Never delete packs younger than this many seconds.
+        #[arg(long, default_value_t = 24 * 60 * 60, value_name = "SECONDS")]
+        grace_secs: u64,
+        /// Folder whose store to collect (default: current directory).
+        folder: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -164,6 +247,9 @@ pub enum PinAction {
         /// (equivalent to `--paths '*'`).
         #[arg(long = "paths", value_name = "GLOB")]
         paths: Vec<String>,
+        /// Duration of the protection window in hours.
+        #[arg(long, default_value_t = 8, value_name = "HOURS")]
+        hours: u64,
         /// Folder to pin (default: current directory).
         folder: Option<PathBuf>,
     },

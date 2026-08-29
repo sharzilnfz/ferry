@@ -1,0 +1,79 @@
+[
+  {
+    "stage_name": "Stage 1: Environment & Connectivity",
+    "status": "PASS",
+    "duration_ms": 2251.84545799857,
+    "details": {
+      "mac_version": "ferry 0.1.0",
+      "arch_version": "ferry 0.1.0",
+      "ping_mac_to_arch_ms": 60.862
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 2: Cryptographic Pairing",
+    "status": "PASS",
+    "duration_ms": 2328.0169579957146,
+    "details": {
+      "folder_id": "cab7702536d45bc2d98e99c75ef2eaef"
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 3: P2P Daemons",
+    "status": "PASS",
+    "duration_ms": 3087.0419169950765,
+    "details": {},
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 4: Bidirectional Sync",
+    "status": "PASS",
+    "duration_ms": 7685.9001249977155,
+    "details": {
+      "mac_to_arch": {
+        "convergence_ms": 6184.32
+      },
+      "arch_to_mac": {
+        "convergence_ms": 1089.93
+      }
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 5: Dual-Device TUI",
+    "status": "PASS",
+    "duration_ms": 3841.761583003972,
+    "details": {
+      "mac_tui_status": "VERIFIED",
+      "arch_tui_status": "VERIFIED"
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 6: Dual-Device Web UI",
+    "status": "PASS",
+    "duration_ms": 1822.6722910039825,
+    "details": {
+      "mac_web_ui": {},
+      "arch_web_ui": {
+        "status": "VERIFIED"
+      }
+    },
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 7: Session Pinning",
+    "status": "PASS",
+    "duration_ms": 1523.7906250040396,
+    "details": {},
+    "error_message": null
+  },
+  {
+    "stage_name": "Stage 8: Teardown & Cleanup",
+    "status": "PASS",
+    "duration_ms": 847.0625000045402,
+    "details": {},
+    "error_message": null
+  }
+]

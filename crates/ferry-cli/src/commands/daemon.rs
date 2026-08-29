@@ -1,44 +1,17 @@
 //! `ferry daemon`: watch folders, snapshot continuously, exchange with one
-//! peer over TCP in the background.
-//!
-//! # What the daemon honestly does today (v0)
-//!
-//! - Watches each folder with ferry-scan's ScanEngine (native events +
-//!   poll fallback + audits) driving snapshots into the encrypted store.
-//! - Exchanges with EXACTLY ONE peer address (`--peer-url`), over plain
-//!   localhost/LAN TCP using the M0 message inventory. No discovery, no
-//!   NAT traversal, no relay: those land with T-009/T-014 (iroh QUIC).
-//!   `--transport` accepts only `tcp`; other values fail cleanly.
-//! - Applies three-way reconciliation (ferry-sync-engine) with conflict
-//!   quarantine per ADR-0004; rounds repeat until roots match, then the
-//!   agreement pointer is recorded.
-//!
-//! Roles: run one side with `--listen` (it serves sessions) and the other
-//! with `--peer-url` (it dials every interval and drives rounds). A single
-//! daemon may pass both flags.
+//! peer over TCP in the background using the unified `SyncEngine`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use ferry_scan::{ScanEngine, StoreHandle};
 use ferry_store::format::hex;
-use ferry_sync::transport::Transport;
+use ferry_sync::{EngineConfig, SyncEngine};
 
 use crate::error::{CliError, CliResult};
-use crate::exchange::{run_round, scan_snapshot, FolderSession};
-use crate::folder::{self, OpenFolder};
+use crate::folder;
 use crate::out::Output;
-
-/// One watched folder inside a running daemon.
-struct WatchedFolder {
-    opened: OpenFolder,
-    session: FolderSession,
-    engine: ScanEngine,
-    /// Serializes exchange rounds per folder.
-    lock: Arc<Mutex<()>>,
-}
 
 pub struct DaemonArgs<'a> {
     pub folders: &'a [PathBuf],
@@ -73,10 +46,73 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         None => None,
     };
     if listen_addr.is_none() && peer_addr.is_none() {
-        return Err(CliError::new(
-            "usage",
-            "the daemon needs --listen and/or --peer-url",
-            "run one side with --listen 127.0.0.1:44001 and point the other side's --peer-url at it",
+        let home = crate::home::ferry_home()?;
+        let identity = crate::ensure_identity()?;
+        let mut supervisor =
+            ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
+        for p in args.folders {
+            let abs = if p.is_relative() {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(p))
+                    .unwrap_or_else(|_| p.clone())
+            } else {
+                p.clone()
+            };
+            if abs.as_os_str().is_empty() {
+                continue;
+            }
+            match supervisor.handle_register(abs.clone()) {
+                Ok(rec) => eprintln!("registered {} -> {}", rec.path.display(), rec.folder_id),
+                Err(e) if e.code == "already-synced" => {
+                    eprintln!("already-synced {}: {}", p.display(), e.message)
+                }
+                Err(e) => {
+                    return Err(CliError::new(
+                        Box::leak(e.code.into_boxed_str()),
+                        e.message,
+                        e.hint,
+                    ))
+                }
+            }
+        }
+        supervisor.spawn_engines().map_err(|e| {
+            CliError::new(
+                Box::leak(e.code.into_boxed_str()),
+                e.message,
+                "check daemon log",
+            )
+        })?;
+        let socket_path = ferry_ipc::paths::default_socket_path();
+        if let Some(parent) = socket_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                CliError::new("runtime-error", e.to_string(), "failed to start runtime")
+            })?;
+        rt.block_on(async move {
+            let sup_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
+            let _ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(
+                socket_path.clone(),
+                std::sync::Arc::clone(&sup_arc),
+            )
+            .map_err(|e| e.to_string())
+            .expect("ipc bind");
+            eprintln!("ferry device daemon listening at {}", socket_path.display());
+            let mut interval = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                interval.tick().await;
+                let mut sup = sup_arc.lock().await;
+                sup.tick();
+            }
+        });
+        #[allow(unreachable_code)]
+        return Ok(Output::new(
+            serde_json::json!({"command":"daemon","status":"stopped"}),
+            "Daemon stopped.\n",
         ));
     }
 
@@ -86,89 +122,101 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
         args.folders.to_vec()
     };
 
-    let mut watched = Vec::with_capacity(paths.len());
-    for p in &paths {
+    let transport: Arc<dyn ferry_sync::Transport> = Arc::new(ferry_sync::TcpTransport);
+    let identity = crate::ensure_identity()?;
+    let device_id = *identity.public();
+    let mut handles = Vec::with_capacity(paths.len());
+    let mut ipc_handles = Vec::with_capacity(paths.len());
+
+    for (idx, p) in paths.iter().enumerate() {
         let opened = folder::open_folder(p)?;
-        let rules = Arc::new(folder::load_rules(&opened.root, &opened.settings)?);
-        let device_id = current_device_id();
-        let handle = StoreHandle {
-            store: opened.store.clone(),
-            poly: opened.poly,
-            folder_id: opened.folder_id,
-            device_id,
-        };
-        let engine = ScanEngine::watch_with(
-            opened.root.clone(),
-            handle,
-            Default::default(),
-            Arc::clone(&rules) as Arc<dyn ferry_scan::IgnorePolicy>,
-        )
-        .map_err(|e| {
+        let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
             CliError::new(
-                "watch",
+                "poly-invalid",
                 e.to_string(),
-                "check the folder exists and is readable",
+                format!(
+                    "the polynomial record for {} is corrupt; restore the store from a known-good backup",
+                    opened.root.display()
+                ),
             )
         })?;
-        let session = FolderSession {
-            state_dir: opened.state_dir(),
-            tree_root: opened.root.clone(),
-            store: opened.store.clone(),
-            folder_id: opened.folder_id,
-            device_id,
-            poly: opened.poly,
-            ignore: rules,
-        };
-        eprintln!(
-            "watching {} (folder {})",
-            opened.root.display(),
-            ferry_store::format::hex(&opened.folder_id)
-        );
-        watched.push(Arc::new(WatchedFolder {
-            opened,
-            session,
-            engine,
-            lock: Arc::new(Mutex::new(())),
-        }));
-    }
 
-    // Listener thread: serve incoming sessions.
-    let transport = Arc::new(ferry_sync::TcpTransport);
-    let mut listener = match listen_addr {
-        Some(addr) => Some(Transport::listen(transport.as_ref(), addr).map_err(|e| {
+        let bind = if idx == 0 { listen_addr } else { None };
+        let tag = format!("ferry-{}", &hex(&device_id)[..8]);
+
+        let cfg = EngineConfig {
+            tag,
+            store_dir: opened.root.clone(),
+            tree_dir: opened.root.clone(),
+            poly,
+            folder_id: opened.folder_id,
+            poll_interval: Duration::from_millis(200),
+            opportunistic_every: (args.interval_secs * 5).max(1) as u32,
+            bind_addr: bind,
+            connect_to: peer_addr,
+            expected_peer_id: None,
+            pin_state_dir: Some(opened.state_dir()),
+            quiet: true,
+        };
+
+        let mut engine = SyncEngine::new(cfg, transport.clone()).map_err(|e| {
             CliError::new(
                 "bind",
-                format!("cannot bind {addr}: {e}"),
+                format!(
+                    "cannot initialize engine for {}: {e}",
+                    opened.root.display()
+                ),
                 "pick another port or free the existing listener",
             )
-        })?),
-        None => None,
-    };
-    if let Some(lst) = listener.take() {
-        let addr = lst
-            .local_addr()
-            .map_err(|e| CliError::new("bind", e.to_string(), "retry"))?;
-        // Machine-greppable line scripts rely on (human mode).
-        println!("LISTENING {addr}");
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        spawn_accept_loop(lst, &watched);
+        })?;
+        // Same as `ferry sync`: run sessions under the real FERRY_HOME
+        // identity so CONFIG_HEAD-seeded allow-lists recognize this device.
+        engine.set_identity(identity.clone());
+
+        if let Some(addr) = engine.listen_addr() {
+            println!("LISTENING {addr}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+
+        let handle = engine.start();
+
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
+        let daemon_state = Arc::new(ferry_daemon::state::DaemonState::new(
+            handle.clone(),
+            opened.root.clone(),
+            opened.root.clone(),
+            opened.folder_id,
+            identity.clone(),
+            broadcast_tx,
+        ));
+
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&opened.root);
+        let ipc_handle =
+            ferry_daemon::ipc::spawn_ipc_server(socket_path, Arc::clone(&daemon_state)).map_err(
+                |e| {
+                    CliError::new(
+                        "ipc-server",
+                        format!("cannot bind IPC server for {}: {e}", opened.root.display()),
+                        "check socket permissions or remove stale socket",
+                    )
+                },
+            )?;
+        ipc_handles.push(ipc_handle);
+        handles.push(handle);
     }
 
-    // Dialer loop: drive rounds against the peer every interval.
-    let dialer_handles: Vec<_> = watched.iter().map(|w| (Arc::clone(w), peer_addr)).collect();
-    if let Some(_peer) = peer_addr {
-        spawn_dial_loop(
-            transport.clone(),
-            dialer_handles,
-            args.interval_secs,
-            args.json,
-        )?;
+    if let Some(first) = handles.first() {
+        first.join_until_signal();
     }
 
-    // Park forever; termination is a process signal (std-only v0).
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
+    for h in ipc_handles {
+        h.shutdown();
     }
+
+    Ok(Output::new(
+        serde_json::json!({"command": "daemon", "status": "stopped"}),
+        "Daemon stopped.\n",
+    ))
 }
 
 fn check_transport(kind: &str) -> CliResult<()> {
@@ -180,190 +228,4 @@ fn check_transport(kind: &str) -> CliResult<()> {
             "use --transport tcp today; iroh QUIC P2P lands with tickets T-009/T-014",
         )),
     }
-}
-
-fn current_device_id() -> [u8; 32] {
-    let home = match crate::home::ferry_home() {
-        Ok(h) => h,
-        Err(_) => return [0u8; 32], // open_folder would have failed already
-    };
-    match ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)) {
-        Ok(id) => *id.public(),
-        Err(_) => [0u8; 32],
-    }
-}
-
-fn spawn_accept_loop(
-    lst: Box<dyn ferry_sync::transport::Listener>,
-    watched: &[Arc<WatchedFolder>],
-) {
-    // Incoming HELLO tags name the DIALER's device+folder
-    // (`ferry-<dev8>-<folder8>`); route on the folder half, since both
-    // devices share the folder id but never the device id.
-    let by_folder: std::collections::HashMap<String, Arc<WatchedFolder>> = watched
-        .iter()
-        .map(|w| (hex(&w.session.folder_id)[..8].to_string(), Arc::clone(w)))
-        .collect();
-    std::thread::Builder::new()
-        .name("ferry-accept".into())
-        .spawn(move || loop {
-            match lst.accept() {
-                Ok(mut conn) => {
-                    // Read the HELLO here to route to the right folder.
-                    match ferry_sync::proto::recv_hello(conn.as_mut()) {
-                        Ok(h) => {
-                            let folder_key = h.device_tag.split('-').nth(2).unwrap_or("");
-                            let w = by_folder.get(folder_key).cloned();
-                            let w = match w {
-                                Some(w) => w,
-                                None => {
-                                    ferry_sync::proto::send_error(
-                                        conn.as_mut(),
-                                        &format!("no local folder matches tag {}", h.device_tag),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let _guard = w.lock.lock().unwrap();
-                            serve_session(&w, conn.as_mut(), h.device_tag);
-                        }
-                        Err(e) => {
-                            eprintln!("accept: bad hello: {e}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("accept error: {e}");
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        })
-        .expect("spawn accept loop");
-}
-
-/// Serve one inbound round. The HELLO was already consumed for routing, so
-/// the session continues from the OFFER phase.
-fn serve_session(
-    w: &WatchedFolder,
-    conn: &mut dyn ferry_sync::transport::Connection,
-    peer_tag: String,
-) {
-    // Drain queued watcher events so our offer reflects right-now state.
-    let _ = w.engine.scan_once();
-    let snap = match scan_snapshot(&w.session) {
-        Ok(s) => s,
-        Err(e) => {
-            ferry_sync::proto::send_error(conn, &format!("local scan failed: {e}"));
-            return;
-        }
-    };
-    match run_round(conn, false, &w.session, &snap, Some(peer_tag)) {
-        Ok(report) => log_round(w, &report),
-        Err(e) => {
-            ferry_sync::proto::send_error(conn, &format!("{e}"));
-            eprintln!("[{}] session failed: {e}", display_root(w));
-        }
-    }
-}
-
-fn spawn_dial_loop(
-    transport: Arc<ferry_sync::TcpTransport>,
-    targets: Vec<(Arc<WatchedFolder>, Option<SocketAddr>)>,
-    interval_secs: u64,
-    json_mode: bool,
-) -> CliResult<()> {
-    let interval = Duration::from_secs(interval_secs.max(1));
-    std::thread::Builder::new()
-        .name("ferry-dial".into())
-        .spawn(move || {
-            let mut n: u64 = 0;
-            loop {
-                for (w, addr) in &targets {
-                    let addr = addr.expect("checked at startup");
-                    n += 1;
-                    let _ = w.engine.scan_once();
-                    let snap = match scan_snapshot(&w.session) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("[{}] scan failed: {e}", display_root(w));
-                            continue;
-                        }
-                    };
-                    match transport.dial(addr) {
-                        Ok(mut conn) => match run_round(&mut conn, true, &w.session, &snap, None) {
-                            Ok(report) => {
-                                if let Some(peer) = &report.peer_device_id {
-                                    remember_peer_addr(&w.session, peer, addr);
-                                }
-                                log_round(w, &report);
-                                if json_mode {
-                                    emit_event_json(w, &report);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[{}] round failed: {e}", display_root(w));
-                            }
-                        },
-                        Err(e) => {
-                            if n <= targets.len() as u64 {
-                                eprintln!("[{}] peer not reachable yet ({e})", display_root(w));
-                            }
-                        }
-                    }
-                }
-                std::thread::sleep(interval);
-            }
-        })
-        .map_err(|e| CliError::new("thread", e.to_string(), "retry"))?;
-    Ok(())
-}
-
-fn remember_peer_addr(session: &FolderSession, peer_hex: &str, addr: SocketAddr) {
-    if peer_hex.len() != 64 {
-        return;
-    }
-    let dir = session.state_dir.join("peers");
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join(format!("{peer_hex}.addr")), addr.to_string());
-}
-
-fn log_round(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
-    eprintln!(
-        "[{}] round: {} vs {} equal={} meta+{} sent={} recv={} applied={} conflicts={} held={} agreed={}",
-        display_root(w),
-        r.my_root,
-        r.their_root,
-        r.roots_equal_at_offer,
-        r.meta_fetched,
-        r.chunks_sent,
-        r.chunks_received,
-        r.ops_applied,
-        r.conflicts_recorded,
-        r.held,
-        r.agreed
-    );
-}
-
-fn emit_event_json(w: &WatchedFolder, r: &crate::exchange::RoundReport) {
-    use std::io::Write;
-    let event = serde_json::json!({
-        "event": "round",
-        "folder": w.opened.root.display().to_string(),
-        "folder_id": ferry_store::format::hex(&w.session.folder_id),
-        "peer_device_id": r.peer_device_id,
-        "roots_equal": r.roots_equal_at_offer,
-        "meta_fetched": r.meta_fetched,
-        "chunks_sent": r.chunks_sent,
-        "chunks_received": r.chunks_received,
-        "ops_applied": r.ops_applied,
-        "quarantined": r.quarantined,
-        "conflicts_recorded": r.conflicts_recorded,
-        "held": r.held,
-        "agreed": r.agreed,
-    });
-    let _ = writeln!(std::io::stdout(), "{event}");
-}
-
-fn display_root(w: &WatchedFolder) -> String {
-    w.opened.root.display().to_string()
 }

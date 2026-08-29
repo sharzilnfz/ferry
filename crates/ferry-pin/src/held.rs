@@ -83,14 +83,29 @@ impl HeldLedger {
     }
 
     /// Append a batch of entries for one peer. Creates the directory on
-    /// first use. One write call + sync so partial batches cannot interleave.
+    /// first use. Deduplicates against existing lines so identical rounds
+    /// append nothing. One write call + sync so partial batches cannot interleave.
     pub fn append(&self, peer_hex: &str, entries: &[HeldEntry]) -> Result<(), PinError> {
         if entries.is_empty() {
             return Ok(());
         }
+        let existing = self.load_peer(peer_hex)?;
+        let mut seen: std::collections::BTreeSet<(&str, &str)> = existing
+            .iter()
+            .map(|e| (e.path.as_str(), e.remote_manifest_id.as_str()))
+            .collect();
+        let mut to_append = Vec::new();
+        for e in entries {
+            if seen.insert((e.path.as_str(), e.remote_manifest_id.as_str())) {
+                to_append.push(e);
+            }
+        }
+        if to_append.is_empty() {
+            return Ok(());
+        }
         std::fs::create_dir_all(&self.dir).map_err(|e| io_at(&self.dir, e))?;
         let mut body = String::new();
-        for e in entries {
+        for e in to_append {
             body.push_str(&serde_json::to_string(e).expect("held entry serializes"));
             body.push('\n');
         }
@@ -180,12 +195,16 @@ mod tests {
     use super::*;
 
     fn entry(path: &str) -> HeldEntry {
+        entry_with_manifest(path, &"cc".repeat(32))
+    }
+
+    fn entry_with_manifest(path: &str, man_hex: &str) -> HeldEntry {
         HeldEntry {
             held_sec: 1_787_574_000,
             held_nsec: 5,
             path: path.into(),
             device_id: "bb".repeat(32),
-            remote_manifest_id: "cc".repeat(32),
+            remote_manifest_id: man_hex.into(),
             chunks: vec![HeldChunk {
                 id: "dd".repeat(32),
                 len: 7,
@@ -204,7 +223,11 @@ mod tests {
         ledger
             .append(
                 "ab",
-                &[entry("src/b.rs"), entry("src/a.rs"), entry("src/b.rs")],
+                &[
+                    entry_with_manifest("src/b.rs", &"c1".repeat(32)),
+                    entry_with_manifest("src/a.rs", &"c1".repeat(32)),
+                    entry_with_manifest("src/b.rs", &"c2".repeat(32)),
+                ],
             )
             .unwrap();
         let got = ledger.load_peer("ab").unwrap();
@@ -215,6 +238,13 @@ mod tests {
             vec!["src/a.rs".to_string(), "src/b.rs".to_string()]
         );
         assert_eq!(ledger.peers().unwrap(), vec!["ab".to_string()]);
+
+        // Repeated identical appends are deduplicated and append nothing.
+        ledger
+            .append("ab", &[entry_with_manifest("src/a.rs", &"c1".repeat(32))])
+            .unwrap();
+        let got2 = ledger.load_peer("ab").unwrap();
+        assert_eq!(got2.len(), 3);
     }
 
     #[test]

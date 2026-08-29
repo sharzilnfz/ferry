@@ -27,22 +27,28 @@
 //!   apart from that. Policy per T-012: relative internal targets sync as
 //!   links; absolute targets and `..`-escaping targets are refused loudly.
 //!
+//! Since T-11 these per-entry rules live in ONE place,
+//! [`crate::admission`], and this walker merely feeds it facts (raw name,
+//! lstat kind, raw link target, parent depth). The incremental walker in
+//! ferry-scan calls the same gate, so the two can never drift apart again.
+//!
 //! Platform: cross-platform since T-012. Metadata access goes through
 //! `std::fs::Metadata::modified()` / `file_type()`; the exec bit needs POSIX
 //! mode bits where available.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use ferry_platform::{classify_link, find_case_conflict, host_folds_case, is_reserved_device_name};
+use ferry_platform::{find_case_conflict, host_folds_case};
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
 
-use crate::chunker::chunk;
+use crate::admission::{self, AdmittedEntry, AdmittedKind, ObservedKind};
+use crate::chunker::{chunk, PolynomialError, ValidatedPoly};
 use crate::format::{BlobId, BlobKind};
 use crate::manifest::{
-    dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, RootManifest,
-    TreeEntry, TreeNode,
+    dir_entry, file_entry, parse_manifest, parse_tree_node, serialize_manifest,
+    serialize_tree_node, symlink_entry, EntryPayload, RootManifest, TreeEntry, TreeNode,
 };
 use crate::store::{Store, StoreError};
 
@@ -72,6 +78,8 @@ pub enum SnapshotError {
     InvalidTimestamp,
     #[error("store rejected a blob: {0}")]
     Store(#[from] StoreError),
+    #[error("chunker polynomial rejected: {0}")]
+    Polynomial(#[from] PolynomialError),
 }
 
 /// Why one path was refused a place in the snapshot. Refusals are loud:
@@ -140,7 +148,7 @@ pub struct SnapshotIdentity {
 /// Everything one successful snapshot produced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotOutput {
-    /// The root manifest object (already stored as a PACK_META blob).
+    /// The root manifest object (already stored as a `PACK_META` blob).
     pub manifest: RootManifest,
     /// BLAKE3 of the serialized manifest == its blob address.
     pub manifest_id: BlobId,
@@ -155,25 +163,88 @@ pub struct SnapshotOutput {
 /// Walk `source` and store every chunk, tree node, and the root manifest
 /// into `store`. Seals all staging packs before returning (end-of-burst
 /// rule), so a resnapshot of an unchanged tree writes no new pack bytes.
+///
+/// Takes a [`ValidatedPoly`] — validated once at folder-open/config-load —
+/// so an invalid polynomial cannot reach the chunker mid-walk.
+///
+/// When `identity.parent_manifest_id` names a readable manifest in `store`
+/// with matching folder identity (any device: ours or an adopted peer's) and
+/// the scanned root tree id equals
+/// that manifest's root, the stored parent manifest is returned instead of
+/// minting a timestamp-fresh duplicate (an idle tick then writes nothing at
+/// all). Unlike [`snapshot_dir_incremental`], every file is still read and
+/// re-chunked: this entry point is the audit-grade walker.
 pub fn snapshot_dir(
     store: &Store,
-    poly: u64,
+    poly: ValidatedPoly,
     source: &Path,
     identity: &SnapshotIdentity,
 ) -> Result<SnapshotOutput, SnapshotError> {
-    if identity.created_nsec > 999_999_999 {
-        return Err(SnapshotError::InvalidTimestamp);
-    }
-    let mut walker = Walker {
+    finish_snapshot(
         store,
-        poly,
-        stats: ScanStats::default(),
-        refused: Vec::new(),
-    };
-    let mut rel = Vec::new();
-    let root = walker.walk_dir(source, &mut rel)?;
+        identity,
+        walk_snapshot(store, poly, source, identity, false)?,
+    )
+}
+
+/// Like [`snapshot_dir`], but when `identity.parent_manifest_id` names a
+/// readable parent manifest (same folder, any device), files whose size, FULL
+/// mtime (sec + nsec), and exec bit all match the parent's recorded entry
+/// reuse its chunk list WITHOUT reading any file bytes. An unchanged tree
+/// then costs a pure metadata walk.
+///
+/// THE CAVEAT, pinned by ferry-sync-engine's tie-conflict matrix cells:
+/// stat metadata cannot distinguish "untouched" from "rewritten with equal
+/// size + restored mtime". The apply path (`ferry-materialize`) deliberately
+/// restores recorded mtimes, so after conflict resolution a same-stat
+/// substitution is ROUTINE, not adversarial — which is why the default
+/// [`snapshot_dir`] never skips reads and callers must weigh this trade-off
+/// explicitly. Pair it with periodic full audits (a plain `snapshot_dir`)
+/// exactly as ferry-scan's incremental walker already assumes.
+///
+/// A scan whose root tree id equals the readable parent's keeps the parent
+/// manifest instead of minting a timestamp-fresh duplicate.
+pub fn snapshot_dir_incremental(
+    store: &Store,
+    poly: ValidatedPoly,
+    source: &Path,
+    identity: &SnapshotIdentity,
+) -> Result<SnapshotOutput, SnapshotError> {
+    finish_snapshot(
+        store,
+        identity,
+        walk_snapshot(store, poly, source, identity, true)?,
+    )
+}
+
+/// Shared tail: persist the walked root, hold the parent pointer when the
+/// tree did not move, otherwise mint the lineage child.
+fn finish_snapshot(
+    store: &Store,
+    identity: &SnapshotIdentity,
+    walked: (TreeNode, ScanStats, Vec<RefusedPath>, Option<RootManifest>),
+) -> Result<SnapshotOutput, SnapshotError> {
+    let (root, stats, refused, parent) = walked;
     let root_bytes = serialize_tree_node(&root);
     let root_tree_id = store.put_meta(BlobKind::TreeNode, &root_bytes)?;
+
+    // Idle rule: when the scanned tree is byte-identical to the parent's,
+    // the only thing a fresh manifest would change is its wall-clock stamp.
+    // Keep the stored parent pointer; publishing it is exactly the engine's
+    // hold outcome, and skipping put_meta saves one pack + one index file
+    // per unchanged tick.
+    if let Some(parent) = &parent {
+        if parent.root_tree_id == root_tree_id {
+            store.flush()?;
+            return Ok(SnapshotOutput {
+                manifest: parent.clone(),
+                manifest_id: identity.parent_manifest_id,
+                root_tree_id,
+                stats,
+                refused,
+            });
+        }
+    }
 
     let manifest = RootManifest {
         folder_id: identity.folder_id,
@@ -193,9 +264,72 @@ pub fn snapshot_dir(
         manifest,
         manifest_id,
         root_tree_id,
-        stats: walker.stats,
-        refused: walker.refused,
+        stats,
+        refused,
     })
+}
+
+/// Walk `source`, reading + chunking every admitted file unless `reuse`
+/// enables the parent-lineage short-circuit (see
+/// [`snapshot_dir_incremental`]). Returns the root node, counters, refusal
+/// ledger, and the resolvable parent manifest for the idle rule.
+fn walk_snapshot(
+    store: &Store,
+    poly: ValidatedPoly,
+    source: &Path,
+    identity: &SnapshotIdentity,
+    reuse: bool,
+) -> Result<(TreeNode, ScanStats, Vec<RefusedPath>, Option<RootManifest>), SnapshotError> {
+    if identity.created_nsec > 999_999_999 {
+        return Err(SnapshotError::InvalidTimestamp);
+    }
+    let mut rules: Vec<String> = DEFAULT_IGNORE
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    if let Ok(content) = std::fs::read_to_string(source.join("ferry.ignore")) {
+        for line in content.lines() {
+            rules.push(line.to_string());
+        }
+    }
+    let mut walker = Walker {
+        store,
+        poly,
+        stats: ScanStats::default(),
+        refused: Vec::new(),
+        rules,
+        prev_nodes: HashMap::new(),
+    };
+    let parent = current_parent(store, identity);
+    let prev_root = if reuse {
+        parent
+            .as_ref()
+            .and_then(|p| walker.prev_node(&p.root_tree_id))
+    } else {
+        None
+    };
+    let mut rel = Vec::new();
+    let root = walker.walk_dir(source, &mut rel, prev_root.as_deref())?;
+    Ok((root, walker.stats, walker.refused, parent))
+}
+
+/// The previous manifest this scan can reuse against, if any: readable in
+/// `store` and minted for the same folder — ANY device, ours or an adopted
+/// peer's. The engine chains self-mints onto adopted manifests
+/// (`FolderState::adopt_peer`), so requiring a matching device id here would
+/// disable the idle-hold rule forever after every adoption and each quiet
+/// tick would re-mint a timestamp-stamped twin of unchanged content.
+/// Content equality is decided by the scanned root tree id alone; authorship
+/// is irrelevant to it. Anything else falls back to a full read+chunk walk.
+fn current_parent(store: &Store, identity: &SnapshotIdentity) -> Option<RootManifest> {
+    if identity.parent_manifest_id == [0u8; 32] {
+        return None;
+    }
+    let bytes = store
+        .get(BlobKind::Manifest, &identity.parent_manifest_id)
+        .ok()?;
+    let manifest = parse_manifest(&bytes).ok()?;
+    (manifest.folder_id == identity.folder_id).then_some(manifest)
 }
 
 /// Render a relative component vector the way errors and logs show it.
@@ -288,11 +422,79 @@ fn exec_of(meta: &std::fs::Metadata) -> bool {
     }
 }
 
+/// Store-level default ignore lines applied by [`snapshot_dir`].
+///
+/// MUST stay in lockstep with `ferry_ignore::defaults::DEFAULT_RULES` (the
+/// canonical product decision, CONTEXT.md "Selective rules"); a cross-crate
+/// test in ferry-ignore fails if the two lists drift.
+pub const DEFAULT_IGNORE: &[&str] = &[
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    "*.swp",
+    "*~",
+    "node_modules/",
+    ".env",
+    ".env.*",
+];
+
+fn matches_pattern(pat: &str, name: &str, is_dir: bool) -> bool {
+    let (pat, dir_only) = if let Some(stripped) = pat.strip_suffix('/') {
+        (stripped, true)
+    } else {
+        (pat, false)
+    };
+    if dir_only && !is_dir {
+        return false;
+    }
+    if pat.contains('*') {
+        if let Some(suffix) = pat.strip_prefix('*') {
+            name.ends_with(suffix)
+        } else if let Some(prefix) = pat.strip_suffix('*') {
+            name.starts_with(prefix)
+        } else {
+            let parts: Vec<&str> = pat.split('*').collect();
+            if parts.len() == 2 {
+                name.starts_with(parts[0]) && name.ends_with(parts[1])
+            } else {
+                name == pat
+            }
+        }
+    } else {
+        name == pat
+    }
+}
+
+fn is_ignored(rules: &[String], name: &str, is_dir: bool) -> bool {
+    if name.contains(".ferry-conflict.") {
+        return false;
+    }
+    let mut ignored = false;
+    for line in rules {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(unneg) = trimmed.strip_prefix('!') {
+            if matches_pattern(unneg, name, is_dir) {
+                ignored = false;
+            }
+        } else if matches_pattern(trimmed, name, is_dir) {
+            ignored = true;
+        }
+    }
+    ignored
+}
+
 struct Walker<'a> {
     store: &'a Store,
-    poly: u64,
+    poly: ValidatedPoly,
     stats: ScanStats,
     refused: Vec<RefusedPath>,
+    rules: Vec<String>,
+    /// Parsed tree nodes of the parent lineage, keyed by blob id, so an
+    /// unchanged tick reuses chunk lists instead of reading file bytes.
+    prev_nodes: HashMap<BlobId, Rc<TreeNode>>,
 }
 
 impl Walker<'_> {
@@ -303,12 +505,34 @@ impl Walker<'_> {
         });
     }
 
+    /// Load and memoize one tree node from the parent lineage. Any failure
+    /// (missing blob, corrupt bytes) degrades to "no reuse", never an error.
+    fn prev_node(&mut self, id: &BlobId) -> Option<Rc<TreeNode>> {
+        if let Some(n) = self.prev_nodes.get(id) {
+            return Some(Rc::clone(n));
+        }
+        let bytes = self.store.get(BlobKind::TreeNode, id).ok()?;
+        let node = Rc::new(parse_tree_node(&bytes).ok()?);
+        self.prev_nodes.insert(*id, Rc::clone(&node));
+        Some(node)
+    }
+
+    /// The parent-lineage entry recorded for `name`, if that node is known.
+    fn prev_entry<'p>(prev: Option<&'p TreeNode>, name: &str) -> Option<&'p TreeEntry> {
+        prev.and_then(|n| n.entries.iter().find(|e| e.name == name))
+    }
+
     fn put_tree(&self, node: &TreeNode) -> Result<BlobId, SnapshotError> {
         let bytes = serialize_tree_node(node);
         Ok(self.store.put_meta(BlobKind::TreeNode, &bytes)?)
     }
 
-    fn walk_dir(&mut self, dir: &Path, rel: &mut Vec<String>) -> Result<TreeNode, SnapshotError> {
+    fn walk_dir(
+        &mut self,
+        dir: &Path,
+        rel: &mut Vec<String>,
+        prev: Option<&TreeNode>,
+    ) -> Result<TreeNode, SnapshotError> {
         let mut names: Vec<std::ffi::OsString> = Vec::new();
         for entry in std::fs::read_dir(dir).map_err(io_err(dir))? {
             let entry = entry.map_err(io_err(dir))?;
@@ -324,27 +548,21 @@ impl Walker<'_> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            let component = match std::str::from_utf8(raw) {
-                Ok(s) => s.nfc().collect::<String>(),
-                Err(_) => {
-                    rel.push(String::from_utf8_lossy(raw).into_owned());
-                    self.refuse(rel, RefusalReason::NonUtf8Name);
-                    rel.pop();
-                    continue;
-                }
-            };
-            // Reserved Windows device names can never be materialized on a
-            // Windows endpoint; refuse loudly at the source (T-012).
-            if is_reserved_device_name(&component) {
-                rel.push(component);
-                self.refuse(rel, RefusalReason::ReservedName);
-                rel.pop();
+            // Structural store-dir exclusion: .ferry at the root is store metadata, not content.
+            if rel.is_empty() && raw == crate::store::STORE_DIR_NAME.as_bytes() {
                 continue;
             }
             let child_path = dir.join(&name);
-            rel.push(component);
-            let visited = self.visit(&child_path, rel);
-            rel.pop();
+            let Ok(meta) = std::fs::symlink_metadata(&child_path) else {
+                continue;
+            };
+            let is_dir = meta.is_dir();
+            if is_ignored(&self.rules, &name.to_string_lossy(), is_dir) {
+                continue;
+            }
+            // `visit` runs the shared admission gate, records refusals with
+            // `rel` + component pushed/popped internally.
+            let visited = self.visit(&child_path, name.as_os_str(), rel, prev);
             if let Some(e) = visited? {
                 entries.push(e);
             }
@@ -354,81 +572,149 @@ impl Walker<'_> {
         Ok(TreeNode { entries })
     }
 
-    /// Stat, read, chunk, and encode one directory entry. Returns `None` for
-    /// loudly-refused paths (recorded in `self.refused`).
+    /// Stat one directory entry, run it through the shared admission gate
+    /// ([`crate::admission`]), and build its manifest payload. Returns
+    /// `None` for loudly-refused paths (recorded in `self.refused`).
     fn visit(
         &mut self,
         path: &Path,
+        raw_name: &std::ffi::OsStr,
         rel: &mut Vec<String>,
+        prev: Option<&TreeNode>,
     ) -> Result<Option<TreeEntry>, SnapshotError> {
-        let component = rel.last().expect("component pushed before visit").clone();
         // symlink_metadata never follows links: a symlinked dir must be
         // stored as a link, not walked through.
         let meta = std::fs::symlink_metadata(path).map_err(io_err(path))?;
         let ft = meta.file_type();
+        let kind = if ft.is_symlink() {
+            ObservedKind::Symlink
+        } else if ft.is_dir() {
+            ObservedKind::Dir
+        } else if ft.is_file() {
+            ObservedKind::File
+        } else {
+            ObservedKind::Other
+        };
+        // Only links carry a target; `read_link` is their one extra stat.
+        let link_target = if ft.is_symlink() {
+            Some(
+                std::fs::read_link(path)
+                    .map_err(io_err(path))?
+                    .into_os_string(),
+            )
+        } else {
+            None
+        };
 
-        if ft.is_symlink() {
-            let target = std::fs::read_link(path).map_err(io_err(path))?;
-            return match target.to_str() {
-                Some(t) => {
-                    // T-012 symlink policy: only relative targets that stay
-                    // inside the folder sync as links (see ferry_platform).
-                    let depth = rel.len().saturating_sub(1);
-                    match classify_link(depth, t) {
-                        ferry_platform::LinkDecision::SyncAsLink => {
-                            self.stats.symlinks += 1;
-                            let (sec, nsec) = mtime_of(&meta);
-                            Ok(Some(symlink_entry(&component, sec, nsec, t)))
-                        }
-                        ferry_platform::LinkDecision::Refuse(reason) => {
-                            let r = match reason {
-                                ferry_platform::LinkRefusal::AbsoluteTarget => {
-                                    RefusalReason::AbsoluteSymlinkTarget
-                                }
-                                ferry_platform::LinkRefusal::EscapesRoot => {
-                                    RefusalReason::EscapingSymlinkTarget
-                                }
-                            };
-                            self.refuse(rel, r);
-                            Ok(None)
-                        }
+        // THE admission gate (T-11): NFC names, non-UTF-8 refusals,
+        // reserved device names, symlink policy, representable kinds —
+        // the same code the incremental walker runs.
+        let admitted = match admission::admit(admission::EntryFacts {
+            raw_name,
+            kind,
+            link_target: link_target.as_deref(),
+            parent_depth: rel.len(),
+        }) {
+            Ok(a) => a,
+            Err(r) => {
+                rel.push(r.display_name);
+                self.refuse(rel, r.reason);
+                rel.pop();
+                return Ok(None);
+            }
+        };
+
+        rel.push(admitted.component.clone());
+        let out = self.payload(path, &meta, admitted, rel, prev);
+        rel.pop();
+        out
+    }
+
+    /// Payload construction for an ADMITTED entry. Pure dispatch — every
+    /// policy decision already happened in the gate; what remains is
+    /// legitimately walker-specific work (chunking into the store).
+    fn payload(
+        &mut self,
+        path: &Path,
+        meta: &std::fs::Metadata,
+        admitted: AdmittedEntry,
+        rel: &mut Vec<String>,
+        prev: Option<&TreeNode>,
+    ) -> Result<Option<TreeEntry>, SnapshotError> {
+        let component = admitted.component;
+        match admitted.kind {
+            AdmittedKind::Symlink { target } => {
+                self.stats.symlinks += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(symlink_entry(&component, sec, nsec, &target)))
+            }
+            AdmittedKind::Dir => {
+                // Recurse first so the child node exists to point at;
+                // identical listings dedup inside put_meta by content
+                // addressing.
+                let child_prev =
+                    Self::prev_entry(prev, &component).and_then(|e| match &e.payload {
+                        EntryPayload::Dir { child_tree_id } => Some(*child_tree_id),
+                        _ => None,
+                    });
+                let child_prev = child_prev.and_then(|id| self.prev_node(&id));
+                let child = self.walk_dir(path, rel, child_prev.as_deref())?;
+                let child_tree_id = self.put_tree(&child)?;
+                self.stats.dirs += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(dir_entry(&component, sec, nsec, child_tree_id)))
+            }
+            AdmittedKind::File => {
+                // Metadata short-circuit: identical size + full mtime +
+                // exec bit against the parent's entry means the chunk list
+                // is reused and zero file bytes are read. Anything else —
+                // including a same-size tamper with a restored mtime — is
+                // invisible to this check exactly as it is to ferry-scan's
+                // incremental gate; audits remain the repair path.
+                if let Some(prev_e) = Self::prev_entry(prev, &component) {
+                    if file_reusable(prev_e, meta) {
+                        let chunks = match &prev_e.payload {
+                            EntryPayload::File { chunks, .. } => chunks.clone(),
+                            _ => unreachable!("file_reusable guarantees a File payload"),
+                        };
+                        let exec = exec_of(meta);
+                        self.stats.files += 1;
+                        let (sec, nsec) = mtime_of(meta);
+                        return Ok(Some(file_entry(&component, exec, sec, nsec, chunks)));
                     }
                 }
-                None => {
-                    self.refuse(rel, RefusalReason::NonUtf8SymlinkTarget);
-                    Ok(None)
+                let bytes = std::fs::read(path).map_err(io_err(path))?;
+                // `poly` is validated at the API boundary; the error arm is
+                // unreachable in practice but stays typed rather than panicking.
+                let pieces = chunk(self.poly.get(), &bytes)?;
+                let mut chunks = Vec::new();
+                for piece in pieces {
+                    let id = self.store.put_data(piece)?;
+                    self.stats.bytes_chunked += piece.len() as u64;
+                    chunks.push((id, piece.len() as u64));
                 }
-            };
-        }
-
-        if ft.is_dir() {
-            // Recurse first so the child node exists to point at; identical
-            // listings dedup inside put_meta by content addressing.
-            let child = self.walk_dir(path, rel)?;
-            let child_tree_id = self.put_tree(&child)?;
-            self.stats.dirs += 1;
-            let (sec, nsec) = mtime_of(&meta);
-            return Ok(Some(dir_entry(&component, sec, nsec, child_tree_id)));
-        }
-
-        if ft.is_file() {
-            let bytes = std::fs::read(path).map_err(io_err(path))?;
-            let mut chunks = Vec::new();
-            for piece in chunk(self.poly, &bytes) {
-                let id = self.store.put_data(piece)?;
-                self.stats.bytes_chunked += piece.len() as u64;
-                chunks.push((id, piece.len() as u64));
+                let exec = exec_of(meta);
+                self.stats.files += 1;
+                let (sec, nsec) = mtime_of(meta);
+                Ok(Some(file_entry(&component, exec, sec, nsec, chunks)))
             }
-            let exec = exec_of(&meta);
-            self.stats.files += 1;
-            let (sec, nsec) = mtime_of(&meta);
-            return Ok(Some(file_entry(&component, exec, sec, nsec, chunks)));
         }
+    }
+}
 
-        // Sockets, FIFOs, devices: no manifest representation exists. Loud
-        // refusal, snapshot continues without the path.
-        self.refuse(rel, RefusalReason::UnknownFileType);
-        Ok(None)
+/// The reuse predicate: same size, full (sec, nsec) mtime, exec bit, and
+/// file-ness. Deliberately strict — mtime granularity traps live in the
+/// callers that round timestamps, not here.
+fn file_reusable(prev: &TreeEntry, meta: &std::fs::Metadata) -> bool {
+    let (sec, nsec) = mtime_of(meta);
+    match &prev.payload {
+        EntryPayload::File { size, .. } => {
+            *size == meta.len()
+                && prev.mtime_sec == sec
+                && prev.mtime_nsec == nsec
+                && prev.exec == exec_of(meta)
+        }
+        _ => false,
     }
 }
 
@@ -439,7 +725,7 @@ pub(crate) mod testutil {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    /// Windows SystemTime is FILETIME-backed (100ns units): finer digits
+    /// Windows `SystemTime` is FILETIME-backed (100ns units): finer digits
     /// cannot survive a write+read round trip there. Test mtimes quantize to
     /// the platform's clock granularity; unix keeps full fidelity.
     pub(crate) const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
@@ -465,8 +751,8 @@ pub(crate) mod testutil {
         (dir, store)
     }
 
-    pub(crate) fn poly_of(seed: u64) -> u64 {
-        crate::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed))
+    pub(crate) fn poly_of(seed: u64) -> crate::chunker::ValidatedPoly {
+        crate::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(seed))
     }
 
     pub(crate) fn identity(at: (i64, u32)) -> SnapshotIdentity {
@@ -611,7 +897,16 @@ mod tests {
         );
 
         let run = root.entries.iter().find(|e| e.name == "run.sh").unwrap();
-        assert!(run.exec, "exec bit maps to flags bit 0");
+        // Non-unix filesystems cannot store the exec bit (carried in
+        // manifests, not enforced on disk — convention from 3fe146f), so
+        // only unix can verify the flag mapping; elsewhere presence and
+        // payload are what the snapshot can honestly promise.
+        if cfg!(unix) {
+            assert!(run.exec, "exec bit maps to flags bit 0");
+        }
+        let EntryPayload::File { .. } = &run.payload else {
+            panic!("run.sh must be a file");
+        };
 
         let notes = root.entries.iter().find(|e| e.name == "notes.md").unwrap();
         assert_eq!(notes.mtime_sec, 1_700_000_000);
@@ -743,6 +1038,56 @@ mod tests {
 
         assert_eq!(s1.root_tree_id, s2.root_tree_id);
         assert_eq!(before, after, "dedup must leave the pack set untouched");
+    }
+
+    /// T-20 acceptance: an unchanged folder re-scanned K times (fresh
+    /// wall-clock identity per scan, like real scans) grows the store by a
+    /// small constant — chunks and tree nodes dedupe by content hash; only
+    /// the ~100-byte root manifest is new each scan.
+    #[test]
+    fn k_rescans_of_unchanged_folder_grow_the_store_below_a_small_constant() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
+        write_file(&tree.join("b/c.txt"), b"beta gamma", true, (20, 2));
+        write_file(
+            &tree.join("b/deep/d.bin"),
+            b"payload bytes here",
+            false,
+            (30, 3),
+        );
+
+        let pack_bytes = |p: &Path| -> u64 {
+            std::fs::read_dir(p.join(".ferry/packs"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.metadata().unwrap().len())
+                .sum()
+        };
+
+        const K: i64 = 5;
+        const SMALL_CONSTANT_BYTES: u64 = 8 * 1024;
+        let mut first_tree_id = None;
+        let mut baseline = None;
+        for scan in 0..K {
+            // Realistic: every scan stamps its own wall-clock identity.
+            let idn = identity((100 + scan, 7));
+            let out = snapshot_dir(&store, poly_of(13), &tree, &idn).unwrap();
+            match first_tree_id {
+                None => first_tree_id = Some(out.root_tree_id),
+                Some(prev) => assert_eq!(prev, out.root_tree_id, "scan {scan} reused the tree"),
+            }
+            if scan == 0 {
+                baseline = Some(pack_bytes(_dir.path()));
+            } else {
+                let growth = pack_bytes(_dir.path()) - baseline.unwrap();
+                assert!(
+                    growth < SMALL_CONSTANT_BYTES,
+                    "rescan {scan} grew store by {growth} bytes; unchanged-folder \
+                     churn must stay under {SMALL_CONSTANT_BYTES}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -959,5 +1304,213 @@ mod tests {
         std::fs::create_dir_all(tree.join("rapport-ann\u{e9}e")).unwrap();
         let err = snapshot_dir(&store, poly_of(7), &tree, &identity((2, 2))).unwrap_err();
         assert!(matches!(err, SnapshotError::NameCollision { .. }), "{err}");
+    }
+
+    // ---- Parent-lineage reuse (idle tick = metadata-only, zero writes) ----
+
+    fn artifact_counts(p: &Path) -> (usize, usize) {
+        let packs = std::fs::read_dir(p.join(".ferry/packs"))
+            .unwrap()
+            .flatten()
+            .count();
+        let index = std::fs::read_dir(p.join(".ferry/index"))
+            .unwrap()
+            .flatten()
+            .count();
+        (packs, index)
+    }
+
+    #[test]
+    fn unchanged_rescan_with_parent_keeps_manifest_and_writes_nothing() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
+        write_file(&tree.join("sub/b.txt"), b"beta", true, (20, 2));
+
+        let poly = poly_of(13);
+        let s1 = snapshot_dir(&store, poly, &tree, &identity((1, 2))).unwrap();
+        let before = artifact_counts(_dir.path());
+
+        let mut idn = identity((500, 999_999_999));
+        idn.parent_manifest_id = s1.manifest_id;
+
+        // Audit-grade walker: still reads every byte, but the idle rule
+        // keeps the stored parent manifest — zero disk writes.
+        let s2 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
+        assert_eq!(s2.root_tree_id, s1.root_tree_id);
+        assert_eq!(s2.manifest_id, s1.manifest_id);
+        assert_eq!(s2.stats.bytes_chunked, 5 + 4);
+        assert_eq!(artifact_counts(_dir.path()), before);
+
+        // Incremental walker: additionally reuses chunk lists — a pure
+        // metadata walk with zero bytes read and zero disk writes.
+        let s3 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
+        assert_eq!(s3.root_tree_id, s1.root_tree_id);
+        assert_eq!(s3.manifest_id, s1.manifest_id);
+        assert_eq!(
+            serialize_manifest(&s3.manifest),
+            serialize_manifest(&s1.manifest)
+        );
+        assert_eq!(s3.stats.bytes_chunked, 0);
+        assert_eq!(artifact_counts(_dir.path()), before);
+
+        // A real content change breaks both holds again.
+        write_file(&tree.join("a.txt"), "alphas".as_bytes(), false, (11, 5));
+        let s4 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
+        assert_ne!(s4.root_tree_id, s1.root_tree_id);
+        assert_ne!(s4.manifest_id, s1.manifest_id);
+        assert_eq!(s4.manifest.parent_manifest_id, s1.manifest_id);
+        assert_eq!(s4.stats.bytes_chunked, 6);
+    }
+
+    #[test]
+    fn parent_reuse_requires_size_mtime_and_exec_to_match_exactly() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        let victim = tree.join("vault.bin");
+        write_file(&victim, b"payload", false, (77, 123));
+        let poly = poly_of(23);
+        let s1 = snapshot_dir(&store, poly, &tree, &identity((1, 0))).unwrap();
+
+        let mut idn = identity((2, 0));
+        idn.parent_manifest_id = s1.manifest_id;
+
+        // Fully unchanged: the whole point — zero bytes read.
+        let s2 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
+        assert_eq!(s2.manifest_id, s1.manifest_id);
+        assert_eq!(s2.stats.bytes_chunked, 0);
+
+        // Size drift with the mtime held constant must NOT be short-circuited.
+        std::fs::write(&victim, b"payload!").unwrap();
+        set_mtime(&victim, 77, 123);
+        let s3 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
+        assert_ne!(
+            s3.root_tree_id, s1.root_tree_id,
+            "same-mtime size drift must surface"
+        );
+        assert_eq!(s3.stats.bytes_chunked, 8);
+
+        // Exec-bit-only drift with size and mtime held constant must NOT be
+        // short-circuited either: the metadata tuple is the whole contract.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&victim).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&victim, perm).unwrap();
+            set_mtime(&victim, 77, 123);
+            let mut idn3 = identity((3, 0));
+            idn3.parent_manifest_id = s3.manifest_id;
+            let s4 = snapshot_dir_incremental(&store, poly, &tree, &idn3).unwrap();
+            assert_ne!(s4.root_tree_id, s3.root_tree_id, "exec drift must surface");
+            assert_eq!(s4.stats.bytes_chunked, 8);
+
+            // Restore exec-off; drift again vs s4's lineage.
+            let mut perm = std::fs::metadata(&victim).unwrap().permissions();
+            perm.set_mode(0o644);
+            std::fs::set_permissions(&victim, perm).unwrap();
+            set_mtime(&victim, 77, 123);
+            let mut idn4 = identity((4, 0));
+            idn4.parent_manifest_id = s4.manifest_id;
+            let s5 = snapshot_dir_incremental(&store, poly, &tree, &idn4).unwrap();
+            assert_ne!(s5.root_tree_id, s4.root_tree_id);
+        }
+    }
+
+    /// THE documented limit of stat-based reuse, pinned on both sides: a
+    /// silent same-size tamper with a restored mtime is invisible to
+    /// [`snapshot_dir_incremental`] exactly as it is invisible to
+    /// ferry-scan's incremental gate — while the audit-grade
+    /// [`snapshot_dir`] catches it. Apply paths that restore mtimes
+    /// (conflict resolution) are why reuse is opt-in per entry point.
+    #[test]
+    #[cfg(unix)]
+    fn same_stat_tamper_beats_incremental_but_not_the_audit_walk() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        let victim = tree.join("vault.bin");
+        write_file(&victim, b"payload", false, (77, 123));
+        let poly = poly_of(31);
+        let s1 = snapshot_dir(&store, poly, &tree, &identity((1, 0))).unwrap();
+
+        let mut evil = b"payload".to_vec();
+        evil[0] ^= 0xff;
+        std::fs::write(&victim, &evil).unwrap();
+        set_mtime(&victim, 77, 123);
+
+        let mut idn = identity((2, 0));
+        idn.parent_manifest_id = s1.manifest_id;
+
+        let inc = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
+        assert_eq!(inc.root_tree_id, s1.root_tree_id, "stat-blind by contract");
+        assert_eq!(inc.stats.bytes_chunked, 0);
+
+        let audit = snapshot_dir(&store, poly, &tree, &idn).unwrap();
+        assert_ne!(
+            audit.root_tree_id, s1.root_tree_id,
+            "the audit walk must catch the drift"
+        );
+        assert_eq!(audit.stats.bytes_chunked, 7);
+    }
+
+    #[test]
+    fn unknown_or_foreign_parent_degrades_to_a_full_scan() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
+
+        // An unresolvable parent id must never fail the scan.
+        let mut idn = identity((1, 0));
+        idn.parent_manifest_id = [0xEE; 32];
+        let out = snapshot_dir(&store, poly_of(29), &tree, &idn).unwrap();
+        assert_eq!(out.stats.bytes_chunked, 5);
+        assert_eq!(out.manifest.parent_manifest_id, [0xEE; 32]);
+
+        // A readable manifest from ANOTHER FOLDER is ignored for reuse:
+        // full chunking happens and a fresh mint lands.
+        let mut foreign = identity((9, 9));
+        foreign.folder_id = [1; 16];
+        let f1 = snapshot_dir(&store, poly_of(29), &tree, &foreign).unwrap();
+        let mut child = identity((10, 10));
+        child.folder_id = [1; 16];
+        child.parent_manifest_id = f1.manifest_id;
+        write_file(&tree.join("b.txt"), b"beta", false, (11, 0));
+        let f2 = snapshot_dir(&store, poly_of(29), &tree, &child).unwrap();
+        assert_ne!(f2.root_tree_id, f1.root_tree_id);
+    }
+
+    /// A same-folder parent minted by ANOTHER DEVICE is still a valid
+    /// hold/reuse base: after adopting a peer manifest the engine chains its
+    /// scans onto it, and content equality comes from the root tree id, not
+    /// authorship. This is what ends the adopt↔mint idle oscillation.
+    #[test]
+    fn adopted_peer_manifest_holds_when_content_is_unchanged() {
+        let (_dir, store) = fresh_store();
+        let tree = _dir.path().join("t");
+        write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
+
+        let mut peer = identity((9, 9));
+        peer.device_id = [8; 32];
+        let pm = snapshot_dir(&store, poly_of(29), &tree, &peer).unwrap();
+
+        let mut mine = identity((10, 0));
+        mine.folder_id = [7; 16];
+        mine.parent_manifest_id = pm.manifest_id;
+
+        let out = snapshot_dir(&store, poly_of(29), &tree, &mine).unwrap();
+        assert_eq!(out.manifest_id, pm.manifest_id, "held the peer manifest");
+        assert_eq!(out.manifest.device_id, peer.device_id);
+
+        let inc = snapshot_dir_incremental(&store, poly_of(29), &tree, &mine).unwrap();
+        assert_eq!(inc.manifest_id, pm.manifest_id);
+        assert_eq!(
+            inc.stats.bytes_chunked, 0,
+            "reuse against the peer's entries"
+        );
+
+        write_file(&tree.join("b.txt"), b"beta", false, (11, 0));
+        let changed = snapshot_dir(&store, poly_of(29), &tree, &mine).unwrap();
+        assert_ne!(changed.root_tree_id, pm.root_tree_id);
+        assert_eq!(changed.manifest.parent_manifest_id, pm.manifest_id);
     }
 }

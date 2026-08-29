@@ -237,6 +237,7 @@ fn store_model(w: &WorldRoot, model: &Model) -> BlobId {
         for (rel, spec) in &model.files {
             if in_dir(rel) {
                 let chunks: Vec<(BlobId, u64)> = chunk(w.poly, &spec.bytes)
+                    .unwrap()
                     .iter()
                     .map(|b| (store.put_data(b).unwrap(), b.len() as u64))
                     .collect();
@@ -327,6 +328,7 @@ fn apply_once_path() -> PathBuf {
 
 fn chunk_ids(poly: u64, bytes: &[u8]) -> Vec<BlobId> {
     chunk(poly, bytes)
+        .expect("fixture poly valid")
         .iter()
         .map(|b| *blake3::hash(b).as_bytes())
         .collect()
@@ -617,5 +619,10 @@ fn kill9_mid_apply_leaves_old_or_new_state_never_torn() {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }

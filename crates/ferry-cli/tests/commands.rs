@@ -1,5 +1,5 @@
 //! Functional tests for init/status/conflicts/ignore through the library
-//! surface. Each test isolates FERRY_HOME so identity state never leaks.
+//! surface. Each test isolates `FERRY_HOME` so identity state never leaks.
 
 use std::path::Path;
 
@@ -18,7 +18,9 @@ struct Env {
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn setup() -> (Env, std::path::PathBuf, std::path::PathBuf) {
-    let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     std::env::set_var("FERRY_HOME", home.path());
@@ -187,6 +189,31 @@ fn ignore_append_preset_and_layered_listing() {
     // `**/*.log` excludes, but the preset's own includes rescue nothing for
     // plain logs at root — check via decided().
     assert!(rules.decided(&["app.log".to_string()], false));
+}
+
+#[test]
+fn ignore_targets_explicit_folder_and_external_directory() {
+    let (_e, _home, work) = setup();
+    let proj = work.join("external_proj");
+    commands::init::run(&proj, "init").unwrap();
+
+    // Append pattern to explicit folder
+    let out = commands::ignore_cmd::run(&proj, Some("temp/"), None, false).unwrap();
+    assert_eq!(out.json["action"], "added-line");
+    assert_eq!(out.json["folder"], proj.display().to_string());
+    assert!(proj.join("ferry.ignore").is_file());
+    let text = std::fs::read_to_string(proj.join("ferry.ignore")).unwrap();
+    assert!(text.contains("temp/"));
+
+    // Apply preset to explicit folder
+    let out_preset = commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
+    assert_eq!(out_preset.json["action"], "applied-preset");
+    assert_eq!(out_preset.json["folder"], proj.display().to_string());
+
+    // List layers for explicit folder
+    let out_list = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
+    assert_eq!(out_list.json["action"], "list");
+    assert_eq!(out_list.json["folder"], proj.display().to_string());
 }
 
 fn read_settings(proj: &Path) -> Settings {

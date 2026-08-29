@@ -14,8 +14,42 @@ ferry-sync = { path = "../ferry-sync" }
 ferry-iroh = { path = "../ferry-iroh" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
-rand = "0.8"
+ferry-folder = { workspace = true }
+ferry-ignore = { path = "../ferry-ignore" }
+# Dashboard state reads go through the typed owners instead of hand-parsing
+# .ferry/pin-state.json, held/*.jsonl and conflicts.jsonl.
+ferry-pin = { path = "../ferry-pin" }
+ferry-sync-engine = { path = "../ferry-sync-engine" }
+ferry-ipc = { path = "../ferry-ipc" }
+ferry-scan = { path = "../ferry-scan" }
+ferry-platform.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+toml = "0.8"
+tempfile.workspace = true
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+axum = { workspace = true, optional = true }
+
+[features]
+default = ["web-ui"]
+web-ui = ["dep:axum", "dep:tokio-stream"]
+lean = []
+
+[lib]
+name = "ferry_daemon"
+path = "src/lib.rs"
 
 [[bin]]
 name = "ferry-sync"
 path = "src/main.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
+axum = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[lints]
+workspace = true

@@ -142,6 +142,34 @@ mod tests {
     }
 
     #[test]
+    fn colon_or_prefixed_names_rejected() {
+        // Pure string logic: these must fail on every host. On Windows,
+        // PathBuf::push with a prefixed component replaces the whole base,
+        // so "C:evil" would escape the synced root via abs_under.
+        // ("\\server\share" style UNC paths are additionally caught by the
+        // backslash rule in materialize's validate_components; here they are
+        // ordinary bytes on unix, where '\' is not a separator.)
+        for bad in ["C:x", "C:\\x", "a:b", "C:", "/abs"].map(str::to_string) {
+            let e = TreeEntry {
+                name: bad.clone(),
+                exec: false,
+                mtime_sec: 0,
+                mtime_nsec: 0,
+                payload: EntryPayload::File {
+                    size: 0,
+                    chunks: vec![],
+                },
+            };
+            assert!(validate_name(&bad).is_err(), "name {bad:?} must be refused");
+            assert!(validate_entry(&e).is_err(), "entry {bad:?} must be refused");
+            assert!(
+                matches!(validate_name(&bad), Err(ManifestError::InvalidName(_))),
+                "name {bad:?} must be refused as InvalidName"
+            );
+        }
+    }
+
+    #[test]
     fn names_are_nfc_normalized_on_write_and_validated_on_read() {
         // Decomposed: e + combining acute.
         let decomposed = "cafe\u{301}";
@@ -229,6 +257,41 @@ mod tests {
         assert!(matches!(
             validate_entry(&wrong),
             Err(ManifestError::SizeMismatch { .. })
+        ));
+    }
+
+    /// T-02 acceptance: a wire `chunk_count` that lies must come back as a
+    /// typed error with no huge pre-reservation and no panic (debug AND
+    /// release). The count is a raw u32 off the wire; the parser must never
+    /// trust it for capacity.
+    #[test]
+    fn lying_chunk_count_is_a_typed_error_without_huge_allocation() {
+        // One well-formed file-entry header, then chunk_count = u32::MAX and
+        // zero chunk bytes. Pre-T-02 this reserved ~139 GB up front.
+        let mut evil: Vec<u8> = Vec::new();
+        put_u32(&mut evil, 1); // entry_count
+        evil.push(0x00); // type: file
+        put_u32(&mut evil, 1);
+        put_bytes(&mut evil, b"f");
+        evil.push(0x00); // flags
+        put_i64(&mut evil, 0); // mtime_sec
+        put_u32(&mut evil, 0); // mtime_nsec
+        put_u64(&mut evil, 0); // size
+        put_u32(&mut evil, u32::MAX); // lying chunk_count
+        let err = parse_tree_node(&evil).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::Corrupt("truncated")),
+            "got {err:?}"
+        );
+
+        // Same lie but with one real chunk following: still fails cleanly at
+        // the second iteration.
+        let mut half = evil.clone();
+        half.extend_from_slice(&[0xaa; 32]); // chunk id
+        put_u64(&mut half, 5); // chunk len
+        assert!(matches!(
+            parse_tree_node(&half),
+            Err(ManifestError::Corrupt("truncated"))
         ));
     }
 
@@ -339,13 +402,13 @@ impl From<FormatError> for ManifestError {
     }
 }
 
-/// Payload carried by one tree entry, per its entry_type byte.
+/// Payload carried by one tree entry, per its `entry_type` byte.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryPayload {
     File {
         /// Logical plaintext size; MUST equal the sum of chunk lengths.
         size: u64,
-        /// Ordered chunk sequence: (chunk_id, chunk_plain_len).
+        /// Ordered chunk sequence: (`chunk_id`, `chunk_plain_len`).
         chunks: Vec<(BlobId, u64)>,
     },
     Dir {
@@ -374,7 +437,7 @@ pub struct TreeEntry {
     pub exec: bool,
     /// Unix epoch seconds, signed; negative with positive nsec = pre-1970.
     pub mtime_sec: i64,
-    /// 0..=999_999_999, always normalized non-negative.
+    /// `0..=999_999_999`, always normalized non-negative.
     pub mtime_nsec: u32,
     pub payload: EntryPayload,
 }
@@ -462,9 +525,24 @@ fn expect_valid(e: &TreeEntry) {
 }
 
 /// Name rules from "Conventions": single component, no '/', no NUL, never
-/// "." or "..", NFC normalization.
+/// "." or "..", NFC normalization. Colon-bearing or path-prefixed components
+/// ("C:x", "C:\\x", "\\x") are refused on every host: on Windows,
+/// `PathBuf::push` with a prefixed component replaces the whole base, so a
+/// remote entry could escape the synced root (T-17).
 pub fn validate_name(name: &str) -> Result<(), ManifestError> {
-    if name.contains('/') || name.contains('\0') || name == "." || name == ".." {
+    if name.contains('/')
+        || name.contains('\0')
+        || name == "."
+        || name == ".."
+        || name.contains(':')
+        // Stable stand-in for the nightly-only Path::prefix: any leading
+        // Prefix/RootDir/CurDir component means the name is not a plain
+        // single component.
+        || !matches!(
+            std::path::Path::new(name).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
         return Err(ManifestError::InvalidName(name.to_string()));
     }
     let nfc: String = name.nfc().collect();
@@ -529,7 +607,7 @@ pub fn validate_entries(entries: &[TreeEntry]) -> Result<(), ManifestError> {
 
 fn flags_byte(e: &TreeEntry) -> Result<u8, ManifestError> {
     match &e.payload {
-        EntryPayload::File { .. } => Ok(if e.exec { 0x01 } else { 0x00 }),
+        EntryPayload::File { .. } => Ok(u8::from(e.exec)),
         _ => {
             if e.exec {
                 return Err(ManifestError::ExecFlagOnNonFile);
@@ -607,8 +685,13 @@ pub fn parse_tree_node(bytes: &[u8]) -> Result<TreeNode, ManifestError> {
         let payload = match type_byte {
             0x00 => {
                 let size = r.u64()?;
-                let chunk_count = r.u32()? as usize;
-                let mut chunks = Vec::with_capacity(chunk_count);
+                let chunk_count = r.u32()?;
+                // Never pre-reserve from an untrusted wire count: a lying
+                // u32 would reserve ~139 GB before a single entry byte is
+                // read. Grow incrementally instead — the loop below fails
+                // with `truncated` within one iteration once the frame runs
+                // out, so worst-case work is bounded by the input length.
+                let mut chunks = Vec::new();
                 for _ in 0..chunk_count {
                     let id = r.array()?;
                     let len = r.u64()?;

@@ -19,12 +19,16 @@
 //!    - untouched subdirectories keep their cached node and id wholesale —
 //!      not even a stat is spent on their contents,
 //!    - symlinks are re-read (cheap) and NFC/UTF-8 rules applied.
-//! 3. Walk rules mirror `snapshot.rs` exactly: NFC names, loud refusals for
-//!    non-UTF-8 names/targets and unsupported file types, sibling-collision
-//!    hard errors, exec-bit-only permissions. One documented divergence:
-//!    an entry that vanishes mid-pass is skipped rather than failed — the
-//!    next event or audit repairs it, and racing deletions are not a scan
-//!    bug.
+//! 3. Per-entry admission rules are NOT re-implemented here (T-11): names,
+//!    reserved device names, symlink policy, and representable kinds all go
+//!    through `ferry_store::admission` — the same gate `snapshot.rs` runs —
+//!    so "incremental == from-scratch" holds by construction, not by oracle
+//!    tests alone. One documented divergence: an entry that vanishes
+//!    mid-pass is skipped rather than failed — the next event or audit
+//!    repairs it, and racing deletions are not a scan bug. Walker-local
+//!    filters (store-dir exclusion, ignore policy) deliberately sit BETWEEN
+//!    the gate's two phases: ignored entries are skipped silently, never
+//!    refused loudly.
 //! 4. The new root id is compared with the previous one. Only a CHANGED root
 //!    produces a manifest (parent = previous manifest id), so no-op bursts
 //!    write zero pack bytes.
@@ -34,22 +38,23 @@
 //! renamed-away subtrees can never satisfy later short-circuits.
 
 use std::collections::{BTreeSet, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-use ferry_platform::{classify_link, is_reserved_device_name};
-use unicode_normalization::UnicodeNormalization;
 
 use ferry_store::manifest::{
     dir_entry, file_entry, serialize_manifest, serialize_tree_node, symlink_entry, EntryPayload,
     RootManifest, TreeEntry, TreeNode,
 };
-use ferry_store::snapshot::{ensure_no_collisions, RefusalReason, RefusedPath};
+use ferry_store::snapshot::{ensure_no_collisions, RefusedPath};
 use ferry_store::store::Store;
-use ferry_store::{BlobId, BlobKind};
+use ferry_store::{
+    admission::{self, AdmittedKind, ObservedKind},
+    BlobId, BlobKind,
+};
 
 use crate::error::ScanError;
-use crate::ignore::IgnorePolicy;
+use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
 
@@ -111,7 +116,7 @@ pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
 /// mutably and left coherent for the next pass.
 pub(crate) struct Walker<'a> {
     store: &'a Store,
-    poly: u64,
+    poly: ferry_store::chunker::ValidatedPoly,
     ignore: &'a dyn IgnorePolicy,
     disk_root: &'a Path,
     cache: &'a mut DirCache,
@@ -120,6 +125,10 @@ pub(crate) struct Walker<'a> {
     refused: Vec<RefusedPath>,
     /// rel -> freshly rebuilt node id for this pass.
     rebuilt: HashMap<RelPath, BlobId>,
+    /// Read buffer and current-chunk scratch reused across files instead of
+    /// a fresh 256 KiB allocation per rehashed file.
+    read_buf: Vec<u8>,
+    chunk_scratch: Vec<u8>,
 }
 
 impl<'a> Walker<'a> {
@@ -129,7 +138,7 @@ impl<'a> Walker<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run(
         store: &'a Store,
-        poly: u64,
+        poly: ferry_store::chunker::ValidatedPoly,
         ignore: &'a dyn IgnorePolicy,
         disk_root: &'a Path,
         cache: &'a mut DirCache,
@@ -160,6 +169,8 @@ impl<'a> Walker<'a> {
             },
             refused: Vec::new(),
             rebuilt: HashMap::new(),
+            read_buf: vec![0u8; REHASH_READ_BUF],
+            chunk_scratch: Vec::with_capacity(ferry_store::chunker::MIN_SIZE * 2),
         };
 
         for d in order {
@@ -232,7 +243,7 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    /// List `rel` on disk, build its TreeNode reusing cache where valid,
+    /// List `rel` on disk, build its `TreeNode` reusing cache where valid,
     /// store it, update the cache, prune stale children. Returns the node id.
     fn rebuild_dir(
         &mut self,
@@ -241,7 +252,7 @@ impl<'a> Walker<'a> {
     ) -> Result<BlobId, ScanError> {
         // Inside or at the store directory: structurally excluded. Behave
         // exactly like absence so parents never point at it.
-        if rel.last().map(|c| is_store_component(c)).unwrap_or(false) {
+        if rel.last().is_some_and(|c| is_store_component(c)) {
             return self.splice_absent(rel);
         }
         let disk = self.disk_path(rel);
@@ -267,7 +278,15 @@ impl<'a> Walker<'a> {
         }
         names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
-        let old_node: Option<TreeNode> = self.cache.node(rel).map(|c| c.node.clone());
+        // Take the old node out for the duration of the rebuild: the mutably
+        // borrowed cache must stay alive across the walk, but cloning the
+        // whole listing (chunk lists included) per rebuilt directory was
+        // pure waste. Re-inserted below.
+        let old_node = self.cache.take(rel).map(|c| c.node);
+        let old_entries: HashMap<&str, &TreeEntry> = old_node
+            .as_ref()
+            .map(|n| n.entries.iter().map(|e| (e.name.as_str(), e)).collect())
+            .unwrap_or_default();
         let mut entries: Vec<TreeEntry> = Vec::with_capacity(names.len());
         let mut listed_dirs: Vec<RelPath> = Vec::new();
 
@@ -276,12 +295,17 @@ impl<'a> Walker<'a> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            let component = match std::str::from_utf8(raw) {
-                Ok(s) => s.nfc().collect::<String>(),
-                Err(_) => {
+            // Shared admission gate, phase 1 (T-11): UTF-8 + NFC. The
+            // walker-local filters below sit between the phases by design:
+            // ignored entries are skipped silently, never refused loudly.
+            let component = match admission::admit_name(name.as_os_str()) {
+                Ok(c) => c,
+                Err(r) => {
+                    let mut path = rel.clone();
+                    path.push(r.display_name);
                     self.refused.push(RefusedPath {
-                        path: vec![String::from_utf8_lossy(raw).into_owned()],
-                        reason: RefusalReason::NonUtf8Name,
+                        path,
+                        reason: r.reason,
                     });
                     continue;
                 }
@@ -292,20 +316,13 @@ impl<'a> Walker<'a> {
             }
             let mut child_rel = rel.clone();
             child_rel.push(component.clone());
-            if self.ignore.ignored(&child_rel) {
-                continue;
-            }
-            // Reserved Windows device names can never materialize on a
-            // Windows endpoint; refuse loudly at the source (T-012).
-            if is_reserved_device_name(&component) {
-                self.refused.push(RefusedPath {
-                    path: child_rel,
-                    reason: RefusalReason::ReservedName,
-                });
-                continue;
-            }
             let child_disk = disk.join(&name);
 
+            // Stat BEFORE the ignore consult so the seam carries the entry's
+            // real kind (T-12): dir-only patterns bite real dirs with zero
+            // double evaluation and no extra disk access. The stat was
+            // already needed for every surviving entry, so this reorders,
+            // never adds.
             let meta = match std::fs::symlink_metadata(&child_disk) {
                 Ok(m) => m,
                 // Vanished mid-pass: skip; next event or audit repairs.
@@ -313,79 +330,81 @@ impl<'a> Walker<'a> {
                 Err(e) => return Err(Self::io_err(&child_disk)(e)),
             };
             let ft = meta.file_type();
+            // Symlinks count as files, matching gitignore semantics and the
+            // manifest's link entries.
+            let kind = if ft.is_dir() {
+                EntryKind::Dir
+            } else {
+                EntryKind::File
+            };
+            if self.ignore.ignored(&child_rel, kind) {
+                continue;
+            }
 
-            let entry = if ft.is_symlink() {
-                let target = std::fs::read_link(&child_disk).map_err(Self::io_err(&child_disk))?;
-                match target.to_str() {
-                    // T-012 policy: relative internal targets sync as links;
-                    // absolute or root-escaping targets are refused loudly.
-                    Some(t) => match classify_link(rel.len(), t) {
-                        ferry_platform::LinkDecision::SyncAsLink => {
-                            self.stats.symlinks += 1;
-                            symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), t)
-                        }
-                        ferry_platform::LinkDecision::Refuse(reason) => {
-                            self.refused.push(RefusedPath {
-                                path: child_rel,
-                                reason: match reason {
-                                    ferry_platform::LinkRefusal::AbsoluteTarget => {
-                                        RefusalReason::AbsoluteSymlinkTarget
-                                    }
-                                    ferry_platform::LinkRefusal::EscapesRoot => {
-                                        RefusalReason::EscapingSymlinkTarget
-                                    }
-                                },
-                            });
-                            continue;
-                        }
-                    },
-                    None => {
+            // Shared admission gate, phase 2 (T-11): reserved device names,
+            // symlink policy, representable kinds — byte-for-byte the rules
+            // snapshot_dir runs, from one implementation.
+            let observed = if ft.is_symlink() {
+                ObservedKind::Symlink
+            } else if ft.is_dir() {
+                ObservedKind::Dir
+            } else if ft.is_file() {
+                ObservedKind::File
+            } else {
+                ObservedKind::Other
+            };
+            let link_target = if ft.is_symlink() {
+                Some(
+                    std::fs::read_link(&child_disk)
+                        .map_err(Self::io_err(&child_disk))?
+                        .into_os_string(),
+                )
+            } else {
+                None
+            };
+            let admitted =
+                match admission::admit_kind(component, observed, link_target.as_deref(), rel.len())
+                {
+                    Ok(a) => a,
+                    Err(r) => {
                         self.refused.push(RefusedPath {
                             path: child_rel,
-                            reason: RefusalReason::NonUtf8SymlinkTarget,
+                            reason: r.reason,
                         });
                         continue;
                     }
-                }
-            } else if ft.is_dir() {
-                let child_id = self.ensure_child(&child_rel, &disk, dirty_closed)?;
-                listed_dirs.push(child_rel.clone());
-                self.stats.dirs += 1;
-                dir_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), child_id)
-            } else if ft.is_file() {
-                let size = meta.len();
-                let mt = (mtime_sec(&meta), mtime_nsec(&meta));
-                let exec = live_exec(&meta.permissions());
-                self.stats.files += 1;
-
-                let chunks = match old_node.as_ref().and_then(|n| find_entry(n, &component)) {
-                    Some(prev) if reusable(prev, size, mt, exec) => {
-                        match &prev.payload {
-                            EntryPayload::File { chunks, .. } => chunks.clone(),
-                            _ => unreachable!("reusable() guarantees a File payload"),
-                        }
-                        // Short-circuit hit: zero bytes read.
-                    }
-                    _ => {
-                        let bytes =
-                            std::fs::read(&child_disk).map_err(Self::io_err(&child_disk))?;
-                        let mut chunks = Vec::new();
-                        for piece in ferry_store::chunker::chunk(self.poly, &bytes) {
-                            let id = self.store.put_data(piece)?;
-                            self.stats.bytes_chunked += piece.len() as u64;
-                            chunks.push((id, piece.len() as u64));
-                        }
-                        self.stats.files_rehashed += 1;
-                        chunks
-                    }
                 };
-                file_entry(&component, exec, mt.0, mt.1, chunks)
-            } else {
-                self.refused.push(RefusedPath {
-                    path: child_rel,
-                    reason: RefusalReason::UnknownFileType,
-                });
-                continue;
+            let component = admitted.component;
+
+            let entry = match admitted.kind {
+                AdmittedKind::Symlink { target } => {
+                    self.stats.symlinks += 1;
+                    symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), &target)
+                }
+                AdmittedKind::Dir => {
+                    let child_id = self.ensure_child(&child_rel, &disk, dirty_closed)?;
+                    listed_dirs.push(child_rel.clone());
+                    self.stats.dirs += 1;
+                    dir_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), child_id)
+                }
+                AdmittedKind::File => {
+                    let size = meta.len();
+                    let mt = (mtime_sec(&meta), mtime_nsec(&meta));
+                    let exec = live_exec(&meta.permissions());
+                    self.stats.files += 1;
+
+                    let chunks = match old_entries.get(component.as_str()) {
+                        Some(prev) if reusable(prev, size, mt, exec) => {
+                            match &prev.payload {
+                                EntryPayload::File { chunks, .. } => chunks.clone(),
+                                _ => unreachable!("reusable() guarantees a File payload"),
+                            }
+                            // Short-circuit hit: zero bytes read.
+                        }
+                        _ => self.stream_file_chunks(&child_disk)?,
+                    };
+                    file_entry(&component, exec, mt.0, mt.1, chunks)
+                }
             };
             entries.push(entry);
         }
@@ -427,6 +446,60 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
+    /// Stream one file through the CDC chunker with a bounded read buffer,
+    /// storing each chunk as its boundary completes (T-09). Peak memory is
+    /// one chunk (`MAX_SIZE`) plus the read buffer — never the file size;
+    /// GB-scale assets no longer spike RSS during rehash. Both buffers are
+    /// Walker-owned scratch, reused across files in one pass.
+    fn stream_file_chunks(&mut self, path: &Path) -> Result<Vec<(BlobId, u64)>, ScanError> {
+        let store = self.store;
+        // `poly` is a ValidatedPoly from the store handle; rejection is
+        // unreachable but stays typed, never a panic.
+        let mut chunker = ferry_store::chunker::Chunker::new(self.poly.get())?;
+
+        let mut file = std::fs::File::open(path).map_err(Self::io_err(path))?;
+        let buf: &mut Vec<u8> = &mut self.read_buf;
+        if buf.len() != REHASH_READ_BUF {
+            buf.resize(REHASH_READ_BUF, 0);
+        }
+        // Current unterminated chunk only; never exceeds MAX_SIZE because a
+        // boundary fires there unconditionally.
+        let cur: &mut Vec<u8> = &mut self.chunk_scratch;
+        cur.clear();
+        let mut chunks: Vec<(BlobId, u64)> = Vec::new();
+
+        loop {
+            let n = file.read(buf).map_err(Self::io_err(path))?;
+            if n == 0 {
+                break;
+            }
+            let mut eaten = 0usize;
+            for len in chunker.feed(&buf[..n]) {
+                // The completed chunk spans `cur`'s pending tail plus
+                // `len - cur.len()` fresh bytes of this read.
+                let fresh = len - cur.len();
+                cur.extend_from_slice(&buf[eaten..eaten + fresh]);
+                eaten += fresh;
+                let id = store.put_data(cur)?;
+                self.stats.bytes_chunked += cur.len() as u64;
+                chunks.push((id, cur.len() as u64));
+                cur.clear();
+            }
+            let tail_bytes = &buf[eaten..n];
+            cur.extend_from_slice(tail_bytes);
+        }
+
+        let tail = chunker.finish();
+        debug_assert_eq!(tail, cur.len(), "streamed tail must match retained bytes");
+        if tail > 0 {
+            let id = store.put_data(cur)?;
+            self.stats.bytes_chunked += tail as u64;
+            chunks.push((id, tail as u64));
+        }
+        self.stats.files_rehashed += 1;
+        Ok(chunks)
+    }
+
     /// Resolve the tree-node id for a child directory encountered while
     /// rebuilding `parent_disk`'s listing.
     fn ensure_child(
@@ -460,9 +533,8 @@ impl<'a> Walker<'a> {
     }
 }
 
-fn find_entry<'n>(node: &'n TreeNode, name: &str) -> Option<&'n TreeEntry> {
-    node.entries.iter().find(|e| e.name == name)
-}
+/// Read-buffer size for streamed rehashing; one allocation per pass.
+const REHASH_READ_BUF: usize = 256 * 1024;
 
 /// The short-circuit predicate: same size, mtime, exec bit, and file-ness
 /// means the bytes on disk are assumed identical to the recorded chunk list.
@@ -505,10 +577,10 @@ fn split_mtime(t: std::time::SystemTime) -> (i64, u32) {
     ferry_platform::split_unix(t)
 }
 fn mtime_sec(meta: &std::fs::Metadata) -> i64 {
-    meta.modified().map(split_mtime).unwrap_or((0, 0)).0
+    meta.modified().map_or((0, 0), split_mtime).0
 }
 fn mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-    meta.modified().map(split_mtime).unwrap_or((0, 0)).1
+    meta.modified().map_or((0, 0), split_mtime).1
 }
 
 #[cfg(test)]
@@ -529,7 +601,7 @@ mod tests {
         _tmp: tempfile::TempDir,
         _store_dir: tempfile::TempDir,
         store: Store,
-        poly: u64,
+        poly: ferry_store::chunker::ValidatedPoly,
         root: PathBuf,
         cache: DirCache,
         prev_root_tree_id: BlobId,
@@ -556,7 +628,7 @@ mod tests {
             fx
         }
 
-        /// Full-scan path: what run_full does — whole-tree pass against an
+        /// Full-scan path: what `run_full` does — whole-tree pass against an
         /// EMPTY cache, then adopt it (the reseed IS the fresh cache).
         fn full_scan(&mut self) -> BlobId {
             let mut fresh = DirCache::new();
@@ -647,13 +719,13 @@ mod tests {
 
     struct NoIgnoresIgnored;
     impl crate::ignore::IgnorePolicy for NoIgnoresIgnored {
-        fn ignored(&self, _rel: &[String]) -> bool {
+        fn ignored(&self, _rel: &[String], _kind: EntryKind) -> bool {
             false
         }
     }
 
     fn p(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]
@@ -740,7 +812,7 @@ mod tests {
         // The metadata-only mutation is an EXEC-BIT flip; non-unix
         // filesystems cannot store or observe it, so there it degrades to
         // zero metadata drift.
-        let expect_meta = if cfg!(unix) { 1 } else { 0 };
+        let expect_meta = usize::from(cfg!(unix));
         assert_eq!(inc_diff.metadata_modified.len(), expect_meta);
         if cfg!(unix) {
             assert_eq!(inc_diff.metadata_modified[0].path, p(&["sub", "a.txt"]));
@@ -832,8 +904,8 @@ mod tests {
         use crate::ignore::IgnorePolicy;
         struct SkipSecrets;
         impl IgnorePolicy for SkipSecrets {
-            fn ignored(&self, rel: &[String]) -> bool {
-                rel.first().map(|s| s.as_str()) == Some("secrets")
+            fn ignored(&self, rel: &[String], _kind: EntryKind) -> bool {
+                rel.first().map(std::string::String::as_str) == Some("secrets")
             }
         }
         let mut fx = Fixture::new("t4");
@@ -1037,6 +1109,78 @@ mod tests {
         };
         assert_eq!(names, expected);
         assert_eq!(out.root_tree_id, fx.scratch_root_id());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn adversarial_entries_produce_identical_trees_and_ledgers_in_both_walkers() {
+        // T-11 acceptance: fold-adjacent adversarial cases (reserved names,
+        // non-UTF-8 names, unsupported types, link escapes) run through the
+        // SHARED gate, so the from-scratch snapshot_dir and the incremental
+        // walker must agree on the tree AND on every ledger line — nested
+        // paths included.
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut fx = Fixture::new("t11adv");
+        let sub = fx.root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
+        write_file(&sub.join("aux.txt"), b"reserved", false, (2, 0));
+        std::os::unix::fs::symlink("../../outside", sub.join("esc_link")).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(sub.join("pipe"))
+            .status()
+            .unwrap()
+            .success());
+        // Not every filesystem accepts non-UTF-8 names; only expect the
+        // ledger line where the host actually created the entry.
+        let non_utf8 = std::ffi::OsStr::from_bytes(b"na\xffme");
+        let name_refused = std::fs::write(sub.join(non_utf8), b"y").is_ok();
+
+        let ledger = fx.full_scan_with_ledger();
+        let inc_id = fx.prev_root_tree_id;
+
+        use ferry_store::snapshot::{snapshot_dir, RefusalReason};
+        let scratch = snapshot_dir(&fx.store, fx.poly, &fx.root, &identity((3, 0))).unwrap();
+
+        assert_eq!(
+            inc_id, scratch.root_tree_id,
+            "incremental == from-scratch by construction of the shared gate"
+        );
+
+        let mut want: Vec<(Vec<String>, RefusalReason)> = vec![
+            (
+                vec!["sub".into(), "aux.txt".into()],
+                RefusalReason::ReservedName,
+            ),
+            (
+                vec!["sub".into(), "esc_link".into()],
+                RefusalReason::EscapingSymlinkTarget,
+            ),
+            (
+                vec!["sub".into(), "pipe".into()],
+                RefusalReason::UnknownFileType,
+            ),
+        ];
+        if name_refused {
+            want.push((
+                vec!["sub".into(), "na\u{fffd}me".into()],
+                RefusalReason::NonUtf8Name,
+            ));
+        }
+        want.sort();
+
+        let mut got: Vec<_> = ledger.iter().map(|r| (r.path.clone(), r.reason)).collect();
+        got.sort();
+        assert_eq!(got, want, "incremental walker's ledger");
+
+        let mut scr: Vec<_> = scratch
+            .refused
+            .iter()
+            .map(|r| (r.path.clone(), r.reason))
+            .collect();
+        scr.sort();
+        assert_eq!(scr, want, "from-scratch snapshot's ledger");
     }
 
     #[test]

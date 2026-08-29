@@ -17,12 +17,12 @@
 //!    lands via temp+rename; every chunk is hash-verified after the store
 //!    read and again in the temp file pre-rename.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use ferry_store::diff::{join_path, ChangeSet, CompPath, EntryKind, EntryState};
 use ferry_store::format::hex;
@@ -88,6 +88,24 @@ impl ApplyStats {
             + self.unlinked
             + self.mtimes_set
     }
+}
+
+/// Policy hook allowing session pins to evaluate and withhold changes
+/// before disk mutation (T-03).
+pub trait PinGate {
+    /// Evaluates the change set against the pin gate before disk mutation.
+    /// Returns the filtered change set to apply and how many paths were withheld.
+    fn evaluate_changes(&self, changes: &ChangeSet)
+        -> Result<(ChangeSet, usize), MaterializeError>;
+}
+
+/// What one apply actually did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApplyOutcome {
+    /// Distinct paths an active pin withheld from the tree this round.
+    /// Zero proves nothing was held. Callers treat any nonzero as "the peer
+    /// state was only partially accepted".
+    pub held: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +272,14 @@ enum Mutation {
         sec: i64,
         nsec: u32,
     },
+    /// A symlink's target already matches; only the link's OWN recorded
+    /// mtime drifted. Ported from ferry-sync's old inline materializer (deleted in T-05):
+    /// without it, link-mtime-only drift reported as `metadata_modified`
+    /// would be skipped forever and never converge.
+    RestoreSymlinkMtime {
+        sec: i64,
+        nsec: u32,
+    },
 }
 
 impl Mutation {
@@ -284,6 +310,11 @@ pub struct Applier<'a> {
     overwrite: Overwrite,
     style: TempStyle,
     pace_ms: u64,
+    pin: Option<Box<dyn PinGate + 'a>>,
+    /// Per-parent NFC live-fold cache, reset at the start of every apply
+    /// (T-13): each parent directory is read at most once per apply
+    /// instead of once per resolved component.
+    fold: NfcFoldCache,
 }
 
 impl<'a> Applier<'a> {
@@ -296,7 +327,16 @@ impl<'a> Applier<'a> {
             overwrite: Overwrite::Always,
             style: TempStyle::current(),
             pace_ms: 0,
+            pin: None,
+            fold: NfcFoldCache::refusing(),
         }
+    }
+
+    /// Enforce session pinning during materialization (T-03): install a [`PinGate`]
+    /// that withholds matching paths before tree mutation.
+    pub fn with_pin_gate(mut self, gate: impl PinGate + 'a) -> Self {
+        self.pin = Some(Box::new(gate));
+        self
     }
 
     /// Set the overwrite policy (default [`Overwrite::Always`]).
@@ -415,6 +455,49 @@ impl<'a> Applier<'a> {
         self.run(removes, upserts)
     }
 
+    /// The v1 sync session contract (T-05, T-03): apply this change set,
+    /// respecting any configured [`PinGate`], then restore every directory
+    /// mtime from the TARGET tree, deepest first.
+    ///
+    /// Under pin enforcement the applied set is `changes` MINUS whatever
+    /// the active pin withholds; see [`ApplyOutcome::held`].
+    pub fn apply_session_change_set(
+        &mut self,
+        cs: &ChangeSet,
+        target_root_tree_id: &BlobId,
+    ) -> Result<ApplyOutcome, MaterializeError> {
+        let (to_apply, held) = match &self.pin {
+            Some(gate) => gate.evaluate_changes(cs)?,
+            None => (cs.clone(), 0),
+        };
+        self.apply_change_set(&to_apply)?;
+        self.restore_dir_mtimes_from_tree(target_root_tree_id)?;
+        Ok(ApplyOutcome { held })
+    }
+
+    /// Stamp every DIRECTORY of the target tree with its recorded mtime,
+    /// deepest first so later parent stamps never clobber child stamps.
+    /// Ported from ferry-sync's old inline materializer phase 3 (deleted in T-05).
+    pub fn restore_dir_mtimes_from_tree(
+        &mut self,
+        root_tree_id: &BlobId,
+    ) -> Result<ApplyStats, MaterializeError> {
+        let mut dirs: Vec<(CompPath, i64, u32)> = Vec::new();
+        collect_dir_mtimes(self.store, root_tree_id, Vec::new(), &mut dirs)?;
+        for (p, _, _) in &dirs {
+            validate_components(p)?;
+        }
+        // Deepest first: children before the parents whose stamps would
+        // otherwise be perturbed.
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.0.len()));
+        let mut stats = ApplyStats::default();
+        self.fold.clear();
+        for (rel, sec, nsec) in dirs {
+            self.execute_touch(&rel, sec, nsec, &mut stats)?;
+        }
+        Ok(stats)
+    }
+
     // -- pipeline -----------------------------------------------------------
 
     fn run(
@@ -422,6 +505,10 @@ impl<'a> Applier<'a> {
         mut removes: Vec<PlannedRemove>,
         mut upserts: Vec<PlannedUpsert>,
     ) -> Result<ApplyStats, MaterializeError> {
+        // Fresh fold cache per apply: the applier owns every mutation for
+        // the duration of one run, so a cache built here stays exact
+        // without outside invalidation (T-13).
+        self.fold.clear();
         upserts.sort_by(|a, b| a.path.cmp(&b.path));
 
         // Phase 2: plan each upsert against live state. An upsert whose
@@ -436,7 +523,7 @@ impl<'a> Applier<'a> {
         let mut touches: Vec<PlannedTouch> = Vec::new();
         let mut skipped = 0usize;
         for up in &mut upserts {
-            let abs = self.abs(&up.path);
+            let abs = self.abs(&up.path)?;
             let case_shadowed = shadowed.contains(&ferry_platform::fold_key(&join_path(&up.path)));
             plan_upsert(
                 self.store,
@@ -453,11 +540,25 @@ impl<'a> Applier<'a> {
             let base = Base::new(self.store, &expected.root_tree_id);
             let mut divergences: Vec<Divergence> = Vec::new();
             for rm in &removes {
-                guard_removal(self.store, &self.target, &base, rm, &mut divergences)?;
+                guard_removal(
+                    self.store,
+                    &self.target,
+                    &base,
+                    &self.fold,
+                    rm,
+                    &mut divergences,
+                )?;
             }
             for up in &upserts {
                 if up.mutation.is_mutation() {
-                    guard_upsert(self.store, &self.target, &base, up, &mut divergences)?;
+                    guard_upsert(
+                        self.store,
+                        &self.target,
+                        &base,
+                        &self.fold,
+                        up,
+                        &mut divergences,
+                    )?;
                 }
             }
             if !divergences.is_empty() {
@@ -502,7 +603,7 @@ impl<'a> Applier<'a> {
         deep: bool,
         stats: &mut ApplyStats,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(rel);
+        let abs = self.abs(rel)?;
         let md = match std::fs::symlink_metadata(&abs) {
             Ok(md) => md,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -519,6 +620,8 @@ impl<'a> Applier<'a> {
             std::fs::remove_file(&abs).map_err(|e| io_at(&abs, e))?;
             record_deletion(stats, rel);
         }
+        // The applier owns this write: keep the fold cache exact (T-13).
+        self.fold.note_removed(&abs, deep || md.is_dir());
         self.pace();
         Ok(())
     }
@@ -559,7 +662,7 @@ impl<'a> Applier<'a> {
         stats: &mut ApplyStats,
         touches: &mut Vec<PlannedTouch>,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(&up.path);
+        let abs = self.abs(&up.path)?;
         match up.mutation {
             Mutation::Skip => {}
             Mutation::Mkdir { sec, nsec } => {
@@ -572,6 +675,7 @@ impl<'a> Applier<'a> {
                     Ok(_) => {
                         std::fs::remove_file(&abs).map_err(|e| io_at(&abs, e))?;
                         record_deletion(stats, &up.path);
+                        self.fold.note_removed(&abs, false);
                     }
                 }
                 std::fs::create_dir(&abs)
@@ -585,6 +689,7 @@ impl<'a> Applier<'a> {
                     .map_err(|e| io_at(&abs, e))?;
                 stats.dirs_created += 1;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 // Fresh dirs carry wall-clock mtime; the touch phase fixes
                 // it once children exist. execute_touch skips no-op sets.
                 self.pace();
@@ -596,6 +701,13 @@ impl<'a> Applier<'a> {
             }
             Mutation::RestoreMtime { sec, nsec } => {
                 set_mtime(&abs, sec, nsec)?;
+                stats.mtimes_set += 1;
+                self.pace();
+            }
+            Mutation::RestoreSymlinkMtime { sec, nsec } => {
+                // utimensat(AT_SYMLINK_NOFOLLOW): touches the link itself,
+                // never its target.
+                set_symlink_times(&abs, sec, nsec)?;
                 stats.mtimes_set += 1;
                 self.pace();
             }
@@ -621,6 +733,7 @@ impl<'a> Applier<'a> {
                 if let Ok(md) = std::fs::symlink_metadata(&abs) {
                     if md.is_dir() && !md.is_symlink() {
                         self.remove_dir_children_first(&abs, &up.path, stats)?;
+                        self.fold.note_removed(&abs, true);
                     }
                 }
                 let parent = parent_of(&abs);
@@ -630,7 +743,7 @@ impl<'a> Applier<'a> {
                     &fresh_entropy(),
                 ));
                 let result = make_symlink(&target, &tmp_path)
-                    .and_then(|_| std::fs::rename(&tmp_path, &abs).map_err(|e| io_at(&abs, e)));
+                    .and_then(|()| std::fs::rename(&tmp_path, &abs).map_err(|e| io_at(&abs, e)));
                 if result.is_err() {
                     let _ = std::fs::remove_file(&tmp_path);
                 }
@@ -638,6 +751,7 @@ impl<'a> Applier<'a> {
                 fsync_dir(parent)?;
                 stats.symlinks_written += 1;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 // The deferred T-005 piece: restore the link's OWN mtime
                 // (std cannot open a link without following it).
                 if let Some((sec, nsec)) = times {
@@ -658,12 +772,14 @@ impl<'a> Applier<'a> {
                 if let Ok(md) = std::fs::symlink_metadata(&abs) {
                     if md.is_dir() {
                         self.remove_dir_children_first(&abs, &up.path, stats)?;
+                        self.fold.note_removed(&abs, true);
                     }
                 }
                 self.write_file_atomically(&abs, &up.path, exec, sec, nsec, size, &chunks)?;
                 stats.files_written += 1;
                 stats.bytes_written += size;
                 record_creation(stats, &up.path);
+                self.fold.note_created_at(&abs);
                 self.pace();
             }
         }
@@ -697,9 +813,8 @@ impl<'a> Applier<'a> {
                 p => resolved.push(p),
             }
         }
-        let is_dir = std::fs::symlink_metadata(&resolved)
-            .map(|m| m.is_dir() && !m.is_symlink())
-            .unwrap_or(false);
+        let is_dir =
+            std::fs::symlink_metadata(&resolved).is_ok_and(|m| m.is_dir() && !m.is_symlink());
         if is_dir {
             Err(MaterializeError::WindowsDirLinkRefused {
                 path: join_path(rel),
@@ -716,7 +831,7 @@ impl<'a> Applier<'a> {
         nsec: u32,
         stats: &mut ApplyStats,
     ) -> Result<(), MaterializeError> {
-        let abs = self.abs(rel);
+        let abs = self.abs(rel)?;
         let md = match std::fs::symlink_metadata(&abs) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(io_at(&abs, e)),
@@ -725,7 +840,8 @@ impl<'a> Applier<'a> {
         if !md.is_dir() {
             return Ok(());
         }
-        let (cur_sec, cur_nsec) = split_unix_time(md.modified().map_err(|e| io_at(&abs, e))?);
+        let (cur_sec, cur_nsec) =
+            ferry_platform::split_unix(md.modified().map_err(|e| io_at(&abs, e))?);
         if cur_sec == sec && cur_nsec == nsec {
             return Ok(());
         }
@@ -760,45 +876,17 @@ impl<'a> Applier<'a> {
             });
         }
 
-        // 1. Fetch every chunk and verify each against its id AFTER reading
-        //    from the store (defense in depth; the store verifies too).
-        let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(chunks.len());
-        for (index, (id, len)) in chunks.iter().enumerate() {
-            let bytes = self.store.get(BlobKind::DataChunk, id)?;
-            if bytes.len() as u64 != *len {
-                return Err(MaterializeError::ChunkCorrupt {
-                    path: rel_display,
-                    index,
-                    expected: format!("len {len}"),
-                    found: format!("len {}", bytes.len()),
-                });
-            }
-            let found = *blake3::hash(&bytes).as_bytes();
-            if &found != id {
-                return Err(MaterializeError::ChunkCorrupt {
-                    path: rel_display,
-                    index,
-                    expected: hex(id),
-                    found: hex(&found),
-                });
-            }
-            bufs.push(bytes);
-        }
-
-        // 2. Write the temp file in the DESTINATION directory (same
-        //    filesystem, atomic rename), with its final permissions.
+        // 1. Stream chunks sequentially to the temp file (T-09): fetch one
+        //    chunk, verify it against its id AFTER reading from the store
+        //    (defense in depth; the store verifies too), write it, drop it.
+        //    Only the current chunk is ever resident — peak memory is
+        //    O(max chunk size), not O(file size). A corrupt chunk aborts
+        //    mid-stream; the caller removes the temp, so nothing partial
+        //    survives and the destination is never touched.
         let parent = parent_of(abs_dest);
         let tmp_path = parent.join(temp_name_for(&rel_display, self.style, &fresh_entropy()));
-        let outcome = self.write_temp_then_rename(
-            &tmp_path,
-            abs_dest,
-            &rel_display,
-            exec,
-            sec,
-            nsec,
-            chunks,
-            &bufs,
-        );
+        let outcome =
+            self.write_temp_then_rename(&tmp_path, abs_dest, &rel_display, exec, sec, nsec, chunks);
         if outcome.is_err() {
             // Never leave our temp behind on a handled failure.
             let _ = std::fs::remove_file(&tmp_path);
@@ -816,22 +904,41 @@ impl<'a> Applier<'a> {
         sec: i64,
         nsec: u32,
         chunks: &[(BlobId, u64)],
-        bufs: &[Vec<u8>],
     ) -> Result<(), MaterializeError> {
         let mut file = std::fs::File::create(tmp_path).map_err(|e| io_at(tmp_path, e))?;
         set_exec_bit(&file, exec).map_err(|e| io_at(tmp_path, e))?;
 
-        for b in bufs {
-            file.write_all(b).map_err(|e| io_at(tmp_path, e))?;
+        for (index, (id, len)) in chunks.iter().enumerate() {
+            let bytes = self.store.get(BlobKind::DataChunk, id)?;
+            if bytes.len() as u64 != *len {
+                return Err(MaterializeError::ChunkCorrupt {
+                    path: rel_display.to_string(),
+                    index,
+                    expected: format!("len {len}"),
+                    found: format!("len {}", bytes.len()),
+                });
+            }
+            let found = *blake3::hash(&bytes).as_bytes();
+            if &found != id {
+                return Err(MaterializeError::ChunkCorrupt {
+                    path: rel_display.to_string(),
+                    index,
+                    expected: hex(id),
+                    found: hex(&found),
+                });
+            }
+            file.write_all(&bytes).map_err(|e| io_at(tmp_path, e))?;
         }
 
         // Durability + final mtime, both before the rename so the
         // destination never exists with wrong metadata.
-        file.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
-            .map_err(|e| io_at(tmp_path, e))?;
+        file.set_times(
+            std::fs::FileTimes::new().set_modified(ferry_platform::time::join_unix(sec, nsec)),
+        )
+        .map_err(|e| io_at(tmp_path, e))?;
         file.sync_all().map_err(|e| io_at(tmp_path, e))?;
 
-        // 3. Pre-rename verification: re-read every chunk region from the
+        // 2. Pre-rename verification: re-read every chunk region from the
         //    temp file and re-hash. Covers torn temp writes; the
         //    destination is still untouched when this fails. Reopen for
         //    reading: File::create yields a write-only handle.
@@ -847,12 +954,12 @@ impl<'a> Applier<'a> {
 
     // -- helpers ------------------------------------------------------------
 
-    fn abs(&self, rel: &[String]) -> PathBuf {
-        let p = abs_under(&self.target, rel);
+    fn abs(&self, rel: &[String]) -> Result<PathBuf, MaterializeError> {
+        let p = self.fold.resolve(&self.target, rel)?;
         // Windows long paths: apply the \\?\ extended-length prefix when the
         // absolute path meets or exceeds MAX_PATH. Identity on short,
         // relative, and POSIX paths (T-012).
-        ferry_platform::extend_path(&p)
+        Ok(ferry_platform::extend_path(&p))
     }
 }
 
@@ -908,22 +1015,37 @@ fn plan_upsert(
             }
             Ok(())
         }
-        Mutation::WriteSymlink { target, .. } => {
-            let unchanged = stat_opt(abs)?
-                .map(|md| {
-                    md.file_type().is_symlink()
-                        && std::fs::read_link(abs)
-                            .map(|p| p.to_string_lossy() == target.as_str())
-                            .unwrap_or(false)
-                })
-                .unwrap_or(false);
+        Mutation::WriteSymlink { target, times } => {
+            let md = stat_opt(abs)?;
+            let unchanged = md.as_ref().is_some_and(|md| {
+                md.file_type().is_symlink()
+                    && std::fs::read_link(abs).is_ok_and(|p| p.to_string_lossy() == target.as_str())
+            });
             if unchanged {
+                // Target matches, but the link's OWN mtime may have drifted
+                // (link-metadata drift arrives as `metadata_modified`).
+                // Restore the times instead of skipping so such drift
+                // converges instead of oscillating (T-05 port). Only on
+                // unix: elsewhere link times are un-restorable and a
+                // permanent restore loop would never settle.
+                if cfg!(unix) {
+                    if let (Some(md), Some((sec, nsec))) = (md.as_ref(), *times) {
+                        let (lsec, lnsec) =
+                            ferry_platform::split_unix(md.modified().map_err(|e| io_at(abs, e))?);
+                        if lsec != sec || lnsec != nsec {
+                            up.mutation = Mutation::RestoreSymlinkMtime { sec, nsec };
+                            return Ok(());
+                        }
+                    }
+                }
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
             }
             Ok(())
         }
-        Mutation::RestoreMtime { .. } => unreachable!("planner input"),
+        Mutation::RestoreMtime { .. } | Mutation::RestoreSymlinkMtime { .. } => {
+            unreachable!("planner input")
+        }
         Mutation::WriteFile {
             exec,
             sec,
@@ -953,7 +1075,8 @@ fn plan_upsert(
             if !content_matches(store, abs, &chunks)? {
                 return Ok(()); // divergent bytes: full rewrite
             }
-            let (lsec, lnsec) = split_unix_time(md.modified().map_err(|e| io_at(abs, e))?);
+            let (lsec, lnsec) =
+                ferry_platform::split_unix(md.modified().map_err(|e| io_at(abs, e))?);
             if lsec == sec && lnsec == nsec {
                 *skipped += 1;
                 up.mutation = Mutation::Skip;
@@ -1013,6 +1136,7 @@ fn guard_removal(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     rm: &PlannedRemove,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
@@ -1026,7 +1150,7 @@ fn guard_removal(
         return Ok(());
     };
     let exp = ExpectedState::from(&exp_entry);
-    let abs = abs_under(target, &rm.path);
+    let abs = fold.resolve(target, &rm.path)?;
     let Some(md) = stat_opt(&abs)? else {
         out.push(Divergence {
             path: rm.path.clone(),
@@ -1048,9 +1172,9 @@ fn guard_removal(
     if rm.deep && live_kind == EntryKind::Dir {
         // The whole live subtree goes: account for every descendant against
         // the base manifest before allowing it.
-        verify_subtree_matches_base(store, target, base, &rm.path, &exp_entry, out)?;
+        verify_subtree_matches_base(store, target, base, fold, &rm.path, &exp_entry, out)?;
     } else {
-        check_live_matches(target, &rm.path, &exp, store, out)?;
+        check_live_matches(target, fold, &rm.path, &exp, store, out)?;
     }
     Ok(())
 }
@@ -1059,11 +1183,12 @@ fn guard_upsert(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     up: &PlannedUpsert,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
     let exp = base.lookup(&up.path)?;
-    let abs = abs_under(target, &up.path);
+    let abs = fold.resolve(target, &up.path)?;
     let live = classify_opt(stat_opt(&abs)?)?;
     match (exp.as_ref().map(ExpectedState::from), live) {
         (None, None) => Ok(()),
@@ -1083,7 +1208,7 @@ fn guard_upsert(
         }
         (Some(exp_state), Some(_)) => match exp_state.kind {
             EntryKind::Dir => Ok(()), // dirs: kind-only
-            _ => check_live_matches(target, &up.path, &exp_state, store, out),
+            _ => check_live_matches(target, fold, &up.path, &exp_state, store, out),
         },
     }
 }
@@ -1091,21 +1216,19 @@ fn guard_upsert(
 /// Compare one live leaf (or bare dir kind) against the expectation.
 fn check_live_matches(
     target: &Path,
+    fold: &NfcFoldCache,
     rel: &CompPath,
     exp: &ExpectedState,
     store: &Store,
     out: &mut Vec<Divergence>,
 ) -> Result<(), MaterializeError> {
-    let abs = abs_under(target, rel);
-    let md = match stat_opt(&abs)? {
-        Some(m) => m,
-        None => {
-            out.push(Divergence {
-                path: rel.clone(),
-                reason: DivergeReason::ExpectedPresent,
-            });
-            return Ok(());
-        }
+    let abs = fold.resolve(target, rel)?;
+    let Some(md) = stat_opt(&abs)? else {
+        out.push(Divergence {
+            path: rel.clone(),
+            reason: DivergeReason::ExpectedPresent,
+        });
+        return Ok(());
     };
     let found_kind = classify_md(&md);
     if found_kind != exp.kind {
@@ -1177,6 +1300,7 @@ fn verify_subtree_matches_base(
     store: &Store,
     target: &Path,
     base: &Base<'_>,
+    fold: &NfcFoldCache,
     dir_path: &CompPath,
     dir_entry: &TreeEntry,
     out: &mut Vec<Divergence>,
@@ -1186,7 +1310,7 @@ fn verify_subtree_matches_base(
 
     // Walk live, checking each found path.
     let mut live_keys: HashSet<String> = HashSet::new();
-    let abs_dir = abs_under(target, dir_path);
+    let abs_dir = fold.resolve(target, dir_path)?;
     let mut stack = vec![abs_dir];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
@@ -1205,8 +1329,9 @@ fn verify_subtree_matches_base(
             };
             // Keys are NFC (manifest spelling); disk names may hold any
             // equivalent normalization on byte-preserving hosts. Leaf
-            // re-checks go through abs_under, which folds back to the LIVE
-            // spelling, so NFC keys stay honest here.
+            // re-checks go through the applier's NFC fold cache, which
+            // folds back to the LIVE spelling, so NFC keys stay honest
+            // here.
             let key = comp.nfc().collect::<String>();
             let mut rel = components_below(target, &dir);
             rel.push(key);
@@ -1227,7 +1352,7 @@ fn verify_subtree_matches_base(
                     path: rel,
                     reason: DivergeReason::ExpectedAbsent,
                 }),
-                Some(exp) => check_live_matches_leaf(target, &rel, exp, ft, store, out)?,
+                Some(exp) => check_live_matches_leaf(target, fold, &rel, exp, ft, store, out)?,
             }
         }
     }
@@ -1251,6 +1376,7 @@ fn verify_subtree_matches_base(
 #[allow(clippy::too_many_arguments)]
 fn check_live_matches_leaf(
     target: &Path,
+    fold: &NfcFoldCache,
     rel: &CompPath,
     exp: &ExpectedState,
     ft: std::fs::FileType,
@@ -1272,7 +1398,7 @@ fn check_live_matches_leaf(
         });
         return Ok(());
     }
-    check_live_matches(target, rel, exp, store, out)
+    check_live_matches(target, fold, rel, exp, store, out)
 }
 
 fn classify_opt(md: Option<std::fs::Metadata>) -> Result<Option<EntryKind>, MaterializeError> {
@@ -1367,6 +1493,28 @@ fn flatten_base_subtree(
 // Tree flattening / live walking
 // ---------------------------------------------------------------------------
 
+/// Walk a stored tree collecting `(path, mtime)` for every DIRECTORY so
+/// [`Applier::restore_dir_mtimes_from_tree`] can stamp them. Loads tree
+/// nodes through the store.
+fn collect_dir_mtimes(
+    store: &Store,
+    node_id: &BlobId,
+    prefix: CompPath,
+    out: &mut Vec<(CompPath, i64, u32)>,
+) -> Result<(), MaterializeError> {
+    let bytes = store.get(BlobKind::TreeNode, node_id)?;
+    let node = parse_tree_node(&bytes)?;
+    for e in &node.entries {
+        let mut path = prefix.clone();
+        path.push(e.name.clone());
+        if let EntryPayload::Dir { child_tree_id } = &e.payload {
+            out.push((path.clone(), e.mtime_sec, e.mtime_nsec));
+            collect_dir_mtimes(store, child_tree_id, path, out)?;
+        }
+    }
+    Ok(())
+}
+
 /// Flatten a stored tree into per-path desired states.
 fn flatten_tree(
     store: &Store,
@@ -1441,55 +1589,220 @@ fn walk_live(root: &Path) -> Result<Vec<CompPath>, MaterializeError> {
 /// filesystem will happily hold `anne` + U+0301 while every manifest says
 /// `ann\u{e9}` — files written by macOS-origin archives and zip tools are
 /// the classic case. A bare join then misses on those hosts: guards report
-/// phantom ExpectedPresent divergence, subtree verification invents
-/// ExpectedAbsent entries, and atomic renames would create a SECOND file
+/// phantom `ExpectedPresent` divergence, subtree verification invents
+/// `ExpectedAbsent` entries, and atomic renames would create a SECOND file
 /// beside the original.
 ///
 /// Each component therefore resolves in two steps: prefer the exact stored
-/// name; on a miss, fold the live directory once (NFC both sides) and adopt
-/// the live spelling. Genuine absences keep the stored form so creations
-/// land as NFC. Existence checks use symlink_metadata (no link-following).
-fn abs_under(root: &Path, rel: &[String]) -> PathBuf {
-    let mut cur = root.to_path_buf();
-    for comp in rel {
-        let direct = cur.join(comp);
-        if std::fs::symlink_metadata(&direct).is_ok() {
-            cur = direct;
-            continue;
-        }
-        match live_nfc_match(&cur, comp) {
-            Some(live) => cur = cur.join(live),
-            None => cur = direct,
+/// name; on a miss, consult the parent's NFC fold map (NFC both sides) and
+/// adopt the live spelling. Genuine absences keep the stored form so
+/// creations land as NFC. Existence checks use `symlink_metadata` (no
+/// link-following).
+///
+/// T-13: each parent's fold map is scanned at most ONCE per cache lifetime
+/// (one apply) instead of once per resolved component, removing the old
+/// O(paths * depth * dirsize) readdir amplification. The applier owns its
+/// own writes, so created/removed entries are recorded here directly and
+/// nothing else ever invalidates mid-apply.
+struct NfcFoldCache {
+    /// Parent directory -> NFC fold map (NFC key -> raw disk spellings).
+    /// Presence in this map means "scanned (or seeded) during this apply".
+    dirs: RefCell<HashMap<PathBuf, DirFold>>,
+    /// How many distinct parents were actually read from disk (test
+    /// observability for the at-most-one-readdir-per-parent guarantee).
+    scans: Cell<usize>,
+    /// What to do when a directory genuinely holds several spellings of
+    /// one NFC name. Applies refuse loudly ([`MaterializeError::
+    /// AmbiguousDiskSpelling`]); the read-only [`resolve_live`] helper
+    /// keeps the historical deterministic smallest-name pick because it
+    /// cannot return errors — the guarded apply that follows is what
+    /// refuses.
+    ambiguity: AmbiguityPolicy,
+}
+
+/// One directory's NFC fold: normalized key -> every raw spelling folding
+/// onto it (usually exactly one).
+type DirFold = HashMap<String, Vec<String>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AmbiguityPolicy {
+    Refuse,
+    PickSmallest,
+}
+
+impl NfcFoldCache {
+    fn refusing() -> Self {
+        NfcFoldCache {
+            dirs: RefCell::new(HashMap::new()),
+            scans: Cell::new(0),
+            ambiguity: AmbiguityPolicy::Refuse,
         }
     }
-    cur
+
+    fn lenient() -> Self {
+        NfcFoldCache {
+            ambiguity: AmbiguityPolicy::PickSmallest,
+            ..NfcFoldCache::refusing()
+        }
+    }
+
+    /// Drop everything: a new apply must not inherit stale listings.
+    fn clear(&self) {
+        self.dirs.borrow_mut().clear();
+        self.scans.set(0);
+    }
+
+    /// Directories actually read from disk so far.
+    #[cfg(test)]
+    fn scanned_dirs(&self) -> usize {
+        self.scans.get()
+    }
+
+    /// Resolve a full component path under `root`.
+    fn resolve(&self, root: &Path, rel: &[String]) -> Result<PathBuf, MaterializeError> {
+        let mut cur = root.to_path_buf();
+        for comp in rel {
+            let direct = cur.join(comp);
+            if std::fs::symlink_metadata(&direct).is_ok() {
+                cur = direct;
+                continue;
+            }
+            match self.match_live(&cur, comp)? {
+                Some(live) => cur = cur.join(live),
+                None => cur = direct,
+            }
+        }
+        Ok(cur)
+    }
+
+    /// Fold-match one component against one parent, scanning that parent
+    /// from disk at most once per cache lifetime.
+    fn match_live(&self, dir: &Path, want: &str) -> Result<Option<String>, MaterializeError> {
+        let want_nfc: String = want.nfc().collect();
+        if let Some(fold) = self.dirs.borrow().get(dir) {
+            return pick(fold, dir, &want_nfc, self.ambiguity);
+        }
+        let fold = scan_dir_fold(dir);
+        self.scans.set(self.scans.get() + 1);
+        self.dirs.borrow_mut().insert(dir.to_path_buf(), fold);
+        let dirs = self.dirs.borrow();
+        pick(&dirs[dir], dir, &want_nfc, self.ambiguity)
+    }
+
+    /// Record an entry THIS apply just created: the cache stays exact
+    /// without re-reading anything.
+    fn note_created_at(&self, entry_abs: &Path) {
+        let Some(parent) = entry_abs.parent() else {
+            return;
+        };
+        let Some(name) = entry_abs.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        let nfc: String = name.nfc().collect();
+        let mut dirs = self.dirs.borrow_mut();
+        let bucket = dirs
+            .entry(parent.to_path_buf())
+            .or_default()
+            .entry(nfc)
+            .or_default();
+        // Never duplicate within a bucket: two identical spellings are one
+        // entry, not an ambiguity.
+        if !bucket.iter().any(|n| n == name) {
+            bucket.push(name.to_string());
+        }
+    }
+
+    /// Record an entry THIS apply just removed. Deep removals also drop
+    /// every cached sub-map beneath the removed directory, so recreated
+    /// subtrees never resurrect deleted names.
+    ///
+    /// Windows long-path prefixed paths do not string-prefix-match their
+    /// unprefixed cache keys; there the sub-map sweep is skipped and only
+    /// an extra rescan can occur (never a wrong answer).
+    fn note_removed(&self, entry_abs: &Path, deep: bool) {
+        let Some(parent) = entry_abs.parent() else {
+            return;
+        };
+        let Some(name) = entry_abs.file_name().and_then(|n| n.to_str()) else {
+            return;
+        };
+        let nfc: String = name.nfc().collect();
+        let mut dirs = self.dirs.borrow_mut();
+        if deep {
+            dirs.retain(|cached, _| !cached.starts_with(entry_abs));
+        }
+        if let Some(fold) = dirs.get_mut(parent) {
+            if let Some(bucket) = fold.get_mut(&nfc) {
+                bucket.retain(|n| n != name);
+                if bucket.is_empty() {
+                    fold.remove(&nfc);
+                }
+            }
+        }
+    }
 }
 
-/// [`abs_under`] for callers outside this crate that must agree with the
-/// applier about where a stored path lives on disk. The sync engine's
-/// quarantine pre-verify reads the loser's live file BEFORE any guarded
-/// apply runs; a bare join there missed NFD-on-disk spellings on
-/// byte-preserving Linux filesystems and reported phantom ExpectedPresent
-/// divergences the applier would never have produced.
-pub fn resolve_live(root: &Path, rel: &[String]) -> PathBuf {
-    abs_under(root, rel)
-}
-
-/// One readdir, NFC-compared against `want`. Deterministic on pathological
-/// trees holding several spellings of one name: smallest raw name wins.
-fn live_nfc_match(dir: &Path, want: &str) -> Option<String> {
-    let want_nfc: String = want.nfc().collect();
-    let mut best: Option<String> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+/// One readdir over `dir`, grouped by NFC fold. An unreadable directory
+/// yields an empty map (cached, so a broken parent costs one scan per
+/// apply). Non-UTF-8 names are skipped: they cannot become components.
+fn scan_dir_fold(dir: &Path) -> DirFold {
+    let mut fold = DirFold::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return fold;
+    };
+    for entry in rd.flatten() {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let nfc: String = name.nfc().collect();
-        if nfc == want_nfc && best.as_ref().is_none_or(|b| name < *b) {
-            best = Some(name);
+        fold.entry(name.nfc().collect::<String>())
+            .or_default()
+            .push(name);
+    }
+    fold
+}
+
+/// Choose the live spelling for one NFC key out of a directory's fold map.
+/// Exactly one spelling adopts it; several mean the directory genuinely
+/// holds duplicate normalizations, which [`AmbiguityPolicy`] turns into
+/// either a loud typed error or the deterministic smallest raw name.
+fn pick(
+    fold: &DirFold,
+    dir: &Path,
+    want_nfc: &str,
+    policy: AmbiguityPolicy,
+) -> Result<Option<String>, MaterializeError> {
+    match fold.get(want_nfc).map(Vec::as_slice) {
+        None | Some([]) => Ok(None),
+        Some([only]) => Ok(Some(only.clone())),
+        Some(many) => {
+            let mut names = many.to_vec();
+            names.sort();
+            match policy {
+                AmbiguityPolicy::Refuse => Err(MaterializeError::AmbiguousDiskSpelling {
+                    parent: dir.to_string_lossy().into_owned(),
+                    first: names[0].clone(),
+                    second: names[1].clone(),
+                }),
+                AmbiguityPolicy::PickSmallest => Ok(Some(names.remove(0))),
+            }
         }
     }
-    best
+}
+
+/// [`NfcFoldCache::resolve`] for callers outside this crate that must agree
+/// with the applier about where a stored path lives on disk. The sync
+/// engine's quarantine pre-verify reads the loser's live file BEFORE any
+/// guarded apply runs; a bare join there missed NFD-on-disk spellings on
+/// byte-preserving Linux filesystems and reported phantom `ExpectedPresent`
+/// divergences the applier would never have produced.
+///
+/// Read-only and infallible by contract, so a fresh one-shot cache is used
+/// and genuine duplicate spellings fall back to the historical smallest-
+/// name pick here; the guarded apply is what refuses them loudly (T-13).
+pub fn resolve_live(root: &Path, rel: &[String]) -> PathBuf {
+    NfcFoldCache::lenient()
+        .resolve(root, rel)
+        .unwrap_or_else(|_| root.join(rel.iter().collect::<PathBuf>()))
 }
 
 fn components_below(root: &Path, dir: &Path) -> Vec<String> {
@@ -1582,7 +1895,7 @@ pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), Materia
         })?;
     let ts = libc::timespec {
         tv_sec: sec as libc::time_t,
-        tv_nsec: nsec as libc::c_long,
+        tv_nsec: libc::c_long::from(nsec),
     };
     let times = [ts, ts];
     // SAFETY: path is NUL-terminated; times points at two initialized
@@ -1601,10 +1914,13 @@ pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), Materia
     Ok(())
 }
 
-/// Non-unix builds cannot set link times (no std API without following);
-/// callers record the drift and the next full apply repairs it by link
-/// recreation on hosts that support it. Documented platform deviation.
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn set_symlink_times(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
+    let ft = filetime::FileTime::from_unix_time(sec, nsec);
+    filetime::set_symlink_file_times(path, ft, ft).map_err(|e| io_at(path, e))
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn set_symlink_times(_path: &Path, _sec: i64, _nsec: u32) -> Result<(), MaterializeError> {
     Ok(())
 }
@@ -1622,8 +1938,10 @@ fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
             .read(true)
             .open(path)
             .map_err(|e| io_at(path, e))?;
-        f.set_times(std::fs::FileTimes::new().set_modified(system_time(sec, nsec)))
-            .map_err(|e| io_at(path, e))
+        f.set_times(
+            std::fs::FileTimes::new().set_modified(ferry_platform::time::join_unix(sec, nsec)),
+        )
+        .map_err(|e| io_at(path, e))
     }
     #[cfg(not(unix))]
     {
@@ -1637,30 +1955,6 @@ fn set_mtime(path: &Path, sec: i64, nsec: u32) -> Result<(), MaterializeError> {
 
 /// (sec, nsec) with nsec normalized non-negative, matching the manifest's
 /// pre-1970 convention.
-pub(crate) fn split_unix_time(t: SystemTime) -> (i64, u32) {
-    match t.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
-        Err(e) => {
-            let d = e.duration();
-            if d.subsec_nanos() == 0 {
-                (-(d.as_secs() as i64), 0)
-            } else {
-                (-(d.as_secs() as i64) - 1, 1_000_000_000 - d.subsec_nanos())
-            }
-        }
-    }
-}
-
-/// Inverse of [`split_unix_time`].
-pub(crate) fn system_time(sec: i64, nsec: u32) -> SystemTime {
-    let total = sec as i128 * 1_000_000_000 + nsec as i128;
-    if total >= 0 {
-        SystemTime::UNIX_EPOCH + Duration::from_nanos(total as u64)
-    } else {
-        SystemTime::UNIX_EPOCH - Duration::from_nanos((-total) as u64)
-    }
-}
-
 #[cfg(unix)]
 fn fsync_dir(dir: &Path) -> Result<(), MaterializeError> {
     match std::fs::File::open(dir) {
@@ -1737,7 +2031,11 @@ fn content_matches(
 /// Traversal defense: stored names are single NFC components. Reserved
 /// Windows device names are rejected here too — they can never materialize
 /// on a Windows endpoint, so carrying them further only delays a loud,
-/// actionable failure (T-012 policy).
+/// actionable failure (T-012 policy). Colon-bearing or prefixed components
+/// ("C:x", "C:\\x", absolute paths) are refused on every host: on Windows,
+/// `PathBuf::push` with such a component replaces the whole base, so a
+/// remote manifest could escape the synced root via NFC path resolution
+/// (T-17).
 pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeError> {
     for c in path {
         if c.is_empty()
@@ -1746,6 +2044,14 @@ pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeErro
             || c.contains('/')
             || c.contains('\\')
             || c.contains('\0')
+            || c.contains(':')
+            // Stable stand-in for the nightly-only Path::prefix: any
+            // leading Prefix/RootDir/CurDir component means this is not a
+            // plain single component (drive-relative "C:x" included).
+            || !matches!(
+                std::path::Path::new(c).components().next(),
+                Some(std::path::Component::Normal(_))
+            )
         {
             return Err(MaterializeError::BadComponent {
                 component: c.clone(),
@@ -1777,7 +2083,7 @@ pub(crate) fn ensure_no_fold_collisions(paths: &[CompPath]) -> Result<(), Materi
         per_parent
             .entry(parent)
             .or_default()
-            .push(name.first().map(String::as_str).unwrap_or(""));
+            .push(name.first().map_or("", String::as_str));
     }
     let mut parents: Vec<&[String]> = per_parent.keys().copied().collect();
     parents.sort(); // deterministic error order
@@ -1843,6 +2149,7 @@ mod tests {
     /// ordered chunk list for a manifest entry.
     fn chunked(w: &World, bytes: &[u8]) -> Vec<(BlobId, u64)> {
         chunk(w.poly, bytes)
+            .expect("fixture poly valid")
             .iter()
             .map(|b| (w.store.put_data(b).unwrap(), b.len() as u64))
             .collect()
@@ -1887,7 +2194,7 @@ mod tests {
     }
 
     fn mtime_of(md: &std::fs::Metadata) -> (i64, u32) {
-        split_unix_time(md.modified().unwrap())
+        ferry_platform::split_unix(md.modified().unwrap())
     }
 
     // NTFS stores FILETIMEs in 100ns units: sub-100ns digits cannot survive
@@ -1959,7 +2266,7 @@ mod tests {
             assert!(live_exec(&md), "exec flag restored");
         }
         assert_eq!(mtime_of(&md), MT_B); // No temp files left behind.
-        assert!(std::fs::read_dir(&target).unwrap().count() == 1);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
     }
 
     #[test]
@@ -1992,7 +2299,7 @@ mod tests {
         );
         let stats = Applier::new(&w.store, &target).apply_tree(&v2).unwrap();
         assert_eq!(stats.files_written, 2);
-        assert!(stats.creations == ["off.bin", "on.bin"]);
+        assert_eq!(stats.creations, ["off.bin", "on.bin"]);
         assert!(!live_exec(&md_of(&target, &["on.bin"])));
         assert!(live_exec(&md_of(&target, &["off.bin"])));
     }
@@ -2494,7 +2801,7 @@ mod tests {
     fn traversal_defense_rejects_bad_stored_components() {
         let (w, target) = World::new(13);
 
-        for bad in ["..", ".", "a/b", "a\\b", ""] {
+        for bad in ["..", ".", "a/b", "a\\b", "", "C:x", "C:\\x", "a:b", "/abs"] {
             let cs = ChangeSet {
                 added: vec![Added {
                     path: vec![bad.to_string()],
@@ -2636,7 +2943,9 @@ mod tests {
     }
 
     #[test]
-    fn unix_time_helpers_round_trip_pre1970() {
+    fn shared_clock_helpers_round_trip_pre1970() {
+        // Guards the ferry-platform clock helpers this applier depends on
+        // for every mtime it writes and plans against.
         for (sec, nsec) in [
             (0i64, 0u32),
             // Stay within NS_GRAN: windows SystemTime is FILETIME-backed
@@ -2646,8 +2955,8 @@ mod tests {
             (-1, 500_000_000),
             (-5_000_000_000, 1 / NS_GRAN * NS_GRAN),
         ] {
-            let t = system_time(sec, nsec);
-            assert_eq!(split_unix_time(t), (sec, nsec), "({sec},{nsec})");
+            let t = ferry_platform::time::join_unix(sec, nsec);
+            assert_eq!(ferry_platform::split_unix(t), (sec, nsec), "({sec},{nsec})");
         }
     }
 
@@ -2667,7 +2976,7 @@ mod tests {
             entries.push(file_entry(
                 &name,
                 exec,
-                MT_A.0 + i as i64,
+                MT_A.0 + i64::from(i),
                 // Keep generated nsec within the platform's storable
                 // granularity so replans see a stable value.
                 (MT_A.1 + i as u32 * NS_GRAN) % 1_000_000_000,
@@ -2748,6 +3057,104 @@ mod tests {
         // A repeat apply is a full no-op: target AND times now match.
         let again = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
         assert_eq!(again.mutations(), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn identical_symlink_with_drifted_own_mtime_gets_times_restored() {
+        // T-05 port from the deleted inline materializer: an identical link is kept, but
+        // its OWN recorded mtime must be refreshed — otherwise
+        // metadata_modified-only link drift never converges.
+        let (w, target) = World::new(34);
+        let root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![symlink_entry("lnk", MT_B.0, MT_B.1, "elsewhere")],
+            },
+        );
+        Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+
+        // Sabotage: same target, wrong link mtime.
+        std::fs::remove_file(target.join("lnk")).unwrap();
+        std::os::unix::fs::symlink("elsewhere", target.join("lnk")).unwrap();
+        let drifted = md_of(&target, &["lnk"]).modified().unwrap();
+        assert_ne!(
+            ferry_platform::split_unix(drifted),
+            MT_B,
+            "sabotage must take effect"
+        );
+
+        let stats = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(
+            stats.symlinks_written, 0,
+            "identical link must NOT be recreated"
+        );
+        assert_eq!(stats.mtimes_set, 1, "only the link's own times restored");
+        let (sec, nsec) = ferry_platform::split_unix(md_of(&target, &["lnk"]).modified().unwrap());
+        assert_eq!((sec, nsec), MT_B);
+
+        // And now fully settled: another run is a no-op.
+        let s3 = Applier::new(&w.store, &target).apply_tree(&root).unwrap();
+        assert_eq!(s3.mutations(), 0);
+    }
+
+    #[test]
+    fn session_change_set_restores_ancestor_dir_mtimes_absent_from_the_change_set() {
+        // T-05 port of the deleted inline materializer's phase 3: the change set adds ONLY
+        // a deep file; its ancestor directory appears nowhere yet carries
+        // the donor's moved mtime, which apply_session_change_set must
+        // stamp from the target tree.
+        //
+        // Windows FILETIME stores 100ns units: sub-NS_GRAN digits cannot
+        // survive the set_mtime/read-back round trip, so the planted pair
+        // is quantized exactly like MT_A/MT_B.
+        let inner_mt: (i64, u32) = (111, 222 / NS_GRAN * NS_GRAN);
+        let (w, target) = World::new(35);
+
+        let leaf_id = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![wfile("deep.txt", &w, b"", false, (7, 7))],
+            },
+        );
+        let target_root = tree_id(
+            &w,
+            &TreeNode {
+                entries: vec![dir_entry("inner", inner_mt.0, inner_mt.1, leaf_id)],
+            },
+        );
+
+        // Hand-built change set: the ancestor dir is deliberately missing,
+        // exactly like a real diff — adding a file inside an EXISTING dir
+        // reports only the leaf; the dir's own mtime move is never
+        // reported. On disk the ancestor already exists (base state).
+        std::fs::create_dir_all(target.join("inner")).unwrap();
+        let cs = ChangeSet {
+            added: vec![Added {
+                path: vec!["inner".into(), "deep.txt".into()],
+                state: EntryState {
+                    kind: EntryKind::File,
+                    exec: false,
+                    mtime_sec: 7,
+                    mtime_nsec: 7,
+                    chunks: vec![],
+                    target: None,
+                },
+            }],
+            ..Default::default()
+        };
+
+        let mut ap = Applier::new(&w.store, &target);
+        ap.apply_session_change_set(&cs, &target_root).unwrap();
+
+        let (sec, nsec) =
+            ferry_platform::split_unix(md_of(&target, &["inner"]).modified().unwrap());
+        assert_eq!(
+            (sec, nsec),
+            inner_mt,
+            "ancestor dir mtime comes from the offered tree"
+        );
+        assert_eq!(read_target(&target, &["inner/deep.txt"]), b"");
     }
 
     #[test]
@@ -2875,7 +3282,10 @@ mod tests {
         // already succeeds and this passes trivially.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("rapport-anne\u{301}e.md"), b"x").unwrap();
-        let p = abs_under(dir.path(), &["rapport-ann\u{e9}e.md".to_string()]);
+        let fold = NfcFoldCache::refusing();
+        let p = fold
+            .resolve(dir.path(), &["rapport-ann\u{e9}e.md".to_string()])
+            .unwrap();
         assert!(
             std::fs::symlink_metadata(&p).is_ok(),
             "NFC manifest name must resolve onto the NFD disk file"
@@ -2883,6 +3293,256 @@ mod tests {
         // Byte-preserving hosts additionally get the LIVE spelling back
         // (so renames replace in place); folding hosts may return the
         // stored form — the OS folds either way.
+    }
+
+    // ---- T-13: NFC fold cache + loud duplicate spellings -------------------
+
+    #[test]
+    fn m_children_of_one_parent_cost_at_most_one_read_dir() {
+        // Cache observability: `scanned_dirs` counts parents actually read
+        // from disk, so M resolutions under one parent must move it by at
+        // most 1 — including the absent-name probe that forces a real
+        // fold scan on every host.
+        let dir = tempfile::tempdir().unwrap();
+        const M: usize = 16;
+        for i in 0..M {
+            std::fs::write(dir.path().join(format!("child-{i:02}.txt")), b"x").unwrap();
+        }
+        let mut paths: Vec<Vec<String>> =
+            (0..M).map(|i| vec![format!("child-{i:02}.txt")]).collect();
+        // An absent sibling forces a fold-map scan even where every exact
+        // stat above hit; absence keeps the stored form.
+        paths.push(vec!["never-written.txt".into()]);
+        // A nested path shares only the root parent so far.
+        paths.push(vec!["missing-dir".into(), "deep.txt".into()]);
+        // ...and creating it must not add scans for its own parent either:
+        // entries the applier creates go into the cache without readdir.
+
+        let fold = NfcFoldCache::refusing();
+        for p in &paths {
+            fold.resolve(dir.path(), p).unwrap();
+        }
+        assert_eq!(
+            fold.scanned_dirs(),
+            2,
+            "root scanned once, missing-dir once; never per-child"
+        );
+
+        // Repeat resolutions are free: everything is already cached.
+        for p in &paths {
+            fold.resolve(dir.path(), p).unwrap();
+        }
+        assert_eq!(fold.scanned_dirs(), 2);
+    }
+
+    #[test]
+    fn applier_created_entries_enter_the_cache_without_a_rescan() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("fresh")).unwrap();
+        let fold = NfcFoldCache::refusing();
+
+        // Warm both parents (one scan each: root via the absent probe,
+        // fresh/ via the nested probe's second component).
+        fold.resolve(dir.path(), &["probe".into()]).unwrap();
+        fold.resolve(dir.path(), &["fresh".into(), "probe".into()])
+            .unwrap();
+        assert_eq!(fold.scanned_dirs(), 2);
+
+        // The applier creates entries mid-apply and records them directly.
+        std::fs::write(dir.path().join("new.txt"), b"x").unwrap();
+        fold.note_created_at(&dir.path().join("new.txt"));
+        let inner_abs = dir.path().join("fresh").join("inner");
+        std::fs::create_dir(&inner_abs).unwrap();
+        fold.note_created_at(&inner_abs);
+
+        {
+            let dirs = fold.dirs.borrow();
+            let root_fold = &dirs[dir.path()];
+            assert_eq!(
+                root_fold.get("new.txt").map(Vec::as_slice),
+                Some(&["new.txt".to_string()][..])
+            );
+            let fresh_fold = &dirs[&dir.path().join("fresh")];
+            assert_eq!(
+                fresh_fold.get("inner").map(Vec::as_slice),
+                Some(&["inner".to_string()][..])
+            );
+        }
+        assert_eq!(fold.scanned_dirs(), 2, "no rescan to learn our own writes");
+    }
+
+    #[test]
+    fn applier_removed_entries_leave_the_cache_and_deep_removal_drops_submaps() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("gone/inside")).unwrap();
+        std::fs::write(dir.path().join("gone/inside/deep.txt"), b"d").unwrap();
+        std::fs::write(dir.path().join("stay.txt"), b"s").unwrap();
+        let fold = NfcFoldCache::refusing();
+
+        // Warm both maps via absent probes (exact names would hit their
+        // stats and never populate the cache).
+        fold.resolve(dir.path(), &["probe".into()]).unwrap();
+        fold.resolve(dir.path(), &["gone".into(), "probe".into()])
+            .unwrap();
+        {
+            let dirs = fold.dirs.borrow();
+            assert!(dirs.contains_key(&dir.path().join("gone")));
+            assert!(dirs[dir.path()].contains_key("stay.txt"));
+        }
+
+        // Deep removal of gone/: its own bucket entry AND every cached
+        // sub-map beneath it must vanish.
+        fold.note_removed(&dir.path().join("gone"), true);
+        let dirs = fold.dirs.borrow();
+        assert!(
+            !dirs.contains_key(&dir.path().join("gone")),
+            "sub-maps of a removed subtree are dropped"
+        );
+        assert!(
+            dirs[dir.path()]
+                .get("gone")
+                .is_none_or(std::vec::Vec::is_empty),
+            "the removed name leaves the parent's fold map"
+        );
+        assert!(dirs[dir.path()].contains_key("stay.txt"));
+    }
+
+    #[test]
+    fn duplicate_spellings_refuse_loudly_instead_of_lexicographic_min() {
+        // Portable unit proof of the pick policy: one directory map holds
+        // two raw spellings folding to the same NFC key ("café.txt").
+        let mut fold_map: DirFold = HashMap::new();
+        let want_nfc: String = "caf\u{e9}.txt".nfc().collect();
+        fold_map.insert(
+            want_nfc.clone(),
+            vec!["caf\u{e9}.txt".to_string(), "cafe\u{301}.txt".to_string()],
+        );
+
+        let err = pick(
+            &fold_map,
+            Path::new("/target"),
+            &want_nfc,
+            AmbiguityPolicy::Refuse,
+        )
+        .unwrap_err();
+        match err {
+            MaterializeError::AmbiguousDiskSpelling {
+                parent,
+                first,
+                second,
+            } => {
+                assert_eq!(parent, "/target");
+                let mut both = [first, second];
+                both.sort();
+                assert_eq!(both[0], "cafe\u{301}.txt");
+                assert_eq!(both[1], "caf\u{e9}.txt");
+            }
+            other => panic!("wrong error: {other}"),
+        }
+
+        // The lenient read-only helper keeps the deterministic smallest
+        // pick (documented deviation for resolve_live's infallible API).
+        let got = pick(
+            &fold_map,
+            Path::new("/target"),
+            &want_nfc,
+            AmbiguityPolicy::PickSmallest,
+        )
+        .unwrap();
+        assert_eq!(got.as_deref(), Some("cafe\u{301}.txt"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn ambiguous_disk_spellings_produce_the_typed_error_via_resolve() {
+        // Real byte-preserving-disk fixture: two names that both NFC-fold
+        // to "\u{c5}.txt" (decomposed a+ring and the ANGSTROM SIGN), with
+        // the composed spelling itself ABSENT — exactly the case where the
+        // old resolver silently picked the lexicographically smaller one.
+        let dir = tempfile::tempdir().unwrap();
+        let nfd = dir.path().join("a\u{30a}.txt");
+        let singleton = dir.path().join("\u{212b}.txt");
+        std::fs::write(&nfd, b"one").unwrap();
+        std::fs::write(&singleton, b"two").unwrap();
+
+        // Premise check: this proof needs a byte-preserving host. A host
+        // whose temp filesystem merges NFC-equivalent spellings into one
+        // file leaves only one entry to scan, and there is nothing for the
+        // resolver to find ambiguous. The pick POLICY stays covered by
+        // `duplicate_spellings_refuse_loudly_instead_of_lexicographic_min`
+        // (pure in-memory DirFold), so skipping here loses no coverage of
+        // the resolver logic itself.
+        let distinct = match (
+            std::fs::symlink_metadata(&nfd),
+            std::fs::symlink_metadata(&singleton),
+        ) {
+            (Ok(a), Ok(b)) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    a.ino() != b.ino()
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            }
+            _ => false,
+        };
+        if !distinct {
+            eprintln!(
+                "skipping: host temp filesystem merges NFC-equivalent spellings \
+                 (no byte-preserving fixture possible here)"
+            );
+            return;
+        }
+        // A normalization-insensitive host can preserve bytes AND still
+        // resolve the composed spelling through a bare join at lookup time;
+        // there the ambiguity scenario cannot be constructed via disk (the
+        // direct hit wins before any fold-map consult).
+        if std::fs::symlink_metadata(dir.path().join("\u{c5}.txt")).is_ok() {
+            eprintln!(
+                "skipping: host resolves NFC-equivalent lookups natively \
+                 (ambiguity not constructible on this filesystem)"
+            );
+            return;
+        }
+
+        // Self-verify the fixture: the host must present BOTH spellings
+        // under one NFC key to readdir. Anything else (merging, renaming,
+        // re-encoding) means the ambiguity scenario cannot be constructed
+        // here and there is nothing honest to assert about resolve().
+        let seen = scan_dir_fold(dir.path());
+        match seen.get("\u{c5}.txt").map(Vec::as_slice) {
+            Some([a, b])
+                if (a.as_str(), b.as_str()) == ("\u{212b}.txt", "a\u{30a}.txt")
+                    || (a.as_str(), b.as_str()) == ("a\u{30a}.txt", "\u{212b}.txt") => {}
+            other => {
+                eprintln!(
+                    "skipping: host did not present both spellings under one NFC key \
+                     (saw {other:?}); resolver behavior unchanged by this environment"
+                );
+                return;
+            }
+        }
+
+        let fold = NfcFoldCache::refusing();
+        let err = fold
+            .resolve(dir.path(), &["\u{c5}.txt".to_string()])
+            .unwrap_err();
+        match err {
+            MaterializeError::AmbiguousDiskSpelling { first, second, .. } => {
+                let mut both = [first, second];
+                both.sort();
+                assert_eq!(both[0], "a\u{30a}.txt");
+                assert_eq!(both[1], "\u{212b}.txt");
+            }
+            other => panic!("wrong error: {other}"),
+        }
+
+        // And the lenient helper still resolves deterministically.
+        let p = resolve_live(dir.path(), &["\u{c5}.txt".to_string()]);
+        assert_eq!(p.file_name().and_then(|n| n.to_str()), Some("a\u{30a}.txt"));
     }
 
     #[test]

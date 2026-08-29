@@ -26,9 +26,9 @@
 //!
 //! | Platform | Native mechanism            | Recursion   | Loss signal                          | Response in this crate                                              |
 //! |----------|-----------------------------|-------------|--------------------------------------|---------------------------------------------------------------------|
-//! | macOS    | FSEvents                    | native      | coalescing/history drops surface as synthetic events or errors | unclassifiable loss => full rescan; root liveness checked on every poll tick |
+//! | macOS    | `FSEvents`                    | native      | coalescing/history drops surface as synthetic events or errors | unclassifiable loss => full rescan; root liveness checked on every poll tick |
 //! | Linux    | inotify (one watch per dir) | notify adds per-directory watches | `IN_Q_OVERFLOW` (queue) or `ENOSPC`/`EMFILE`/`ENFILE` from watch registration | queue overflow => full rescan; registration failure => mark that subtree **unwatchable** and start poll fallback at `ScanConfig::poll_interval` (default 10 s) |
-//! | Windows  | ReadDirectoryChangesW       | native      | fixed buffer overrun (`ERROR_NOTIFY_ENUM_DIR`) discards events | surfaces as an error/overflow marker => full rescan                  |
+//! | Windows  | `ReadDirectoryChangesW`       | native      | fixed buffer overrun (`ERROR_NOTIFY_ENUM_DIR`) discards events | surfaces as an error/overflow marker => full rescan                  |
 //!
 //! Two rules hold everywhere:
 //!
@@ -75,7 +75,7 @@ pub mod walk;
 pub use config::ScanConfig;
 pub use engine::{CurrentScan, ScanEngine, ScanEvent, ScanRun, StoreHandle};
 pub use error::ScanError;
-pub use ignore::{IgnorePolicy, NoIgnores};
+pub use ignore::{EntryKind, IgnorePolicy, NoIgnores};
 pub use normalize::{canonical_tree_id, equivalent_modulo_mtime};
 pub use policy::{Action, PolicyState, RelPath, Trigger, WatchSignal};
 pub use walk::{PassStats, ScanOutput};

@@ -10,12 +10,14 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::lock::lock;
+
 use ferry_sync::transport::{
-    Connection as DynConnection, Listener as DynListener, MAX_FRAME_BYTES,
+    Connection as DynConnection, Listener as DynListener, PeerId, MAX_FRAME_BYTES,
 };
 use ferry_sync::Transport;
 use iroh::endpoint::{presets, Connection as IrohConn};
@@ -23,7 +25,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, TransportAddr, Watcher
 use tokio::runtime::{Handle, Runtime};
 
 use crate::config::{IrohConfig, RelaySetting};
-use crate::directory::Route;
+use crate::directory::{Route, RouteTable};
 use crate::FERRY_ALPN;
 
 /// Where accepted/dialed connections' path choices get recorded, per peer.
@@ -53,7 +55,7 @@ impl PathObservation {
 pub enum DialFailure {
     /// No route registered for this alias.
     NoRoute(SocketAddr),
-    /// Refusing to connect to ourselves (engine shutdown probes do this).
+    /// Refusing to connect to ourselves.
     SelfDial,
     /// The route resolved, but no usable path appeared in time.
     Timeout,
@@ -86,19 +88,16 @@ struct Inner {
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
-    /// Set by a self-dial (the M0 engine's shutdown probe): the next
-    /// accept() returns a clean-EOF connection instead of waiting, exactly
-    /// like dialing your own TCP listener unblocks its accept.
-    wake: AtomicBool,
-    /// Relay URLs from config. Attached to dialed EndpointAddrs so
+    /// Relay URLs from config. Attached to dialed `EndpointAddrs` so
     /// key-only dialing can resolve through OUR relay (deployment rule:
     /// peers we sync with are clients of the same self-hosted relay).
     relay_urls: Vec<iroh::RelayUrl>,
+    routes: RouteTable,
 }
 
 impl Inner {
     fn observe(&self, id: EndpointId) -> Arc<PathObservation> {
-        let mut map = self.observations.lock().unwrap();
+        let mut map = lock(&self.observations);
         map.entry(*id.as_bytes())
             .or_insert_with(|| Arc::new(PathObservation::default()))
             .clone()
@@ -120,21 +119,6 @@ impl std::fmt::Debug for IrohTransport {
                 &crate::identity::id_short(self.inner.my_id.as_bytes()),
             )
             .finish_non_exhaustive()
-    }
-}
-
-/// Synthesized ports for `listen("127.0.0.1:0")`: route keys must be unique
-/// per process and stable after resolution, but no socket binds there.
-static SYNTH_PORT: AtomicU16 = AtomicU16::new(45601);
-
-fn next_synth_key(ip: std::net::IpAddr) -> SocketAddr {
-    loop {
-        let cur = SYNTH_PORT.fetch_add(1, Ordering::SeqCst);
-        let port = 45601 + (cur % 4000);
-        let key = SocketAddr::new(ip, port);
-        if crate::directory::resolve_route(&key).is_none() {
-            return key;
-        }
     }
 }
 
@@ -160,6 +144,7 @@ impl IrohTransport {
             RelaySetting::Custom(urls) => urls.iter().filter_map(|u| u.parse().ok()).collect(),
             _ => Vec::new(),
         };
+        let routes = cfg.routes.unwrap_or_default();
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
@@ -169,16 +154,40 @@ impl IrohTransport {
                 dial_timeout: cfg.dial_timeout,
                 closed: AtomicBool::new(false),
                 observations: Mutex::new(HashMap::new()),
-                wake: AtomicBool::new(false),
                 relay_urls,
+                routes,
             }),
         })
     }
 
-    /// Register an explicit cross-process route before dialing it:
-    /// route-key → peer endpoint id (the daemon CLI builds these from
-    /// `--peer <hex>`).
+    /// Access this transport's route table.
+    pub fn routes(&self) -> &RouteTable {
+        &self.inner.routes
+    }
+
+    /// Access this transport's route table.
+    pub fn route_table(&self) -> &RouteTable {
+        &self.inner.routes
+    }
+
+    /// Register an explicit route for this transport instance:
+    /// route-key → peer endpoint id.
     pub fn with_route(&self, key: SocketAddr, endpoint_id: [u8; 32]) -> &Self {
+        let route = Route {
+            endpoint_id,
+            ip_hints: Vec::new(),
+        };
+        self.inner
+            .routes
+            .register_explicit_route(key, route.clone());
+        crate::directory::register_explicit_route(key, route);
+        self
+    }
+
+    /// Register a peer identity explicitly into this transport's route table,
+    /// returning a fresh synthesized route key.
+    pub fn register_peer(&self, endpoint_id: [u8; 32]) -> SocketAddr {
+        let key = self.inner.routes.register_peer(endpoint_id, Vec::new());
         crate::directory::register_explicit_route(
             key,
             Route {
@@ -186,12 +195,23 @@ impl IrohTransport {
                 ip_hints: Vec::new(),
             },
         );
-        self
+        key
     }
 
     /// This endpoint's public id — print it; peers dial by it.
     pub fn endpoint_id(&self) -> [u8; 32] {
         *self.inner.my_id.as_bytes()
+    }
+
+    /// Dial a peer directly by 32-byte public key identity.
+    pub fn dial_peer(&self, endpoint_id: &[u8; 32]) -> Result<Box<dyn DynConnection>, DialFailure> {
+        let hints = self
+            .inner
+            .routes
+            .resolve_peer(endpoint_id)
+            .map(|r| r.ip_hints)
+            .unwrap_or_default();
+        self.dial_endpoint(*endpoint_id, hints)
     }
 
     /// Dial straight by public key — the ADR-0003 primitive that alias
@@ -208,17 +228,7 @@ impl IrohTransport {
         let id = EndpointId::from_bytes(&endpoint_id)
             .map_err(|_| DialFailure::Connect("malformed endpoint id".into()))?;
         if id == self.inner.my_id {
-            // Self-probe (engine shutdown unblock). iroh refuses self-
-            // connects, so we reproduce TCP's observable behavior locally:
-            // the dialer gets a connection that reads as immediate clean
-            // EOF, and the listener's accept wakes with the same thing.
-            self.inner.wake.store(true, Ordering::SeqCst);
-            return Ok(Box::new(FramedConnection {
-                rt: self.inner.rt.handle().clone(),
-                conn: None,
-                send: Mutex::new(None),
-                recv: Mutex::new(None),
-            }));
+            return Err(DialFailure::SelfDial);
         }
         let mut addr = EndpointAddr::new(id);
         for h in hints {
@@ -265,9 +275,9 @@ impl IrohTransport {
         spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
             rt: self.inner.rt.handle().clone(),
-            conn: Some(conn),
-            send: Mutex::new(Some(send)),
-            recv: Mutex::new(Some(recv)),
+            conn,
+            send: Mutex::new(send),
+            recv: Mutex::new(recv),
         }))
     }
 
@@ -293,19 +303,13 @@ impl IrohTransport {
 }
 
 /// Direct-address hints for a freshly bound endpoint.
-///
-/// `bound_sockets()` reports wildcard binds (`0.0.0.0:P`), which are
-/// useless as dial targets. Convert to dialable loopback addresses on the
-/// bound ports and add whatever concrete unicast addresses netwatch has
-/// reported so far. Loopback hints make same-host tests deterministic;
-/// real-LAN paths come from discovery or relays, not this list.
 fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for bound in ep.bound_sockets() {
         match bound {
             SocketAddr::V4(_) => out.push(SocketAddr::from(([127, 0, 0, 1], bound.port()))),
             SocketAddr::V6(_) => {
-                out.push(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], bound.port())))
+                out.push(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], bound.port())));
             }
         }
     }
@@ -366,41 +370,48 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
 fn spawn_path_sampler(handle: &Handle, conn: &IrohConn, obs: Arc<PathObservation>) {
     let conn = conn.clone();
     handle.spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_millis(50));
-        loop {
-            tokio::select! {
-                _ = tick.tick() => {
-                    for path in conn.paths().iter() {
-                        if path.is_selected() {
-                            if path.is_relay() {
-                                obs.selected_relay_seen.store(true, Ordering::SeqCst);
-                            }
-                            if path.is_ip() {
-                                obs.selected_ip_seen.store(true, Ordering::SeqCst);
-                            }
-                        }
-                    }
-                }
-                closed = conn.closed() => {
-                    let _ = closed;
-                    break;
-                }
-            }
-        }
+        // Observations are monotone latches: one sample at open, one final
+        // sample once the connection closes (post-upgrade state included),
+        // no polling in between.
+        latch_selected_paths(&conn, &obs);
+        let _ = conn.closed().await;
+        latch_selected_paths(&conn, &obs);
     });
 }
 
+fn latch_selected_paths(conn: &IrohConn, obs: &PathObservation) {
+    for path in conn.paths().iter() {
+        if path.is_selected() {
+            if path.is_relay() {
+                obs.selected_relay_seen.store(true, Ordering::SeqCst);
+            }
+            if path.is_ip() {
+                obs.selected_ip_seen.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Transport impl: alias dialing over explicit routes + the process directory.
+// Transport impl: alias dialing over explicit routes + the route table.
 // ---------------------------------------------------------------------------
 
 impl Transport for IrohTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn DynConnection>> {
-        let Some((route, _scope)) = crate::directory::resolve_route(&addr) else {
+        let route = self
+            .inner
+            .routes
+            .resolve_route(&addr)
+            .or_else(|| crate::directory::resolve_route(&addr));
+        let Some((route, _scope)) = route else {
             return Err(DialFailure::NoRoute(addr).into_io());
         };
         self.dial_endpoint(route.endpoint_id, route.ip_hints)
-            .map_err(|f| f.into_io())
+            .map_err(DialFailure::into_io)
+    }
+
+    fn dial_peer(&self, peer: &PeerId) -> io::Result<Box<dyn DynConnection>> {
+        self.dial_peer(peer).map_err(DialFailure::into_io)
     }
 
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn DynListener>> {
@@ -411,22 +422,21 @@ impl Transport for IrohTransport {
             ));
         }
         let key = if addr.port() == 0 {
-            next_synth_key(addr.ip())
+            self.inner.routes.next_synth_key(addr.ip())
         } else {
             addr
         };
-        // Publish ourselves so in-process dialers resolve this key to our
-        // public key + real bound sockets (as their address hints).
-        crate::directory::publish_route(
-            key,
-            Route {
-                endpoint_id: *self.inner.my_id.as_bytes(),
-                ip_hints: direct_hints(&self.inner.ep),
-            },
-        );
+        // Publish ourselves so dialers resolve this key to our public key + real bound sockets.
+        let route = Route {
+            endpoint_id: *self.inner.my_id.as_bytes(),
+            ip_hints: direct_hints(&self.inner.ep),
+        };
+        self.inner.routes.publish_route(key, route.clone());
+        crate::directory::publish_route(key, route);
         Ok(Box::new(IrohListener {
             inner: Arc::clone(&self.inner),
             key,
+            closed: Arc::new(AtomicBool::new(false)),
         }))
     }
 }
@@ -434,6 +444,7 @@ impl Transport for IrohTransport {
 struct IrohListener {
     inner: Arc<Inner>,
     key: SocketAddr,
+    closed: Arc<AtomicBool>,
 }
 
 impl DynListener for IrohListener {
@@ -441,31 +452,25 @@ impl DynListener for IrohListener {
         Ok(self.key)
     }
 
+    fn close(&self) -> io::Result<()> {
+        self.closed.store(true, Ordering::SeqCst);
+        let ep = self.inner.ep.clone();
+        let _ = self.inner.rt.block_on(async move {
+            tokio::time::timeout(Duration::from_millis(200), ep.close()).await
+        });
+        Ok(())
+    }
+
     fn accept(&self) -> io::Result<Box<dyn DynConnection>> {
-        // Poll the endpoint in short slices so engine shutdown cannot strand
-        // this call: TCP's accept unblocked via a self-connect probe, but
-        // iroh forbids connecting to your own EndpointId, so we watch the
-        // transport-closed flag between slices instead.
         loop {
-            if self.inner.closed.load(Ordering::SeqCst) {
+            if self.closed.load(Ordering::SeqCst) || self.inner.closed.load(Ordering::SeqCst) {
                 return Err(io_error(
                     io::ErrorKind::ConnectionAborted,
                     "listener closed".into(),
                 ));
             }
-            // Shutdown probe: surface a clean-EOF connection, mirroring
-            // what dialing your own TCP listener looks like to the M0
-            // accept loop.
-            if self.inner.wake.swap(false, Ordering::SeqCst) {
-                return Ok(Box::new(FramedConnection {
-                    rt: self.inner.rt.handle().clone(),
-                    conn: None,
-                    send: Mutex::new(None),
-                    recv: Mutex::new(None),
-                }));
-            }
             let next = self.inner.rt.block_on(async {
-                tokio::time::timeout(Duration::from_millis(100), self.inner.ep.accept()).await
+                tokio::time::timeout(Duration::from_millis(200), self.inner.ep.accept()).await
             });
             let incoming = match next {
                 Ok(Some(incoming)) => incoming,
@@ -473,12 +478,10 @@ impl DynListener for IrohListener {
                     return Err(io_error(
                         io::ErrorKind::ConnectionAborted,
                         "endpoint closed".into(),
-                    ))
+                    ));
                 }
                 Err(_elapsed) => continue,
             };
-            // Incoming::accept() is a sync step; the returned Accepting is
-            // the future that finishes the handshake.
             let conn = self.inner.rt.block_on(async {
                 match incoming.accept() {
                     Ok(accepting) => accepting
@@ -490,17 +493,6 @@ impl DynListener for IrohListener {
             let obs = self.inner.observe(conn.remote_id());
             spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
 
-            // A genuine inbound from ourselves is unexpected (iroh refuses
-            // self-connects), but if it ever appears treat it like a probe.
-            if conn.remote_id() == self.inner.my_id {
-                return Ok(Box::new(FramedConnection {
-                    rt: self.inner.rt.handle().clone(),
-                    conn: Some(conn),
-                    send: Mutex::new(None),
-                    recv: Mutex::new(None),
-                }));
-            }
-
             let streams = self
                 .inner
                 .rt
@@ -508,9 +500,9 @@ impl DynListener for IrohListener {
                 .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
                 rt: self.inner.rt.handle().clone(),
-                conn: Some(conn),
-                send: Mutex::new(Some(streams.0)),
-                recv: Mutex::new(Some(streams.1)),
+                conn,
+                send: Mutex::new(streams.0),
+                recv: Mutex::new(streams.1),
             }));
         }
     }
@@ -522,14 +514,10 @@ impl DynListener for IrohListener {
 
 struct FramedConnection {
     rt: Handle,
-    /// Held (never read) because dropping the iroh Connection closes the
-    /// underlying QUIC connection — this field IS the keepalive. `None` on
-    /// local probe connections (engine shutdown wakes), which carry no
-    /// stream and read as immediate clean EOF.
     #[allow(dead_code)]
-    conn: Option<IrohConn>,
-    send: Mutex<Option<iroh::endpoint::SendStream>>,
-    recv: Mutex<Option<iroh::endpoint::RecvStream>>,
+    conn: IrohConn,
+    send: Mutex<iroh::endpoint::SendStream>,
+    recv: Mutex<iroh::endpoint::RecvStream>,
 }
 
 fn io_error(kind: io::ErrorKind, msg: String) -> io::Error {
@@ -559,13 +547,7 @@ fn check_incoming_len(len: u32) -> io::Result<()> {
 impl DynConnection for FramedConnection {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         check_outgoing_len(payload.len())?;
-        let mut guard = self.send.lock().unwrap();
-        let Some(send) = guard.as_mut() else {
-            return Err(io_error(
-                io::ErrorKind::NotConnected,
-                "probe connection: no outbound stream".into(),
-            ));
-        };
+        let mut send = lock(&self.send);
         let len = (payload.len() as u32).to_le_bytes();
         self.rt.block_on(async {
             send.write_all(&len).await?;
@@ -577,15 +559,7 @@ impl DynConnection for FramedConnection {
     }
 
     fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut guard = self.recv.lock().unwrap();
-        let Some(recv) = guard.as_mut() else {
-            // Probe connections (engine shutdown dials to its own alias)
-            // carry no stream: a clean immediate EOF.
-            return Err(io_error(
-                io::ErrorKind::UnexpectedEof,
-                "peer closed cleanly".into(),
-            ));
-        };
+        let mut recv = lock(&self.recv);
         let mut len_buf = [0u8; 4];
         self.rt.block_on(async {
             match recv.read_exact(&mut len_buf).await {
@@ -595,16 +569,16 @@ impl DynConnection for FramedConnection {
                     return Err(io_error(
                         io::ErrorKind::UnexpectedEof,
                         "peer closed cleanly".into(),
-                    ))
+                    ));
                 }
                 Err(iroh::endpoint::ReadExactError::FinishedEarly(n)) => {
                     return Err(io_error(
                         io::ErrorKind::UnexpectedEof,
                         format!("peer closed mid-frame after {n} length bytes"),
-                    ))
+                    ));
                 }
                 Err(e @ iroh::endpoint::ReadExactError::ReadError(_)) => {
-                    return Err(io::Error::other(format!("recv: {e:#}")))
+                    return Err(io::Error::other(format!("recv: {e:#}")));
                 }
             }
             let len = u32::from_le_bytes(len_buf);

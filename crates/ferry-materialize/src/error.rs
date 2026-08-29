@@ -87,6 +87,8 @@ pub enum MaterializeError {
     Store(#[from] ferry_store::store::StoreError),
     #[error("manifest decode failed: {0}")]
     Manifest(#[from] ferry_store::manifest::ManifestError),
+    #[error("pin: {0}")]
+    Pin(String),
     #[error("refusing stored name component {component:?} (traversal defense)")]
     BadComponent { component: String },
     #[error("{path}: {source}")]
@@ -148,6 +150,16 @@ pub enum MaterializeError {
          picks silently)"
     )]
     CaseCollision {
+        parent: String,
+        first: String,
+        second: String,
+    },
+    #[error(
+        "ambiguous disk spelling in {parent}: {first:?} and {second:?} both normalize \
+         to the same stored name; remove one of them on disk before syncing (ferry \
+         never picks silently)"
+    )]
+    AmbiguousDiskSpelling {
         parent: String,
         first: String,
         second: String,

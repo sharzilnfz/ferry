@@ -23,7 +23,7 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -35,7 +35,7 @@ use notify::{Error as NotifyError, Event, RecommendedWatcher, RecursiveMode, Wat
 
 use crate::config::ScanConfig;
 use crate::error::ScanError;
-use crate::ignore::IgnorePolicy;
+use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{Action, PolicyState, RelPath, Trigger, WatchSignal};
 use crate::state::DirCache;
 use crate::walk::{close_under_ancestors, PassStats, Walker};
@@ -47,7 +47,9 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Clone)]
 pub struct StoreHandle {
     pub store: Arc<Store>,
-    pub poly: u64,
+    /// Validated once at handle construction (folder-open/config-load);
+    /// walkers can never hold an invalid polynomial.
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub device_id: [u8; 32],
 }
@@ -171,7 +173,41 @@ struct Parts {
     queue: Arc<SignalQueue>,
     core: Arc<Mutex<Core>>,
     current: Arc<RwLock<Option<Arc<CurrentScan>>>>,
-    subs: Arc<Mutex<Vec<Sender<ScanEvent>>>>,
+    subs: Arc<Mutex<Vec<Subscriber>>>,
+}
+
+/// Channel capacity per subscriber. Combined with the staged slot below,
+/// this caps retained snapshots at two per stalled consumer regardless of
+/// how many passes complete while it never receives.
+const SUB_CHANNEL_BOUND: usize = 1;
+
+/// One live subscriber: a capacity-bounded channel plus a single staged
+/// slot holding the newest event the channel has not yet accepted.
+struct Subscriber {
+    tx: SyncSender<ScanEvent>,
+    /// Replaced wholesale on every publish (scan completions coalesce
+    /// naturally), so a receiver that stalls pins O(1) memory instead of
+    /// one full snapshot per pass.
+    staged: Option<ScanEvent>,
+}
+
+impl Subscriber {
+    /// Stage `ev` and flush it into the channel if there is room. Returns
+    /// false when the receiver is gone (subscriber should be pruned).
+    fn offer(&mut self, ev: ScanEvent) -> bool {
+        self.staged = Some(ev);
+        match self
+            .tx
+            .try_send(self.staged.as_ref().expect("just staged").clone())
+        {
+            Ok(()) => self.staged = None,
+            // Channel busy with an older copy; the staged newest folds
+            // forward on the next publish. Bounded, not lost forever.
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => return false,
+        }
+        true
+    }
 }
 
 impl Parts {
@@ -204,15 +240,15 @@ impl Parts {
                 // then audit, then poll, then plain events.
                 match s {
                     WatchSignal::Overflow { .. } | WatchSignal::RootReturned => {
-                        trigger = Trigger::OverflowRecovery
+                        trigger = Trigger::OverflowRecovery;
                     }
                     WatchSignal::AuditDue => {
                         if trigger == Trigger::Events {
-                            trigger = Trigger::Audit
+                            trigger = Trigger::Audit;
                         }
                     }
                     WatchSignal::PolledChanged(_) if trigger == Trigger::Events => {
-                        trigger = Trigger::Poll
+                        trigger = Trigger::Poll;
                     }
                     _ => {}
                 }
@@ -221,7 +257,7 @@ impl Parts {
                     Action::RescanSubtrees(dirs) => dirty.extend(dirs),
                     Action::FullRescan { reason } => {
                         if full_reason.is_none() {
-                            full_reason = Some(reason)
+                            full_reason = Some(reason);
                         }
                     }
                     Action::StartPolling { .. } => {}
@@ -266,7 +302,7 @@ impl Parts {
     /// file is read and hashed fresh. One walking codepath means a full scan
     /// and an incremental pass can never disagree about what belongs in the
     /// manifest (e.g. the structurally excluded store directory, which
-    /// ferry-store's own snapshot_dir does not filter). The cache reseeds
+    /// ferry-store's own `snapshot_dir` does not filter). The cache reseeds
     /// from the fresh walk afterwards, so pre-existing cache drift cannot
     /// survive an audit.
     fn run_full(&self, trigger: Trigger, reason: &str) -> Result<ScanRun, ScanError> {
@@ -386,13 +422,18 @@ impl Parts {
 
     fn publish(&self, cur: Arc<CurrentScan>) {
         *self.current.write().expect("current lock") = Some(cur.clone());
-        let mut subs = self.subs.lock().expect("subs lock");
-        subs.retain(|tx| tx.send(ScanEvent::Updated(cur.clone())).is_ok());
+        self.deliver(ScanEvent::Updated(cur));
     }
 
     fn report_failure(&self, err: &ScanError) {
+        self.deliver(ScanEvent::Failed(err.to_string()));
+    }
+
+    /// Latest-wins fan-out: stage the event on every subscriber and drop
+    /// the ones whose receivers are gone.
+    fn deliver(&self, ev: ScanEvent) {
         let mut subs = self.subs.lock().expect("subs lock");
-        subs.retain(|tx| tx.send(ScanEvent::Failed(err.to_string())).is_ok());
+        subs.retain_mut(|sub| sub.offer(ev.clone()));
     }
 }
 
@@ -504,11 +545,23 @@ impl ScanEngine {
         self.parts.core.lock().expect("core").last_pass.clone()
     }
 
-    /// Subscribe to scan completions/failures. Unbounded; subscribers whose
-    /// receivers are dropped are pruned on the next event.
+    /// Subscribe to scan completions/failures.
+    ///
+    /// Backpressure is bounded and latest-wins: each subscriber retains at
+    /// most two events (one buffered in a capacity-1 channel, one staged
+    /// slot) no matter how many passes complete while the receiver stalls,
+    /// and each publish replaces the staged event — so a live-but-stalled
+    /// consumer pins O(1) snapshot memory instead of one `CurrentScan` per
+    /// pass. The staged newest folds into the channel on the next publish
+    /// once the receiver drains. Subscribers whose receivers are dropped
+    /// are pruned on the next event.
     pub fn subscribe(&self) -> std::sync::mpsc::Receiver<ScanEvent> {
-        let (tx, rx) = channel();
-        self.parts.subs.lock().expect("subs lock").push(tx);
+        let (tx, rx) = sync_channel(SUB_CHANNEL_BOUND);
+        self.parts
+            .subs
+            .lock()
+            .expect("subs lock")
+            .push(Subscriber { tx, staged: None });
         rx
     }
 
@@ -614,12 +667,11 @@ impl ScanEngine {
                         if now >= deadline {
                             break;
                         }
-                        match parts.queue.wait_arrival(deadline - now) {
-                            true => {
-                                batch.extend(parts.queue.drain());
-                                deadline = Instant::now() + quiet;
-                            }
-                            false => break 'debounce,
+                        if parts.queue.wait_arrival(deadline - now) {
+                            batch.extend(parts.queue.drain());
+                            deadline = Instant::now() + quiet;
+                        } else {
+                            break 'debounce;
                         }
                     }
                     if stop.load(Ordering::Relaxed) {
@@ -750,18 +802,26 @@ fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
     Some(rel)
 }
 
+/// True when a watcher-event path lies under an excluded path. Ancestor
+/// components are necessarily directories, so each prefix is judged as a
+/// dir with no disk access (T-12). Watcher events do not carry the final
+/// component's kind; the full path counts as excluded only when BOTH
+/// interpretations exclude it. A dir-only pattern (`build/`) therefore
+/// cannot silently swallow events for a FILE named `build` that the rules
+/// would keep — at worst the extra event marks a parent dirty and the pass
+/// re-prunes with exact kinds.
 fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
     for c in rel {
         if crate::walk::is_store_component(c) {
             return true;
         }
     }
-    for i in 1..=rel.len() {
-        if ignore.ignored(&rel[..i]) {
+    for i in 1..rel.len() {
+        if ignore.ignored(&rel[..i], EntryKind::Dir) {
             return true;
         }
     }
-    false
+    ignore.ignored(rel, EntryKind::Dir) && ignore.ignored(rel, EntryKind::File)
 }
 
 enum ErrClass {
@@ -784,9 +844,7 @@ fn classify_watch_error(e: &NotifyError) -> ErrClass {
         MaxFilesWatch => ErrClass::Unwatchable(Vec::new()),
         Io(ioe) => match ioe.raw_os_error() {
             // ENOSPC (inotify watches/space), EMFILE/ENFILE (fd exhaustion).
-            Some(28) | Some(24) | Some(23) => {
-                ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default())
-            }
+            Some(28 | 24 | 23) => ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default()),
             _ => ErrClass::Loss,
         },
         _ => ErrClass::Loss,
@@ -826,7 +884,14 @@ fn stat_sweep(
             }
             let mut full = dir_rel.clone();
             full.push(e.name.clone());
-            if ignore.ignored(&full) {
+            // The cache payload records the kind we last saw; judge with it
+            // (T-12: no stat inside the policy). A kind flip on disk still
+            // surfaces: the sweep's forward pass stats every real child.
+            let kind = match &e.payload {
+                EntryPayload::Dir { .. } => EntryKind::Dir,
+                _ => EntryKind::File,
+            };
+            if ignore.ignored(&full, kind) {
                 continue;
             }
             let mut p = disk_root.to_path_buf();
@@ -868,22 +933,30 @@ fn sweep_dir(
         let Some(component) = name.to_str().map(|s| s.nfc().collect::<String>()) else {
             continue;
         };
-        let store_skip = crate::walk::is_store_component(&component);
-        let mut child_rel = rel.clone();
-        child_rel.push(component.clone());
-        if ignore.ignored(&child_rel) || store_skip {
+        if crate::walk::is_store_component(&component) {
             continue;
         }
+        let mut child_rel = rel.clone();
+        child_rel.push(component.clone());
         let child_disk = disk.join(&name);
+        // Stat BEFORE the ignore consult so the verdict carries the real
+        // kind (T-12); this stat already happened for every surviving
+        // entry, so it is a reorder, not an addition.
         let Ok(meta) = std::fs::symlink_metadata(&child_disk) else {
             out.push(rel.clone());
             continue;
         };
         let ft = meta.file_type();
+        let kind = if ft.is_dir() {
+            EntryKind::Dir
+        } else {
+            EntryKind::File
+        };
+        if ignore.ignored(&child_rel, kind) {
+            continue;
+        }
         if ft.is_dir() {
-            if !crate::walk::is_store_component(&component) {
-                sweep_dir(disk_root, &child_rel, cache, ignore, out);
-            }
+            sweep_dir(disk_root, &child_rel, cache, ignore, out);
         } else if ft.is_file() {
             let exec = live_exec_bit(&meta);
             let name_str = child_rel.last().expect("non-empty").as_str();
@@ -921,17 +994,11 @@ fn live_exec_bit(meta: &std::fs::Metadata) -> bool {
 }
 
 fn meta_mtime_sec(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .map(ferry_platform::split_unix)
-        .unwrap_or((0, 0))
-        .0
+    meta.modified().map_or((0, 0), ferry_platform::split_unix).0
 }
 
 fn meta_mtime_nsec(meta: &std::fs::Metadata) -> u32 {
-    meta.modified()
-        .map(ferry_platform::split_unix)
-        .unwrap_or((0, 0))
-        .1
+    meta.modified().map_or((0, 0), ferry_platform::split_unix).1
 }
 
 #[cfg(test)]
@@ -940,7 +1007,7 @@ mod tests {
     use crate::testutil::*;
 
     fn rel(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     fn seeded_cache(dir: &std::path::Path) -> (tempfile::TempDir, Store, DirCache) {
@@ -1032,7 +1099,7 @@ mod tests {
     fn stat_sweep_respects_ignore_policy() {
         struct SkipAll;
         impl crate::ignore::IgnorePolicy for SkipAll {
-            fn ignored(&self, _rel: &[String]) -> bool {
+            fn ignored(&self, _rel: &[String], _kind: EntryKind) -> bool {
                 true
             }
         }
@@ -1044,5 +1111,61 @@ mod tests {
         write_file(&root.join("x.txt"), b"different", false, (2, 0));
         let found = super::stat_sweep(&root, &Vec::new(), &cache, &SkipAll);
         assert!(found.is_empty(), "ignored paths are never swept: {found:?}");
+    }
+
+    /// T-19: a subscriber that never receives must pin O(1) memory —
+    /// after N publishes exactly one event sits buffered, and the staged
+    /// slot holds the LAST published snapshot (latest-wins), not N.
+    #[test]
+    fn stalled_subscriber_retention_is_bounded_latest_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t");
+        std::fs::create_dir_all(&root).unwrap();
+        write_file(&root.join("a.txt"), b"a", false, (1, 0));
+        let (_sd, store) = fresh_store();
+        let engine = ScanEngine::watch(
+            root,
+            StoreHandle {
+                store: Arc::new(store),
+                poly: poly_of(3),
+                folder_id: [1; 16],
+                device_id: [2; 32],
+            },
+        )
+        .unwrap();
+        let baseline = engine.current().expect("initial pass published");
+
+        let rx = engine.subscribe();
+        const N: usize = 64;
+        for _ in 0..N {
+            // Publish directly: the retention contract under test is
+            // per-publish, not tied to how passes are triggered.
+            engine.parts.publish(baseline.clone());
+        }
+
+        // Bounded: capacity-1 channel holds exactly one event.
+        assert!(matches!(rx.try_recv(), Ok(ScanEvent::Updated(_))));
+        assert!(rx.try_recv().is_err(), "retention must be bounded");
+
+        // Latest-wins observable: the staged pending event IS pass N's
+        // snapshot (pointer-identical to the last publish), never an
+        // unbounded backlog of older ones.
+        let subs = engine.parts.subs.lock().expect("subs lock");
+        assert_eq!(subs.len(), 1);
+        match &subs[0].staged {
+            Some(ScanEvent::Updated(cur)) => assert!(
+                Arc::ptr_eq(cur, &baseline),
+                "staged event must reflect the latest pass"
+            ),
+            other => panic!("expected staged Updated event, got {other:?}"),
+        }
+        drop(subs);
+
+        // Dropped receiver is pruned on the next event.
+        drop(rx);
+        engine.parts.publish(baseline.clone());
+        assert!(engine.parts.subs.lock().expect("subs lock").is_empty());
+
+        engine.stop();
     }
 }

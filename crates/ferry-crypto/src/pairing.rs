@@ -50,8 +50,15 @@ use crate::base32::{self, Base32Error};
 use crate::crc32::crc32;
 use crate::folder_key::{wrap_folder_key, Fmk, FolderKeyError, WRAPPED_LEN};
 use crate::identity::{DeviceId, DeviceIdentity};
+use chacha20poly1305::{
+    aead::{Aead, Payload},
+    ChaCha20Poly1305, Nonce,
+};
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use rand::RngCore;
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -86,6 +93,51 @@ pub enum PairingError {
     CodeHashMismatch,
     #[error(transparent)]
     KeyWrap(#[from] FolderKeyError),
+}
+
+#[derive(Debug, Error)]
+pub enum GrantError {
+    #[error("grant file is malformed: need at least {need} bytes, have {have}")]
+    Malformed { need: usize, have: usize },
+    #[error("grant failed authentication against this offer")]
+    Auth,
+    #[error("offer bytes truncated: need {need}, have {have}")]
+    OfferTruncated { need: usize, have: usize },
+    /// HKDF-expand can only fail on absurd output lengths and AEAD seal
+    /// cannot fail without streaming or padding; both are infallible for
+    /// these inputs but their APIs return Result, so they land here.
+    #[error("internal crypto failure (unreachable for these inputs)")]
+    Internal,
+}
+
+/// Bounds-checked cursor over a wire message. Every field read goes through
+/// [`Reader::take`], which refuses to run past the end of the buffer, so no
+/// offset arithmetic depends on a caller having length-checked first — the
+/// invariant lives in code instead of in the reader's head.
+struct Reader<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Reader { bytes, pos: 0 }
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], PairingError> {
+        let end = self.pos + N;
+        let src = self
+            .bytes
+            .get(self.pos..end)
+            .ok_or(PairingError::Truncated {
+                need: end,
+                have: self.bytes.len(),
+            })?;
+        self.pos = end;
+        let mut out = [0u8; N];
+        out.copy_from_slice(src);
+        Ok(out)
+    }
 }
 
 /// Advisory connectivity flags displayed alongside / carried by the short
@@ -189,14 +241,17 @@ impl PairingOffer {
         if bytes[4] != FORMAT_VERSION {
             return Err(PairingError::BadVersion(bytes[4]));
         }
-        let folder_id = bytes[5..21].try_into().expect("16 bytes");
-        let initiator_pub = bytes[21..53].try_into().expect("32 bytes");
-        let secret: [u8; 32] = bytes[53..85].try_into().expect("32 bytes");
-        let created_sec = i64::from_le_bytes(bytes[85..93].try_into().expect("8 bytes"));
+        let mut r = Reader::new(bytes);
+        let _magic = r.take::<4>()?;
+        let _version = r.take::<1>()?;
+        let folder_id = r.take::<16>()?;
+        let initiator_pub = r.take::<32>()?;
+        let secret = Zeroizing::new(r.take::<32>()?);
+        let created_sec = i64::from_le_bytes(r.take::<8>()?);
         Ok(PairingOffer {
             folder_id,
             initiator_pub,
-            secret: Zeroizing::new(secret),
+            secret,
             created_sec,
         })
     }
@@ -280,18 +335,22 @@ impl PairingResponse {
         if bytes[4] != FORMAT_VERSION {
             return Err(PairingError::BadVersion(bytes[4]));
         }
+        let mut r = Reader::new(bytes);
+        let _magic = r.take::<4>()?;
+        let _version = r.take::<1>()?;
         Ok(PairingResponse {
-            responder_pub: bytes[5..37].try_into().expect("32 bytes"),
-            mac: bytes[37..69].try_into().expect("32 bytes"),
-            created_sec: i64::from_le_bytes(bytes[69..77].try_into().expect("8 bytes")),
+            responder_pub: r.take::<32>()?,
+            mac: r.take::<32>()?,
+            created_sec: i64::from_le_bytes(r.take::<8>()?),
         })
     }
 
-    /// Verify against the offer this response answers. Constant-time MAC
-    /// comparison via `hmac`'s verified API equivalent (reduced comparison).
+    /// Verify against the offer this response answers. The MAC comparison is
+    /// constant-time (`subtle::ConstantTimeEq`), so a failed check leaks
+    /// nothing about how many leading MAC bytes happened to agree.
     pub fn verify(&self, offer: &PairingOffer, offer_bytes: &[u8]) -> Result<(), PairingError> {
         let expect = Self::compute_mac(offer_bytes, offer.one_time_secret(), &self.responder_pub);
-        if expect != self.mac {
+        if bool::from(expect.ct_ne(&self.mac)) {
             return Err(PairingError::MacMismatch);
         }
         // The transcript binds the offer bytes themselves, so the parsed
@@ -347,6 +406,108 @@ pub fn complete_pairing(
         wrapped_for_self,
         wrapped_for_peer,
     })
+}
+
+// --- pair-grant handoff (initiator -> acceptor sealed envelope) ---
+
+/// Domain-separation info for the pair-grant sealing key.
+const GRANT_INFO: &[u8] = b"ferry/v1/pair-grant";
+/// HKDF salt for the pair-grant sealing key.
+const GRANT_SALT: &[u8] = b"ferry/v1/pair-grant-salt";
+/// Magic opening every sealed pair-grant record: "FRGR".
+pub const GRANT_MAGIC: [u8; 4] = *b"FRGR";
+/// Sealed pair-grant format version written by v1 implementations.
+pub const GRANT_VERSION: u8 = 1;
+/// RFC 8439 nonce length.
+const GRANT_NONCE_LEN: usize = 12;
+
+/// Derive the pair-grant sealing key from an offer's one-time secret:
+/// `HKDF-SHA-256(ikm = one_time_secret, salt = GRANT_SALT)` expanded to
+/// 32 bytes with `GRANT_INFO`. `Result` is part of the contract so callers
+/// never see a panic path; the internal length check cannot fail for a
+/// 32-byte OKM.
+pub fn derive_pair_grant_key(one_time_secret: &[u8]) -> Result<[u8; 32], GrantError> {
+    let hk = Hkdf::<Sha256>::new(Some(GRANT_SALT), one_time_secret);
+    let mut okm = [0u8; 32];
+    hk.expand(GRANT_INFO, &mut okm)
+        .map_err(|_| GrantError::Internal)?;
+    Ok(okm)
+}
+
+/// The one-time secret's fixed window inside serialized offer bytes (v1
+/// layout, offsets pinned in [`crate`]'s docs).
+fn offer_one_time_secret(offer_bytes: &[u8]) -> Result<&[u8], GrantError> {
+    offer_bytes.get(53..85).ok_or(GrantError::OfferTruncated {
+        need: 85,
+        have: offer_bytes.len(),
+    })
+}
+
+fn grant_cipher(key: &[u8; 32]) -> ChaCha20Poly1305 {
+    // Scoped import: hmac::Mac also exposes new_from_slice-adjacent names,
+    // and a function-local `use` keeps the two crypto stacks from colliding
+    // at the top of this module.
+    use chacha20poly1305::aead::KeyInit;
+    ChaCha20Poly1305::new(key.into())
+}
+
+/// Seal an opaque grant body under a key derived from the offer's one-time
+/// secret, producing the full v1 wire record:
+///
+/// ```text
+/// "FRGR" || version(1) || nonce(12) || AEAD ciphertext
+/// ```
+///
+/// with the ENTIRE offer bytes bound as AAD. The nonce is fresh CSPRNG
+/// output per seal.
+pub fn seal_pair_grant(offer_bytes: &[u8], body: &[u8]) -> Result<Vec<u8>, GrantError> {
+    let secret = offer_one_time_secret(offer_bytes)?;
+    let key = derive_pair_grant_key(secret)?;
+    let cipher = grant_cipher(&key);
+    let mut nonce_bytes = [0u8; GRANT_NONCE_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+    let ct = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: body,
+                aad: offer_bytes,
+            },
+        )
+        .map_err(|_| GrantError::Internal)?;
+
+    let mut out = Vec::with_capacity(GRANT_MAGIC.len() + 1 + GRANT_NONCE_LEN + ct.len());
+    out.extend_from_slice(&GRANT_MAGIC);
+    out.push(GRANT_VERSION);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Open a sealed pair-grant record: checks the framing, derives the key from
+/// the offer bytes' embedded secret, authenticates (the whole offer file is
+/// AAD), and returns the body plaintext. Any tampering with EITHER file, or
+/// any attempt to replay a grant against a different offer, fails here.
+pub fn open_pair_grant(offer_bytes: &[u8], raw: &[u8]) -> Result<Vec<u8>, GrantError> {
+    const HEADER_LEN: usize = 4 + 1 + GRANT_NONCE_LEN;
+    if raw.len() < HEADER_LEN || raw[..4] != GRANT_MAGIC || raw[4] != GRANT_VERSION {
+        return Err(GrantError::Malformed {
+            need: HEADER_LEN,
+            have: raw.len(),
+        });
+    }
+    let secret = offer_one_time_secret(offer_bytes)?;
+    let key = derive_pair_grant_key(secret)?;
+    let cipher = grant_cipher(&key);
+    cipher
+        .decrypt(
+            Nonce::from_slice(&raw[5..5 + GRANT_NONCE_LEN]),
+            Payload {
+                msg: &raw[HEADER_LEN..],
+                aad: offer_bytes,
+            },
+        )
+        .map_err(|_| GrantError::Auth)
 }
 
 // --- short codes ---
@@ -570,6 +731,27 @@ mod tests {
     }
 
     #[test]
+    fn mac_verify_match_passes_and_single_bit_flip_fails() {
+        // Acceptance for T-03's constant-time compare: matching MAC passes,
+        // any single flipped MAC bit fails, with no panic path.
+        let (offer, offer_bytes) = test_offer();
+        let responder = DeviceIdentity::generate();
+        let resp = respond(&offer, &responder, 1_700_000_050);
+        resp.verify(&offer, &offer_bytes).unwrap();
+
+        for byte in [0usize, 15, 31] {
+            for bit in [0x01u8, 0x80] {
+                let mut evil = resp.clone();
+                evil.mac[byte] ^= bit;
+                assert!(matches!(
+                    evil.verify(&offer, &offer_bytes),
+                    Err(PairingError::MacMismatch)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn response_mac_binds_transcript_and_rejects_fakes() {
         let (offer, offer_bytes) = test_offer();
         let responder = DeviceIdentity::generate();
@@ -632,6 +814,61 @@ mod tests {
         assert_eq!(colors.len(), qr.width() * qr.width());
         assert!(colors.contains(&qrcode::Color::Dark));
         assert!(colors.contains(&qrcode::Color::Light));
+    }
+
+    #[test]
+    fn grant_seal_open_round_trip_binds_the_offer() {
+        let (_offer, offer_bytes) = test_offer();
+        let body = br#"{"wrapped_for_peer":"ab","poly":7}"#;
+
+        let sealed = seal_pair_grant(&offer_bytes, body).unwrap();
+        assert_eq!(&sealed[..4], &GRANT_MAGIC, "FRGR magic");
+        assert_eq!(sealed[4], GRANT_VERSION);
+        // Framing is fixed: magic+version+nonce+body+16-byte tag.
+        assert_eq!(sealed.len(), 4 + 1 + 12 + body.len() + 16);
+        assert_eq!(
+            open_pair_grant(&offer_bytes, &sealed).unwrap(),
+            body.as_slice()
+        );
+
+        // A different offer cannot open this grant (AAD + key binding).
+        // test_offer() is deterministic, so mutate these bytes rather than
+        // minting another one.
+        let mut other_bytes = offer_bytes.clone();
+        other_bytes[70] ^= 1; // inside the one-time secret region
+        assert!(matches!(
+            open_pair_grant(&other_bytes, &sealed),
+            Err(GrantError::Auth)
+        ));
+
+        // Every flipped byte in nonce or ciphertext fails authentication.
+        for idx in [5usize, 12, sealed.len() - 1] {
+            let mut evil = sealed.clone();
+            evil[idx] ^= 0x80;
+            assert!(matches!(
+                open_pair_grant(&offer_bytes, &evil),
+                Err(GrantError::Auth)
+            ));
+        }
+
+        // Truncated / wrong framing is Malformed, not Auth.
+        assert!(matches!(
+            open_pair_grant(&offer_bytes, &sealed[..16]),
+            Err(GrantError::Malformed { .. })
+        ));
+        let mut evil_magic = sealed.clone();
+        evil_magic[0] = b'X';
+        assert!(matches!(
+            open_pair_grant(&offer_bytes, &evil_magic),
+            Err(GrantError::Malformed { .. })
+        ));
+
+        // Derivation is deterministic per secret, and distinct secrets
+        // diverge.
+        let k1 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
+        let k2 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
+        assert_eq!(k1, k2);
+        assert_ne!(k1, derive_pair_grant_key(b"a different secret").unwrap());
     }
 
     #[test]

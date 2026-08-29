@@ -25,7 +25,7 @@
 ///   behavior out of the box.
 /// - `.env`, `.env.*` — **opt-in with a loud warning** (excluded by default).
 ///   Roughly 54% of `.env` files contain detectable secrets and 65% of leaked
-///   secrets live in env-class files (research archetype 9 / GitGuardian).
+///   secrets live in env-class files (research archetype 9 / `GitGuardian`).
 ///   E2E encryption protects the bytes, but sharing credentials to another
 ///   device must be a deliberate act: opting in is one `!.env` line, and the
 ///   share-time secret scan (`crate::secrets`) flags likely credentials.

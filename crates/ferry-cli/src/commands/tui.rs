@@ -1,0 +1,38 @@
+use std::path::Path;
+use std::sync::Arc;
+
+use ferry_daemon::ui::AutoBackend;
+use ferry_ipc::backend::UiBackend;
+
+use crate::error::CliResult;
+
+pub fn run(folder: Option<&Path>) -> CliResult<crate::out::Output> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+        crate::error::CliError::new(
+            "runtime-error",
+            e.to_string(),
+            "failed to start async runtime",
+        )
+    })?;
+    rt.block_on(async {
+        let dir = folder.unwrap_or_else(|| Path::new("."));
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(dir);
+        let backend: Arc<dyn UiBackend> =
+            Arc::new(AutoBackend::new(socket_path).with_fallback(dir.to_path_buf()));
+
+        let mut guard = ferry_tui::TerminalGuard::init().map_err(|e| {
+            crate::error::CliError::new("tui-error", e.to_string(), "failed to initialize terminal")
+        })?;
+        let events = ferry_tui::TerminalEvents::new();
+        let mut app = ferry_tui::TuiApp::new_with_backend(backend.clone());
+        app.run(guard.terminal_mut(), backend, events)
+            .await
+            .map_err(|e| {
+                crate::error::CliError::new("tui-error", e.to_string(), "TUI exited with an error")
+            })?;
+        Ok(crate::out::Output::new(
+            serde_json::json!({ "status": "closed" }),
+            "TUI closed.",
+        ))
+    })
+}

@@ -1,4 +1,4 @@
-//! CONFIG_HEAD container: the plaintext folder bootstrap record.
+//! `CONFIG_HEAD` container: the plaintext folder bootstrap record.
 //!
 //! Byte layout from `docs/store-format.md` ("Folder layout"), byte-for-byte:
 //!
@@ -39,7 +39,7 @@ pub enum ConfigHeadError {
     BadWrappedLen(u32),
 }
 
-/// One recipient entry of the CONFIG_HEAD body.
+/// One recipient entry of the `CONFIG_HEAD` body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrappedKeyEntry {
     pub device_pub: DeviceId,
@@ -56,7 +56,7 @@ impl WrappedKeyEntry {
     }
 }
 
-/// Serialize a complete CONFIG_HEAD container (header + body).
+/// Serialize a complete `CONFIG_HEAD` container (header + body).
 pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> Vec<u8> {
     let mut out =
         Vec::with_capacity(HEADER_LEN + BODY_PREAMBLE_LEN + entries.len() * ENTRY_FIXED_LEN);
@@ -74,14 +74,14 @@ pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> V
     out
 }
 
-/// Parsed CONFIG_HEAD contents.
+/// Parsed `CONFIG_HEAD` contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigHead {
     pub folder_id: [u8; 16],
     pub entries: Vec<WrappedKeyEntry>,
 }
 
-/// Parse a complete CONFIG_HEAD container, enforcing every v1 rule.
+/// Parse a complete `CONFIG_HEAD` container, enforcing every v1 rule.
 pub fn parse_config_head(bytes: &[u8]) -> Result<ConfigHead, ConfigHeadError> {
     let kind = parse_header(bytes)?;
     if kind != ferry_store::format::ContainerKind::ConfigHead {

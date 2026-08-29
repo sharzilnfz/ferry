@@ -264,7 +264,7 @@ pub fn derive_index_key(fmk: &[u8; KEY_LEN], salt: &[u8; SALT_LEN]) -> [u8; KEY_
 }
 
 /// Build the 12-byte body nonce: 8 zero bytes || u32 BIG-ENDIAN
-/// ((counter << 1) | last_flag). Counter occupies bits 1..31, flag bit 0.
+/// ((counter << 1) | `last_flag`). Counter occupies bits 1..31, flag bit 0.
 pub fn body_nonce(counter: u32, last_flag: u8) -> [u8; NONCE_LEN] {
     body_nonce_checked(counter, last_flag).expect("valid stream counter")
 }
@@ -277,7 +277,7 @@ pub fn body_nonce_checked(counter: u32, last_flag: u8) -> Result<[u8; NONCE_LEN]
     if counter >= (1 << 31) {
         return Err(CryptoError::MalformedCiphertext);
     }
-    let word = (counter << 1) | last_flag as u32;
+    let word = (counter << 1) | u32::from(last_flag);
     let mut nonce = [0u8; NONCE_LEN];
     nonce[8..].copy_from_slice(&word.to_be_bytes());
     Ok(nonce)

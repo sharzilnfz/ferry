@@ -4,7 +4,7 @@
 //!
 //! # Engine choice
 //!
-//! Pattern matching is delegated to the `ignore` crate (BurntSushi,
+//! Pattern matching is delegated to the `ignore` crate (`BurntSushi`,
 //! dual MIT/Apache-2.0 — compatible with this workspace) via
 //! `ignore::gitignore::Gitignore::matched()`. That API compiles one rule
 //! file's lines into an optimized glob set and answers single-path queries
@@ -15,7 +15,7 @@
 //! ferry-scan owns walking (and event filtering), and this crate only ever
 //! answers "is this relative path ignored?". Hand-rolling was rejected:
 //! gitignore edge cases are notoriously subtle (anchoring vs. basename
-//! matching, literal_separator, escaped classes), and BurntSushi's
+//! matching, `literal_separator`, escaped classes), and `BurntSushi`'s
 //! implementation is the de-facto reference used by ripgrep.
 //!
 //! # Layer precedence (defined precisely)
@@ -30,7 +30,7 @@
 //! ```
 //!
 //! Per-directory rule files (`ferry.ignore`, and `.gitignore` when opted in)
-//! in SUBdirectories stack after the whole root chain, shallowest first —
+//! in `SUBdirectories` stack after the whole root chain, shallowest first —
 //! i.e. git's depth-first precedence: a deeper file's decisions override the
 //! entire root chain *for paths beneath that directory*, including presets.
 //! This mirrors git exactly (the root chain simply plays the role of the

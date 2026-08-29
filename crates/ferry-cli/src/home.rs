@@ -1,4 +1,4 @@
-//! Where Ferry keeps per-device state, and the FERRY_HOME contract.
+//! Where Ferry keeps per-device state, and the `FERRY_HOME` contract.
 //!
 //! `FERRY_HOME` (env var) overrides the default `~/.ferry` for ALL
 //! per-device state. This is what lets two simulated devices coexist on
@@ -13,10 +13,10 @@
 
 use std::path::PathBuf;
 
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, CodeInto};
 
 /// Resolve the device home: `$FERRY_HOME` when set (non-empty), else
-/// `$HOME/.ferry`. Empty-string FERRY_HOME is treated as unset so a stray
+/// `$HOME/.ferry`. Empty-string `FERRY_HOME` is treated as unset so a stray
 /// `FERRY_HOME= cargo test` behaves like production.
 ///
 /// When HOME is unset (native Windows shells have no HOME), fall back to
@@ -45,6 +45,16 @@ pub fn ferry_home() -> CliResult<PathBuf> {
 /// Directory holding `device.key`.
 pub fn identity_root(home: &std::path::Path) -> PathBuf {
     home.join("identity")
+}
+
+/// Load (creating on first use) the device identity keypair.
+///
+/// Returns `None` only when even the home directory cannot be resolved; key
+/// read/write failures surface to the caller as errors.
+pub fn load_device_identity() -> CliResult<ferry_crypto::identity::DeviceIdentity> {
+    let home = ferry_home()?;
+    ferry_crypto::identity::load_or_create(&identity_root(&home))
+        .code("identity", "cannot read or create the device identity key")
 }
 
 #[cfg(test)]

@@ -7,20 +7,23 @@ license.workspace = true
 [dependencies]
 ferry-sync = { path = "../ferry-sync" }
 ferry-crypto = { path = "../ferry-crypto" }
-blake3 = "1.5"
+ferry-store = { path = "../ferry-store" }
+blake3.workspace = true
 
 # T-009 version pins (SPEC risk: iroh API churn). These move together;
 # bump them as one set and re-run the full suite. All MIT OR Apache-2.0.
-iroh = "=1.0.3"
+iroh.workspace = true
 iroh-mdns-address-lookup = "=0.5.0"
-tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time"] }
+tokio.workspace = true
 
 [dev-dependencies]
 anyhow = "1"
-ferry-store = { path = "../ferry-store" }
 ferry-relay = { path = "../ferry-relay" }
-tempfile = "3"
-rand = "0.8"
+tempfile.workspace = true
+rand.workspace = true
 
 [package.metadata.notes]
 pins = "iroh 1.0.x family (iroh, iroh-relay, iroh-base, iroh-dns) + iroh-mdns-address-lookup 0.5.x must be bumped together"
+
+[lints]
+workspace = true

@@ -21,7 +21,7 @@ impl Default for ScanConfig {
     fn default() -> Self {
         ScanConfig {
             quiet_window: Duration::from_millis(500),
-            audit_interval: Duration::from_secs(24 * 60 * 60),
+            audit_interval: Duration::from_hours(24),
             poll_interval: Duration::from_secs(10),
         }
     }

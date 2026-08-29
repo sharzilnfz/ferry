@@ -24,10 +24,9 @@
 //!   type on the wire.
 //! - [`secure`]: handshake key schedule, transcript, per-direction traffic
 //!   keys, and the AEAD seal/open layer applied to frames after auth.
-//! - [`agreement`]: last-agreed manifest pointers per peer, canonical bytes
-//!   per `docs/store-format.md`.
 //! - [`engine`]: the conversation driver: hello → authenticate → offers →
-//!   pull → re-offer → agree → bye.
+//!   pull → re-offer → agree → bye. Agreement records themselves live in
+//!   `ferry_store::agreement` (the single canonical codec + ledger).
 //!
 //! # Security posture
 //!
@@ -42,7 +41,6 @@
 //! authentication and drop the connection. See `docs/adr/0002` (no plaintext
 //! leaves the process) and `docs/adr/0003` (peers are their public keys).
 
-pub mod agreement;
 pub mod codec;
 pub mod engine;
 pub mod error;
@@ -57,6 +55,7 @@ mod engine_tests;
 pub use engine::{run_engine, EngineConfig, FolderState, Granularity, Role, SessionReport};
 pub use error::ProtoError;
 pub use ferry_crypto::identity::DeviceId;
+pub use secure::SecureSession;
 pub use stream::{duplex_pair, ByteStream};
 pub use version::ProtocolVersion;
 

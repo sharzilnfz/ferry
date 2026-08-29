@@ -20,15 +20,16 @@
 //! Concurrency: at most one session runs per daemon (a mutex serializes
 //! the dialer and every accepted handler). Only the connect-role daemon
 //! dials; the listen-role daemon serves and relies on the peer's
-//! opportunistic dials (~1s) to discover its changes. Simultaneous edits
+//! opportunistic backstop dials (default every 50 ticks ≈ 10 s) to discover
+//! its changes. Simultaneous edits
 //! resolve by lineage last-writer-wins and may LOSE the loser's changes —
 //! explicit M0 scope, T-010 owns conflicts.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_crypto::identity::DeviceIdentity;
@@ -36,25 +37,26 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
 use ferry_store::manifest::{parse_manifest, serialize_manifest, RootManifest};
-use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
+use ferry_store::snapshot::{
+    snapshot_dir, snapshot_dir_incremental, SnapshotError, SnapshotIdentity, SnapshotOutput,
+};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::exchange::{self, CurrentState, ExchangeHost};
-use crate::materialize::{BlobSource, InlineMaterializer, MaterializeError, Materializer};
-use crate::proto::{self, ItemPayload, ProtoError};
 use crate::session::{self, ConnLink, Established, ExpectPeer};
-use crate::state::{device_id_from_tag, AgreedRecord, AgreementStore};
 use crate::transport::{Connection, Transport};
+use ferry_store::agreement::{AgreedRecord, AgreementLedger};
+pub use ferry_store::snapshot::ScanStats;
 use ferry_store::store::Store;
-
-/// chunk id -> owning pack name + cached pack bytes.
-type PackMap = HashMap<BlobId, (PackId, Arc<Vec<u8>>)>;
 
 /// Default poll cadence from the ticket ("sleep 200ms").
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
-/// Idle dials happen every Nth poll tick, bounding reverse-direction lag.
-pub const DEFAULT_OPPORTUNISTIC_EVERY: u32 = 5;
+/// Idle-backstop dials happen every Nth poll tick. While the folder is
+/// settled (scan root == baseline root), divergence dialing stays silent and
+/// only this backstop fires — it is also how the connect-role daemon discovers
+/// listen-role peer changes, so it must stay live.
+pub const DEFAULT_OPPORTUNISTIC_EVERY: u32 = 50;
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -64,8 +66,9 @@ pub struct EngineConfig {
     /// The synced working tree (created if missing).
     pub tree_dir: PathBuf,
     /// Folder chunker polynomial — MUST match the peer's or CDC boundaries
-    /// diverge. Generate once with `ferry-sync genpoly`.
-    pub poly: u64,
+    /// diverge. Generate once with `ferry-sync genpoly`. Validated at
+    /// config-load; an invalid value is a config error, never a mid-scan panic.
+    pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub poll_interval: Duration,
     pub opportunistic_every: u32,
@@ -75,15 +78,147 @@ pub struct EngineConfig {
     /// should be set per daemon; the connector drives sessions.
     pub connect_to: Option<SocketAddr>,
     /// Strictly expect this peer device id at the handshake (ADR-0003).
-    /// `None` = trust-on-first-use: accept whichever identity proves
-    /// possession of its claimed key. Wire behavior is identical either
-    /// way; this is LOCAL acceptance policy only.
+    /// If set to `Some(pin)`, the engine strictly enforces that single peer identity.
+    /// `None` indicates default policy: if a `CONFIG_HEAD` exists in the folder,
+    /// an allow-list is seeded from its wrapped keys (deny-unknown by default);
+    /// otherwise Trust-On-First-Use (TOFU) persists the first authenticated peer
+    /// identity per folder under `.ferry/peers/` and refuses any subsequent mismatches.
     pub expected_peer_id: Option<BlobId>,
-    /// DEV ONLY: speak the retired M0 plaintext framing instead of protocol
-    /// v1. Defaults OFF; production engines must never set it.
-    pub legacy_m0_proto: bool,
+    /// The folder's `.ferry` directory whose pin-state.json gates tree
+    /// mutation at the shared execution boundary (T-06 session pinning).
+    /// `None` (the default) is the no-pin policy: materialization never
+    /// consults pin state.
+    pub pin_state_dir: Option<PathBuf>,
     /// Silence stdout status lines (tests).
     pub quiet: bool,
+}
+
+/// Local peer authorization policy (T-18).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PeerPolicy {
+    /// Trust on first use (TOFU): accepts the first peer that proves key
+    /// possession, persists its identity per-folder to disk under `.ferry/peers/`,
+    /// and strictly enforces that pinned identity on subsequent sessions
+    /// (refusing any mismatches loudly).
+    #[default]
+    TrustOnFirstUse,
+    /// Explicit allow-list: accepts only peers whose device ID is in the set.
+    /// Denies unknown peers by default. Does not perform TOFU.
+    AllowList(HashSet<BlobId>),
+}
+
+impl PeerPolicy {
+    /// Construct an allow-list policy from an iterator of allowed peer device IDs.
+    pub fn from_allowed<I: IntoIterator<Item = BlobId>>(peers: I) -> Self {
+        PeerPolicy::AllowList(peers.into_iter().collect())
+    }
+
+    /// Construct an allow-list policy seeded from `CONFIG_HEAD` container bytes.
+    /// Extracts every `device_pub` from the wrapped key entries.
+    pub fn from_config_head(
+        bytes: &[u8],
+    ) -> Result<Self, ferry_crypto::config_head::ConfigHeadError> {
+        let ch = ferry_crypto::config_head::parse_config_head(bytes)?;
+        let set: HashSet<BlobId> = ch.entries.into_iter().map(|e| e.device_pub).collect();
+        Ok(PeerPolicy::AllowList(set))
+    }
+}
+
+/// On-disk ledger for persisted TOFU peer identities (T-18).
+/// Records live under `<store_dir>/peers/` named `<folder_hex>-<peer_hex>.peer`.
+#[derive(Clone, Debug)]
+pub struct PeerLedger {
+    dir: PathBuf,
+}
+
+impl PeerLedger {
+    /// `store_dir` is the folder's `.ferry` directory (or stand-in in tests).
+    pub fn new(store_dir: impl Into<PathBuf>) -> Self {
+        PeerLedger {
+            dir: store_dir.into().join("peers"),
+        }
+    }
+
+    pub fn path_for(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> PathBuf {
+        self.dir
+            .join(format!("{}-{}.peer", hex(folder_id), hex(peer)))
+    }
+
+    /// Persist a first-seen peer identity atomically.
+    pub fn record_peer(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> Result<(), std::io::Error> {
+        std::fs::create_dir_all(&self.dir)?;
+        let tmp = self
+            .dir
+            .join(format!(".tmp-{}-{}", hex(folder_id), hex(peer)));
+        std::fs::write(&tmp, hex(peer).as_bytes())?;
+        std::fs::rename(&tmp, self.path_for(folder_id, peer))?;
+        Ok(())
+    }
+
+    /// List all persisted peers for `folder_id`, sorted for determinism.
+    pub fn list_peers(&self, folder_id: &[u8; 16]) -> Result<Vec<BlobId>, std::io::Error> {
+        let prefix = format!("{}-", hex(folder_id));
+        let rd = match std::fs::read_dir(&self.dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut out = Vec::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.')
+                || !name_str.starts_with(&prefix)
+                || !name_str.ends_with(".peer")
+            {
+                continue;
+            }
+            let peer_hex = name_str
+                .trim_start_matches(&prefix)
+                .trim_end_matches(".peer");
+            if let Some(peer_id) = ferry_store::format::unhex::<32>(peer_hex) {
+                out.push(peer_id);
+            }
+        }
+        out.sort_unstable();
+        Ok(out)
+    }
+
+    /// Forget a folder's persisted peer identity. Returns true if removed.
+    pub fn forget_peer(
+        &self,
+        folder_id: &[u8; 16],
+        peer: &[u8; 32],
+    ) -> Result<bool, std::io::Error> {
+        match std::fs::remove_file(self.path_for(folder_id, peer)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Check candidate paths for a `CONFIG_HEAD` file to seed allow-list mode.
+fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolicy {
+    let candidates = [
+        store.store_dir().join("config"),
+        cfg.store_dir.join("config"),
+        cfg.store_dir.join(".ferry").join("config"),
+    ];
+    for path in &candidates {
+        if path.is_file() {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(policy) = PeerPolicy::from_config_head(&bytes) {
+                    if let PeerPolicy::AllowList(ref set) = policy {
+                        if !set.is_empty() {
+                            return policy;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    PeerPolicy::TrustOnFirstUse
 }
 
 impl EngineConfig {
@@ -93,14 +228,16 @@ impl EngineConfig {
             tag: "test-node".into(),
             store_dir: PathBuf::from(".ferry-sync-test-store"),
             tree_dir: PathBuf::from(".ferry-sync-test-tree"),
-            poly: ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(poly_seed)),
+            poly: ferry_store::chunker::ValidatedPoly::generate(&mut StdRng::seed_from_u64(
+                poly_seed,
+            )),
             folder_id: crate::DEFAULT_FOLDER_ID,
             poll_interval: Duration::from_millis(50),
             opportunistic_every: 3,
             bind_addr: None,
             connect_to: None,
             expected_peer_id: None,
-            legacy_m0_proto: false,
+            pin_state_dir: None,
             quiet: true,
         }
     }
@@ -140,16 +277,12 @@ pub enum IngestError {
     Io(#[from] std::io::Error),
     #[error("pack: {0}")]
     Pack(#[from] ferry_store::pack::PackError),
-    #[error("index rebuild found damaged packs: {0:?}")]
-    RebuildSkipped(Vec<String>),
     #[error("{0}")]
     Other(String),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("proto: {0}")]
-    Proto(#[from] ProtoError),
     /// Protocol v1 wire failure (handshake, framing, seal/open, flow).
     #[error("v1 wire: {0}")]
     Wire(#[from] ferry_proto::error::ProtoError),
@@ -166,7 +299,9 @@ pub enum SessionError {
     #[error("diff failed: {0}")]
     Diff(#[from] ferry_store::diff::DiffError),
     #[error("agreement state: {0}")]
-    State(#[from] crate::state::StateError),
+    Agreement(#[from] ferry_store::agreement::AgreementError),
+    #[error("peer unauthorized: {0}")]
+    PeerUnauthorized(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -179,26 +314,324 @@ struct SnapshotData {
     manifest_id: BlobId,
 }
 
-/// What the local engine knows when a session starts.
-struct MyOffer {
-    snap: Arc<SnapshotData>,
-    agreed_id: BlobId,
-    agreed_root: Option<BlobId>,
+/// How long a session waits for the first poll tick to publish state.
+const FIRST_STATE_WAIT: Duration = Duration::from_secs(10);
+
+/// Max simultaneously ACCEPTED session threads. Beyond this, inbound
+/// connections are dropped politely (logged, never queued) — a hostile or
+/// accidental connection storm cannot exhaust threads or memory.
+const MAX_CONCURRENT_SESSIONS: usize = 4;
+
+/// The folder-pointer state machine (T-07): ONE owner for the current
+/// pointer, the raw latest scan, the last-agreed baseline, the agreed id,
+/// and the next self-mint parent — all behind one mutex so poll ticks and
+/// session adoptions can no longer interleave writes across four locks
+/// (spec B1). Every mutation is an explicit op below; readers wait on the
+/// condvar instead of spin-sleeping.
+///
+/// Ordering rule that makes clobbering impossible by construction:
+/// `publish_scan` re-checks under the lock whether the current pointer
+/// changed since the scan STARTED (`ScanToken`). An adoption that landed
+/// mid-scan wins; the stale pre-adoption scan is discarded whole rather
+/// than published over the adopted lineage.
+struct FolderState {
+    inner: Mutex<FolderPointers>,
+    changed: Condvar,
 }
+
+#[derive(Default)]
+struct FolderPointers {
+    /// Latest raw scan — refreshed every tick (legacy sessions read this).
+    latest: Option<Arc<SnapshotData>>,
+    /// CURRENT folder pointer: our latest snapshot OR an adopted peer manifest.
+    current: Option<Arc<SnapshotData>>,
+    /// Last-agreed manifest (divergence baseline).
+    baseline: Option<RootManifest>,
+    /// Manifest id of `baseline` (kept alongside it under the same lock).
+    agreed: Option<BlobId>,
+    /// Parent lineage for the next SELF-minted manifest.
+    last_own_manifest_id: BlobId,
+    /// Last-tick scan counts.
+    scan_stats: Option<ScanStats>,
+}
+
+/// What a scan captured before it started, so publication can tell whether
+/// the world moved underneath it.
+#[derive(Clone, Copy)]
+struct ScanToken {
+    parent: BlobId,
+    observed_current: Option<BlobId>,
+}
+
+/// What happened to a finished scan at publication time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishOutcome {
+    /// Real local change: current moved to the fresh scan.
+    Minted,
+    /// Scanned root equals the current pointer's root: adopt-and-hold.
+    Held,
+    /// An adoption landed mid-scan: the scan was discarded untouched.
+    DiscardedStale,
+}
+
+impl FolderState {
+    fn new() -> Self {
+        FolderState {
+            inner: Mutex::new(FolderPointers {
+                last_own_manifest_id: [0u8; 32],
+                ..FolderPointers::default()
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, FolderPointers> {
+        self.inner.lock().unwrap()
+    }
+
+    /// Capture the pre-scan view a later [`Self::publish_scan`] validates
+    /// against. Call BEFORE scanning; the token is cheap (`Copy`).
+    fn scan_token(&self) -> ScanToken {
+        let g = self.lock();
+        ScanToken {
+            parent: g.last_own_manifest_id,
+            observed_current: g.current.as_ref().map(|s| s.manifest_id),
+        }
+    }
+
+    /// Tick path: atomically validate + publish a finished scan. See the
+    /// type-level docs for why check-and-write share one critical section.
+    fn publish_scan(
+        &self,
+        tok: ScanToken,
+        data: Arc<SnapshotData>,
+        stats: ScanStats,
+    ) -> PublishOutcome {
+        let mut g = self.lock();
+        g.scan_stats = Some(stats);
+        if g.current.as_ref().map(|s| s.manifest_id) != tok.observed_current {
+            // The current pointer moved while we scanned (an adoption): the
+            // scan describes PRE-adoption tree state. Publishing it would
+            // clobber the adopted lineage — discard whole; the next tick
+            // resnapshots the post-apply tree.
+            return PublishOutcome::DiscardedStale;
+        }
+        g.latest = Some(Arc::clone(&data));
+        let held_same_root = g
+            .current
+            .as_ref()
+            .is_some_and(|c| c.manifest.root_tree_id == data.manifest.root_tree_id);
+        if !held_same_root {
+            g.current = Some(Arc::clone(&data));
+            g.last_own_manifest_id = data.manifest_id;
+        }
+        drop(g);
+        self.changed.notify_all();
+        if held_same_root {
+            PublishOutcome::Held
+        } else {
+            PublishOutcome::Minted
+        }
+    }
+
+    /// Session path: take a peer manifest as our current folder state
+    /// (adoption precedes agreement). Also refreshes `latest` so legacy
+    /// sessions see adopted bytes.
+    fn adopt_peer(&self, data: Arc<SnapshotData>) {
+        let id = data.manifest_id;
+        let mut g = self.lock();
+        g.latest = Some(Arc::clone(&data));
+        g.current = Some(data);
+        g.last_own_manifest_id = id;
+        drop(g);
+        self.changed.notify_all();
+    }
+
+    /// Record agreement: baseline and agreed id move together under the
+    /// single lock, so offers can never pair a new baseline with an old id.
+    fn record_agreed(&self, manifest: RootManifest, manifest_id: BlobId) {
+        let mut g = self.lock();
+        g.baseline = Some(manifest);
+        g.agreed = Some(manifest_id);
+        drop(g);
+        self.changed.notify_all();
+    }
+
+    /// Wait for the CURRENT folder pointer the same way.
+    fn wait_current(&self, deadline: Instant) -> Option<Arc<SnapshotData>> {
+        let mut g = self.lock();
+        loop {
+            if let Some(snap) = g.current.clone() {
+                return Some(snap);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (ng, _) = self.changed.wait_timeout(g, deadline - now).unwrap();
+            g = ng;
+        }
+    }
+
+    fn baseline_root(&self) -> Option<BlobId> {
+        self.lock().baseline.as_ref().map(|m| m.root_tree_id)
+    }
+
+    fn agreed_id(&self) -> Option<BlobId> {
+        self.lock().agreed
+    }
+
+    fn current_root(&self) -> Option<BlobId> {
+        self.lock()
+            .current
+            .as_ref()
+            .map(|s| s.manifest.root_tree_id)
+    }
+
+    pub fn current_manifest_id(&self) -> Option<BlobId> {
+        self.lock().current.as_ref().map(|s| s.manifest_id)
+    }
+
+    fn scan_counts(&self) -> Option<ScanStats> {
+        self.lock().scan_stats.clone()
+    }
+
+    fn pending_changes(&self) -> Option<i64> {
+        let g = self.lock();
+        let baseline = g.baseline.as_ref()?;
+        let current = g.current.as_ref()?;
+        if baseline.root_tree_id == current.manifest.root_tree_id {
+            Some(0)
+        } else {
+            Some(-1)
+        }
+    }
+
+    /// Wake every waiter (shutdown): they re-check their deadlines instead
+    /// of sleeping out a 10s window while the engine dies.
+    fn wake_all(&self) {
+        self.changed.notify_all();
+    }
+}
+
 struct SharedState {
     shutdown: AtomicBool,
+    force_full_scan: AtomicBool,
     stats: Mutex<EngineStats>,
-    agreed: Mutex<Option<BlobId>>,
-    root: Mutex<Option<BlobId>>,
+    /// window before their `JoinHandle` lands in the joins vec.
+    /// Incremented SYNCHRONOUSLY in the accept loop before `spawn`,
+    /// decremented by each handler's [`LiveSession`], so shutdown can
+    /// account for handlers even in that window.
+    live_sessions: Mutex<usize>,
+    live_idle: Condvar,
+    /// Remaining accept permits ([`MAX_CONCURRENT_SESSIONS`]).
+    free_permits: Mutex<usize>,
+    /// Park for [`EngineHandle::join_until_signal`]; notified by shutdown.
+    park: Mutex<()>,
+    park_cv: Condvar,
+    peer_connectivity: Mutex<HashMap<BlobId, (Instant, &'static str)>>,
 }
 
 impl SharedState {
+    fn new() -> Self {
+        SharedState {
+            shutdown: AtomicBool::new(false),
+            force_full_scan: AtomicBool::new(false),
+            stats: Mutex::new(EngineStats::default()),
+            live_sessions: Mutex::new(0),
+            live_idle: Condvar::new(),
+            free_permits: Mutex::new(MAX_CONCURRENT_SESSIONS),
+            park: Mutex::new(()),
+            park_cv: Condvar::new(),
+            peer_connectivity: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn record_peer_connectivity(&self, peer: BlobId, status: &'static str) {
+        if let Ok(mut map) = self.peer_connectivity.lock() {
+            map.insert(peer, (Instant::now(), status));
+        }
+    }
+
+    fn peer_connectivity(&self, peer: &BlobId) -> &'static str {
+        if let Ok(map) = self.peer_connectivity.lock() {
+            if let Some((at, status)) = map.get(peer) {
+                if at.elapsed() < Duration::from_secs(60) {
+                    return status;
+                }
+            }
+        }
+        "unknown"
+    }
+
+    fn wake_parked(&self) {
+        self.park_cv.notify_all();
+    }
+
     fn bump(&self, f: impl FnOnce(&mut EngineStats)) {
         f(&mut self.stats.lock().unwrap());
     }
 
     fn stats(&self) -> EngineStats {
         *self.stats.lock().unwrap()
+    }
+
+    fn shutting_down(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Semaphore-style try-acquire. `None` = engine busy: caller rejects
+    /// politely (log + drop) instead of queueing unbounded work.
+    fn acquire_permit(self: &Arc<Self>) -> Option<SessionPermit> {
+        let mut g = self.free_permits.lock().unwrap();
+        if *g == 0 {
+            return None;
+        }
+        *g -= 1;
+        Some(SessionPermit {
+            shared: Arc::clone(self),
+        })
+    }
+
+    /// Count this handler BEFORE spawning its thread (see `live_sessions`).
+    fn register_live_session(self: &Arc<Self>) -> LiveSession {
+        *self.live_sessions.lock().unwrap() += 1;
+        LiveSession {
+            shared: Arc::clone(self),
+        }
+    }
+
+    /// Block until every registered session handler has exited.
+    fn wait_sessions_done(&self) {
+        let mut g = self.live_sessions.lock().unwrap();
+        while *g > 0 {
+            g = self.live_idle.wait(g).unwrap();
+        }
+    }
+}
+
+/// RAII accept permit: released when the handler finishes or is dropped.
+struct SessionPermit {
+    shared: Arc<SharedState>,
+}
+
+impl Drop for SessionPermit {
+    fn drop(&mut self) {
+        *self.shared.free_permits.lock().unwrap() += 1;
+    }
+}
+
+/// RAII liveness marker: decrement + notify shutdown on exit, panics
+/// included, so a dying handler can never wedge `shutdown`.
+struct LiveSession {
+    shared: Arc<SharedState>,
+}
+
+impl Drop for LiveSession {
+    fn drop(&mut self) {
+        let mut g = self.shared.live_sessions.lock().unwrap();
+        *g -= 1;
+        self.shared.live_idle.notify_all();
     }
 }
 
@@ -295,26 +728,61 @@ pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
     lineage_winner(a, b)
 }
 
+/// Injectable wall clock: seconds + nanoseconds since the epoch. Tests
+/// pin this so tick logic is deterministic without real time.
+pub(crate) type ClockFn = Arc<dyn Fn() -> (i64, u32) + Send + Sync>;
+
+/// Injectable snapshot source (the scan). Tests substitute canned outputs
+/// to interleave tick-vs-adopt deterministically.
+pub(crate) type SnapshotSourceFn = Arc<
+    dyn Fn(
+            &Store,
+            ferry_store::chunker::ValidatedPoly,
+            &Path,
+            &SnapshotIdentity,
+        ) -> Result<SnapshotOutput, SnapshotError>
+        + Send
+        + Sync,
+>;
+
+fn system_clock() -> ClockFn {
+    Arc::new(now_parts)
+}
+
+fn real_snapshot_source() -> SnapshotSourceFn {
+    Arc::new(snapshot_dir_incremental)
+}
+
+/// Audit-grade scanner for the first tick after a session touched the tree:
+/// apply paths restore recorded mtimes, so strict stat-reuse could mistake a
+/// same-size conflict-tie rewrite for an untouched file. One full read+chunk
+/// pass re-grounds the reuse baseline; only quiet ticks run incremental.
+fn audit_snapshot_source() -> SnapshotSourceFn {
+    Arc::new(snapshot_dir)
+}
+
 struct Ctx {
     cfg: EngineConfig,
-    /// This daemon's long-term device identity: X25519 keypair derived
-    /// deterministically from the tag (stable across restarts; T-007 owns
-    /// the real provisioning ritual). Its PUBLIC key is the manifest
-    /// device_id, the handshake stat_pub, and the ledger's peer key.
+    /// This daemon's long-term device identity: a persisted X25519 keypair
+    /// loaded via `SyncEngine::set_identity` (production) or, in tests, the
+    /// tag-derived constructor. Its PUBLIC key is the manifest
+    /// `device_id`, the handshake `stat_pub`, and the ledger's peer key.
     identity: DeviceIdentity,
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
-    agreements: AgreementStore,
     session_lock: Mutex<()>,
-    /// Latest scan result — always refreshed each tick (legacy sessions
-    /// read this).
-    latest: Mutex<Option<Arc<SnapshotData>>>,
-    /// The CURRENT folder pointer: our latest snapshot OR an adopted peer
-    /// manifest. v1 announcements and parent chains flow from here.
-    current: Mutex<Option<Arc<SnapshotData>>>,
-    baseline: Mutex<Option<RootManifest>>,
-    last_own_manifest_id: Mutex<BlobId>,
+    /// The folder-pointer state machine (T-07): one owner for current /
+    /// latest / baseline / agreed / next-parent.
+    folder: Arc<FolderState>,
     shared: Arc<SharedState>,
+    /// Local peer authorization policy (T-18).
+    peer_policy: PeerPolicy,
+    clock: ClockFn,
+    snapshot_source: SnapshotSourceFn,
+    /// Present only when the real scanner is in use (no test injection):
+    /// the audit-grade walk for post-session ticks. Tests inject a single
+    /// scripted source, so there is nothing to upgrade to.
+    audit_source: Option<SnapshotSourceFn>,
 }
 
 impl Ctx {
@@ -336,54 +804,18 @@ impl Ctx {
         self.shared.bump(|s| s.rejected_items += 1);
     }
 
-    fn my_offer(&self) -> Result<MyOffer, SessionError> {
-        // Sessions may arrive before the very first poll tick; wait briefly.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(snap) = self.latest.lock().unwrap().clone() {
-                let baseline = self.baseline.lock().unwrap().clone();
-                let (agreed_id, agreed_root) = match &baseline {
-                    Some(m) => (
-                        *blake3::hash(&serialize_manifest(m)).as_bytes(),
-                        Some(m.root_tree_id),
-                    ),
-                    None => ([0u8; 32], None),
-                };
-                return Ok(MyOffer {
-                    snap,
-                    agreed_id,
-                    agreed_root,
-                });
-            }
-            if Instant::now() > deadline {
-                return Err(SessionError::Other("no local snapshot available".into()));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
     /// The CURRENT folder pointer (own latest or adopted), waiting out the
-    /// same pre-first-tick window as [`Ctx::my_offer`].
+    /// same pre-first-tick window.
     fn current_snapshot(&self) -> Result<Arc<SnapshotData>, SessionError> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(snap) = self.current.lock().unwrap().clone() {
-                return Ok(snap);
-            }
-            if Instant::now() > deadline {
-                return Err(SessionError::Other(
-                    "no local folder state available".into(),
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let deadline = Instant::now() + FIRST_STATE_WAIT;
+        self.folder
+            .wait_current(deadline)
+            .ok_or_else(|| SessionError::Other("no local folder state available".into()))
     }
 
     /// Record the last-agreed pointer against a peer device: THE canonical
-    /// 77-byte ledger record (ferry_proto::agreement, byte-exact per
-    /// `docs/store-format.md` §"Last-agreed manifest pointer", the format
-    /// T-010's engine reads), plus the M0 convenience record that keeps
-    /// the full manifest bytes for offline baseline recovery. Also moves
+    /// 77-byte ledger record (`ferry_store::agreement`, byte-exact per
+    /// `docs/store-format.md` §"Last-agreed manifest pointer"). Also moves
     /// the in-memory baseline so divergence gating sees agreement.
     fn record_agreement(
         &self,
@@ -392,29 +824,41 @@ impl Ctx {
         manifest_id: BlobId,
     ) -> Result<(), SessionError> {
         let (sec, nsec) = now_parts();
-        // Canonical, spec-shaped ledger under <store>/.ferry/agreement/.
-        ferry_proto::agreement::AgreementLedger::new(self.store.store_dir())
+        AgreementLedger::new(self.store.store_dir())
             .record(
                 &self.cfg.folder_id,
-                &ferry_proto::agreement::AgreementRecord {
-                    peer,
+                &AgreedRecord {
+                    peer_device_id: peer,
                     manifest_id,
                     agreed_sec: sec,
                     agreed_nsec: nsec,
                 },
             )
             .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;
-        // M0-local convenience copy (per-peer dir + manifest.bin).
-        let rec = AgreedRecord {
-            peer_device_id: peer,
-            manifest_id,
-            agreed_sec: sec,
-            agreed_nsec: nsec,
-            flags: 0,
+        let manifest = if manifest_bytes.is_empty() {
+            match self
+                .store
+                .get(ferry_store::format::BlobKind::Manifest, &manifest_id)
+            {
+                Ok(b) => parse_manifest(&b)?,
+                Err(_) => {
+                    self.status(&format!(
+                        "STATE agreed={} recorded vs {} (manifest body not in store)",
+                        hex(&manifest_id),
+                        hex_short(&peer)
+                    ));
+                    return Ok(());
+                }
+            }
+        } else {
+            let _ = self
+                .store
+                .put_meta(ferry_store::format::BlobKind::Manifest, manifest_bytes);
+            let _ = self.store.flush();
+            let _ = self.store.write_index_snapshot();
+            parse_manifest(manifest_bytes)?
         };
-        self.agreements.record(&hex(&peer), rec, manifest_bytes)?;
-        *self.baseline.lock().unwrap() = Some(parse_manifest(manifest_bytes)?);
-        *self.shared.agreed.lock().unwrap() = Some(manifest_id);
+        self.folder.record_agreed(manifest, manifest_id);
         self.status(&format!(
             "STATE agreed={} recorded vs {}",
             hex(&manifest_id),
@@ -432,17 +876,27 @@ impl Ctx {
     /// sides' round-2 ids stay comparable. A differing root means real
     /// local change: mint a child of the current lineage.
     fn tick(&self, n: u64) -> Result<(), SessionError> {
-        let parent = *self.last_own_manifest_id.lock().unwrap();
-        let (sec, nsec) = now_parts();
+        // Capture the pre-scan view FIRST: publication validates against it
+        // under the folder lock, so an adoption landing mid-scan wins.
+        let tok = self.folder.scan_token();
+        let (sec, nsec) = (self.clock)();
         let identity = SnapshotIdentity {
             folder_id: self.cfg.folder_id,
             device_id: *self.identity.device_id(),
-            parent_manifest_id: parent,
+            parent_manifest_id: tok.parent,
             created_sec: sec,
             created_nsec: nsec,
         };
+        // A session that applied changes or adopted a manifest forces ONE
+        // audit-grade scan (apply restores mtimes; stat-reuse must not judge
+        // the post-session tree). Quiet ticks stay on the incremental walk.
+        let forced = self.shared.force_full_scan.swap(false, Ordering::Relaxed);
+        let scan: SnapshotSourceFn = match (forced, &self.audit_source) {
+            (true, Some(audit)) => Arc::clone(audit),
+            _ => Arc::clone(&self.snapshot_source),
+        };
         let out: SnapshotOutput =
-            snapshot_dir(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
+            (scan)(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
         let manifest_bytes = serialize_manifest(&out.manifest);
         let data = Arc::new(SnapshotData {
             manifest_id: out.manifest_id,
@@ -450,46 +904,39 @@ impl Ctx {
             manifest_bytes,
         });
 
-        // Always publish the raw scan for the legacy session path.
-        *self.latest.lock().unwrap() = Some(data.clone());
-
-        let held_same_root = match self.current.lock().unwrap().as_ref() {
-            Some(cur) => cur.manifest.root_tree_id == out.root_tree_id,
-            None => false,
-        };
-        if !held_same_root {
-            // Real local change (or fresh device): mint a child of the
-            // current lineage.
-            *self.current.lock().unwrap() = Some(Arc::clone(&data));
-            *self.last_own_manifest_id.lock().unwrap() = out.manifest_id;
+        let outcome = self.folder.publish_scan(tok, data, out.stats);
+        match outcome {
+            PublishOutcome::DiscardedStale => {
+                // An adoption landed while we scanned; the scan described
+                // pre-adoption tree state. The next tick resnapshots the
+                // post-apply tree and publishes then.
+                self.status("STATE scan discarded: adoption landed mid-scan");
+                return Ok(());
+            }
+            PublishOutcome::Held | PublishOutcome::Minted => {}
         }
-        drop(data); // held case: scan blobs dedupe in the store
-        *self.shared.root.lock().unwrap() = Some(out.root_tree_id);
 
-        let base_root = self
-            .baseline
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|m| m.root_tree_id);
+        let base_root = self.folder.baseline_root();
+        let current_manifest = self
+            .folder
+            .current_manifest_id()
+            .unwrap_or(out.root_tree_id);
         self.status(&format!(
             "STATE root={} agreed={}",
-            hex(&out.root_tree_id),
-            self.shared
-                .agreed
-                .lock()
-                .unwrap()
-                .map(|i| hex(&i))
-                .unwrap_or("none".into())
+            hex(&current_manifest),
+            self.folder.agreed_id().map_or("none".into(), |i| hex(&i))
         ));
 
         // Connector drives sessions; listener relies on opportunistic dials
         // from the peer to discover ITS changes. Divergence from the agreed
-        // baseline still gates dialing (the M0 bone), with the same
-        // opportunistic backstop.
+        // baseline still gates dialing (the M0 bone). When fully settled —
+        // current root == baseline root == the manifest both sides settled on
+        // last session — the per-tick dial is skipped entirely; only the
+        // opportunistic backstop fires, which must stay live because it is
+        // also how connector-side peers announce listen-role changes.
+        let diverged = base_root != Some(out.root_tree_id);
         if self.cfg.connect_to.is_some()
-            && (base_root != Some(out.root_tree_id)
-                || n.is_multiple_of(u64::from(self.cfg.opportunistic_every)))
+            && (diverged || n.is_multiple_of(u64::from(self.cfg.opportunistic_every)))
         {
             // try_lock: never queue behind a serving session; next tick retries.
             if let Ok(_guard) = self.session_lock.try_lock() {
@@ -500,24 +947,23 @@ impl Ctx {
     }
 
     fn dial_and_run(&self) {
-        let addr = match self.cfg.connect_to {
-            Some(a) => a,
-            None => return,
+        let Some(addr) = self.cfg.connect_to else {
+            return;
         };
         match self.transport.dial(addr) {
-            Ok(mut conn) => match dispatch_session(conn.as_mut(), self, true) {
+            Ok(mut conn) => match run_session_v1(conn.as_mut(), self, true) {
                 Ok(()) => self.bump_ok(),
                 Err(e) => {
-                    // v1 sessions already said a best-effort BYE; only the
-                    // legacy path knows the ERROR frame.
-                    if self.cfg.legacy_m0_proto {
-                        proto::send_error(conn.as_mut(), &format!("{e}"));
-                    }
                     self.note_session_failure(&e);
                     self.status(&format!("SESSION failed (dial): {e}"));
                 }
             },
-            Err(e) => self.status(&format!("SESSION dial error: {e}")),
+            Err(e) => {
+                if let Some(peer) = self.cfg.expected_peer_id {
+                    self.shared.record_peer_connectivity(peer, "unreachable");
+                }
+                self.status(&format!("SESSION dial error: {e}"));
+            }
         }
     }
 
@@ -528,25 +974,14 @@ impl Ctx {
     fn note_session_failure(&self, e: &SessionError) {
         if matches!(
             e,
-            SessionError::Wire(ferry_proto::error::ProtoError::Auth(_))
+            SessionError::Wire(
+                ferry_proto::error::ProtoError::Auth(_)
+                    | ferry_proto::error::ProtoError::IdentityMismatch { .. }
+            ) | SessionError::PeerUnauthorized(_)
         ) {
             self.bump_rejected();
         }
         self.bump_failed();
-    }
-}
-
-/// Pick the session shape: protocol v1 (default, encrypted) or the
-/// retired M0 plaintext framing behind the dev flag.
-fn dispatch_session(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    dialer: bool,
-) -> Result<(), SessionError> {
-    if ctx.cfg.legacy_m0_proto {
-        run_session_legacy(conn, ctx, dialer)
-    } else {
-        run_session_v1(conn, ctx, dialer)
     }
 }
 
@@ -562,13 +997,53 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     } else {
         ferry_proto::Role::Responder
     };
-    let expect = match ctx.cfg.expected_peer_id {
-        Some(pin) => ExpectPeer::Pin(pin),
-        None => ExpectPeer::TrustOnFirstUse,
+
+    let ledger = PeerLedger::new(ctx.store.store_dir());
+    let (expect, is_tofu_fresh) = match &ctx.peer_policy {
+        PeerPolicy::AllowList(set) => {
+            if set.len() == 1 {
+                let pin = *set.iter().next().unwrap();
+                (ExpectPeer::Pin(pin), false)
+            } else {
+                (ExpectPeer::TrustOnFirstUse, false)
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => {
+            let known = ledger.list_peers(&ctx.cfg.folder_id)?;
+            if let Some(first) = known.first() {
+                (ExpectPeer::Pin(*first), false)
+            } else {
+                (ExpectPeer::TrustOnFirstUse, true)
+            }
+        }
     };
 
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
+
+    match &ctx.peer_policy {
+        PeerPolicy::AllowList(set) => {
+            if !set.contains(&est.peer) {
+                let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
+                ctx.shared.record_peer_connectivity(est.peer, "unreachable");
+                ctx.status(&format!(
+                    "PEER unauthorized: {} not in allow-list",
+                    hex(&est.peer)
+                ));
+                return Err(SessionError::PeerUnauthorized(hex(&est.peer)));
+            }
+        }
+        PeerPolicy::TrustOnFirstUse => {
+            if is_tofu_fresh {
+                ctx.status(&format!(
+                    "PEER new device trusted (TOFU): {}",
+                    hex(&est.peer)
+                ));
+                ledger.record_peer(&ctx.cfg.folder_id, &est.peer)?;
+            }
+        }
+    }
+
     ctx.status(&format!(
         "SESSION v1 peer={} encrypted=yes version={} role={}",
         hex_short(&est.peer),
@@ -578,7 +1053,7 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
 
     let snap = ctx.current_snapshot()?;
     let host = EngineHost { ctx };
-    exchange::run_v1_session(
+    let res = exchange::run_v1_session(
         &mut est,
         &host,
         &ctx.store,
@@ -590,7 +1065,13 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
         },
         MAX_ITEM_RETRIES,
         dialer,
-    )
+    );
+    if res.is_ok() {
+        ctx.shared.record_peer_connectivity(est.peer, "reachable");
+    } else {
+        ctx.shared.record_peer_connectivity(est.peer, "unreachable");
+    }
+    res
 }
 
 /// The engine's [`ExchangeHost`]: routes driver callbacks into snapshot
@@ -612,6 +1093,10 @@ impl ExchangeHost for EngineHost<'_> {
         &self.ctx.cfg.tree_dir
     }
 
+    fn pin_state_dir(&self) -> Option<&std::path::Path> {
+        self.ctx.cfg.pin_state_dir.as_deref()
+    }
+
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError> {
         let id = *blake3::hash(bytes).as_bytes();
         let data = Arc::new(SnapshotData {
@@ -619,15 +1104,23 @@ impl ExchangeHost for EngineHost<'_> {
             manifest: manifest.clone(),
             manifest_bytes: bytes.to_vec(),
         });
-        *self.ctx.latest.lock().unwrap() = Some(Arc::clone(&data));
-        *self.ctx.current.lock().unwrap() = Some(data);
-        *self.ctx.last_own_manifest_id.lock().unwrap() = id;
-        *self.ctx.shared.root.lock().unwrap() = Some(manifest.root_tree_id);
+        self.ctx
+            .shared
+            .force_full_scan
+            .store(true, Ordering::Relaxed);
+        self.ctx.folder.adopt_peer(data);
         self.ctx.status(&format!(
             "STATE root={} adopted",
             hex(&manifest.root_tree_id)
         ));
         Ok(())
+    }
+
+    fn note_tree_mutation(&self) {
+        self.ctx
+            .shared
+            .force_full_scan
+            .store(true, Ordering::Relaxed);
     }
 
     fn agree(&self, peer: BlobId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError> {
@@ -639,480 +1132,18 @@ fn hex_short(b: &BlobId) -> String {
     hex(b)[..12].to_string()
 }
 
-fn now_parts() -> (i64, u32) {
+pub(crate) fn now_parts() -> (i64, u32) {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     (d.as_secs() as i64, d.subsec_nanos())
 }
 
-struct StoreSource<'a> {
-    store: &'a Store,
-}
-
-impl BlobSource for StoreSource<'_> {
-    fn get(&self, kind: BlobKind, id: &BlobId) -> Result<Vec<u8>, MaterializeError> {
-        self.store.get(kind, id).map_err(|e| {
-            MaterializeError::MissingBlob(format!("{} {}: {e}", kind_debug(kind), hex(id)))
-        })
-    }
-}
-
-fn kind_debug(k: BlobKind) -> &'static str {
-    match k {
-        BlobKind::DataChunk => "chunk",
-        BlobKind::TreeNode => "tree",
-        BlobKind::Manifest => "manifest",
-        BlobKind::Polynomial => "poly",
-    }
-}
-
-/// One sync conversation over an established connection — RETIRED M0
-/// plaintext framing, kept behind [`EngineConfig::legacy_m0_proto`].
-/// Caller holds the per-daemon session lock. `dialer` speaks first (HELLO
-/// order only; every subsequent decision is symmetric).
-fn run_session_legacy(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    dialer: bool,
-) -> Result<(), SessionError> {
-    let my = ctx.my_offer()?;
-
-    let peer_tag = if dialer {
-        proto::send_hello(conn, &ctx.cfg.tag)?;
-        let h = proto::recv_hello(conn)?;
-        ctx.status(&format!("SESSION opened with {}", h.device_tag));
-        h.device_tag
-    } else {
-        let h = proto::recv_hello(conn)?;
-        ctx.status(&format!("SESSION accepted from {}", h.device_tag));
-        proto::send_hello(conn, &ctx.cfg.tag)?;
-        h.device_tag
-    };
-
-    proto::send_offer(
-        conn,
-        &proto::Offer {
-            manifest_bytes: my.snap.manifest_bytes.clone(),
-            agreed_manifest_id: my.agreed_id,
-            agreed_root_tree_id: my.agreed_root.unwrap_or([0; 32]),
-        },
-    )?;
-    let theirs = proto::recv_offer(conn)?;
-    let peer_manifest = parse_manifest(&theirs.manifest_bytes)?;
-    let peer_manifest_id = *blake3::hash(&theirs.manifest_bytes).as_bytes();
-
-    // Keep the offered manifest as a stored blob: agreement records may
-    // reference it across restarts.
-    ctx.store
-        .put_meta(BlobKind::Manifest, &theirs.manifest_bytes)?;
-
-    decide_and_transfer(
-        conn,
-        ctx,
-        my,
-        theirs,
-        peer_manifest,
-        peer_manifest_id,
-        peer_tag,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn decide_and_transfer(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: MyOffer,
-    theirs: proto::Offer,
-    peer_manifest: RootManifest,
-    peer_manifest_id: BlobId,
-    peer_tag: String,
-) -> Result<(), SessionError> {
-    if my.snap.manifest.root_tree_id == peer_manifest.root_tree_id {
-        // Same content already. If agreement pointers match, nothing to do;
-        // otherwise settle on the lineage winner so records converge even
-        // between fresh peers (both-empty bootstrap included).
-        if my.agreed_id != [0; 32] && theirs.agreed_manifest_id == my.agreed_id {
-            ctx.status("SESSION converged already");
-            return Ok(());
-        }
-        let win = lineage_winner(&my.snap.manifest, &peer_manifest);
-        let (winner_bytes, winner_id) = match win {
-            Donor::First => (my.snap.manifest_bytes.clone(), my.snap.manifest_id),
-            Donor::Second => (theirs.manifest_bytes.clone(), peer_manifest_id),
-        };
-        // Deterministic speakers: the First side receives the confirmation
-        // it computes; the Second side records then sends it.
-        match win {
-            Donor::First => {
-                let got = proto::recv_agreed(conn)?;
-                if got != winner_id {
-                    return Err(SessionError::Other(format!(
-                        "agreement mismatch: expected {}, peer said {}",
-                        hex(&winner_id),
-                        hex(&got)
-                    )));
-                }
-                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
-            }
-            Donor::Second => {
-                ctx.record_agreement(device_id_from_tag(&peer_tag), &winner_bytes, winner_id)?;
-                proto::send_agreed(conn, winner_id)?;
-            }
-        }
-        ctx.status("SESSION settled agreement without transfer");
-        return Ok(());
-    }
-
-    let their_baseline = if theirs.agreed_manifest_id == [0u8; 32] {
-        None
-    } else {
-        Some(theirs.agreed_root_tree_id)
-    };
-    let win = select_donor(
-        PeerState {
-            current_root: my.snap.manifest.root_tree_id,
-            baseline_root: my.agreed_root,
-        },
-        PeerState {
-            current_root: peer_manifest.root_tree_id,
-            baseline_root: their_baseline,
-        },
-        &my.snap.manifest,
-        &peer_manifest,
-    );
-
-    match win {
-        Donor::First => serve_as_donor(conn, ctx, &my.snap, &peer_tag)?,
-        Donor::Second => run_as_puller(
-            conn,
-            ctx,
-            my.snap,
-            theirs,
-            peer_manifest,
-            peer_manifest_id,
-            peer_tag,
-        )?,
-    }
-    Ok(())
-}
-
-/// Donor side: answer requests until AGREED arrives.
-fn serve_as_donor(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: &Arc<SnapshotData>,
-    peer_tag: &str,
-) -> Result<(), SessionError> {
-    let mut pack_cache: Option<PackMap> = None;
-    loop {
-        let (t, body) = proto::recv_msg(conn)?;
-        match t {
-            proto::tag::REQ_META => {
-                for (kind, id) in proto::decode_req_meta(&body)? {
-                    let bytes = ctx.store.get(kind, &id)?;
-                    proto::send_item(conn, &ItemPayload::Blob { kind, id, bytes })?;
-                }
-                proto::send_items_done(conn)?;
-            }
-            proto::tag::REQ_DATA => {
-                let ids = proto::decode_req_data(&body)?;
-                if pack_cache.is_none() {
-                    pack_cache = Some(build_pack_map(ctx)?);
-                }
-                serve_data_request(conn, ctx, pack_cache.as_ref().unwrap(), &ids)?;
-            }
-            proto::tag::AGREED => {
-                let id = proto::decode_agreed(&body)?;
-                if id != my.manifest_id {
-                    return Err(SessionError::Other(format!(
-                        "peer agreed on {} but I offered {}",
-                        hex(&id),
-                        hex(&my.manifest_id)
-                    )));
-                }
-                ctx.record_agreement(
-                    device_id_from_tag(peer_tag),
-                    &my.manifest_bytes,
-                    my.manifest_id,
-                )?;
-                ctx.status(&format!(
-                    "SESSION complete: peer agreed on {}",
-                    hex_short(&id)
-                ));
-                return Ok(());
-            }
-            other => return Err(ProtoError::BadTag(other).into()),
-        }
-    }
-}
-
-fn serve_data_request(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    map: &PackMap,
-    chunk_ids: &[BlobId],
-) -> Result<(), SessionError> {
-    let mut sent_packs: HashSet<PackId> = HashSet::new();
-    for id in chunk_ids {
-        match map.get(id) {
-            Some((name, bytes)) => {
-                if sent_packs.insert(*name) {
-                    proto::send_item(
-                        conn,
-                        &ItemPayload::Pack {
-                            name: *name,
-                            bytes: (**bytes).clone(),
-                        },
-                    )?;
-                }
-                // Chunk rides a pack already sent this round: nothing to do.
-            }
-            None => {
-                // Unmapped fallback (should not happen post-seal, but stay
-                // correct): serve the blob individually.
-                let bytes = ctx.store.get(BlobKind::DataChunk, id)?;
-                proto::send_item(
-                    conn,
-                    &ItemPayload::Blob {
-                        kind: BlobKind::DataChunk,
-                        id: *id,
-                        bytes,
-                    },
-                )?;
-            }
-        }
-    }
-    proto::send_items_done(conn)?;
-    Ok(())
-}
-
-// Pack ingest lives in ONE place now: `exchange::ingest_pack_verified`
-// (re-exported from the crate root), shared by both protocol paths.
-
-/// Scan the on-disk packs and map every DATA CHUNK id to its owning pack
-/// (with the pack's bytes cached for streaming). Packs failing their own
-/// name verification are skipped loudly; a requested chunk with no healthy
-/// home falls back to individual-blob transfer downstream.
-fn build_pack_map(ctx: &Ctx) -> Result<PackMap, SessionError> {
-    let packs_dir = ctx.store.store_dir().join("packs");
-    let mut out = HashMap::new();
-    for entry in std::fs::read_dir(&packs_dir)?.flatten() {
-        let path = entry.path();
-        let name_str = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let claimed: PackId = match ferry_store::format::unhex(&name_str) {
-            Some(v) => v,
-            None => continue,
-        };
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        if ferry_store::pack::pack_name_of(&bytes) != claimed {
-            ctx.status(&format!("WARN skipping damaged pack {}", name_str));
-            continue;
-        }
-        let (_, entries) = match ferry_store::pack::read_footer(
-            &bytes,
-            &claimed,
-            &[0u8; ferry_store::crypto::KEY_LEN],
-            &PassthroughCipher,
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let shared = Arc::new(bytes);
-        for e in entries {
-            if e.kind == BlobKind::DataChunk {
-                out.insert(e.id, (claimed, Arc::clone(&shared)));
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Puller side: hydrate the peer's tree nodes, diff, request data by chunk
-/// id, ingest, materialize durably, confirm.
-fn run_as_puller(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    my: Arc<SnapshotData>,
-    theirs: proto::Offer,
-    peer_manifest: RootManifest,
-    peer_manifest_id: BlobId,
-    peer_tag: String,
-) -> Result<(), SessionError> {
-    fetch_meta_tree(conn, ctx, &peer_manifest.root_tree_id)?;
-
-    let changes = ferry_store::diff::diff_manifests(&ctx.store, &my.manifest, &peer_manifest)?;
-    let wanted = collect_chunk_ids(&changes);
-    ctx.status(&format!(
-        "SESSION pulling: {} added / {} removed / {} modified / {} metadata, {} chunks wanted",
-        changes.added.len(),
-        changes.removed.len(),
-        changes.content_modified.len() + changes.type_changed.len(),
-        changes.metadata_modified.len(),
-        wanted.len()
-    ));
-
-    proto::send_req_data(conn, &wanted)?;
-    let mut received_packs = false;
-    loop {
-        match proto::recv_item_stream(conn)? {
-            proto::ItemStream::Done => break,
-            proto::ItemStream::Item(item) => {
-                if ingest_item(ctx, &item)? {
-                    received_packs = true;
-                }
-            }
-        }
-    }
-
-    if received_packs {
-        // Seal staged meta blobs, then teach the location table about the
-        // freshly landed packs. M0 shortcut: full rebuild per delivery;
-        // T-002/T-008 replace this with incremental index appends.
-        ctx.store.flush()?;
-        let (_, skipped) = ctx.store.rebuild_index()?;
-        if !skipped.is_empty() {
-            return Err(IngestError::RebuildSkipped(skipped).into());
-        }
-    }
-
-    InlineMaterializer::new(&ctx.cfg.tree_dir)
-        .apply(&peer_manifest, &changes, &StoreSource { store: &ctx.store })
-        .map_err(|e| SessionError::Apply(format!("{e}")))?;
-
-    ctx.record_agreement(
-        device_id_from_tag(&peer_tag),
-        &theirs.manifest_bytes,
-        peer_manifest_id,
-    )?;
-    proto::send_agreed(conn, peer_manifest_id)?;
-    ctx.status(&format!(
-        "SESSION complete: agreed on {}",
-        hex_short(&peer_manifest_id)
-    ));
-    Ok(())
-}
-
-/// Walk the offered tree level by level, requesting missing tree nodes as
-/// individual meta blobs. Presence probing goes through the store (staging
-/// included), so repeat sessions only fetch what is genuinely absent.
-fn fetch_meta_tree(
-    conn: &mut dyn Connection,
-    ctx: &Ctx,
-    root: &BlobId,
-) -> Result<(), SessionError> {
-    let mut frontier: Vec<BlobId> = vec![*root];
-    let mut fetched = 0usize;
-    while !frontier.is_empty() {
-        let missing: Vec<BlobId> = frontier
-            .iter()
-            .filter(|id| ctx.store.get(BlobKind::TreeNode, id).is_err())
-            .copied()
-            .collect();
-        if !missing.is_empty() {
-            let req: Vec<(BlobKind, BlobId)> =
-                missing.iter().map(|id| (BlobKind::TreeNode, *id)).collect();
-            proto::send_req_meta(conn, &req)?;
-            let mut got: HashSet<BlobId> = HashSet::new();
-            while got.len() < missing.len() {
-                match proto::recv_item_stream(conn)? {
-                    proto::ItemStream::Done => {
-                        return Err(SessionError::Other("tree-node stream ended early".into()))
-                    }
-                    proto::ItemStream::Item(ItemPayload::Blob {
-                        kind: BlobKind::TreeNode,
-                        id,
-                        bytes,
-                    }) => {
-                        if !missing.contains(&id) || got.contains(&id) {
-                            return Err(SessionError::Other(format!(
-                                "unexpected tree node {} in response",
-                                hex(&id)
-                            )));
-                        }
-                        let found = *blake3::hash(&bytes).as_bytes();
-                        if found != id {
-                            ctx.bump_rejected();
-                            return Err(IngestError::BlobHashMismatch {
-                                id: hex(&id),
-                                found: hex(&found),
-                            }
-                            .into());
-                        }
-                        ctx.store.put_meta(BlobKind::TreeNode, &bytes)?;
-                        got.insert(id);
-                        fetched += 1;
-                    }
-                    proto::ItemStream::Item(other) => {
-                        return Err(SessionError::Other(format!(
-                            "expected tree node item, got kind {:?}",
-                            other
-                        )))
-                    }
-                }
-            }
-            proto::recv_items_done(conn)?;
-        }
-        // Expand frontier: children of every node now present locally.
-        let mut next = Vec::new();
-        for id in &frontier {
-            let bytes = ctx.store.get(BlobKind::TreeNode, id)?;
-            let node = ferry_store::manifest::parse_tree_node(&bytes)?;
-            for e in node.entries {
-                if let ferry_store::manifest::EntryPayload::Dir { child_tree_id } = e.payload {
-                    next.push(child_tree_id);
-                }
-            }
-        }
-        frontier = next;
-    }
-    if fetched > 0 {
-        ctx.status(&format!("SESSION fetched {fetched} tree nodes"));
-    }
-    Ok(())
-}
-
-/// Verify-after-receipt, then persist. Returns true when a PACK landed on
-/// disk (caller must refresh the index).
-fn ingest_item(ctx: &Ctx, item: &ItemPayload) -> Result<bool, IngestError> {
-    match item {
-        ItemPayload::Pack { name, bytes } => {
-            match exchange::ingest_pack_verified(&ctx.store, name, bytes) {
-                Ok(()) => Ok(true),
-                Err(e @ IngestError::NameMismatch { .. }) => {
-                    ctx.bump_rejected();
-                    Err(e)
-                }
-                Err(e) => Err(e),
-            }
-        }
-        ItemPayload::Blob { kind, id, bytes } => {
-            let found = *blake3::hash(bytes).as_bytes();
-            if found != *id {
-                ctx.bump_rejected();
-                return Err(IngestError::BlobHashMismatch {
-                    id: hex(id),
-                    found: hex(&found),
-                });
-            }
-            ctx.store.put_blob(*kind, bytes)?;
-            Ok(false)
-        }
-    }
-}
-
-fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
-    collect_chunk_ids_public(changes)
-}
-
-/// Shared with the v1 exchange driver (`exchange::pull_content`).
-pub(crate) fn collect_chunk_ids_public(changes: &ChangeSet) -> Vec<BlobId> {
+/// Chunk-id collector over a change set. The v1 exchange driver's pull
+/// path now computes its wanted set inside the convergence engine; this
+/// helper remains for the engine's own tests.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
     let mut seen: HashSet<BlobId> = HashSet::new();
     let mut out = Vec::new();
     for state in changes
@@ -1136,13 +1167,31 @@ pub struct SyncEngine {
     transport: Arc<dyn Transport>,
     store: Arc<Store>,
     listener: Option<Box<dyn crate::transport::Listener>>,
+    peer_policy: Option<PeerPolicy>,
+    /// Explicit device identity (T-14/T-18 follow-up): when set, sessions use
+    /// this keypair instead of the tag-derived skeleton identity, so the wire
+    /// peer id equals the `device_pub` recorded in `CONFIG_HEAD` wrap entries
+    /// and allow-list authorization can match. None = legacy tag derivation.
+    identity: Option<DeviceIdentity>,
+    /// Test seams (T-07): None = real clock / real scanner.
+    clock: Option<ClockFn>,
+    snapshot_source: Option<SnapshotSourceFn>,
 }
 
 impl SyncEngine {
     /// Build (but do not start) an engine. Opens or creates the store,
     /// creates the tree dir, binds the listener when configured.
+    ///
+    /// Startup also runs the T-20 crash-residue sweep, bounded older-than:
+    /// store-side temps under `.ferry/` (pack staging, sidecar and ledger
+    /// temps — `ferry_store::reclaim`) plus tree-side materialize temps
+    /// (`ferry_materialize::sweep_stale_temps`). Failures are best-effort
+    /// and never block startup.
     pub fn new(cfg: EngineConfig, transport: Arc<dyn Transport>) -> Result<Self, EngineError> {
         std::fs::create_dir_all(&cfg.tree_dir)?;
+        let stale = Duration::from_secs(ferry_materialize::DEFAULT_STALE_TEMP_AGE_SECS);
+        let _ = ferry_materialize::sweep_stale_temps(&cfg.tree_dir, stale);
+        let _ = ferry_store::reclaim::sweep_store_temps(&cfg.store_dir, stale);
         let store = Arc::new(open_or_create_store(&cfg.store_dir)?);
         let listener = match cfg.bind_addr {
             Some(addr) => Some(Transport::listen(transport.as_ref(), addr)?),
@@ -1153,7 +1202,36 @@ impl SyncEngine {
             transport,
             store,
             listener,
+            peer_policy: None,
+            identity: None,
+            clock: None,
+            snapshot_source: None,
         })
+    }
+
+    /// Explicitly configure the peer authorization policy (T-18).
+    pub fn set_peer_policy(&mut self, policy: PeerPolicy) {
+        self.peer_policy = Some(policy);
+    }
+
+    /// Run sessions with a real device identity instead of the tag-derived
+    /// skeleton keypair (T-14/T-18 follow-up). Production callers (ferry-cli)
+    /// pass the `FERRY_HOME` identity so handshake ids match the `device_pub`
+    /// entries their peers seed allow-lists from.
+    pub fn set_identity(&mut self, identity: DeviceIdentity) {
+        self.identity = Some(identity);
+    }
+
+    /// Swap the clock and the scanner (test seam, T-07): tick logic becomes
+    /// deterministic without real time or a real tree.
+    #[cfg(test)]
+    pub(crate) fn set_test_injections(
+        &mut self,
+        clock: ClockFn,
+        snapshot_source: SnapshotSourceFn,
+    ) {
+        self.clock = Some(clock);
+        self.snapshot_source = Some(snapshot_source);
     }
 
     /// Bound address (after `:0` resolution); None for pure connectors.
@@ -1179,25 +1257,59 @@ impl SyncEngine {
     pub fn start(mut self) -> EngineHandle {
         let listener = self.listener.take();
         let listen_addr = listener.as_ref().and_then(|l| l.local_addr().ok());
-        let shared = Arc::new(SharedState {
-            shutdown: AtomicBool::new(false),
-            stats: Mutex::new(EngineStats::default()),
-            agreed: Mutex::new(None),
-            root: Mutex::new(None),
-        });
-        let agreements = AgreementStore::new(self.store.store_dir());
+        let shared = Arc::new(SharedState::new());
+        let folder = Arc::new(FolderState::new());
+        if let Ok(records) =
+            AgreementLedger::new(self.store.store_dir()).list_folder(&self.cfg.folder_id)
+        {
+            if let Some((_, rec)) = records
+                .iter()
+                .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec))
+            {
+                if let Ok(bytes) = self.store.get(BlobKind::Manifest, &rec.manifest_id) {
+                    if let Ok(manifest) = parse_manifest(&bytes) {
+                        folder.record_agreed(manifest, rec.manifest_id);
+                    }
+                }
+            }
+        }
+        let peer_policy = if let Some(policy) = self.peer_policy.take() {
+            policy
+        } else if let Some(pin) = self.cfg.expected_peer_id {
+            PeerPolicy::AllowList([pin].into())
+        } else {
+            resolve_peer_policy_from_disk(&self.cfg, &self.store)
+        };
+        let store_dir = self.store.store_dir().to_path_buf();
+        let folder_id = self.cfg.folder_id;
+        // Production daemon (ferry-daemon/src/main.rs) always calls
+        // `set_identity(load_or_create(...))` before `start`, so the
+        // tag-derived fallback is unreachable in production. It remains for
+        // tests (unit tests with `cfg(test)` and integration tests without
+        // `cfg(test)` that don't call `set_identity`) so they keep
+        // deterministic ids explicitly via the tag.
+        let device = self
+            .identity
+            .take()
+            .unwrap_or_else(|| device_identity_for_tag(&self.cfg.tag));
+        let injected_scan = self.snapshot_source.is_some();
+        let snapshot_source = self
+            .snapshot_source
+            .take()
+            .unwrap_or_else(real_snapshot_source);
+        let audit_source = (!injected_scan).then(audit_snapshot_source);
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
-            identity: device_identity_for_tag(&self.cfg.tag),
+            identity: device,
             store: Arc::clone(&self.store),
             transport: Arc::clone(&self.transport),
-            agreements,
             session_lock: Mutex::new(()),
-            latest: Mutex::new(None),
-            current: Mutex::new(None),
-            baseline: Mutex::new(None),
-            last_own_manifest_id: Mutex::new([0u8; 32]),
+            folder: Arc::clone(&folder),
             shared: Arc::clone(&shared),
+            peer_policy,
+            clock: self.clock.take().unwrap_or_else(system_clock),
+            snapshot_source,
+            audit_source,
         });
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1227,9 +1339,12 @@ impl SyncEngine {
 
         EngineHandle {
             shared,
+            folder,
             joins,
             listen_addr,
             transport: Arc::clone(&self.transport),
+            store_dir,
+            folder_id,
             tag: self.cfg.tag,
         }
     }
@@ -1246,10 +1361,13 @@ fn open_or_create_store(store_dir: &std::path::Path) -> Result<Store, EngineErro
     }
 }
 
-/// Deterministic per-tag device identity for the skeleton: a real X25519
-/// keypair derived from BLAKE3("ferry/v0/device-key:" || tag). Stable
-/// across restarts so peers can pin each other; T-007 replaces the
-/// derivation with real key material, not the protocol around it.
+/// Deterministic per-tag device identity — TEST-ONLY (ticket 12). The one
+/// production identity source is a persisted keypair via
+/// `ferry_crypto::identity::load_or_create`; tag derivation exists so engine
+/// tests keep deterministic device ids deliberately.
+/// This remains `pub` so integration tests (`crates/ferry-sync/tests/*`)
+/// can use it, but production `SyncEngine::start` never calls it — it
+/// requires `set_identity` with a persisted keypair.
 pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
     use blake3::Hasher;
     use rand::SeedableRng;
@@ -1275,38 +1393,51 @@ fn accept_loop(
     shared: Arc<SharedState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
 ) {
-    while !shared.shutdown.load(Ordering::SeqCst) {
+    while !shared.shutting_down() {
         match listener.accept() {
             Ok(mut conn) => {
-                if shared.shutdown.load(Ordering::SeqCst) {
+                if shared.shutting_down() {
                     break;
                 }
+                // Bounded accept (T-07): no permit = engine busy; reject
+                // politely by dropping the connection instead of queueing
+                // unbounded threads.
+                let Some(permit) = shared.acquire_permit() else {
+                    ctx.status("SESSION refused: engine busy");
+                    drop(conn);
+                    continue;
+                };
+                // Count the handler BEFORE spawn so shutdown can account
+                // for it even before its JoinHandle lands in `joins`.
+                let live = shared.register_live_session();
                 let ctx = Arc::clone(&ctx);
-                let shared = Arc::clone(&shared);
                 let h = std::thread::Builder::new()
                     .name(format!("{}-session", ctx.cfg.tag))
                     .spawn(move || {
+                        let _live = live;
+                        let _permit = permit;
                         // Serialize sessions; bail promptly on shutdown.
                         let _guard = ctx.session_lock.lock().unwrap();
-                        if shared.shutdown.load(Ordering::SeqCst) {
+                        if ctx.shared.shutting_down() {
                             return;
                         }
-                        match dispatch_session(conn.as_mut(), &ctx, false) {
+                        match run_session_v1(conn.as_mut(), &ctx, false) {
                             Ok(()) => ctx.bump_ok(),
                             Err(e) => {
-                                if ctx.cfg.legacy_m0_proto {
-                                    proto::send_error(conn.as_mut(), &format!("{e}"));
-                                }
                                 ctx.note_session_failure(&e);
                                 ctx.status(&format!("SESSION failed (accept): {e}"));
                             }
                         }
                     })
                     .expect("spawn session handler");
-                joins.lock().unwrap().push(h);
+                {
+                    let mut g = joins.lock().unwrap();
+                    g.retain(|j| !j.is_finished());
+                    g.push(h);
+                }
             }
             Err(e) => {
-                if shared.shutdown.load(Ordering::SeqCst) {
+                if shared.shutting_down() {
                     break;
                 }
                 ctx.status(&format!("ACCEPT error: {e}"));
@@ -1319,7 +1450,7 @@ fn accept_loop(
 fn poll_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>) {
     let mut n: u64 = 0;
     loop {
-        if shared.shutdown.load(Ordering::SeqCst) {
+        if shared.shutting_down() {
             return;
         }
         n += 1;
@@ -1334,9 +1465,12 @@ fn poll_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>) {
 #[derive(Clone)]
 pub struct EngineHandle {
     shared: Arc<SharedState>,
+    folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     transport: Arc<dyn Transport>,
+    store_dir: PathBuf,
+    folder_id: [u8; 16],
     tag: String,
 }
 
@@ -1346,11 +1480,23 @@ impl EngineHandle {
     }
 
     pub fn agreed_id(&self) -> Option<BlobId> {
-        *self.shared.agreed.lock().unwrap()
+        self.folder.agreed_id()
     }
 
     pub fn root_id(&self) -> Option<BlobId> {
-        *self.shared.root.lock().unwrap()
+        self.folder.current_root()
+    }
+
+    pub fn current_manifest_id(&self) -> Option<BlobId> {
+        self.folder.current_manifest_id()
+    }
+
+    pub fn scan_counts(&self) -> Option<ScanStats> {
+        self.folder.scan_counts()
+    }
+
+    pub fn pending_changes(&self) -> Option<i64> {
+        self.folder.pending_changes()
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -1361,13 +1507,54 @@ impl EngineHandle {
         self.listen_addr
     }
 
-    /// Signal shutdown and wait for loops to exit. Idempotent.
+    pub fn peer_connectivity(&self, peer: &BlobId) -> &'static str {
+        self.shared.peer_connectivity(peer)
+    }
+
+    pub fn record_peer_connectivity(&self, peer: BlobId, status: &'static str) {
+        self.shared.record_peer_connectivity(peer, status);
+    }
+
+    /// Return the list of pinned/persisted peer device IDs for this engine's folder (T-18).
+    pub fn pinned_peers(&self) -> Result<Vec<BlobId>, std::io::Error> {
+        let ledger = PeerLedger::new(&self.store_dir);
+        ledger.list_peers(&self.folder_id)
+    }
+
+    pub fn store_dir(&self) -> &Path {
+        &self.store_dir
+    }
+
+    pub fn folder_id(&self) -> &[u8; 16] {
+        &self.folder_id
+    }
+
+    /// Trigger an immediate manual audit-grade filesystem rescan.
+    pub fn trigger_scan(&self) {
+        self.shared.force_full_scan.store(true, Ordering::Relaxed);
+    }
+
+    /// Signal shutdown and wait for every thread to exit — the poll loop,
+    /// the accept loop, AND every session handler (including ones still in
+    /// their spawn window). Idempotent.
     pub fn shutdown(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
+        // Wake condvar waiters so nobody sleeps out a state-wait window
+        // while the engine dies; they re-check and exit on deadline/flag.
+        self.folder.wake_all();
+        self.shared.wake_parked();
         // Unblock a possibly-blocked accept() with a throwaway connection.
         if let Some(addr) = self.listen_addr {
             let _ = self.transport.dial(addr);
         }
+        while let Some(j) = self.joins.lock().unwrap().pop() {
+            let _ = j.join();
+        }
+        // Handlers counted before spawn (T-07): wait for any that were in
+        // their registration window during the drain above.
+        self.shared.wait_sessions_done();
+        // Final sweep: a handler finishing now may have just pushed its
+        // JoinHandle; nothing can spawn after this (accept loop is gone).
         while let Some(j) = self.joins.lock().unwrap().pop() {
             let _ = j.join();
         }
@@ -1377,11 +1564,16 @@ impl EngineHandle {
     /// parks here; actual termination is a process signal (std has no
     /// handler story), after which Drop runs the same shutdown path.
     pub fn join_until_signal(&self) {
-        loop {
-            if self.shared.shutdown.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(200));
+        let mut guard = self.shared.park.lock().unwrap();
+        while !self.shared.shutting_down() {
+            // Long slice; shutdown()'s wake_parked releases the park
+            // immediately, the timeout only bounds a lost-wake race.
+            let (ng, _) = self
+                .shared
+                .park_cv
+                .wait_timeout(guard, Duration::from_secs(5))
+                .unwrap();
+            guard = ng;
         }
     }
 }
@@ -1481,5 +1673,470 @@ mod tests {
             *blake3::hash(&bytes).as_bytes(),
             *blake3::hash(&serialize_manifest(&m)).as_bytes()
         );
+    }
+
+    // ---- T-07: folder-pointer state machine, injectable tick inputs ----
+
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    /// A canned [`SnapshotOutput`] without touching disk or a tree.
+    fn fake_scan(sec: i64, dev: [u8; 32], root: BlobId, parent: BlobId) -> SnapshotOutput {
+        let m = RootManifest {
+            folder_id: crate::DEFAULT_FOLDER_ID,
+            device_id: dev,
+            created_sec: sec,
+            created_nsec: 0,
+            root_tree_id: root,
+            parent_manifest_id: parent,
+        };
+        let bytes = serialize_manifest(&m);
+        SnapshotOutput {
+            manifest_id: *blake3::hash(&bytes).as_bytes(),
+            manifest: m,
+            root_tree_id: root,
+            stats: ferry_store::snapshot::ScanStats::default(),
+            refused: Vec::new(),
+        }
+    }
+
+    fn snap_data(out: &SnapshotOutput) -> Arc<SnapshotData> {
+        Arc::new(SnapshotData {
+            manifest_id: out.manifest_id,
+            manifest: out.manifest.clone(),
+            manifest_bytes: serialize_manifest(&out.manifest),
+        })
+    }
+
+    /// A full Ctx against a throwaway store, with injectable clock/scanner.
+    /// Returns the Ctx and the [`tempfile::TempDir`] keeping its store alive.
+    fn test_ctx(
+        folder: Arc<FolderState>,
+        tag: &str,
+        clock: ClockFn,
+        source: SnapshotSourceFn,
+    ) -> (Ctx, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("root");
+        let store = Arc::new(open_or_create_store(&store_dir.join("store")).expect("test store"));
+        let mut cfg = EngineConfig::default_for_test(11);
+        cfg.tag = tag.into();
+        cfg.store_dir = store_dir.join("store");
+        cfg.tree_dir = store_dir.join("tree");
+        std::fs::create_dir_all(&cfg.tree_dir).unwrap();
+        let ctx = Ctx {
+            cfg,
+            identity: device_identity_for_tag(tag),
+            store,
+            transport: Arc::new(crate::transport::TcpTransport),
+            session_lock: Mutex::new(()),
+            folder,
+            shared: Arc::new(SharedState::new()),
+            peer_policy: PeerPolicy::TrustOnFirstUse,
+            clock,
+            snapshot_source: source,
+            audit_source: None,
+        };
+        (ctx, dir)
+    }
+
+    /// Scripted scanner: pops one canned output per call; runs an optional
+    /// hook BEFORE returning, which is how tests replay the exact
+    /// tick-vs-adopt interleaving from spec B1 deterministically.
+    type ScanScript = Arc<
+        Mutex<
+            VecDeque<(
+                SnapshotOutput,
+                Option<Box<dyn Fn(&FolderState) + Send + Sync>>,
+            )>,
+        >,
+    >;
+
+    fn scripted_source(script: ScanScript, folder: &Arc<FolderState>) -> SnapshotSourceFn {
+        let folder = Arc::clone(folder);
+        Arc::new(move |_store, _poly, _dir, _identity| {
+            let (out, hook) = script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script exhausted");
+            if let Some(hook) = hook {
+                hook(&folder);
+            }
+            Ok(out)
+        })
+    }
+
+    fn pinned_clock(sec: i64) -> ClockFn {
+        Arc::new(move || (sec, 0))
+    }
+
+    #[test]
+    fn adoption_survives_a_scan_that_started_before_it() {
+        // Spec B1 interleaving, replayed exactly: a tick reads its parent,
+        // starts scanning; a session adopts a peer manifest DURING the
+        // scan; the tick then tries to publish. The pre-adoption scan must
+        // be discarded whole — never published over the adopted lineage.
+        let me = [7u8; 32];
+        let peer = [9u8; 32];
+        let scan_a = fake_scan(10, me, [1; 32], [0; 32]); // first own snapshot
+        let adopted_out = fake_scan(20, peer, [2; 32], [0; 32]); // peer manifest
+        let scan_c = fake_scan(30, me, [3; 32], [0; 32]); // stale mid-scan product
+
+        let folder = Arc::new(FolderState::new());
+        let adopted = snap_data(&adopted_out);
+        let adopted_id = adopted.manifest_id;
+
+        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([
+            (
+                scan_c,
+                Some(Box::new({
+                    let adopted = Arc::clone(&adopted);
+                    move |f: &FolderState| f.adopt_peer(Arc::clone(&adopted))
+                })
+                    as Box<dyn Fn(&FolderState) + Send + Sync>),
+            ),
+            (scan_a, None),
+        ])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-a",
+            pinned_clock(100),
+            scripted_source(Arc::clone(&script), &folder),
+        );
+
+        // Tick 1 adopts mid-scan; its own scan product must NOT clobber.
+        ctx.tick(1).unwrap();
+        {
+            let g = folder.lock();
+            assert_eq!(
+                g.current.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "mid-scan adoption must survive the concurrent tick"
+            );
+            assert_eq!(
+                g.last_own_manifest_id, adopted_id,
+                "next self-mint continues the ADOPTED lineage"
+            );
+            assert_eq!(
+                g.latest.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "stale scan must not refresh the raw-scan slot either"
+            );
+        }
+
+        // Tick 2 scans cleanly (no adoption races it) and publishes.
+        let fresh = fake_scan(40, me, [4; 32], [0; 32]);
+        script.lock().unwrap().push_back((fresh, None));
+        ctx.tick(2).unwrap();
+        {
+            let g = folder.lock();
+            assert_ne!(
+                g.current.as_ref().map(|s| s.manifest_id),
+                Some(adopted_id),
+                "a clean later tick may mint again"
+            );
+            assert_eq!(
+                Some(g.last_own_manifest_id),
+                g.current.as_ref().map(|s| s.manifest_id),
+                "current and next-parent move together under the one lock"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_sweep_removes_planted_stale_temps_at_every_site() {
+        // T-20 acceptance: SyncEngine::new is the documented startup hook;
+        // residue planted before startup must be reclaimed, live files kept.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let sd = root.join(".ferry");
+        for d in ["tmp", "peers", "agreement", "index"] {
+            std::fs::create_dir_all(sd.join(d)).unwrap();
+        }
+        let tree_dir = dir.path().join("tree");
+        std::fs::create_dir_all(&tree_dir).unwrap();
+
+        let stale: Vec<std::path::PathBuf> = vec![
+            sd.join("tmp").join(format!("pack-{}.tmp", hex(&[7u8; 16]))),
+            sd.join(format!("pin-state.json.tmp.{}.0.9", std::process::id())),
+            sd.join("peers").join(".tmp-dead-beef"),
+            sd.join("agreement").join(".tmp-aa-bb"),
+            tree_dir.join(".ferry.notes.tmp.aabbccdd"),
+        ];
+        for p in &stale {
+            std::fs::write(p, b"stale residue").unwrap();
+            // Epoch mtime: far older than any sane sweep bound.
+            let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+                .unwrap();
+        }
+        let fresh = vec![
+            sd.join("peers")
+                .join(format!("{}-{}.peer", hex(&[1u8; 16]), hex(&[2u8; 32]))),
+            tree_dir.join("real.txt"),
+        ];
+        for p in &fresh {
+            std::fs::write(p, b"live").unwrap();
+        }
+
+        let mut cfg = EngineConfig::default_for_test(11);
+        cfg.store_dir = root.clone();
+        cfg.tree_dir = tree_dir.clone();
+        let _engine = SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).unwrap();
+
+        for p in &stale {
+            assert!(!p.exists(), "startup must sweep {p:?}");
+        }
+        for p in &fresh {
+            assert!(p.exists(), "startup must never touch {p:?}");
+        }
+    }
+
+    #[test]
+    fn rescan_of_unchanged_tree_holds_the_current_pointer() {
+        // Adopt-and-hold: same scanned root keeps the current pointer (and
+        // the announced id) stable so round-2 comparisons stay valid.
+        let me = [3u8; 32];
+        let root = [5; 32];
+        let first = fake_scan(1, me, root, [0; 32]);
+        let again = fake_scan(2, me, root, [0; 32]); // same tree, later stamp
+        let first_id = first.manifest_id;
+        let second_id = again.manifest_id;
+
+        let folder = Arc::new(FolderState::new());
+        let script: ScanScript =
+            Arc::new(Mutex::new(VecDeque::from([(first, None), (again, None)])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-b",
+            pinned_clock(7),
+            scripted_source(script, &folder),
+        );
+
+        ctx.tick(1).unwrap();
+        assert_eq!(
+            folder.lock().current.as_ref().map(|s| s.manifest_id),
+            Some(first_id)
+        );
+
+        ctx.tick(2).unwrap();
+        let g = folder.lock();
+        assert_eq!(
+            g.current.as_ref().map(|s| s.manifest_id),
+            Some(first_id),
+            "unchanged root must hold the current pointer"
+        );
+        assert_eq!(g.last_own_manifest_id, first_id);
+        assert_eq!(
+            g.latest.as_ref().map(|s| s.manifest_id),
+            Some(second_id),
+            "raw scan slot still refreshes every tick"
+        );
+    }
+
+    #[test]
+    fn snapshot_and_adoption_state_transitions() {
+        let me = [1u8; 32];
+        let peer = [2u8; 32];
+
+        let folder = Arc::new(FolderState::new());
+        let own = fake_scan(1, me, [1; 32], [0; 32]);
+        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([(own, None)])));
+        let (ctx, _dir) = test_ctx(
+            Arc::clone(&folder),
+            "t07-c",
+            pinned_clock(3),
+            scripted_source(script, &folder),
+        );
+        ctx.tick(1).unwrap();
+
+        // Initial snapshot
+        let before = ctx.current_snapshot().unwrap();
+        assert_eq!(before.manifest.root_tree_id, [1; 32]);
+
+        // Adopt + agree while no reader holds the lock.
+        let peer_out = fake_scan(9, peer, [2; 32], [0; 32]);
+        let peer_snap = snap_data(&peer_out);
+        folder.adopt_peer(Arc::clone(&peer_snap));
+        folder.record_agreed(peer_out.manifest.clone(), peer_out.manifest_id);
+
+        // Snapshot after adoption: fully-new pair.
+        let after = ctx.current_snapshot().unwrap();
+        assert_eq!(after.manifest_id, peer_out.manifest_id);
+        assert_eq!(after.manifest.root_tree_id, [2; 32]);
+
+        // The earlier snapshot is untouched: snapshots are immutable Arcs.
+        assert_eq!(before.manifest.root_tree_id, [1; 32]);
+    }
+
+    #[test]
+    fn accept_permits_bound_concurrency_and_replenish() {
+        let shared = Arc::new(SharedState::new());
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_SESSIONS {
+            held.push(shared.acquire_permit().expect("permit within bound"));
+        }
+        assert!(
+            shared.acquire_permit().is_none(),
+            "bound exhausted: further accepts must be rejected"
+        );
+        drop(held.pop());
+        assert!(
+            shared.acquire_permit().is_some(),
+            "a finished handler frees its permit"
+        );
+
+        // Liveness accounting: registered-before-spawn handlers are
+        // counted until their guard drops.
+        let live = shared.register_live_session();
+        drop(live);
+        shared.wait_sessions_done(); // must return promptly now
+    }
+
+    #[test]
+    fn shutdown_joins_everything_and_stops_all_writes() {
+        // Probe seam: every scanner invocation is a write-driving event.
+        // After shutdown() returns (all threads joined), the poll loop is
+        // gone, so the probe must stay silent forever after.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls = Arc::clone(&calls);
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("engine");
+        let mut cfg = EngineConfig::default_for_test(23);
+        cfg.tag = "t07-shutdown".into();
+        cfg.store_dir = root.join("store");
+        cfg.tree_dir = root.join("tree");
+        cfg.poll_interval = Duration::from_millis(15);
+        cfg.bind_addr = Some("127.0.0.1:0".parse().unwrap());
+        cfg.connect_to = None;
+
+        let mut engine =
+            SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).expect("engine");
+        engine.set_test_injections(
+            system_clock(),
+            Arc::new(move |store, poly, source, identity| {
+                probe_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                snapshot_dir(store, poly, source, identity)
+            }),
+        );
+        let handle = engine.start();
+
+        // Let several ticks run, then shut down and time the join.
+        std::thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        handle.shutdown();
+        let joined = started.elapsed();
+        assert!(
+            joined < Duration::from_secs(5),
+            "shutdown must join promptly, took {joined:?}"
+        );
+
+        let at_shutdown = calls.load(AtomicOrdering::SeqCst);
+        assert!(at_shutdown > 0, "poll loop ran while alive");
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            at_shutdown,
+            "probe saw writes AFTER shutdown returned: a thread was not joined"
+        );
+    }
+
+    #[test]
+    fn peer_ledger_records_lists_and_forgets_peers() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = PeerLedger::new(dir.path());
+        let folder1 = [1u8; 16];
+        let folder2 = [2u8; 16];
+        let peer_a = [10u8; 32];
+        let peer_b = [20u8; 32];
+
+        // Initially empty.
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), Vec::<BlobId>::new());
+
+        // Record peer_a for folder1.
+        ledger.record_peer(&folder1, &peer_a).unwrap();
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a]);
+        // folder2 still empty.
+        assert_eq!(ledger.list_peers(&folder2).unwrap(), Vec::<BlobId>::new());
+
+        // Record peer_b for folder1.
+        ledger.record_peer(&folder1, &peer_b).unwrap();
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a, peer_b]);
+
+        // Forget peer_a.
+        assert!(ledger.forget_peer(&folder1, &peer_a).unwrap());
+        assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_b]);
+
+        // Forget peer_a again returns false (not found).
+        assert!(!ledger.forget_peer(&folder1, &peer_a).unwrap());
+    }
+
+    #[test]
+    fn peer_policy_seeds_from_config_head_bytes() {
+        let folder_id = [42u8; 16];
+        let dev1 = [1u8; 32];
+        let dev2 = [2u8; 32];
+        let wrapped = [7u8; ferry_crypto::folder_key::WRAPPED_LEN];
+
+        let entries = vec![
+            ferry_crypto::config_head::WrappedKeyEntry::new(dev1, wrapped),
+            ferry_crypto::config_head::WrappedKeyEntry::new(dev2, wrapped),
+        ];
+        let bytes = ferry_crypto::config_head::write_config_head(&folder_id, &entries);
+
+        let policy = PeerPolicy::from_config_head(&bytes).unwrap();
+        match policy {
+            PeerPolicy::AllowList(set) => {
+                assert!(set.contains(&dev1));
+                assert!(set.contains(&dev2));
+                assert!(!set.contains(&[3u8; 32]));
+            }
+            PeerPolicy::TrustOnFirstUse => panic!("expected AllowList policy"),
+        }
+    }
+
+    #[test]
+    fn engine_handle_exposes_scan_counts_pending_and_connectivity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        let tree_dir = dir.path().join("tree");
+        std::fs::create_dir_all(&tree_dir).unwrap();
+        std::fs::write(tree_dir.join("f.txt"), b"data").unwrap();
+
+        let mut cfg = EngineConfig::default_for_test(12345);
+        cfg.store_dir = store_dir;
+        cfg.tree_dir = tree_dir.clone();
+        cfg.bind_addr = None;
+        cfg.connect_to = None;
+
+        let engine = SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).unwrap();
+        let handle = engine.start();
+
+        // Wait for first tick to scan tree
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while handle.scan_counts().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let counts = handle
+            .scan_counts()
+            .expect("scan counts should be available after tick");
+        assert_eq!(counts.files, 1);
+        assert_eq!(counts.dirs, 0);
+
+        // No agreement recorded yet -> pending_changes is None
+        assert_eq!(handle.pending_changes(), None);
+
+        // Peer connectivity default is "unknown"
+        let peer_dev = [99u8; 32];
+        assert_eq!(handle.peer_connectivity(&peer_dev), "unknown");
+
+        // Record connectivity observation
+        handle.record_peer_connectivity(peer_dev, "reachable");
+        assert_eq!(handle.peer_connectivity(&peer_dev), "reachable");
+
+        handle.shutdown();
     }
 }

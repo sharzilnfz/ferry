@@ -7,6 +7,81 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
+[workspace.dependencies]
+# shared external deps, hoisted from crates/*/Cargo.toml (T-01).
+# Version requirements must stay identical to what was there before:
+# bumping changes Cargo.lock resolution, which T-01 forbids.
+blake3 = "1.5"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tempfile = "3"
+qrcode = "0.14"
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+zeroize = "1"
+# Declared directly by ferry-crypto for constant-time MAC comparison (T-03).
+# Pinned to the version already resolved transitively via the AEAD stack;
+# bumping is forbidden (T-01).
+subtle = "2.6.1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+unicode-normalization = "0.1"
+ignore = "0.4"
+libc = "0.2"
+filetime = "0.2"
+iroh = "=1.0.3"
+tokio = { version = "=1.49.0", features = ["rt", "rt-multi-thread", "time", "net", "macros", "sync", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+
+ratatui = "0.29"
+crossterm = "0.28"
+egui = "0.29"
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+
+# internal crates
+ferry-platform = { path = "crates/ferry-platform" }
+ferry-folder = { path = "crates/ferry-folder" }
+ferry-ipc = { path = "crates/ferry-ipc" }
+ferry-tui = { path = "crates/ferry-tui" }
+ferry-gui = { path = "crates/ferry-gui" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints allowed tree-wide because they fight existing design or force
+# churn disproportionate to value (T-01). Revisit individually as code evolves.
+module_name_repetitions = { level = "allow", priority = 1 }   # module paths mirror crate layout by design
+missing_errors_doc = { level = "allow", priority = 1 }        # doc churn on internal APIs
+missing_panics_doc = { level = "allow", priority = 1 }        # lock().unwrap() on purpose-held mutexes is standard here
+must_use_candidate = { level = "allow", priority = 1 }        # attribute churn across every accessor
+return_self_not_must_use = { level = "allow", priority = 1 }  # same churn class as must_use_candidate
+cast_possible_truncation = { level = "allow", priority = 1 }  # wire-format/protocol code casts sizes deliberately
+cast_possible_wrap = { level = "allow", priority = 1 }
+cast_sign_loss = { level = "allow", priority = 1 }
+cast_precision_loss = { level = "allow", priority = 1 }
+unreadable_literal = { level = "allow", priority = 1 }        # hex keys and timestamps read better ungrouped
+too_many_lines = { level = "allow", priority = 1 }            # splitting long functions hurts locality more than it helps
+similar_names = { level = "allow", priority = 1 }
+struct_field_names = { level = "allow", priority = 1 }        # common prefixes mirror protocol/stat field names
+used_underscore_binding = { level = "allow", priority = 1 }   # underscore fields are read intentionally in shutdown paths
+needless_pass_by_value = { level = "allow", priority = 1 }    # taking ownership in internal APIs is intentional; refactors ripple
+unnecessary_wraps = { level = "allow", priority = 1 }          # uniform Result signatures ease error propagation
+items_after_statements = { level = "allow", priority = 1 }     # helpers kept next to their sole call site aid reading
+single_match_else = { level = "allow", priority = 1 }
+match_same_arms = { level = "allow", priority = 1 }            # identical arms kept separate to mirror spec cases
+enum_glob_use = { level = "allow", priority = 1 }
+option_option = { level = "allow", priority = 1 }
+missing_fields_in_debug = { level = "allow", priority = 1 }
+struct_excessive_bools = { level = "allow", priority = 1 }
+
 [profile.release]
 lto = true
 strip = true

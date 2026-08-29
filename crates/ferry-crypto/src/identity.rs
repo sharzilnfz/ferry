@@ -1,7 +1,7 @@
 //! Long-lived device identity keys (X25519 static keypairs).
 //!
 //! A device's identity is one 32-byte Curve25519 secret scalar. Its
-//! **device_id** is the raw public key (`docs/store-format.md`, manifest
+//! **`device_id`** is the raw public key (`docs/store-format.md`, manifest
 //! schema: "creating device's X25519 public key"). Identities live in an
 //! injectable directory, defaulting to `~/.ferry/identity/device.key`,
 //! created with restrictive permissions (file 0600, directory 0700).
@@ -10,7 +10,7 @@
 //! not parse, or whose stored public key disagrees with its own secret, is
 //! [`IdentityError::Corrupted`] — NEVER silently regenerated. Regenerating
 //! would mint new trust out of thin air while every folder still wraps keys
-//! to the old device_id: silent trust-forking data loss wearing a helpful
+//! to the old `device_id`: silent trust-forking data loss wearing a helpful
 //! face. The user gets the error and decides.
 
 use rand::rngs::OsRng;
@@ -20,7 +20,7 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-/// Raw X25519 public key == device_id everywhere in Ferry.
+/// Raw X25519 public key == `device_id` everywhere in Ferry.
 pub type DeviceId = [u8; 32];
 
 const FILE_NAME: &str = "device.key";
@@ -52,7 +52,7 @@ pub enum IdentityError {
 pub struct DeviceIdentity {
     sk: StaticSecret,
     /// Cached raw public key; equals `sk.basepoint()` and doubles as the
-    /// device_id.
+    /// `device_id`.
     pk: DeviceId,
 }
 
@@ -82,7 +82,7 @@ impl DeviceIdentity {
         DeviceIdentity { sk, pk }
     }
 
-    /// The device_id: raw X25519 public key bytes.
+    /// The `device_id`: raw X25519 public key bytes.
     pub fn device_id(&self) -> &DeviceId {
         &self.pk
     }

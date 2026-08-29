@@ -34,6 +34,13 @@ impl DirCache {
         self.dirs.get(rel)
     }
 
+    /// Remove and return the cached record for exactly `rel` (children
+    /// untouched). Lets a rebuild consult prior entries without cloning the
+    /// whole listing; the caller re-inserts the rebuilt record.
+    pub(crate) fn take(&mut self, rel: &RelPath) -> Option<CachedDir> {
+        self.dirs.remove(rel)
+    }
+
     pub(crate) fn insert(&mut self, rel: RelPath, dir: CachedDir) {
         self.dirs.insert(rel, dir);
     }
@@ -96,7 +103,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn key(parts: &[&str]) -> RelPath {
-        parts.iter().map(|s| s.to_string()).collect()
+        parts.iter().map(std::string::ToString::to_string).collect()
     }
 
     /// Seed the cache the way the engine does after a full scan: one
@@ -105,7 +112,7 @@ mod tests {
         let mut cache = DirCache::new();
         let mut closed = BTreeSet::new();
         closed.insert(Vec::new());
-        let mut stats = Default::default();
+        let mut stats = crate::walk::PassStats::default();
         let out = Walker::run(
             store,
             poly_of(3),

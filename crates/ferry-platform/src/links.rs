@@ -107,9 +107,7 @@ pub fn classify_link(depth: usize, target: &str) -> LinkDecision {
 pub fn allow_windows_dir_links() -> bool {
     #[cfg(windows)]
     {
-        std::env::var_os("FERRY_ALLOW_WINDOWS_DIR_LINKS")
-            .map(|v| v == "1")
-            .unwrap_or(false)
+        std::env::var_os("FERRY_ALLOW_WINDOWS_DIR_LINKS").is_some_and(|v| v == "1")
     }
     #[cfg(not(windows))]
     {
