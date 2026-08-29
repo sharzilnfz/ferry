@@ -327,10 +327,7 @@ impl TuiApp {
             let code = key.code;
             match code {
                 KeyCode::Esc => {
-                    let has_filter = self
-                        .picker
-                        .as_ref()
-                        .is_some_and(PickerState::has_filter);
+                    let has_filter = self.picker.as_ref().is_some_and(PickerState::has_filter);
                     if has_filter {
                         if let Some(p) = self.picker.as_mut() {
                             p.clear_filter();

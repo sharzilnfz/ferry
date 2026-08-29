@@ -68,7 +68,10 @@ fn pair_has_initiate_and_accept_forms() {
         other => panic!("{other:?}"),
     }
     // Accept form.
-    match parse(&["pair", "--accept", "/tmp/offer.ferry-pair", "dest"]).command.unwrap() {
+    match parse(&["pair", "--accept", "/tmp/offer.ferry-pair", "dest"])
+        .command
+        .unwrap()
+    {
         Command::Pair { accept, dir, .. } => {
             assert_eq!(accept, Some(PathBuf::from("/tmp/offer.ferry-pair")));
             assert_eq!(dir, Some(PathBuf::from("dest")));
@@ -149,7 +152,10 @@ fn ignore_pattern_preset_and_list() {
         }
         other => panic!("{other:?}"),
     }
-    match parse(&["ignore", "--preset", "claude", "/tmp/proj"]).command.unwrap() {
+    match parse(&["ignore", "--preset", "claude", "/tmp/proj"])
+        .command
+        .unwrap()
+    {
         Command::Ignore {
             preset, pattern, ..
         } => {
@@ -203,7 +209,9 @@ fn daemon_folders_listen_peer_transport_interval() {
     );
     // Unknown transport values still PARSE (runtime rejects them cleanly).
     let cli = parse(&["daemon", "--transport", "iroh"]);
-    assert!(matches!(cli.command.as_ref().unwrap(), Command::Daemon { transport, .. } if transport == "iroh"));
+    assert!(
+        matches!(cli.command.as_ref().unwrap(), Command::Daemon { transport, .. } if transport == "iroh")
+    );
 }
 
 #[test]
@@ -266,7 +274,9 @@ fn pin_has_four_actions_and_repeatable_paths() {
     match parse(&[
         "pin", "start", "--paths", "src/**", "--paths", "docs/*", "sub",
     ])
-    .command.unwrap() {
+    .command
+    .unwrap()
+    {
         Command::Pin {
             action:
                 ferry_cli::cli::PinAction::Start {
@@ -288,7 +298,10 @@ fn pin_has_four_actions_and_repeatable_paths() {
         vec!["pin", "status", "elsewhere"],
     ] {
         let cli = parse(&args);
-        assert!(matches!(cli.command.as_ref().unwrap(), Command::Pin { .. }), "{args:?}");
+        assert!(
+            matches!(cli.command.as_ref().unwrap(), Command::Pin { .. }),
+            "{args:?}"
+        );
     }
     // Unknown action refused.
     assert!(Cli::try_parse_from(["ferry", "pin", "rebase"]).is_err());
@@ -344,7 +357,9 @@ fn ui_flags_parse_web_gui_tui() {
         "8080",
         "--no-open",
     ])
-    .command.unwrap() {
+    .command
+    .unwrap()
+    {
         Command::Ui {
             gui,
             web,

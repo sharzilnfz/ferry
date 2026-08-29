@@ -14,6 +14,11 @@
 
 pub mod error;
 pub mod folder;
+pub mod inventory;
 pub mod pairing;
 
 pub use error::{CodeInto, FolderError, FolderResult};
+pub use inventory::{
+    default_listing_root, ferry_home, sort_entries, validate_and_normalize, validate_path,
+    DirectoryEntry, FolderInventory, FolderRecord, ListDirectoryRequest, ListDirectoryResponse,
+};

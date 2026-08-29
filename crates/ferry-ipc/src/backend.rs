@@ -15,12 +15,22 @@ use tokio_stream::Stream;
 
 use std::collections::HashMap;
 
-use crate::fs::{sort_entries, validate_path, ListDirectoryResponse};
+use ferry_folder::inventory::{
+    sort_entries, validate_path, DirectoryEntry, FolderRecord, ListDirectoryResponse,
+};
+
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDirection};
-use crate::registry::FolderRecord;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Coded folder-inventory failures flow into the frontend error taxonomy
+/// unchanged (same `code`/`message`/`hint` discipline).
+impl From<ferry_folder::FolderError> for OpError {
+    fn from(e: ferry_folder::FolderError) -> Self {
+        Self::new(e.code, e.message, e.hint)
+    }
+}
 
 /// Domain error taxonomy with error codes, human messages, and actionable hints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -305,7 +315,7 @@ pub struct FakeBackend {
     active_pin: Arc<RwLock<Option<PinRecord>>>,
     active_share: Arc<RwLock<Option<ShareOffer>>>,
     event_tx: broadcast::Sender<UiEvent>,
-    fs_fixture: Arc<RwLock<HashMap<PathBuf, Vec<crate::fs::DirectoryEntry>>>>,
+    fs_fixture: Arc<RwLock<HashMap<PathBuf, Vec<DirectoryEntry>>>>,
     pairing_sessions: Arc<std::sync::Mutex<HashMap<String, InMemPairingSession>>>,
 }
 
@@ -346,12 +356,12 @@ impl FakeBackend {
     }
 
     /// Insert or replace the in-memory directory tree used by `list_directory`.
-    pub async fn set_fs_fixture(&self, fixture: HashMap<PathBuf, Vec<crate::fs::DirectoryEntry>>) {
+    pub async fn set_fs_fixture(&self, fixture: HashMap<PathBuf, Vec<DirectoryEntry>>) {
         *self.fs_fixture.write().await = fixture;
     }
 
     /// Insert entries for a single directory into the in-memory fixture.
-    pub async fn insert_fs_dir(&self, dir: PathBuf, entries: Vec<crate::fs::DirectoryEntry>) {
+    pub async fn insert_fs_dir(&self, dir: PathBuf, entries: Vec<DirectoryEntry>) {
         self.fs_fixture.write().await.insert(dir, entries);
     }
 
@@ -585,30 +595,15 @@ impl UiBackend for FakeBackend {
     }
 
     fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
-        })
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
     }
 
     fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
-        })
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
     }
 
     fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
-        Box::pin(async {
-            Err(OpError::not_found(
-                "not-implemented",
-                "wave 0 stub",
-            ))
-        })
+        Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
     }
 
     fn create_pairing_session(

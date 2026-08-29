@@ -21,7 +21,10 @@ pub async fn pick_folder_async() -> Option<PathBuf> {
     if is_headless_inner() {
         return None;
     }
-    rfd::AsyncFileDialog::new().pick_folder().await.map(|h| h.path().to_path_buf())
+    rfd::AsyncFileDialog::new()
+        .pick_folder()
+        .await
+        .map(|h| h.path().to_path_buf())
 }
 
 #[cfg(not(feature = "gui"))]

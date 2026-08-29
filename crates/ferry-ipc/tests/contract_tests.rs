@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use ferry_ipc::{
     backend::{FakeBackend, UiBackend},
-    fs::{DirectoryEntry, ListDirectoryRequest, ListDirectoryResponse},
     pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode},
-    registry::{FolderRecord, FolderRegistry},
-    ClientCommand, DaemonMessage, OpError,
+    ClientCommand, DaemonMessage, DirectoryEntry, FolderRecord, ListDirectoryRequest,
+    ListDirectoryResponse, OpError,
 };
 use rand::SeedableRng;
 
@@ -82,41 +81,6 @@ fn folder_record_json_round_trip() {
     let json = serde_json::to_string(&rec).unwrap();
     let back: FolderRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(rec, back);
-}
-
-#[test]
-fn folder_registry_toml_round_trip() {
-    let registry = FolderRegistry {
-        folders: vec![
-            FolderRecord {
-                folder_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                path: PathBuf::from("/home/user/a"),
-                added_at: "2026-08-28T12:00:00Z".to_string(),
-            },
-            FolderRecord {
-                folder_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-                path: PathBuf::from("/home/user/b"),
-                added_at: "2026-08-28T13:00:00Z".to_string(),
-            },
-        ],
-    };
-    let toml_str = toml::to_string(&registry).expect("toml ser");
-    let back: FolderRegistry = toml::from_str(&toml_str).expect("toml de");
-    assert_eq!(registry, back);
-}
-
-#[test]
-fn folder_registry_json_round_trip() {
-    let registry = FolderRegistry {
-        folders: vec![FolderRecord {
-            folder_id: "cccccccccccccccccccccccccccccccc".to_string(),
-            path: PathBuf::from("/tmp/c"),
-            added_at: "2026-08-28T00:00:00Z".to_string(),
-        }],
-    };
-    let json = serde_json::to_string(&registry).unwrap();
-    let back: FolderRegistry = serde_json::from_str(&json).unwrap();
-    assert_eq!(registry, back);
 }
 
 #[test]

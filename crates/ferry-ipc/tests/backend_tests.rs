@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use ferry_ipc::backend::{FakeBackend, UiBackend};
-use ferry_ipc::fs::{DirectoryEntry, validate_path};
 use ferry_ipc::protocol::{ClientCommand, DaemonMessage};
+use ferry_ipc::{validate_path, DirectoryEntry};
 use unicode_normalization::UnicodeNormalization;
 
 #[tokio::test]
@@ -95,10 +95,7 @@ async fn fake_backend_traversal_protection() {
         PathBuf::from("../../etc"),
     ];
     for p in cases {
-        let err = backend
-            .list_directory(Some(p.clone()))
-            .await
-            .unwrap_err();
+        let err = backend.list_directory(Some(p.clone())).await.unwrap_err();
         assert!(
             err.code == "path-traversal" || err.code == "bad-path",
             "path {p:?} got {} expected traversal/bad-path",

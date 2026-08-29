@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use ferry_ipc::backend::{OpError, UiBackend};
-use ferry_ipc::fs::DirectoryEntry;
+use ferry_ipc::DirectoryEntry;
 
 // ── headless helper ──────────────────────────────────────────────────────────
 
@@ -102,7 +102,10 @@ impl PickerState {
 
     pub async fn load(&mut self, backend: &dyn UiBackend) -> Result<(), OpError> {
         self.loading = true;
-        match backend.list_directory(Some(self.current_path.clone())).await {
+        match backend
+            .list_directory(Some(self.current_path.clone()))
+            .await
+        {
             Ok(resp) => {
                 self.set_entries(resp.entries, resp.absolute_path);
                 Ok(())
@@ -147,7 +150,8 @@ impl PickerState {
 
     #[must_use]
     pub fn enter(&self) -> Option<PathBuf> {
-        self.selected().and_then(|e| if e.is_dir { Some(e.path.clone()) } else { None })
+        self.selected()
+            .and_then(|e| if e.is_dir { Some(e.path.clone()) } else { None })
     }
 
     pub async fn enter_and_load(&mut self, backend: &dyn UiBackend) -> Result<bool, OpError> {
@@ -226,7 +230,10 @@ impl PickerState {
             return self.entries.len();
         }
         let needle = self.filter.to_lowercase();
-        self.entries.iter().filter(|e| e.name.to_lowercase().contains(&needle)).count()
+        self.entries
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&needle))
+            .count()
     }
 
     fn clamp_cursor(&mut self) {

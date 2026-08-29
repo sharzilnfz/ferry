@@ -463,17 +463,14 @@ async fn api_pair_join(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(bad_body)?;
-    let code = body
-        .get("code")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad-request",
-                "code is required",
-                "pass the 6-character pairing code",
-            )
-        })?;
+    let code = body.get("code").and_then(Value::as_str).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad-request",
+            "code is required",
+            "pass the 6-character pairing code",
+        )
+    })?;
     let target_dir = body
         .get("target_dir")
         .or_else(|| body.get("targetDir"))
@@ -670,18 +667,14 @@ async fn api_fs_ls(
             ));
         }
     }
-    let resp = server
-        .backend
-        .list_directory(path_opt)
-        .await
-        .map_err(|e| {
-            let status = match e.code.as_str() {
-                "path-traversal" => StatusCode::FORBIDDEN,
-                "bad-path" => StatusCode::BAD_REQUEST,
-                _ => super::error::status_for_code(&e.code),
-            };
-            ApiError::new(status, &e.code, e.message, e.hint)
-        })?;
+    let resp = server.backend.list_directory(path_opt).await.map_err(|e| {
+        let status = match e.code.as_str() {
+            "path-traversal" => StatusCode::FORBIDDEN,
+            "bad-path" => StatusCode::BAD_REQUEST,
+            _ => super::error::status_for_code(&e.code),
+        };
+        ApiError::new(status, &e.code, e.message, e.hint)
+    })?;
     Ok(Json(json!({
         "entries": resp.entries,
         "absolute_path": resp.absolute_path.display().to_string(),

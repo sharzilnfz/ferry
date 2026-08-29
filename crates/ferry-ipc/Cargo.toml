@@ -5,19 +5,19 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ferry-folder = { workspace = true }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "sync", "macros"] }
 tokio-stream = { workspace = true }
-unicode-normalization = { workspace = true }
-toml = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "io-util"] }
 toml = "0.8"
+unicode-normalization = { workspace = true }
 
 [lints]
 workspace = true

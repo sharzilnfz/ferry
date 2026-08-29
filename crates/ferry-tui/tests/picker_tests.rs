@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ferry_ipc::backend::{FakeBackend, UiBackend};
-use ferry_ipc::fs::DirectoryEntry;
+use ferry_ipc::DirectoryEntry;
 use ferry_tui::app::TuiApp;
-use ferry_tui::picker::{PickerState, PickerSelectResult};
+use ferry_tui::picker::{PickerSelectResult, PickerState};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent {
@@ -23,7 +23,13 @@ fn char_key(c: char) -> KeyEvent {
     key(KeyCode::Char(c))
 }
 
-fn entry(name: &str, path: &str, is_dir: bool, is_git_repo: bool, is_already_synced: bool) -> DirectoryEntry {
+fn entry(
+    name: &str,
+    path: &str,
+    is_dir: bool,
+    is_git_repo: bool,
+    is_already_synced: bool,
+) -> DirectoryEntry {
     DirectoryEntry {
         name: name.to_string(),
         path: PathBuf::from(path),
@@ -66,7 +72,10 @@ async fn picker_open_and_navigate_via_backend() {
     backend.set_fs_fixture(make_fixture()).await;
 
     let mut picker = PickerState::new();
-    picker.open_and_load(&backend, Some(PathBuf::from("/"))).await.unwrap();
+    picker
+        .open_and_load(&backend, Some(PathBuf::from("/")))
+        .await
+        .unwrap();
     assert_eq!(picker.current_path, PathBuf::from("/"));
     assert!(!picker.loading);
     // Sorted: dirs first alphabetically (docs, projects, synced_dir) then files
@@ -87,7 +96,11 @@ async fn picker_open_and_navigate_via_backend() {
     // Enter on current selection if it's dir should return path
     // Let's explicitly set cursor to projects (index 1) and enter
     // Find projects entry position
-    let proj_idx = picker.visible_entries().iter().position(|e| e.name == "projects").unwrap();
+    let proj_idx = picker
+        .visible_entries()
+        .iter()
+        .position(|e| e.name == "projects")
+        .unwrap();
     picker.cursor = proj_idx;
     let target = picker.enter().expect("projects is dir");
     assert_eq!(target, PathBuf::from("/projects"));
@@ -121,7 +134,11 @@ async fn picker_enter_via_app_keyboard_simulation() {
     // Reset cursor to projects entry for deterministic enter
     {
         let p = app.picker.as_mut().unwrap();
-        let idx = p.visible_entries().iter().position(|e| e.name == "projects").unwrap();
+        let idx = p
+            .visible_entries()
+            .iter()
+            .position(|e| e.name == "projects")
+            .unwrap();
         p.cursor = idx;
     }
     app.handle_key_action(&be, key(KeyCode::Enter)).await;
@@ -143,7 +160,9 @@ async fn filter_narrows_case_insensitive_and_esc_clears() {
     let backend = FakeBackend::new();
     backend.set_fs_fixture(make_fixture()).await;
     let mut p = PickerState::new();
-    p.open_and_load(&backend, Some(PathBuf::from("/"))).await.unwrap();
+    p.open_and_load(&backend, Some(PathBuf::from("/")))
+        .await
+        .unwrap();
 
     // Without filter, 4 entries
     assert_eq!(p.visible_len(), 4);
@@ -207,7 +226,10 @@ async fn filter_via_app_typing_and_esc() {
 
     // Esc should clear filter, not close modal
     app.handle_key_action(&be, key(KeyCode::Esc)).await;
-    assert!(app.is_picker_open(), "Esc with filter should clear, not close");
+    assert!(
+        app.is_picker_open(),
+        "Esc with filter should clear, not close"
+    );
     assert_eq!(app.picker.as_ref().unwrap().filter, "");
 
     // Second Esc closes
@@ -250,14 +272,22 @@ fn selection_already_synced_shows_hint_without_register() {
     );
     // Find synced index (order: normal, synced? Actually alphabetical: normal < synced, so normal first)
     // Let's locate synced
-    let synced_idx = p.visible_entries().iter().position(|e| e.name == "synced").unwrap();
+    let synced_idx = p
+        .visible_entries()
+        .iter()
+        .position(|e| e.name == "synced")
+        .unwrap();
     p.cursor = synced_idx;
     let r = p.try_select();
     assert!(matches!(r, PickerSelectResult::AlreadySynced(e) if e.name == "synced"));
     assert_eq!(p.hint.as_deref(), Some("already synced"));
 
     // Hint should persist, selection on normal should clear hint and return Selected
-    let normal_idx = p.visible_entries().iter().position(|e| e.name == "normal").unwrap();
+    let normal_idx = p
+        .visible_entries()
+        .iter()
+        .position(|e| e.name == "normal")
+        .unwrap();
     p.cursor = normal_idx;
     let r2 = p.try_select();
     assert!(matches!(r2, PickerSelectResult::Selected(e) if e.name == "normal"));
@@ -276,13 +306,20 @@ async fn app_space_on_already_synced_shows_hint_no_register() {
     // Find synced_dir cursor
     {
         let p = app.picker.as_ref().unwrap();
-        let idx = p.visible_entries().iter().position(|e| e.name == "synced_dir").unwrap();
+        let idx = p
+            .visible_entries()
+            .iter()
+            .position(|e| e.name == "synced_dir")
+            .unwrap();
         app.picker.as_mut().unwrap().cursor = idx;
     }
     app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
     // Should stay open and hint set
     assert!(app.is_picker_open());
-    assert_eq!(app.picker.as_ref().unwrap().hint.as_deref(), Some("already synced"));
+    assert_eq!(
+        app.picker.as_ref().unwrap().hint.as_deref(),
+        Some("already synced")
+    );
     // Activity log should contain already synced warning, not register success
     let has_warn = app
         .state
@@ -339,7 +376,10 @@ fn picker_state_machine_unit() {
     assert_eq!(p.cursor, 0);
     assert!(p.filter.is_empty());
 
-    p.set_entries(vec![entry("b", "/tmp/b", true, true, false)], PathBuf::from("/tmp"));
+    p.set_entries(
+        vec![entry("b", "/tmp/b", true, true, false)],
+        PathBuf::from("/tmp"),
+    );
     assert!(!p.loading);
     assert_eq!(p.entries.len(), 1);
     assert_eq!(p.breadcrumbs(), "/tmp");

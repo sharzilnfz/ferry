@@ -511,11 +511,8 @@ impl GuiApp {
                 } else if code == "folder_registered" {
                     let msg = format!("Folder added: {message}");
                     self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
-                    self.activity_log.push(ActivityEntry::new(
-                        "Folder",
-                        msg,
-                        colors::FERRY_GREEN,
-                    ));
+                    self.activity_log
+                        .push(ActivityEntry::new("Folder", msg, colors::FERRY_GREEN));
                 } else {
                     self.status_message = Some((
                         format!("{code}: {message}"),

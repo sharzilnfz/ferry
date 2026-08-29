@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ferry_daemon::ui::server::{generate_token, DashboardServer};
 use ferry_ipc::backend::FakeBackend;
-use ferry_ipc::fs::DirectoryEntry;
+use ferry_ipc::DirectoryEntry;
 use serde_json::Value;
 
 async fn send_http(
@@ -68,7 +68,9 @@ async fn fs_ls_requires_auth() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
 
     let (status, body, _) = send_http(addr, "GET", "/api/fs/ls?path=/tmp", &[], None).await;
     assert_eq!(status, 403);
@@ -105,7 +107,9 @@ async fn fs_ls_returns_200_for_valid_path() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
 
     let auth = format!("Bearer {token}");
     let (status, body, _) = send_http(
@@ -120,7 +124,10 @@ async fn fs_ls_returns_200_for_valid_path() {
     assert_eq!(body["absolute_path"], "/tmp");
     let entries = body["entries"].as_array().expect("entries array");
     assert_eq!(entries.len(), 3);
-    let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"alpha"));
     assert!(names.contains(&"beta.txt"));
 
@@ -134,7 +141,9 @@ async fn fs_ls_path_traversal_returns_403() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(
@@ -169,7 +178,9 @@ async fn fs_ls_encoded_traversal_returns_403() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(
@@ -204,7 +215,9 @@ async fn fs_ls_null_byte_returns_400() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(
@@ -239,7 +252,9 @@ async fn fs_ls_double_slash_returns_400() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(
@@ -274,7 +289,9 @@ async fn fs_ls_bad_path_non_absolute_returns_400() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(
@@ -294,25 +311,28 @@ async fn fs_ls_bad_path_non_absolute_returns_400() {
 #[tokio::test]
 async fn fs_ls_missing_path_defaults_to_ok() {
     let fake = Arc::new(FakeBackend::new());
-    let default_root = ferry_ipc::fs::default_listing_root();
+    let default_root = ferry_ipc::default_listing_root();
     let mut fixture: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
-    fixture.insert(default_root.clone(), vec![make_entry("child", &default_root.display().to_string(), true)]);
+    fixture.insert(
+        default_root.clone(),
+        vec![make_entry(
+            "child",
+            &default_root.display().to_string(),
+            true,
+        )],
+    );
     fake.set_fs_fixture(fixture).await;
     let token = generate_token();
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
-    let (status, body, _) = send_http(
-        addr,
-        "GET",
-        "/api/fs/ls",
-        &[("Authorization", &auth)],
-        None,
-    )
-    .await;
+    let (status, body, _) =
+        send_http(addr, "GET", "/api/fs/ls", &[("Authorization", &auth)], None).await;
     assert_eq!(status, 200);
     assert_eq!(body["absolute_path"], default_root.display().to_string());
 
@@ -337,7 +357,9 @@ async fn fs_ls_autocomplete_filter_via_prefix() {
     let server = DashboardServer::new(fake).with_token(&token);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let h = tokio::spawn(async move { server.serve(listener).await.unwrap(); });
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
     let auth = format!("Bearer {token}");
 
     let (status, body, _) = send_http(

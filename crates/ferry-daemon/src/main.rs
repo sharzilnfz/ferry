@@ -172,19 +172,21 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
     }
     // Legacy single-folder path (also used for `ferry daemon --listen` deprecated wrapper)
     if has_flag(args, "--listen") {
-        eprintln!("warning: --listen is deprecated; use `ferry daemon` without args for device daemon");
+        eprintln!(
+            "warning: --listen is deprecated; use `ferry daemon` without args for device daemon"
+        );
         // If --listen is given with a path arg, register it before falling through to legacy
         if let Some(p) = flag(args, "--listen") {
             let home = ferry_home();
             let _ = std::fs::create_dir_all(&home);
-            if let Ok(mut reg) = ferry_daemon::registry::FolderRegistry::load(&home) {
-                let pb = std::path::PathBuf::from(&p);
-                if pb.is_absolute() && pb.exists() {
-                    if let Ok(rec) = reg.register(pb) {
-                        let _ = reg.save(&home);
-                        eprintln!("registered folder {} -> {}", rec.path.display(), rec.folder_id);
-                    }
-                }
+            if let Ok(rec) = ferry_folder::inventory::FolderInventory::new(&home)
+                .register(&std::path::PathBuf::from(&p))
+            {
+                eprintln!(
+                    "registered folder {} -> {}",
+                    rec.path.display(),
+                    rec.folder_id
+                );
             }
         }
     }
@@ -202,7 +204,9 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
     // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
     let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
-        .or_else(|_| ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key")))
+        .or_else(|_| {
+            ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
+        })
         .map_err(|e| format!("device identity: {e}"))?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -233,7 +237,9 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
         let rec = rt.block_on(async { supervisor.handle_register(abs.clone()) });
         match rec {
             Ok(r) => eprintln!("registered {} -> {}", r.path.display(), r.folder_id),
-            Err(e) if e.code == "already-synced" => eprintln!("already-synced {}: {}", p.display(), e.message),
+            Err(e) if e.code == "already-synced" => {
+                eprintln!("already-synced {}: {}", p.display(), e.message);
+            }
             Err(e) => return Err(format!("register {}: {}", p.display(), e.message)),
         }
     }
@@ -248,9 +254,11 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
     }
     let supervisor_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
     let sup_for_ipc = std::sync::Arc::clone(&supervisor_arc);
-    let _ipc_handle = rt.block_on(async {
-        ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
-    }).map_err(|e| format!("ipc server: {e}"))?;
+    let _ipc_handle = rt
+        .block_on(async {
+            ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
+        })
+        .map_err(|e| format!("ipc server: {e}"))?;
     eprintln!("ferry device daemon listening at {}", socket_path.display());
     // Supervision loop with backoff — runs until killed
     rt.block_on(async move {

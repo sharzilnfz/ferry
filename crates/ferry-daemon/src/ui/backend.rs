@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_folder::folder::{dot_dir, load_rules, open_folder};
+use ferry_folder::inventory::{validate_path, ListDirectoryResponse};
 use ferry_folder::pairing::{
     accept_begin, accept_complete, initiate_begin, GRANT_SUFFIX, OFFER_SUFFIX, RESPONSE_SUFFIX,
 };
@@ -12,7 +13,6 @@ use ferry_ipc::backend::{
     OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary, ShareOffer, ShareStatus,
     UiBackend, UiEvent, UiEventStream,
 };
-use ferry_ipc::fs::{list_directory_sync, validate_path, ListDirectoryResponse};
 use ferry_ipc::protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
     PinView, ScanStatsView,
@@ -573,40 +573,32 @@ impl UiBackend for InProcessAdapter {
         Box::pin(async move {
             let validated = validate_path(path)?;
             let validated_clone = validated.clone();
-            tokio::task::spawn_blocking(move || list_directory_sync(validated_clone))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+            tokio::task::spawn_blocking(move || {
+                backend_inventory()
+                    .inspect_dir(Some(validated_clone))
+                    .map_err(OpError::from)
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
 
-    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
-        Box::pin(async move {
-            let home = ferry_home_for_backend();
-            let reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
-            Ok(reg.folders.clone())
-        })
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
+        Box::pin(async move { backend_inventory().list().map_err(OpError::from) })
     }
 
     fn register_folder(
         &self,
         path: PathBuf,
-    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
-        Box::pin(async move {
-            let home = ferry_home_for_backend();
-            let mut reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
-            let rec = reg.register(path).map_err(|e| e.to_op_error())?;
-            reg.save(&home).map_err(|e| e.to_op_error())?;
-            Ok(rec)
-        })
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
+        Box::pin(async move { backend_inventory().register(&path).map_err(OpError::from) })
     }
 
     fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
         Box::pin(async move {
-            let home = ferry_home_for_backend();
-            let mut reg = crate::registry::FolderRegistry::load(&home).map_err(|e| e.to_op_error())?;
-            reg.remove(&folder_id).map_err(|e| e.to_op_error())?;
-            reg.save(&home).map_err(|e| e.to_op_error())?;
-            Ok(())
+            backend_inventory()
+                .unregister(&folder_id)
+                .map_err(OpError::from)
         })
     }
 
@@ -619,11 +611,8 @@ impl UiBackend for InProcessAdapter {
         let folder = self.folder.clone();
         let store = self.pairing_store.clone();
         Box::pin(async move {
-            let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                home,
-                identity,
-                store,
-            );
+            let transport =
+                ferry_sync::pairing_transport::PairingTransport::with_shared(home, identity, store);
             // Ensure the folder_id maps to our current folder (InProcess is single-folder, but
             // PairingTransport looks up via registry/override; registering our folder here makes
             // create_session work without a pre-existing registry entry in tests).
@@ -657,21 +646,11 @@ impl UiBackend for InProcessAdapter {
 }
 
 fn ferry_home_for_backend() -> PathBuf {
-    if let Some(v) = std::env::var_os("FERRY_HOME") {
-        let p = PathBuf::from(&v);
-        if !p.as_os_str().is_empty() {
-            return p;
-        }
-    }
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-    {
-        if !home.as_os_str().is_empty() {
-            return home.join(".ferry");
-        }
-    }
-    PathBuf::from("/tmp/.ferry")
+    ferry_folder::inventory::ferry_home()
+}
+
+fn backend_inventory() -> ferry_folder::inventory::FolderInventory {
+    ferry_folder::inventory::FolderInventory::new(&ferry_folder::inventory::ferry_home())
 }
 
 /// Remote IPC client adapter querying a running daemon over IPC.
@@ -965,7 +944,9 @@ impl UiBackend for DaemonIpcAdapter {
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
             client
-                .send_command(&ClientCommand::ListDirectory { path: Some(validated) })
+                .send_command(&ClientCommand::ListDirectory {
+                    path: Some(validated),
+                })
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
             let resp = client
@@ -998,7 +979,7 @@ impl UiBackend for DaemonIpcAdapter {
         })
     }
 
-    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
         let socket = self.socket_path.clone();
         Box::pin(async move {
             let mut client = IpcClient::connect(&socket)
@@ -1016,10 +997,14 @@ impl UiBackend for DaemonIpcAdapter {
                 .recv_message()
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
-                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                .ok_or_else(|| {
+                    OpError::new("internal", "daemon disconnected", "check daemon log")
+                })?;
             match resp {
                 DaemonMessage::FolderList { folders } => Ok(folders),
-                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
                 other => Err(OpError::new(
                     "protocol",
                     format!("unexpected response {other:?}"),
@@ -1032,7 +1017,7 @@ impl UiBackend for DaemonIpcAdapter {
     fn register_folder(
         &self,
         path: PathBuf,
-    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
         let socket = self.socket_path.clone();
         Box::pin(async move {
             let mut client = IpcClient::connect(&socket)
@@ -1050,10 +1035,14 @@ impl UiBackend for DaemonIpcAdapter {
                 .recv_message()
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
-                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                .ok_or_else(|| {
+                    OpError::new("internal", "daemon disconnected", "check daemon log")
+                })?;
             match resp {
                 DaemonMessage::FolderRegistered { folder } => Ok(folder),
-                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
                 other => Err(OpError::new(
                     "protocol",
                     format!("unexpected response {other:?}"),
@@ -1074,18 +1063,24 @@ impl UiBackend for DaemonIpcAdapter {
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
             client
-                .send_command(&ClientCommand::RemoveFolder { folder_id: folder_id.clone() })
+                .send_command(&ClientCommand::RemoveFolder {
+                    folder_id: folder_id.clone(),
+                })
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
             let resp = client
                 .recv_message()
                 .await
                 .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
-                .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                .ok_or_else(|| {
+                    OpError::new("internal", "daemon disconnected", "check daemon log")
+                })?;
             match resp {
                 DaemonMessage::FolderRemoved { .. } => Ok(()),
                 DaemonMessage::Ack { .. } => Ok(()),
-                DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
                 other => Err(OpError::new(
                     "protocol",
                     format!("unexpected response {other:?}"),
@@ -1103,31 +1098,53 @@ impl UiBackend for DaemonIpcAdapter {
         Box::pin(async move {
             // Try IPC first; on failure fall back to in-process (daemon offline).
             match async {
-                let mut client = IpcClient::connect(&socket).await
+                let mut client = IpcClient::connect(&socket)
+                    .await
                     .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
-                let _initial = client.recv_message().await
+                let _initial = client
+                    .recv_message()
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
-                client.send_command(&ClientCommand::CreatePairingSession { req: req.clone() }).await
+                client
+                    .send_command(&ClientCommand::CreatePairingSession { req: req.clone() })
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
-                let resp = client.recv_message().await
+                let resp = client
+                    .recv_message()
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
-                    .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                    .ok_or_else(|| {
+                        OpError::new("internal", "daemon disconnected", "check daemon log")
+                    })?;
                 match resp {
                     DaemonMessage::PairingCreated { response } => Ok(response),
-                    DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
-                    other => Err(OpError::new("protocol", format!("unexpected response {other:?}"), "retry")),
+                    DaemonMessage::Error { code, message } => {
+                        Err(OpError::new(code, message, "check daemon"))
+                    }
+                    other => Err(OpError::new(
+                        "protocol",
+                        format!("unexpected response {other:?}"),
+                        "retry",
+                    )),
                 }
-            }.await {
+            }
+            .await
+            {
                 Ok(r) => Ok(r),
                 Err(_) => {
                     // Fallback: in-process pairing via shared store (tests without daemon).
                     let home = ferry_home_for_backend();
                     let identity = InProcessAdapter::new(".").get_identity();
                     let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                        home, identity, ferry_sync::pairing_transport::daemon_shared_store()
+                        home,
+                        identity,
+                        ferry_sync::pairing_transport::daemon_shared_store(),
                     );
                     tokio::task::spawn_blocking(move || transport.create_session(req.folder_id))
-                        .await.map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+                        .await
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "check worker stderr")
+                        })?
                 }
             }
         })
@@ -1140,30 +1157,52 @@ impl UiBackend for DaemonIpcAdapter {
         let socket = self.socket_path.clone();
         Box::pin(async move {
             match async {
-                let mut client = IpcClient::connect(&socket).await
+                let mut client = IpcClient::connect(&socket)
+                    .await
                     .map_err(|e| OpError::new("not-found", e.to_string(), "daemon offline"))?;
-                let _initial = client.recv_message().await
+                let _initial = client
+                    .recv_message()
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
-                client.send_command(&ClientCommand::JoinPairingSession { req: req.clone() }).await
+                client
+                    .send_command(&ClientCommand::JoinPairingSession { req: req.clone() })
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?;
-                let resp = client.recv_message().await
+                let resp = client
+                    .recv_message()
+                    .await
                     .map_err(|e| OpError::internal(e.to_string(), "check daemon"))?
-                    .ok_or_else(|| OpError::new("internal", "daemon disconnected", "check daemon log"))?;
+                    .ok_or_else(|| {
+                        OpError::new("internal", "daemon disconnected", "check daemon log")
+                    })?;
                 match resp {
                     DaemonMessage::PairingJoined { result } => Ok(result),
-                    DaemonMessage::Error { code, message } => Err(OpError::new(code, message, "check daemon")),
-                    other => Err(OpError::new("protocol", format!("unexpected response {other:?}"), "retry")),
+                    DaemonMessage::Error { code, message } => {
+                        Err(OpError::new(code, message, "check daemon"))
+                    }
+                    other => Err(OpError::new(
+                        "protocol",
+                        format!("unexpected response {other:?}"),
+                        "retry",
+                    )),
                 }
-            }.await {
+            }
+            .await
+            {
                 Ok(r) => Ok(r),
                 Err(_) => {
                     let home = ferry_home_for_backend();
                     let identity = InProcessAdapter::new(".").get_identity();
                     let transport = ferry_sync::pairing_transport::PairingTransport::with_shared(
-                        home, identity, ferry_sync::pairing_transport::daemon_shared_store()
+                        home,
+                        identity,
+                        ferry_sync::pairing_transport::daemon_shared_store(),
                     );
                     tokio::task::spawn_blocking(move || transport.join_session(req))
-                        .await.map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+                        .await
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "check worker stderr")
+                        })?
                 }
             }
         })
@@ -1375,7 +1414,7 @@ impl UiBackend for AutoBackend {
         })
     }
 
-    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::registry::FolderRecord>, OpError>> {
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
         let ipc = self.ipc.clone();
         let in_proc = self.in_process.clone();
         Box::pin(async move {
@@ -1389,7 +1428,7 @@ impl UiBackend for AutoBackend {
     fn register_folder(
         &self,
         path: PathBuf,
-    ) -> BoxFuture<'_, Result<ferry_ipc::registry::FolderRecord, OpError>> {
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
         let ipc = self.ipc.clone();
         let in_proc = self.in_process.clone();
         Box::pin(async move {

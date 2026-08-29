@@ -48,10 +48,13 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     if listen_addr.is_none() && peer_addr.is_none() {
         let home = crate::home::ferry_home()?;
         let identity = crate::ensure_identity()?;
-        let mut supervisor = ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
+        let mut supervisor =
+            ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
         for p in args.folders {
             let abs = if p.is_relative() {
-                std::env::current_dir().map(|cwd| cwd.join(p)).unwrap_or_else(|_| p.clone())
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(p))
+                    .unwrap_or_else(|_| p.clone())
             } else {
                 p.clone()
             };
@@ -60,19 +63,44 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             }
             match supervisor.handle_register(abs.clone()) {
                 Ok(rec) => eprintln!("registered {} -> {}", rec.path.display(), rec.folder_id),
-                Err(e) if e.code == "already-synced" => eprintln!("already-synced {}: {}", p.display(), e.message),
-                Err(e) => return Err(CliError::new(Box::leak(e.code.into_boxed_str()), e.message, e.hint)),
+                Err(e) if e.code == "already-synced" => {
+                    eprintln!("already-synced {}: {}", p.display(), e.message)
+                }
+                Err(e) => {
+                    return Err(CliError::new(
+                        Box::leak(e.code.into_boxed_str()),
+                        e.message,
+                        e.hint,
+                    ))
+                }
             }
         }
-        supervisor.spawn_engines().map_err(|e| CliError::new(Box::leak(e.code.into_boxed_str()), e.message, "check daemon log"))?;
+        supervisor.spawn_engines().map_err(|e| {
+            CliError::new(
+                Box::leak(e.code.into_boxed_str()),
+                e.message,
+                "check daemon log",
+            )
+        })?;
         let socket_path = ferry_ipc::paths::default_socket_path();
         if let Some(parent) = socket_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|e| CliError::new("runtime-error", e.to_string(), "failed to start runtime"))?;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                CliError::new("runtime-error", e.to_string(), "failed to start runtime")
+            })?;
         rt.block_on(async move {
             let sup_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-            let _ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), std::sync::Arc::clone(&sup_arc)).map_err(|e| e.to_string()).expect("ipc bind");
+            let _ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(
+                socket_path.clone(),
+                std::sync::Arc::clone(&sup_arc),
+            )
+            .map_err(|e| e.to_string())
+            .expect("ipc bind");
             eprintln!("ferry device daemon listening at {}", socket_path.display());
             let mut interval = tokio::time::interval(Duration::from_millis(500));
             loop {
@@ -82,7 +110,10 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             }
         });
         #[allow(unreachable_code)]
-        return Ok(Output::new(serde_json::json!({"command":"daemon","status":"stopped"}), "Daemon stopped.\n"));
+        return Ok(Output::new(
+            serde_json::json!({"command":"daemon","status":"stopped"}),
+            "Daemon stopped.\n",
+        ));
     }
 
     let paths: Vec<PathBuf> = if args.folders.is_empty() {

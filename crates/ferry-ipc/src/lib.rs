@@ -6,11 +6,9 @@
 pub mod backend;
 pub mod error;
 pub mod framing;
-pub mod fs;
 pub mod pairing;
 pub mod paths;
 pub mod protocol;
-pub mod registry;
 pub mod transport;
 
 pub use backend::{
@@ -18,21 +16,22 @@ pub use backend::{
     ShareOffer, ShareStatus, UiBackend, UiEvent, UiEventStream,
 };
 pub use error::IpcError;
+// The folder inventory data shapes and guards live in `ferry-folder` (single
+// owner of registry persistence and inspection); re-exported here so the
+// wire protocol and frontends keep one import site.
+pub use ferry_folder::inventory::{
+    default_listing_root, sort_entries, validate_and_normalize, validate_path, DirectoryEntry,
+    FolderInventory, FolderRecord, ListDirectoryRequest, ListDirectoryResponse,
+};
 pub use framing::{IpcConnection, IpcReceiver, IpcSender, DEFAULT_MAX_MESSAGE_SIZE};
-pub use paths::{default_socket_path, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX};
+pub use pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode};
 #[allow(deprecated)]
 pub use paths::socket_path_for_dir;
-pub use fs::{
-    default_listing_root, is_already_synced, list_directory_sync, load_folder_registry,
-    sort_entries, validate_and_normalize, validate_path, DirectoryEntry, ListDirectoryRequest,
-    ListDirectoryResponse,
-};
-pub use pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest, PairingCode};
+pub use paths::{default_socket_path, DEFAULT_SOCKET_FILENAME, DEFAULT_WINDOWS_PIPE_PREFIX};
 pub use protocol::{
     ClientCommand, ConflictEntry, DaemonMessage, DeviceStamp, EngineSnapshot, PeerStatusView,
     PinView, ScanStatsView, TransferDirection,
 };
-pub use registry::{FolderRecord, FolderRegistry};
 pub use transport::{
     create_in_memory_pair, create_in_memory_pair_with_buffer_size, InMemoryConnection,
     InMemoryStream,

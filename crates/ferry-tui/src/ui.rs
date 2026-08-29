@@ -486,14 +486,31 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .title(Span::styled(
             " Select Folder ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" open  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Space", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Space",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" close", Style::default().fg(Color::DarkGray)),
         ]));
 
@@ -509,7 +526,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
         .constraints([
             Constraint::Length(1), // breadcrumb
             Constraint::Length(1), // filter
-            Constraint::Min(3),     // list
+            Constraint::Min(3),    // list
             Constraint::Length(1), // hint
         ])
         .split(inner);
@@ -524,9 +541,15 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
 
     // Filter line
     let filter_text = if picker.filter.is_empty() {
-        Span::styled(" Filter: (type to filter)", Style::default().fg(Color::DarkGray))
+        Span::styled(
+            " Filter: (type to filter)",
+            Style::default().fg(Color::DarkGray),
+        )
     } else {
-        Span::styled(format!(" Filter: {}", picker.filter), Style::default().fg(Color::Yellow))
+        Span::styled(
+            format!(" Filter: {}", picker.filter),
+            Style::default().fg(Color::Yellow),
+        )
     };
     let filter_para = Paragraph::new(Line::from(vec![filter_text]));
     frame.render_widget(filter_para, chunks[1]);
@@ -568,11 +591,18 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
             spans.push(Span::styled("  [git]", Style::default().fg(Color::Green)));
         }
         if entry.is_already_synced {
-            spans.push(Span::styled("  (synced)", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                "  (synced)",
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         let mut line = Line::from(spans);
         if entry.is_already_synced {
-            line = line.style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+            line = line.style(
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            );
         }
         // Highlight cursor: need to compute effective cursor index matching this row's position
         let effective_cursor = picker.cursor;
@@ -580,9 +610,18 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
         let is_selected = row_idx == effective_cursor;
         let mut item = ListItem::new(line);
         if is_selected {
-            item = item.style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD));
+            item = item.style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            );
         } else if entry.is_already_synced {
-            item = item.style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM));
+            item = item.style(
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            );
         }
         items.push(item);
     }
@@ -608,7 +647,9 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let hint_line = if let Some(ref h) = picker.hint {
         Paragraph::new(Line::from(vec![Span::styled(
             h.clone(),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )]))
     } else if picker.loading {
         Paragraph::new(Line::from(vec![Span::styled(
