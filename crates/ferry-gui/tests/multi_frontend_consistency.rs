@@ -13,7 +13,7 @@ use std::sync::Arc;
 use ferry_daemon::ui::backend::snapshot_to_status_doc;
 use ferry_gui::beacon::BeaconState;
 use ferry_gui::GuiApp;
-use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
+use ferry_ipc::backend::{FakeBackend, SessionDomain, StatusDomain, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, ScanStatsView, TransferDirection,
 };

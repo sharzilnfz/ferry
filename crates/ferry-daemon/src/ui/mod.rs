@@ -29,6 +29,8 @@ pub use backend::{
 pub use error::{status_for_code, ApiError, OpError};
 #[cfg(not(feature = "web-ui"))]
 pub use ferry_ipc::backend::OpError;
+pub use ferry_ipc::backend::{InventoryDomain, SessionDomain, StatusDomain, UiBackend};
+pub use ferry_ipc::client::{DaemonClient, ReconnectPolicy};
 #[cfg(feature = "web-ui")]
 pub use server::{
     asset, extract_token, generate_token, is_token_valid, DashboardServer, APP_JS, INDEX_HTML,

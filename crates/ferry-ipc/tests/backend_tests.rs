@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ferry_ipc::backend::{FakeBackend, UiBackend};
+use ferry_ipc::backend::{FakeBackend, InventoryDomain};
 use ferry_ipc::protocol::{ClientCommand, DaemonMessage};
 use ferry_ipc::{validate_path, DirectoryEntry};
 use unicode_normalization::UnicodeNormalization;

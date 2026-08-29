@@ -15,7 +15,7 @@ use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
 use ferry_daemon::ui::backend::{AutoBackend, DaemonIpcAdapter, InProcessAdapter};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
-use ferry_ipc::backend::UiBackend;
+use ferry_ipc::backend::InventoryDomain;
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
 use rand::rngs::StdRng;

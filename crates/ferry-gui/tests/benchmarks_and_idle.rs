@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use egui::{Context, RawInput};
 use ferry_gui::theme::Theme;
 use ferry_gui::GuiApp;
-use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
+use ferry_ipc::backend::{FakeBackend, StatusDomain, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, ScanStatsView,
 };

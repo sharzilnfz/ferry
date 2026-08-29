@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use ferry_ipc::backend::{FakeBackend, UiBackend, UiEvent};
+use ferry_ipc::backend::{FakeBackend, StatusDomain, UiBackend, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, ScanStatsView, TransferDirection,
 };
