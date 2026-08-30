@@ -278,71 +278,57 @@ fn collect_chunks(state: &EntryState, out: &mut BTreeMap<BlobId, u64>) {
     }
 }
 
+/// The resolved three-way base.
+enum SafeBase<'a> {
+    /// The base is a proven ancestor of both sides; diff against it.
+    Proven(&'a RootManifest),
+    /// No provable ancestor (none given, or the parent chain of either
+    /// side fails to reach the base): diff both sides against the empty
+    /// tree, so every file on both sides is an addition and nothing is
+    /// pruned.
+    Empty,
+}
+
+/// True when `ancestor` is `of` itself or reachable through `of`'s
+/// parent-pointer chain. The depth cap guards against cyclic manifests.
+fn is_ancestor(store: &Store, ancestor: &BlobId, of: &RootManifest) -> bool {
+    if *blake3::hash(&serialize_manifest(of)).as_bytes() == *ancestor {
+        return true;
+    }
+    let mut curr_parent = of.parent_manifest_id;
+    let mut depth = 0;
+    while curr_parent != [0u8; 32] && depth < 256 {
+        if curr_parent == *ancestor {
+            return true;
+        }
+        match store.get(BlobKind::Manifest, &curr_parent) {
+            Ok(bytes) => match parse_manifest(&bytes) {
+                Ok(m) => curr_parent = m.parent_manifest_id,
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        }
+        depth += 1;
+    }
+    false
+}
+
 fn resolve_safe_base<'a>(
     store: &Store,
-    _local: &'a RootManifest,
+    local: &'a RootManifest,
     remote: &'a RootManifest,
     base: Option<&'a RootManifest>,
-) -> Option<&'a RootManifest> {
-    let b = base?;
-    // If base matches remote, it is directly grounded.
-    if b.root_tree_id == remote.root_tree_id {
-        return Some(b);
+) -> SafeBase<'a> {
+    let b = match base {
+        Some(b) => b,
+        None => return SafeBase::Empty,
+    };
+    let base_id = *blake3::hash(&serialize_manifest(b)).as_bytes();
+    if is_ancestor(store, &base_id, local) && is_ancestor(store, &base_id, remote) {
+        SafeBase::Proven(b)
+    } else {
+        SafeBase::Empty
     }
-
-    let base_bytes = serialize_manifest(b);
-    let base_id = *blake3::hash(&base_bytes).as_bytes();
-
-    let remote_bytes = serialize_manifest(remote);
-    let remote_id = *blake3::hash(&remote_bytes).as_bytes();
-
-    // 1. Check if remote is a forward descendant of base:
-    let mut curr_parent = remote.parent_manifest_id;
-    let mut depth = 0;
-    let mut is_descendant = false;
-    while curr_parent != [0u8; 32] && depth < 256 {
-        if curr_parent == base_id {
-            is_descendant = true;
-            break;
-        }
-        match store.get(BlobKind::Manifest, &curr_parent) {
-            Ok(bytes) => match parse_manifest(&bytes) {
-                Ok(m) => curr_parent = m.parent_manifest_id,
-                Err(_) => break,
-            },
-            Err(_) => break,
-        }
-        depth += 1;
-    }
-
-    if is_descendant {
-        return Some(b);
-    }
-
-    // 2. Check if remote is an ancestor of base (remote rolled back / restored from backup).
-    let mut curr_parent = b.parent_manifest_id;
-    let mut depth = 0;
-    while curr_parent != [0u8; 32] && depth < 256 {
-        if curr_parent == remote_id {
-            // Remote is an ancestor of base. Downgrade base to remote to prevent false deletions.
-            return Some(remote);
-        }
-        match store.get(BlobKind::Manifest, &curr_parent) {
-            Ok(bytes) => match parse_manifest(&bytes) {
-                Ok(m) => curr_parent = m.parent_manifest_id,
-                Err(_) => break,
-            },
-            Err(_) => break,
-        }
-        depth += 1;
-    }
-
-    // 3. If remote is strictly older than base and not a proven successor, downgrade to remote.
-    if (remote.created_sec, remote.created_nsec) < (b.created_sec, b.created_nsec) {
-        return Some(remote);
-    }
-
-    Some(b)
 }
 
 /// Run one reconciliation and produce the internal execution plan.
@@ -354,17 +340,19 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         base,
     } = input;
 
-    // Lineage check: ensure base is a valid ancestor of both sides to prevent
-    // rollback-induced deletions of live local files.
+    // A base unproven on either side degrades to the empty tree: every
+    // file is an addition and nothing is pruned. A broken lineage never
+    // diffs against the remote manifest.
     let safe_base = resolve_safe_base(store, local, remote, base);
 
-    // Base root: the agreed manifest's tree, or the empty tree for initial
-    // sync (add-vs-add treats the empty tree as the ancestor).
     let empty_root = store.put_meta(
         BlobKind::TreeNode,
         &serialize_tree_node(&TreeNode::default()),
     )?;
-    let base_root = safe_base.map_or(empty_root, |m| m.root_tree_id);
+    let base_root = match safe_base {
+        SafeBase::Proven(m) => m.root_tree_id,
+        SafeBase::Empty => empty_root,
+    };
 
     let local_view = index_change_set(&diff_roots(store, &base_root, &local.root_tree_id)?);
     let remote_view = index_change_set(&diff_roots(store, &base_root, &remote.root_tree_id)?);
@@ -891,6 +879,9 @@ mod tests {
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
         );
         let base = p.sa.manifest.clone();
+        // B adopts the agreed base as its lineage parent (the exchange's
+        // adoption rule), so the base is provable on both sides.
+        p.b.parent = p.sa.manifest_id;
 
         write_file(&p.a.tree.join("f.txt"), b"the edit", false, (60, 0));
         std::fs::remove_file(p.b.tree.join("f.txt")).unwrap();
@@ -927,6 +918,7 @@ mod tests {
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
         );
         let base = p.sa.manifest.clone();
+        p.b.parent = p.sa.manifest_id;
 
         std::fs::remove_file(p.a.tree.join("f.txt")).unwrap();
         write_file(&p.b.tree.join("f.txt"), b"edited elsewhere", false, (70, 0));
@@ -966,6 +958,7 @@ mod tests {
         );
         let _ = &p.sa;
         let base = p.sa.manifest.clone();
+        p.b.parent = p.sa.manifest_id;
 
         // A replaces the whole directory with a file of the same name.
         std::fs::remove_dir_all(p.a.tree.join("d")).unwrap();

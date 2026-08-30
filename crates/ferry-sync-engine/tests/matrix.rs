@@ -268,12 +268,13 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     if has_base {
         write_file(&a.tree.join(path), b"v0", (1000, 0));
         write_file(&b.tree.join(path), b"v0", (1000, 0));
-        let sa = a.snap();
-        let sb = b.snap();
-        // Each device records its own agreement-time manifest; trees are
-        // identical so the ancestor is unambiguous.
-        record_agreement(&mut a, DEV_B, sa.manifest_id);
-        record_agreement(&mut b, DEV_A, sb.manifest_id);
+        let s0 = a.snap();
+        // B adopts A's manifest as the shared agreed base (the exchange's
+        // adoption rule), so the base is provable on both sides.
+        transfer_meta(&a.store, &b.store, &s0);
+        b.parent = s0.manifest_id;
+        record_agreement(&mut a, DEV_B, s0.manifest_id);
+        record_agreement(&mut b, DEV_A, s0.manifest_id);
     }
 
     let (va_bytes, vb_bytes): (&[u8], &[u8]) = (b"version A", b"version B");
@@ -491,10 +492,21 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         let entries = list_conflicts(&d.state).unwrap();
         total_entries += entries.len();
         for e in &entries {
-            let want_kind = match scenario {
-                Scenario::DeleteVsEdit => "delete_vs_edit",
-                Scenario::AddVsAddDiff => "add_vs_add",
-                _ => "both_changed",
+            // The second executor of a staggered order never received the
+            // first executor's intermediate manifest, so its remote-lineage
+            // walk fails and the base degrades to empty: the identical
+            // divergence is decided as add-vs-add (same winner, same
+            // quarantine, different kind label).
+            let second_executor_degraded = match order {
+                Order::Simultaneous => false,
+                Order::AFirst => d_label == "B",
+                Order::BFirst => d_label == "A",
+            };
+            let want_kind = match (scenario, second_executor_degraded) {
+                (Scenario::DeleteVsEdit, _) => "delete_vs_edit",
+                (Scenario::AddVsAddDiff, _) => "add_vs_add",
+                (_, true) => "add_vs_add",
+                (_, false) => "both_changed",
             };
             assert_eq!(e.kind, want_kind, "{d_label}");
             assert_eq!(e.path, path);

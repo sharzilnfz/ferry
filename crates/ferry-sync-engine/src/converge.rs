@@ -1058,6 +1058,10 @@ mod tests {
         write_file(&b.tree.join("f.txt"), b"base", false, (100, 0));
         let s0a = a.snapshot();
         let _s0b = b.snapshot();
+        // B adopts A's base manifest as its lineage pointer (the exchange's
+        // adoption rule), so the base is provable on both sides.
+        transfer_manifest(&a.store, &b.store, &s0a.manifest, s0a.manifest_id);
+        b.parent = s0a.manifest_id;
 
         write_file(&a.tree.join("f.txt"), b"winner from A", false, (200, 0));
         write_file(&b.tree.join("f.txt"), b"loser on B", false, (150, 0));
@@ -1271,6 +1275,8 @@ mod tests {
         write_file(&b.tree.join(nfd), b"base", false, (100, 0));
         let s0 = a.snapshot();
         let _s0b = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &s0.manifest, s0.manifest_id);
+        b.parent = s0.manifest_id;
 
         write_file(&a.tree.join(nfd), b"winner from A", false, (200, 0));
         write_file(&b.tree.join(nfd), b"loser on B", false, (150, 0));
@@ -1351,6 +1357,8 @@ mod tests {
         write_file(&b.tree.join("f.txt"), b"base", false, (10, 0));
         let s0a = a.snapshot();
         let _s0b = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &s0a.manifest, s0a.manifest_id);
+        b.parent = s0a.manifest_id;
 
         // B deletes while A edits; the rig runs on B so B resurrects A's
         // edit.
@@ -1425,6 +1433,8 @@ mod tests {
         write_file(&b.tree.join("docs/d.txt"), b"base docs", false, (100, 0));
         let s0 = a.snapshot();
         let _sb0 = b.snapshot();
+        transfer_manifest(&a.store, &b.store, &s0.manifest, s0.manifest_id);
+        b.parent = s0.manifest_id;
 
         write_file(&a.tree.join("src/a.txt"), b"A newer src", false, (300, 0));
         write_file(&b.tree.join("src/a.txt"), b"B older src", false, (200, 0));
