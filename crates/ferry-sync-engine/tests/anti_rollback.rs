@@ -39,7 +39,9 @@ impl TestNode {
         fs::create_dir_all(&store_dir).unwrap();
         fs::create_dir_all(&state).unwrap();
 
-        let poly = ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(SEED));
+        let poly = ferry_store::chunker::ValidatedPoly::generate(
+            &mut rand::rngs::StdRng::seed_from_u64(SEED),
+        );
         let fmk = [1u8; 32];
         let store = Store::create(&store_dir, fmk, Box::new(PassthroughCipher)).unwrap();
         store.put_polynomial(poly.get()).unwrap();
@@ -139,19 +141,38 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
     // Device A runs convergence with local = M2, remote = M1, base = M2 (from agreement).
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let res = engine
-        .converge(&snap_m2.manifest, &snap_m1.manifest, Some(&snap_m2.manifest))
+        .converge(
+            &snap_m2.manifest,
+            &snap_m1.manifest,
+            Some(&snap_m2.manifest),
+        )
         .unwrap();
 
     // Verification: Zero silent data loss!
     // file2.txt and file3.txt MUST survive on Device A disk
     assert!(a.tree.join("file1.txt").is_file(), "file1.txt must exist");
-    assert!(a.tree.join("file2.txt").is_file(), "file2.txt must not be deleted by rolled-back peer");
-    assert!(a.tree.join("file3.txt").is_file(), "file3.txt must not be deleted by rolled-back peer");
-    assert_eq!(fs::read(a.tree.join("file2.txt")).unwrap(), b"important local data 2");
-    assert_eq!(fs::read(a.tree.join("file3.txt")).unwrap(), b"important local data 3");
+    assert!(
+        a.tree.join("file2.txt").is_file(),
+        "file2.txt must not be deleted by rolled-back peer"
+    );
+    assert!(
+        a.tree.join("file3.txt").is_file(),
+        "file3.txt must not be deleted by rolled-back peer"
+    );
+    assert_eq!(
+        fs::read(a.tree.join("file2.txt")).unwrap(),
+        b"important local data 2"
+    );
+    assert_eq!(
+        fs::read(a.tree.join("file3.txt")).unwrap(),
+        b"important local data 3"
+    );
 
     // All local files must be on the send list to peer B to restore consistency
-    assert!(!res.send.is_empty(), "winner files must be sent to rolled-back peer");
+    assert!(
+        !res.send.is_empty(),
+        "winner files must be sent to rolled-back peer"
+    );
 }
 
 #[test]
@@ -174,7 +195,11 @@ fn test_peer_rollback_does_not_overwrite_newer_file_with_stale_content() {
     // 3. Remote peer offers stale M1 (created at 1_000_000)
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let _res = engine
-        .converge(&snap_m2.manifest, &snap_m1.manifest, Some(&snap_m2.manifest))
+        .converge(
+            &snap_m2.manifest,
+            &snap_m1.manifest,
+            Some(&snap_m2.manifest),
+        )
         .unwrap();
 
     // Verification: Live file must retain v2 content, not overwritten with stale v1

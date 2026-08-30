@@ -5,10 +5,10 @@
 //! counter nonces with a last-segment flag, header-bound AAD. Everything
 //! except the raw AEAD primitive is implemented here and tested now.
 //!
-//! [`PassthroughCipher`] is the deliberate v0 stub: it emits correctly shaped
-//! ciphertext (plaintext plus a zeroed 16-byte tag slot) but provides NO
-//! confidentiality and NO authenticity. T-007/T-008 replace it with the real
-//! cipher by swapping this one impl; no other module may change.
+//! [`PassthroughCipher`] is the zero-crypto fixture stub: it emits correctly
+//! shaped ciphertext (plaintext plus a zeroed 16-byte tag slot) but provides
+//! NO confidentiality and NO authenticity. It is compile-gated behind
+//! `cfg(test)` / the `test-util` feature so no production build can name it.
 
 #[cfg(test)]
 mod tests {
@@ -339,14 +339,19 @@ pub trait PackCipher: Send + Sync {
     ) -> Result<Vec<u8>, CryptoError>;
 }
 
-/// v0 stub standing in for ChaCha20-Poly1305 until T-007/T-008 wire real
-/// keys. Output framing matches a real AEAD exactly (payload || 16-byte tag
-/// slot), so every offset, length, and name in the format is already
-/// spec-conformant. It XORs NOTHING: the tag slot is zeros, authenticity is
-/// limited to "the bytes were written by this stub", and there is no
-/// confidentiality at all. MUST NOT ship beyond development.
+/// Zero-crypto stub: output framing matches a real AEAD exactly (payload ||
+/// 16-byte tag slot) so test fixtures keep spec-conformant geometry. It XORs
+/// NOTHING: the tag slot is zeros, authenticity is limited to "the bytes were
+/// written by this stub", and there is no confidentiality at all.
+///
+/// Compile-gated out of production builds (`#[cfg(any(test, feature =
+/// "test-util"))]`): no shipped binary can name it, so a silent plaintext
+/// fallback is unrepresentable. Test fixtures enable it via their
+/// dev-dependency feature.
+#[cfg(any(test, feature = "test-util"))]
 pub struct PassthroughCipher;
 
+#[cfg(any(test, feature = "test-util"))]
 impl PackCipher for PassthroughCipher {
     fn seal(
         &self,

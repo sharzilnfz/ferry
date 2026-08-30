@@ -8,6 +8,7 @@ use ferry_folder::folder::{
     create_folder, dot_dir, find_polynomial, open_folder, save_settings, short_device,
     write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
 };
+use ferry_store::format::BlobKind;
 use ferry_store::store::Store;
 
 const FOLDER_ID: [u8; 16] = [7u8; 16];
@@ -172,4 +173,89 @@ fn double_initialize_refuses_through_already_initialized_code() {
     make_folder(&root, &id);
     let err = code_of(create_folder(&root, &id, FOLDER_ID, POLY));
     assert_eq!(err, "already-initialized");
+}
+
+#[test]
+fn opened_store_is_encrypted_at_rest() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+
+    let opened = open_folder(&root, &id).expect("open succeeds");
+    let marker = b"FERRY-PLAINTEXT-MARKER-at-rest";
+    let blob = opened.store.put_data(marker).unwrap();
+    opened.store.flush().unwrap();
+    opened.store.write_index_snapshot().unwrap();
+
+    // The blob round-trips through the opened store...
+    assert_eq!(
+        opened.store.get(BlobKind::DataChunk, &blob).unwrap(),
+        marker
+    );
+
+    // ...but the marker is nowhere in the raw packs: the store this
+    // interface hands out is ChaCha20-Poly1305, never plaintext.
+    for entry in std::fs::read_dir(root.join(".ferry/packs"))
+        .unwrap()
+        .flatten()
+    {
+        let raw = std::fs::read(entry.path()).unwrap();
+        assert!(
+            !raw.windows(marker.len()).any(|w| w == marker),
+            "plaintext marker found in {}",
+            entry.path().display()
+        );
+    }
+}
+
+#[test]
+fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+
+    // Flip one byte of this device's wrapped FMK: the envelope still parses,
+    // but the key cannot be unwrapped.
+    let config_path = root.join(".ferry/config");
+    let mut head =
+        ferry_crypto::config_head::parse_config_head(&std::fs::read(&config_path).unwrap())
+            .unwrap();
+    head.entries[0].wrapped[0] ^= 0xFF;
+    std::fs::write(
+        &config_path,
+        ferry_crypto::config_head::write_config_head(&head.folder_id, &head.entries),
+    )
+    .unwrap();
+
+    let err = open_folder(&root, &id).err().unwrap();
+    assert_eq!(err.code, "key-unwrap");
+
+    // No fallback ran: the store packs are untouched on disk.
+    assert!(root.join(".ferry/packs").is_dir());
+}
+
+#[test]
+fn wrong_fmk_cannot_reopen_the_store() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+    drop(open_folder(&root, &id).expect("open succeeds"));
+
+    // The deleted zero-key reopen path: opening with the wrong FMK fails
+    // loudly, it does not degrade to plaintext.
+    assert!(
+        Store::open(
+            &root,
+            [0u8; 32],
+            Box::new(ferry_crypto::pack_cipher::ChaChaCipher)
+        )
+        .is_err(),
+        "a wrong FMK must never reopen the store"
+    );
 }

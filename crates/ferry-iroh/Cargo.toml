@@ -19,6 +19,8 @@ tokio.workspace = true
 [dev-dependencies]
 anyhow = "1"
 ferry-relay = { path = "../ferry-relay" }
+# Test fixtures open stores through ferry-folder's test-util helper.
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 tempfile.workspace = true
 rand.workspace = true
 
