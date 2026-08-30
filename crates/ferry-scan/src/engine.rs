@@ -128,12 +128,15 @@ impl SignalQueue {
     }
 
     /// Wait up to `dur`; true if something arrived meanwhile.
-    fn wait_arrival(&self, dur: Duration) -> bool {
+    fn wait_arrival(&self, stop: &AtomicBool, dur: Duration) -> bool {
         let deadline = Instant::now() + dur;
         let mut g = self.q.lock().expect("signal queue");
         loop {
             if !g.is_empty() {
                 return true;
+            }
+            if stop.load(Ordering::Relaxed) {
+                return false;
             }
             let now = Instant::now();
             if now >= deadline {
@@ -144,7 +147,7 @@ impl SignalQueue {
                 .wait_timeout(g, deadline - now)
                 .expect("signal queue");
             g = g2;
-            if t.timed_out() {
+            if t.timed_out() || stop.load(Ordering::Relaxed) {
                 return !g.is_empty();
             }
         }
@@ -675,7 +678,7 @@ impl ScanEngine {
                         if now >= deadline {
                             break;
                         }
-                        if parts.queue.wait_arrival(deadline - now) {
+                        if parts.queue.wait_arrival(&stop, deadline - now) {
                             batch.extend(parts.queue.drain());
                             deadline = Instant::now() + quiet;
                         } else {

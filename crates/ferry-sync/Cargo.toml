@@ -9,6 +9,7 @@ ferry-store = { path = "../ferry-store" }
 ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-folder = { path = "../ferry-folder" }
+ferry-ignore = { path = "../ferry-ignore" }
 # Session-pin types for sync engine tests and release planning.
 ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true

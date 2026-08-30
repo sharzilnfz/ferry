@@ -99,6 +99,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
     if let Ok(identity) = crate::home::load_device_identity() {
         engine.set_identity(identity);
     }
+    engine.set_ignore_policy(opened.ignore_policy());
 
     let handle = engine.start();
     let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);

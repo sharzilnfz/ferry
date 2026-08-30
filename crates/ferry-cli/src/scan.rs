@@ -94,8 +94,5 @@ pub fn one_shot_raw(
 }
 
 fn folder_rules(opened: &OpenFolder) -> CliResult<Arc<dyn IgnorePolicy>> {
-    Ok(Arc::new(crate::folder::load_rules(
-        &opened.root,
-        &opened.settings,
-    )?))
+    Ok(opened.ignore_policy())
 }

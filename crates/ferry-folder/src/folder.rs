@@ -98,6 +98,28 @@ pub fn load_rules(folder: &Path, settings: &Settings) -> FolderResult<ferry_igno
     )
 }
 
+/// Load and compile the folder's ignore policy from disk, falling back to default rules if settings cannot be read.
+pub fn load_ignore_policy(folder: &Path) -> FolderResult<ferry_ignore::FerryIgnore> {
+    let settings_path = dot_dir(folder).join(SETTINGS_FILE);
+    let cfg = if settings_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(settings) = serde_json::from_str::<Settings>(&content) {
+                settings.ignore_config()
+            } else {
+                ferry_ignore::IgnoreConfig::default()
+            }
+        } else {
+            ferry_ignore::IgnoreConfig::default()
+        }
+    } else {
+        ferry_ignore::IgnoreConfig::default()
+    };
+    ferry_ignore::FerryIgnore::new(folder, &cfg).code(
+        "ignore-rules",
+        "fix or remove the offending line in ferry.ignore / .ferry/settings.json",
+    )
+}
+
 /// Create a brand-new synced folder at `root`. Fails when `.ferry` already
 /// exists — never silently re-initialize trust material.
 ///
@@ -185,6 +207,7 @@ pub struct OpenFolder {
     pub folder_id: [u8; 16],
     pub poly: u64,
     pub store: Arc<Store>,
+    pub rules: Arc<ferry_ignore::FerryIgnore>,
 }
 
 impl OpenFolder {
@@ -195,6 +218,14 @@ impl OpenFolder {
 
     pub fn state_dir(&self) -> PathBuf {
         state_dir(&self.root)
+    }
+
+    pub fn rules(&self) -> Arc<ferry_ignore::FerryIgnore> {
+        Arc::clone(&self.rules)
+    }
+
+    pub fn ignore_policy(&self) -> Arc<dyn ferry_scan::IgnorePolicy> {
+        Arc::clone(&self.rules) as Arc<dyn ferry_scan::IgnorePolicy>
     }
 }
 
@@ -280,9 +311,10 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
         "your device.key may have changed; restore it or re-pair the folder",
     )?;
 
-    // Bootstrap steps 3+: open the store, locate the polynomial blob.
+    // Bootstrap steps 3+: open the store, locate the polynomial blob, compile rules.
     let store = Arc::new(open_store(root, *fmk)?);
     let poly = find_polynomial(&store)?;
+    let rules = Arc::new(load_rules(root, &settings)?);
 
     Ok(OpenFolder {
         root: root.to_path_buf(),
@@ -290,6 +322,7 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
         folder_id: head.folder_id,
         poly,
         store,
+        rules,
     })
 }
 

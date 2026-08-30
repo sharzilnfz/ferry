@@ -81,7 +81,10 @@ pub struct TcpTransport;
 
 impl Transport for TcpTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>> {
-        Ok(Box::new(TcpConn(TcpStream::connect(addr)?)))
+        let stream = TcpStream::connect(addr)?;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+        Ok(Box::new(TcpConn(stream)))
     }
 
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>> {
@@ -98,6 +101,8 @@ impl Listener for TcpLst {
 
     fn accept(&self) -> io::Result<Box<dyn Connection>> {
         let (stream, _) = self.0.accept()?;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         Ok(Box::new(TcpConn(stream)))
     }
 

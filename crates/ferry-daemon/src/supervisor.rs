@@ -179,6 +179,7 @@ impl Supervisor {
                 message: e.to_string(),
             })?;
         engine.set_identity(self.identity.clone());
+        engine.set_ignore_policy(opened.ignore_policy());
         let handle = Arc::new(engine.start());
         let record = existing_record.unwrap_or_else(|| {
             let (secs, _) = ferry_platform::time::now_unix();

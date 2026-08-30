@@ -292,6 +292,38 @@ fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolic
     }
 }
 
+/// Resolves ignore rules from the tree directory's settings and rule files,
+/// falling back to built-in default ignore policies.
+fn resolve_ignore_policy_from_disk(cfg: &EngineConfig, store: &Store) -> Arc<dyn ferry_scan::IgnorePolicy> {
+    let candidates = [
+        cfg.tree_dir.join(".ferry").join("settings.json"),
+        store.store_dir().join("settings.json"),
+        cfg.store_dir.join("settings.json"),
+        cfg.store_dir.join(".ferry").join("settings.json"),
+    ];
+    let mut ignore_config = ferry_ignore::IgnoreConfig::default();
+    for path in &candidates {
+        if path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(settings) = serde_json::from_str::<ferry_folder::folder::Settings>(&content) {
+                    ignore_config = settings.ignore_config();
+                    break;
+                }
+            }
+        }
+    }
+    match ferry_ignore::FerryIgnore::new(&cfg.tree_dir, &ignore_config) {
+        Ok(ignore) => Arc::new(ignore),
+        Err(e) => {
+            eprintln!(
+                "warning: failed to compile FerryIgnore for {}: {e}",
+                cfg.tree_dir.display()
+            );
+            Arc::new(ferry_scan::NoIgnores)
+        }
+    }
+}
+
 impl EngineConfig {
     /// Sensible test defaults: fixed folder id, fast polling, protocol v1.
     pub fn default_for_test(poly_seed: u64) -> Self {
@@ -1127,6 +1159,7 @@ pub struct SyncEngine {
     /// peer id equals the `device_pub` recorded in `CONFIG_HEAD` wrap entries
     /// and allow-list authorization can match. None = legacy tag derivation.
     identity: Option<DeviceIdentity>,
+    ignore_policy: Option<Arc<dyn ferry_scan::IgnorePolicy>>,
 }
 
 impl SyncEngine {
@@ -1161,12 +1194,24 @@ impl SyncEngine {
             listener,
             peer_policy: None,
             identity: None,
+            ignore_policy: None,
         })
     }
 
     /// Explicitly configure the peer authorization policy (T-18).
     pub fn set_peer_policy(&mut self, policy: PeerPolicy) {
         self.peer_policy = Some(policy);
+    }
+
+    /// Explicitly configure the ignore policy (T-02).
+    pub fn set_ignore_policy(&mut self, policy: Arc<dyn ferry_scan::IgnorePolicy>) {
+        self.ignore_policy = Some(policy);
+    }
+
+    /// Builder style setter for ignore policy.
+    pub fn with_ignore_policy(mut self, policy: Arc<dyn ferry_scan::IgnorePolicy>) -> Self {
+        self.ignore_policy = Some(policy);
+        self
     }
 
     /// Run sessions with a real device identity instead of the tag-derived
@@ -1237,6 +1282,11 @@ impl SyncEngine {
         } else {
             resolve_peer_policy_from_disk(&self.cfg, &self.store)
         };
+        let ignore_policy = if let Some(policy) = self.ignore_policy.take() {
+            policy
+        } else {
+            resolve_ignore_policy_from_disk(&self.cfg, &self.store)
+        };
 
         let scan_cfg = ScanConfig {
             poll_interval: self.cfg.poll_interval,
@@ -1255,7 +1305,7 @@ impl SyncEngine {
                 &self.cfg.tree_dir,
                 scan_handle,
                 scan_cfg,
-                Arc::new(ferry_scan::NoIgnores),
+                ignore_policy,
             )
             .expect("start scan engine"),
         );
