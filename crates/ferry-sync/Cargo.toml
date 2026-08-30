@@ -27,6 +27,8 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
+# Test harnesses open stores through ferry-folder's test-util helper.
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 rand.workspace = true
 tempfile.workspace = true
 filetime.workspace = true

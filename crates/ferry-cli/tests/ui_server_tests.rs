@@ -504,8 +504,14 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     cfg_a.tree_dir = tree_a.clone();
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
 
-    let mut engine_a =
-        ferry_sync::SyncEngine::new(cfg_a.clone(), Arc::new(ferry_sync::TcpTransport)).unwrap();
+    let folder_store_a =
+        ferry_folder::open_or_create_test_store(&store_a, &identity_a).expect("folder store a");
+    let mut engine_a = ferry_sync::SyncEngine::with_store(
+        cfg_a.clone(),
+        Arc::new(ferry_sync::TcpTransport),
+        folder_store_a,
+    )
+    .unwrap();
     engine_a.set_identity(identity_a.clone());
     engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
     let addr_a = engine_a.listen_addr().unwrap();
@@ -517,8 +523,14 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     cfg_b.tree_dir = tree_b.clone();
     cfg_b.connect_to = Some(addr_a);
 
-    let mut engine_b =
-        ferry_sync::SyncEngine::new(cfg_b.clone(), Arc::new(ferry_sync::TcpTransport)).unwrap();
+    let folder_store_b =
+        ferry_folder::open_or_create_test_store(&store_b, &identity_b).expect("folder store b");
+    let mut engine_b = ferry_sync::SyncEngine::with_store(
+        cfg_b.clone(),
+        Arc::new(ferry_sync::TcpTransport),
+        folder_store_b,
+    )
+    .unwrap();
     engine_b.set_identity(identity_b.clone());
     engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
     let handle_b = engine_b.start();

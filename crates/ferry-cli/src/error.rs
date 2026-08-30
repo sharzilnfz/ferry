@@ -8,7 +8,7 @@
 #[derive(Debug)]
 pub struct CliError {
     /// Stable machine identifier (see docs/cli-json.md). Never renamed.
-    pub code: &'static str,
+    pub code: String,
     /// What happened.
     pub message: String,
     /// What to try next.
@@ -19,9 +19,13 @@ pub struct CliError {
 }
 
 impl CliError {
-    pub fn new(code: &'static str, message: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
         CliError {
-            code,
+            code: code.into(),
             message: message.into(),
             hint: hint.into(),
             detail: None,
@@ -33,7 +37,7 @@ impl CliError {
     /// ("all errors exit nonzero"), except the codes a CI script must be
     /// able to tell apart.
     pub fn exit_code(&self) -> u8 {
-        match self.code {
+        match self.code.as_str() {
             "secrets-found" => 3,
             "daemon-stop-timeout" => 4,
             _ => 1,

@@ -12,7 +12,7 @@ passes again.
 **Blocked by:** 01 (the entry point delegates lock teardown and stop/status to
 the DaemonLock interface).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] One function in the daemon crate runs the device daemon; the CLI delegates to it
 - [ ] Signal handling, registration, tick loop, and lock teardown each exist once in the codebase

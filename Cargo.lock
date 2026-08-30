@@ -1970,6 +1970,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "ferry-crypto",
+ "ferry-folder",
  "ferry-relay",
  "ferry-store",
  "ferry-sync",
@@ -2063,6 +2064,8 @@ name = "ferry-scan"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-crypto",
+ "ferry-folder",
  "ferry-platform",
  "ferry-store",
  "notify",
@@ -2078,6 +2081,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ferry-platform",
+ "ferry-store",
  "filetime",
  "hkdf",
  "rand 0.8.7",

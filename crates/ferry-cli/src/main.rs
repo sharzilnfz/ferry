@@ -50,7 +50,7 @@ fn report_error(e: &CliError, json_mode: bool) {
         }
         let _ = writeln!(lock, "{doc}");
     } else {
-        let _ = writeln!(lock, "{}", out::error_text(e.code, &e.message, &e.hint));
+        let _ = writeln!(lock, "{}", out::error_text(&e.code, &e.message, &e.hint));
     }
 }
 

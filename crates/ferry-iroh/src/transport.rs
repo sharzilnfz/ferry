@@ -82,7 +82,8 @@ impl DialFailure {
 }
 
 struct Inner {
-    rt: Runtime,
+    rt: Mutex<Option<Runtime>>,
+    rt_handle: Handle,
     ep: Endpoint,
     my_id: EndpointId,
     dial_timeout: Duration,
@@ -95,12 +96,43 @@ struct Inner {
     routes: RouteTable,
 }
 
+fn block_on<F>(handle: &Handle, f: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let h = handle.clone();
+        std::thread::spawn(move || h.block_on(f)).join().unwrap()
+    } else {
+        handle.block_on(f)
+    }
+}
+
 impl Inner {
     fn observe(&self, id: EndpointId) -> Arc<PathObservation> {
         let mut map = lock(&self.observations);
         map.entry(*id.as_bytes())
             .or_insert_with(|| Arc::new(PathObservation::default()))
             .clone()
+    }
+
+    fn rt_handle(&self) -> &Handle {
+        &self.rt_handle
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.rt.lock() {
+            if let Some(rt) = g.take() {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    let _ = std::thread::spawn(move || drop(rt)).join();
+                } else {
+                    drop(rt);
+                }
+            }
+        }
     }
 }
 
@@ -152,10 +184,12 @@ impl IrohTransport {
         .join()
         .map_err(|_| io::Error::other("thread panicked building iroh transport"))??;
         let my_id = ep.id();
+        let rt_handle = rt.handle().clone();
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
-                rt,
+                rt: Mutex::new(Some(rt)),
+                rt_handle,
                 ep,
                 my_id,
                 dial_timeout,
@@ -252,7 +286,7 @@ impl IrohTransport {
         // back a ready pipe, and accept_bi on the peer resolves immediately.
         let ep = self.inner.ep.clone();
         let budget = self.inner.dial_timeout;
-        let opened = self.inner.rt.block_on(async move {
+        let opened = block_on(self.inner.rt_handle(), async move {
             match tokio::time::timeout(budget, async {
                 let conn = ep
                     .connect(addr, FERRY_ALPN)
@@ -279,9 +313,9 @@ impl IrohTransport {
             Err(detail) => return Err(DialFailure::Connect(detail)),
         };
         let obs = self.inner.observe(conn.remote_id());
-        spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
+        spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
-            rt: self.inner.rt.handle().clone(),
+            rt: self.inner.rt_handle().clone(),
             conn,
             send: Mutex::new(send),
             recv: Mutex::new(recv),
@@ -303,8 +337,8 @@ impl IrohTransport {
     pub fn shutdown(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         let ep = self.inner.ep.clone();
-        let _ = self.inner.rt.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(500), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(500), ep.close()).await;
         });
     }
 }
@@ -462,8 +496,8 @@ impl DynListener for IrohListener {
     fn close(&self) -> io::Result<()> {
         self.closed.store(true, Ordering::SeqCst);
         let ep = self.inner.ep.clone();
-        let _ = self.inner.rt.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(200), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
         });
         Ok(())
     }
@@ -476,8 +510,9 @@ impl DynListener for IrohListener {
                     "listener closed".into(),
                 ));
             }
-            let next = self.inner.rt.block_on(async {
-                tokio::time::timeout(Duration::from_millis(200), self.inner.ep.accept()).await
+            let ep = self.inner.ep.clone();
+            let next = block_on(self.inner.rt_handle(), async move {
+                tokio::time::timeout(Duration::from_millis(200), ep.accept()).await
             });
             let incoming = match next {
                 Ok(Some(incoming)) => incoming,
@@ -489,7 +524,7 @@ impl DynListener for IrohListener {
                 }
                 Err(_elapsed) => continue,
             };
-            let conn = self.inner.rt.block_on(async {
+            let conn = block_on(self.inner.rt_handle(), async move {
                 match incoming.accept() {
                     Ok(accepting) => accepting
                         .await
@@ -498,15 +533,15 @@ impl DynListener for IrohListener {
                 }
             })?;
             let obs = self.inner.observe(conn.remote_id());
-            spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
+            spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
 
-            let streams = self
-                .inner
-                .rt
-                .block_on(conn.accept_bi())
-                .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
+            let conn_for_streams = conn.clone();
+            let streams = block_on(self.inner.rt_handle(), async move {
+                conn_for_streams.accept_bi().await
+            })
+            .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
-                rt: self.inner.rt.handle().clone(),
+                rt: self.inner.rt_handle().clone(),
                 conn,
                 send: Mutex::new(streams.0),
                 recv: Mutex::new(streams.1),

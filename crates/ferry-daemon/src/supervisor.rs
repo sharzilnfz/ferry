@@ -173,12 +173,16 @@ impl Supervisor {
             quiet: true,
         };
         let transport = Arc::clone(&self.transport);
-        let mut engine =
-            if let Ok(opened) = ferry_folder::folder::open_folder(&record.path, &self.identity) {
-                SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
-            } else {
-                SyncEngine::new(cfg, transport)
-            }
+        // One opening path, loud on failure: an unshared or key-unwrap-broken
+        // folder NEVER falls back to a fresh or plaintext store.
+        let opened =
+            ferry_folder::folder::open_folder(&record.path, &self.identity).map_err(|e| {
+                SupervisorError {
+                    code: e.code.to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+        let mut engine = SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
             .map_err(|e| SupervisorError {
                 code: "engine-init".to_string(),
                 message: e.to_string(),

@@ -18,8 +18,22 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use ferry_store::chunker::generate_polynomial;
+use ferry_sync::engine::device_identity_for_tag;
 use ferry_sync::format::hex;
 use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
+
+/// Store for a test engine, opened through ferry-folder — the one module
+/// that owns key unwrap and cipher choice. No test here names a cipher.
+pub fn test_store(cfg: &EngineConfig) -> Arc<ferry_store::store::Store> {
+    ferry_folder::open_or_create_test_store(&cfg.store_dir, &device_identity_for_tag(&cfg.tag))
+        .expect("test folder store")
+}
+
+/// Build (but do not start) an engine over a ferry-folder-opened store.
+pub fn engine(cfg: EngineConfig, transport: Arc<dyn ferry_sync::Transport>) -> SyncEngine {
+    let store = test_store(&cfg);
+    SyncEngine::with_store(cfg, transport, store).expect("engine init")
+}
 
 #[allow(unused_imports)]
 pub use corrupt::CorruptingTransport;
@@ -120,7 +134,52 @@ impl EngineFixture {
             hook(&mut cfg_a);
         }
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-        let mut engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
+        let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
+
+        let id_a = device_identity_for_tag(&cfg_a.tag);
+        let id_b = device_identity_for_tag(&cfg_b.tag);
+
+        let (store_a, fmk) =
+            ferry_folder::folder::create_folder(&cfg_a.store_dir, &id_a, cfg_a.folder_id, poly)
+                .expect("create folder a");
+        ferry_folder::folder::save_settings(
+            &cfg_a.store_dir,
+            &ferry_folder::folder::Settings {
+                format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+                folder_id: hex(&cfg_a.folder_id),
+                honor_gitignore: false,
+                presets: Vec::new(),
+                overrides: Vec::new(),
+            },
+        )
+        .unwrap();
+        store_a.flush().unwrap();
+        store_a.write_index_snapshot().unwrap();
+
+        let store_b = ferry_folder::folder::adopt_folder(
+            &cfg_b.store_dir,
+            &id_b,
+            cfg_b.folder_id,
+            &fmk,
+            poly,
+        )
+        .expect("adopt folder b");
+        ferry_folder::folder::save_settings(
+            &cfg_b.store_dir,
+            &ferry_folder::folder::Settings {
+                format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+                folder_id: hex(&cfg_b.folder_id),
+                honor_gitignore: false,
+                presets: Vec::new(),
+                overrides: Vec::new(),
+            },
+        )
+        .unwrap();
+        store_b.flush().unwrap();
+        store_b.write_index_snapshot().unwrap();
+
+        let mut engine_a = SyncEngine::with_store(cfg_a, default_transport(), Arc::new(store_a))
+            .expect("engine A");
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
@@ -129,10 +188,9 @@ impl EngineFixture {
         engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let a = engine_a.start();
 
-        let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
         cfg_b.connect_to = Some(addr);
         let tb = transport_b.unwrap_or_else(default_transport);
-        let mut engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
+        let mut engine_b = SyncEngine::with_store(cfg_b, tb, Arc::new(store_b)).expect("engine B");
         engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let b = engine_b.start();
 
@@ -155,7 +213,9 @@ impl EngineFixture {
     /// Stop the default B and start a fresh one through `transport`.
     pub fn replace_b(&mut self, transport: Arc<dyn ferry_sync::Transport>) -> EngineHandle {
         self.b.shutdown();
-        let mut engine_b = SyncEngine::new(self.b_config(), transport).expect("engine B");
+        let cfg = self.b_config();
+        let store_b = test_store(&cfg);
+        let mut engine_b = SyncEngine::with_store(cfg, transport, store_b).expect("engine B");
         engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         self.b = engine_b.start();
         self.b.clone()

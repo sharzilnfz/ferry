@@ -26,7 +26,6 @@ impl TestRig {
         let temp_dir = TempDir::new().expect("tempdir");
         let store_dir = temp_dir.path().join("store");
         let tree_dir = temp_dir.path().join("tree");
-        std::fs::create_dir_all(&store_dir).expect("create store");
         std::fs::create_dir_all(&tree_dir).expect("create tree");
 
         let identity = DeviceIdentity::generate();
@@ -39,7 +38,10 @@ impl TestRig {
         cfg.folder_id = folder_id;
         cfg.pin_state_dir = Some(store_dir.join(".ferry"));
 
-        let mut engine = SyncEngine::new(cfg, Arc::new(TcpTransport)).expect("engine init");
+        let store = ferry_folder::open_or_create_test_store(&store_dir, &identity)
+            .expect("test folder store");
+        let mut engine =
+            SyncEngine::with_store(cfg, Arc::new(TcpTransport), store).expect("engine init");
         engine.set_identity(identity.clone());
 
         Self {

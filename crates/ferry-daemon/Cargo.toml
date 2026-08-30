@@ -49,6 +49,8 @@ path = "src/main.rs"
 [dev-dependencies]
 tempfile.workspace = true
 axum = { workspace = true }
+# Test rigs open stores through ferry-folder's test-util helper.
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [lints]

@@ -9,18 +9,19 @@
 //! relative link still syncs.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use ferry_materialize::{Applier, MaterializeError};
 use ferry_platform::LinkRefusal;
-use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::{Added, ChangeSet, EntryKind, EntryState};
 use ferry_store::manifest::{serialize_tree_node, RootManifest, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
 
-fn open_store(dir: &Path) -> Store {
-    std::fs::create_dir_all(dir).unwrap();
-    Store::create(dir, [0u8; 32], Box::new(PassthroughCipher)).unwrap()
+fn open_store(dir: &Path) -> Arc<Store> {
+    // Opened through ferry-folder: real FMK, real cipher, no fixture stubs.
+    let identity = ferry_crypto::identity::DeviceIdentity::from_secret_bytes(&[0xB2u8; 32]);
+    ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
 }
 
 /// A root manifest whose tree is the canonical empty node.
