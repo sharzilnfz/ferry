@@ -13,13 +13,13 @@ daemon.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `daemon stop` polls with backoff up to a five-second deadline and verifies exit via the OS
-- [ ] On timeout, stop exits with an error, preserves the PID file, and status reports the live PID
-- [ ] PID and socket files are unlinked only after confirmed process exit
-- [ ] PID parsing, liveness probing, and termination live in one interface on the platform module; the CLI no longer calls the OS process API directly
-- [ ] The daemon PID filename appears in exactly one place
-- [ ] Stop and status are testable against a temp home with zero real daemon processes
-- [ ] Stop returns unambiguous exit codes and output payloads a CI script can assert
-- [ ] Existing daemon tests still pass; new lifecycle tests assert observable behavior only
+- [x] `daemon stop` polls with backoff up to a five-second deadline and verifies exit via the OS
+- [x] On timeout, stop exits with an error, preserves the PID file, and status reports the live PID
+- [x] PID and socket files are unlinked only after confirmed process exit
+- [x] PID parsing, liveness probing, and termination live in one interface on the platform module; the CLI no longer calls the OS process API directly
+- [x] The daemon PID filename appears in exactly one place
+- [x] Stop and status are testable against a temp home with zero real daemon processes
+- [x] Stop returns unambiguous exit codes and output payloads a CI script can assert
+- [x] Existing daemon tests still pass; new lifecycle tests assert observable behavior only
