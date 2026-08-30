@@ -31,6 +31,16 @@ pub struct SupervisedEngine {
     pub restart_count: u32,
 }
 
+use std::net::SocketAddr;
+
+#[derive(Debug, Clone, Default)]
+pub struct EngineSpawnOptions {
+    pub bind_addr: Option<SocketAddr>,
+    pub connect_to: Option<SocketAddr>,
+    pub opportunistic_every: Option<u32>,
+    pub poll_interval: Option<Duration>,
+}
+
 pub struct Supervisor {
     home: PathBuf,
     identity: DeviceIdentity,
@@ -67,12 +77,32 @@ impl Supervisor {
         }
     }
 
+    pub fn with_transport(
+        home: PathBuf,
+        identity: DeviceIdentity,
+        transport: Arc<dyn ferry_sync::Transport>,
+    ) -> Self {
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(64);
+        Self {
+            home,
+            identity,
+            engines: HashMap::new(),
+            broadcast_tx,
+            transport,
+            iroh_transport: None,
+        }
+    }
+
     pub fn home(&self) -> &Path {
         &self.home
     }
 
     pub fn identity(&self) -> &DeviceIdentity {
         &self.identity
+    }
+
+    pub fn transport(&self) -> &Arc<dyn ferry_sync::Transport> {
+        &self.transport
     }
 
     pub fn broadcast_tx(&self) -> &tokio::sync::broadcast::Sender<UiEvent> {
@@ -83,41 +113,22 @@ impl Supervisor {
         FolderInventory::new(&self.home)
     }
 
-    fn parse_folder_id(hex_str: &str) -> Result<[u8; 16], OpError> {
-        if hex_str.len() == 32 {
-            ferry_store::format::unhex::<16>(hex_str).ok_or_else(|| {
-                OpError::new(
-                    "corrupt-registry",
-                    format!("invalid folder_id {hex_str}"),
-                    "fix or delete folders.toml",
-                )
-            })
-        } else if hex_str.len() == 64 {
-            let trunc = &hex_str[..32];
-            ferry_store::format::unhex::<16>(trunc).ok_or_else(|| {
-                OpError::new(
-                    "corrupt-registry",
-                    format!("invalid folder_id {hex_str}"),
-                    "fix or delete folders.toml",
-                )
-            })
-        } else {
-            Err(OpError::new(
-                "corrupt-registry",
-                format!("invalid folder_id length {}: {hex_str}", hex_str.len()),
-                "fix or delete folders.toml",
-            ))
-        }
+    pub fn spawn_engine(
+        &self,
+        folder_path: &Path,
+        options: EngineSpawnOptions,
+    ) -> Result<SupervisedEngine, SupervisorError> {
+        self.spawn_engine_internal(folder_path, options, None)
     }
 
-    fn spawn_one(&self, record: FolderRecord) -> Result<SupervisedEngine, SupervisorError> {
-        let folder_id_bytes =
-            Self::parse_folder_id(&record.folder_id).map_err(|e| SupervisorError {
-                code: e.code.clone(),
-                message: e.message.clone(),
-            })?;
+    fn spawn_engine_internal(
+        &self,
+        folder_path: &Path,
+        options: EngineSpawnOptions,
+        existing_record: Option<FolderRecord>,
+    ) -> Result<SupervisedEngine, SupervisorError> {
         let opened =
-            ferry_folder::folder::open_folder(&record.path, &self.identity).map_err(|e| {
+            ferry_folder::folder::open_folder(folder_path, &self.identity).map_err(|e| {
                 SupervisorError {
                     code: e.code.to_string(),
                     message: e.to_string(),
@@ -129,46 +140,72 @@ impl Supervisor {
                 message: format!("invalid chunker polynomial in store: {e}"),
             }
         })?;
+        let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
         let tag = format!(
             "ferry-{}",
-            &record.folder_id[..8.min(record.folder_id.len())]
+            &folder_id_hex[..8.min(folder_id_hex.len())]
         );
 
-        let bind_addr = if self.iroh_transport.is_some() {
-            Some("127.0.0.1:0".parse().unwrap())
-        } else {
-            None
-        };
-        let connect_to = None;
+        let bind_addr = options.bind_addr.or_else(|| {
+            if self.iroh_transport.is_some() {
+                Some("127.0.0.1:0".parse().unwrap())
+            } else {
+                None
+            }
+        });
+        let opportunistic_every = options.opportunistic_every.unwrap_or(50);
+        let poll_interval = options
+            .poll_interval
+            .unwrap_or_else(|| Duration::from_millis(200));
 
         let cfg = EngineConfig {
             tag,
-            store_dir: record.path.clone(),
-            tree_dir: record.path.clone(),
+            store_dir: opened.root.clone(),
+            tree_dir: opened.root.clone(),
             poly,
-            folder_id: folder_id_bytes,
-            poll_interval: Duration::from_millis(200),
-            opportunistic_every: 50,
+            folder_id: opened.folder_id,
+            poll_interval,
+            opportunistic_every,
             bind_addr,
-            connect_to,
+            connect_to: options.connect_to,
             allow_trust_on_first_use: false,
-            pin_state_dir: Some(record.path.join(".ferry")),
+            pin_state_dir: Some(opened.state_dir()),
             quiet: true,
         };
         let transport = Arc::clone(&self.transport);
         let mut engine = SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
             .map_err(|e| SupervisorError {
-                code: "engine-init".to_string(),
+                code: "bind".to_string(),
                 message: e.to_string(),
             })?;
         engine.set_identity(self.identity.clone());
         let handle = Arc::new(engine.start());
+        let record = existing_record.unwrap_or_else(|| {
+            let (secs, _) = ferry_platform::time::now_unix();
+            let added_at = ferry_platform::time::fmt_rfc3339(secs);
+            FolderRecord {
+                folder_id: folder_id_hex,
+                path: opened.root,
+                added_at,
+            }
+        });
         Ok(SupervisedEngine {
             record,
             handle,
-            folder_id_bytes,
+            folder_id_bytes: opened.folder_id,
             restart_count: 0,
         })
+    }
+
+    fn spawn_one(&self, record: FolderRecord) -> Result<SupervisedEngine, SupervisorError> {
+        let options = EngineSpawnOptions {
+            bind_addr: None,
+            connect_to: None,
+            opportunistic_every: Some(50),
+            poll_interval: Some(Duration::from_millis(200)),
+        };
+        let path = record.path.clone();
+        self.spawn_engine_internal(&path, options, Some(record))
     }
 
     pub fn spawn_engines(&mut self) -> Result<(), SupervisorError> {

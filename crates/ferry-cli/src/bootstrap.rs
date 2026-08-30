@@ -91,21 +91,23 @@ fn try_ping_sync(socket: &Path) -> bool {
     let timeout = Duration::from_millis(200);
     let fut = async move {
         let mut conn = ferry_ipc::IpcClient::connect(&sock).await.map_err(|_| ())?;
-        let _ = tokio::time::timeout(Duration::from_millis(50), conn.recv_message()).await;
         conn.send_command(&ferry_ipc::ClientCommand::Ping)
             .await
             .map_err(|_| ())?;
-        let resp = tokio::time::timeout(timeout, conn.recv_message())
-            .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-        match resp {
-            Some(ferry_ipc::DaemonMessage::Pong) => Ok::<bool, ()>(true),
-            Some(ferry_ipc::DaemonMessage::Ack { .. }) => Ok(true),
-            _ => Err(()),
+        while let Ok(res) = tokio::time::timeout(timeout, conn.recv_message()).await {
+            match res {
+                Ok(Some(msg)) => match msg {
+                    ferry_ipc::DaemonMessage::Pong | ferry_ipc::DaemonMessage::Ack { .. } => {
+                        return Ok::<bool, ()>(true)
+                    }
+                    _ => continue,
+                },
+                _ => break,
+            }
         }
+        Err(())
     };
-    run_with_timeout(timeout + Duration::from_millis(50), fut).unwrap_or(false)
+    run_with_timeout(timeout + Duration::from_millis(100), fut).unwrap_or(false)
 }
 
 fn run_with_timeout<F, T>(timeout: Duration, fut: F) -> Option<T>
@@ -176,7 +178,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
 
     let mut elapsed = Duration::from_millis(0);
     let mut delay = Duration::from_millis(50);
-    let deadline = Duration::from_millis(5000);
+    let deadline = Duration::from_millis(10000);
     while elapsed < deadline {
         std::thread::sleep(delay);
         elapsed += delay;

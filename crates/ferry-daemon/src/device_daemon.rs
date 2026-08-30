@@ -150,3 +150,92 @@ pub fn run(
     ipc_handle.shutdown();
     Ok(())
 }
+
+/// Arguments for ad-hoc single or multi-folder daemon runs (e.g. `--listen` or `--peer-url`).
+pub struct AdHocDaemonArgs {
+    pub folders: Vec<PathBuf>,
+    pub listen_addr: Option<std::net::SocketAddr>,
+    pub peer_addr: Option<std::net::SocketAddr>,
+    pub transport: String,
+    pub interval_secs: u64,
+}
+
+/// Run an ad-hoc daemon for specific folders and listen/peer addresses.
+/// Delegates engine construction and supervision to the supervisor.
+pub fn run_adhoc(
+    home: &Path,
+    identity: DeviceIdentity,
+    args: AdHocDaemonArgs,
+) -> Result<(), DeviceDaemonError> {
+    let supervisor = match args.transport.as_str() {
+        "iroh" => crate::supervisor::Supervisor::new(home.to_path_buf(), identity.clone()),
+        _ => crate::supervisor::Supervisor::with_transport(
+            home.to_path_buf(),
+            identity.clone(),
+            Arc::new(ferry_sync::TcpTransport),
+        ),
+    };
+
+    let paths = if args.folders.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        args.folders
+    };
+
+    let mut handles = Vec::with_capacity(paths.len());
+    let mut ipc_handles = Vec::with_capacity(paths.len());
+
+    for (idx, p) in paths.iter().enumerate() {
+        let bind_addr = if idx == 0 { args.listen_addr } else { None };
+        let options = crate::supervisor::EngineSpawnOptions {
+            bind_addr,
+            connect_to: args.peer_addr,
+            opportunistic_every: Some((args.interval_secs * 5).max(1) as u32),
+            poll_interval: Some(Duration::from_millis(200)),
+        };
+
+        let supervised = supervisor.spawn_engine(p, options).map_err(|e| {
+            DeviceDaemonError::Spawn {
+                code: e.code,
+                message: e.message,
+            }
+        })?;
+
+        if let Some(addr) = supervised.handle.listen_addr() {
+            println!("LISTENING {addr}");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(128);
+        let daemon_state = Arc::new(crate::state::DaemonState::new(
+            (*supervised.handle).clone(),
+            supervised.record.path.clone(),
+            supervised.record.path.clone(),
+            supervised.folder_id_bytes,
+            identity.clone(),
+            broadcast_tx,
+        ));
+
+        #[allow(deprecated)]
+        let socket_path = ferry_ipc::paths::socket_path_for_dir(&supervised.record.path);
+        let ipc_handle =
+            crate::ipc::spawn_ipc_server(socket_path, Arc::clone(&daemon_state)).map_err(|e| {
+                DeviceDaemonError::Ipc(format!(
+                    "cannot bind IPC server for {}: {e}",
+                    supervised.record.path.display()
+                ))
+            })?;
+        ipc_handles.push(ipc_handle);
+        handles.push(supervised.handle);
+    }
+
+    if let Some(first) = handles.first() {
+        first.join_until_signal();
+    }
+
+    for h in ipc_handles {
+        h.shutdown();
+    }
+
+    Ok(())
+}
