@@ -166,62 +166,43 @@ pub fn release(folder: &Path) -> CliResult<Output> {
     let scan = crate::commands::status::scan_now(&opened)?;
 
     let now = ferry_platform::time::now_unix();
+    let summary = pin_mgr
+        .release(&opened.store, &opened.root, &scan.manifest, now)
+        .map_err(pin_error)?;
+
     let mut peers = Vec::new();
-    let mut total_quarantined = 0usize;
-    let mut total_conflicts = 0usize;
-    let mut total_ops = 0usize;
-    for peer_hex in pin_mgr.held_peers().map_err(pin_error)? {
-        // One transactional convergence per peer; the ledger clears only
-        // after ITS convergence succeeded, so a failure leaves everything
-        // retryable (re-running recomputes the same decisions).
-        let rp = pin_mgr
-            .release_peer(
-                &peer_hex,
-                &opened.store,
-                &opened.root,
-                &scan.manifest,
-                None,
-                now,
-            )
-            .map_err(pin_error)?;
-        if rp.held_entries == 0 {
-            continue;
-        }
-        pin_mgr.clear_peer(&peer_hex).map_err(pin_error)?;
-        total_quarantined += rp.result.quarantined.len();
-        total_conflicts += rp.result.conflicts.len();
-        total_ops += rp.result.apply.mutations();
+    for rp in &summary.peers {
         peers.push(json!({
             "device_id": rp.device_id,
             "remote_manifest_id": rp.remote_manifest_id,
             "held_entries": rp.held_entries,
             "held_paths": rp.held_paths,
-            "ops_applied": rp.result.apply.mutations(),
-            "quarantined": rp.result.quarantined.len(),
-            "conflicts_recorded": rp.result.conflicts.len(),
+            "ops_applied": rp.ops_applied,
+            "quarantined": rp.quarantined,
+            "conflicts_recorded": rp.conflicts_recorded,
         }));
     }
 
-    // End the marker too. Dispatch over IPC if daemon running, otherwise local mark_released.
+    // End the marker too. Dispatch over IPC if daemon running.
     let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
     let ended = match ipc_res {
         Some(ferry_ipc::DaemonMessage::Ack { .. }) => true,
-        _ => pin_mgr.stop_session().map_err(pin_error)?,
+        _ => summary.pin_ended,
     };
 
     let conflicts_total = list_conflicts(&state_dir)
         .map(|e| e.len())
         .map_err(|e| cli("conflict-log", e))
-        .unwrap_or(total_conflicts);
+        .unwrap_or(summary.total_conflicts);
 
     let json_doc = json!({
         "command": "pin",
         "action": "release",
         "folder": opened.root.display().to_string(),
         "peers": peers,
-        "quarantined": total_quarantined,
-        "conflicts_recorded": total_conflicts,
-        "ops_applied": total_ops,
+        "quarantined": summary.total_quarantined,
+        "conflicts_recorded": summary.total_conflicts,
+        "ops_applied": summary.total_ops,
         "pin_ended": ended,
         "conflicts_total": conflicts_total,
     });
@@ -240,6 +221,8 @@ pub fn release(folder: &Path) -> CliResult<Output> {
                 p["conflicts_recorded"],
             );
         }
+        let total_quarantined = summary.total_quarantined;
+        let total_conflicts = summary.total_conflicts;
         let _ = writeln!(
             h,
             "Total      {total_quarantined} loser copy/copies, {total_conflicts} conflict entr(y/ies) in conflicts.jsonl"

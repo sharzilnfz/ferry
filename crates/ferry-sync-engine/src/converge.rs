@@ -82,6 +82,8 @@ pub enum ConvergenceError {
     Log(#[from] LogError),
     #[error("agreement ledger failed: {0}")]
     Agreement(#[from] AgreementError),
+    #[error("pin error: {0}")]
+    Pin(#[from] crate::pin_error::PinError),
     #[error("io failed at {path}: {source}")]
     Io {
         path: PathBuf,
@@ -199,6 +201,12 @@ pub trait BlobFetch {
 /// Pin path gate: true when a path (stored components) is held.
 type HoldGate<'a> = Box<dyn Fn(&[String]) -> bool + 'a>;
 
+enum HoldConfig<'a> {
+    Auto,
+    Disabled,
+    Custom(HoldGate<'a>),
+}
+
 /// The deep convergence seam: reconcile, fetch, materialize, quarantine,
 /// report, and agree — one call, one transactional unit.
 pub struct ConvergenceEngine<'a> {
@@ -206,7 +214,7 @@ pub struct ConvergenceEngine<'a> {
     root: &'a Path,
     state_dir: Option<&'a Path>,
     now: (i64, u32),
-    hold: Option<HoldGate<'a>>,
+    hold: HoldConfig<'a>,
     fetcher: Option<&'a mut dyn BlobFetch>,
 }
 
@@ -219,7 +227,7 @@ impl<'a> ConvergenceEngine<'a> {
             root,
             state_dir: None,
             now: timefmt::now_unix(),
-            hold: None,
+            hold: HoldConfig::Auto,
             fetcher: None,
         }
     }
@@ -244,7 +252,13 @@ impl<'a> ConvergenceEngine<'a> {
     /// works offline), and send-chunks referenced exclusively by held
     /// paths are withheld from the result.
     pub fn hold(mut self, gate: impl Fn(&[String]) -> bool + 'a) -> Self {
-        self.hold = Some(Box::new(gate));
+        self.hold = HoldConfig::Custom(Box::new(gate));
+        self
+    }
+
+    /// Explicitly disable pin gating for this convergence (e.g. during release).
+    pub fn no_hold(mut self) -> Self {
+        self.hold = HoldConfig::Disabled;
         self
     }
 
@@ -279,9 +293,17 @@ impl<'a> ConvergenceEngine<'a> {
         //    safety first: the reconcile structural passes reason over ONE
         //    plan, so a split that moves an ancestor of the other half is
         //    refused loudly instead of guessed at.
+        let state_dir = self.state_dir.unwrap_or_else(|| self.store.store_dir());
         let (plan, held) = match &self.hold {
-            Some(gate) => gate_plan(plan, gate.as_ref(), self.store, local)?,
-            None => (plan, Vec::new()),
+            HoldConfig::Custom(gate) => gate_plan(plan, gate.as_ref(), self.store, local)?,
+            HoldConfig::Disabled => (plan, Vec::new()),
+            HoldConfig::Auto => {
+                if let Some(matcher) = crate::hold::hold_matcher(state_dir)? {
+                    gate_plan(plan, |p| matcher.matches(p), self.store, local)?
+                } else {
+                    (plan, Vec::new())
+                }
+            }
         };
 
         // 3. Fetch required blobs before touching anything. The list is
@@ -403,6 +425,15 @@ impl<'a> ConvergenceEngine<'a> {
         }
         if let Some(sd) = self.state_dir.or(Some(self.store.store_dir())) {
             append_entries(sd, &conflicts)?;
+        }
+
+        // 6b. Ledger pin-held decisions for status surfaces and release.
+        if !held.is_empty() {
+            let peer_hex = hex(&remote.device_id);
+            let remote_bytes = serialize_manifest(remote);
+            let remote_id = *blake3::hash(&remote_bytes).as_bytes();
+            let remote_hex = hex(&remote_id);
+            crate::hold::record_held(state_dir, &peer_hex, &remote_hex, &held, self.now)?;
         }
 
         // 7. Agreement: commit the remote manifest id only when this run

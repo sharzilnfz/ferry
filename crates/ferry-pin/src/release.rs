@@ -91,6 +91,7 @@ pub fn release_peer(
     )?;
     let result = ConvergenceEngine::new(store, root)
         .state_dir(state_dir)
+        .no_hold()
         .at(now)
         .converge(local, &remote, base)
         .map_err(pin_convergence)?;
