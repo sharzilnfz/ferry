@@ -81,7 +81,7 @@ Ferry provides three frontend interfaces connected to the daemon over IPC:
 2. **Terminal TUI (`ferry tui`)**. Retro terminal dashboard built with `ratatui`. Features live throughput meters, activity logs, keyboard shortcuts (`O`, `P`, `R`, `C`, `Q`), and an in-terminal filesystem browser.
 3. **Web Dashboard (`ferry ui --web`)**. Browser interface built with axum. Delivers real-time updates via Server-Sent Events (SSE), directory exploration, and token-based URL authentication. The token is printed in the startup URL — there is no other way to retrieve it, so launch with the output visible.
 
-Note: `ferry daemon --ui <ADDR>` is a *different*, older dashboard — loopback-only and **unauthenticated**. `ferry ui --web` is the token-gated one. Don't mix them up.
+Note: the web dashboard is served exclusively via `ferry ui --web` (token-gated). There is no `ferry daemon --ui` flag.
 
 ---
 
