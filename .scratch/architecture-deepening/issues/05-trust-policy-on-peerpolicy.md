@@ -13,8 +13,8 @@ explicit config flag, recorded in a new ADR.
 
 **Status:** ready-for-agent
 
-- [ ] Remote-peer derivation and expected-peer resolution exist once, on PeerPolicy
-- [ ] Empty allow-list refuses connections to unpaired devices; no TOFU default
-- [ ] The three duplicated self-filter walks are deleted
-- [ ] Existing peer-policy tests updated for the refuse default and still passing
-- [ ] If trust-on-first-use survives as an opt-in, it is config-flag gated and an ADR records the reversal
+- [x] Remote-peer derivation and expected-peer resolution exist once, on PeerPolicy
+- [x] Empty allow-list refuses connections to unpaired devices; no TOFU default
+- [x] The three duplicated self-filter walks are deleted
+- [x] Existing peer-policy tests updated for the refuse default and still passing
+- [x] If trust-on-first-use survives as an opt-in, it is config-flag gated and an ADR records the reversal
