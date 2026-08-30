@@ -192,3 +192,44 @@ fn nfc_normalization_applied() {
     // Should contain NFC form
     assert!(p.to_string_lossy().contains('é'));
 }
+
+#[tokio::test]
+async fn test_auto_backend_connect_auto_offline_fallback() {
+    use ferry_ipc::backend::{connect_auto, StatusDomain};
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("my_folder");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("test.txt"), b"hello").unwrap();
+
+    let socket_path = PathBuf::from("/tmp/nonexistent_socket_test_04.sock");
+    let auto = connect_auto(socket_path, root.clone());
+
+    // When daemon is offline, get_status returns an offline snapshot
+    let status = auto.get_status().await.expect("offline status");
+    assert_eq!(status.folder, root.display().to_string());
+    assert_eq!(status.state, "offline");
+
+    // list_directory falls back to local folder inspect
+    let listing = auto
+        .list_directory(Some(root.clone()))
+        .await
+        .expect("local listing");
+    assert_eq!(listing.absolute_path, root);
+    assert!(listing.entries.iter().any(|e| e.name == "test.txt"));
+}
+
+#[tokio::test]
+async fn test_auto_backend_with_custom_fallback() {
+    use ferry_ipc::backend::{AutoBackend, FakeBackend, StatusDomain};
+    use std::sync::Arc;
+
+    let socket_path = PathBuf::from("/tmp/nonexistent_socket_custom.sock");
+    let fake = Arc::new(FakeBackend::new());
+    let auto = AutoBackend::new(socket_path).with_fallback_backend(fake.clone());
+
+    let status = auto.get_status().await.expect("fake backend status");
+    assert_eq!(status.folder, "/test/folder");
+}
+

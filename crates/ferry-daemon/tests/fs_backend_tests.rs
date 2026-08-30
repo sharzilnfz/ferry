@@ -13,9 +13,10 @@ use std::time::Duration;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
-use ferry_daemon::ui::backend::{AutoBackend, DaemonIpcAdapter, InProcessAdapter};
+use ferry_daemon::ui::backend::{AutoBackend, InProcessAdapter};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::backend::InventoryDomain;
+use ferry_ipc::client::DaemonClient;
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
 use rand::rngs::StdRng;
@@ -286,8 +287,8 @@ async fn daemon_ipc_adapter_forwards_without_re_reading() {
     // give time to bind
     tokio::time::sleep(Duration::from_millis(80)).await;
 
-    let ipc_adapter = DaemonIpcAdapter::new(socket_path.clone());
-    let resp = ipc_adapter
+    let ipc_client = DaemonClient::new(socket_path.clone());
+    let resp = ipc_client
         .list_directory(Some(list_root.clone()))
         .await
         .expect("ipc listing");
@@ -306,7 +307,7 @@ async fn daemon_ipc_adapter_forwards_without_re_reading() {
     assert_eq!(direct_resp.entries.len(), resp.entries.len());
 
     // Traversal via IPC should return path-traversal error, not listing
-    let err = ipc_adapter
+    let err = ipc_client
         .list_directory(Some(PathBuf::from("/tmp/../etc/passwd")))
         .await
         .unwrap_err();

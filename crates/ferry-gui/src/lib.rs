@@ -12,13 +12,14 @@ pub mod picker;
 pub mod telemetry;
 pub mod theme;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use activity::ActivityEntry;
 pub use app::{format_bytes, BackendAction, GuiApp, GuiTransferState};
 pub use beacon::BeaconState;
 use eframe::NativeOptions;
-use ferry_ipc::backend::UiBackend;
+use ferry_ipc::backend::{connect_auto, UiBackend};
 pub use theme::{colors, Theme};
 
 /// Launch the Ferry native desktop GUI window.
@@ -48,3 +49,14 @@ pub fn run_gui(
         }),
     )
 }
+
+/// Launch the Ferry native desktop GUI window with an automated backend connection.
+pub fn run_gui_auto(
+    socket_path: impl Into<PathBuf>,
+    folder_path: impl Into<Option<PathBuf>>,
+    rt_handle: tokio::runtime::Handle,
+) -> Result<(), eframe::Error> {
+    let backend = Arc::new(connect_auto(socket_path, folder_path));
+    run_gui(backend, rt_handle)
+}
+

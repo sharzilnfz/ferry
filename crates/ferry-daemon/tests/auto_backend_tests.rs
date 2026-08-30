@@ -7,9 +7,10 @@ use std::time::Duration;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
-use ferry_daemon::ui::backend::{AutoBackend, DaemonIpcAdapter};
+use ferry_daemon::ui::backend::{AutoBackend, InProcessAdapter};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::backend::{SessionDomain, StatusDomain};
+use ferry_ipc::client::DaemonClient;
 use ferry_ipc::protocol::PinView;
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
@@ -118,7 +119,7 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
     let online_snap = backend
         .get_status()
         .await
-        .expect("online status via DaemonIpcAdapter");
+        .expect("online status via DaemonClient");
     assert_eq!(online_snap.folder, rig.tree_dir.display().to_string());
 
     // Start a pin over IPC through AutoBackend
@@ -156,14 +157,14 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
 }
 
 #[tokio::test]
-async fn test_daemon_ipc_adapter_direct() {
+async fn test_daemon_client_direct() {
     let rig = TestRig::new();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&rig.tree_dir);
 
-    let ipc_adapter = DaemonIpcAdapter::new(socket_path.clone());
+    let ipc_client = DaemonClient::new(socket_path.clone());
 
     // Offline fails with the transport error code (fallback routing key)
-    let err = ipc_adapter.get_status().await.unwrap_err();
+    let err = ipc_client.get_status().await.unwrap_err();
     assert_eq!(err.code, "daemon-unreachable");
 
     // Start daemon
@@ -184,17 +185,17 @@ async fn test_daemon_ipc_adapter_direct() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Status over IPC
-    let snap = ipc_adapter.get_status().await.expect("get_status over IPC");
+    let snap = ipc_client.get_status().await.expect("get_status over IPC");
     assert_eq!(snap.folder, rig.tree_dir.display().to_string());
 
     // Trigger scan over IPC
-    ipc_adapter
+    ipc_client
         .trigger_scan()
         .await
         .expect("trigger_scan over IPC");
 
     // List conflicts over IPC
-    let conflicts = ipc_adapter
+    let conflicts = ipc_client
         .list_conflicts()
         .await
         .expect("list_conflicts over IPC");

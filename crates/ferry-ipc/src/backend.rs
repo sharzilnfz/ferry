@@ -16,7 +16,8 @@ use tokio_stream::Stream;
 use std::collections::HashMap;
 
 use ferry_folder::inventory::{
-    sort_entries, validate_path, DirectoryEntry, FolderRecord, ListDirectoryResponse,
+    ferry_home, sort_entries, validate_path, DirectoryEntry, FolderInventory, FolderRecord,
+    ListDirectoryResponse,
 };
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
@@ -716,3 +717,412 @@ impl InventoryDomain for FakeBackend {
         Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
     }
 }
+
+/// Composite automatic backend: talks to the daemon over the persistent
+/// multiplexed IPC connection (`DaemonClient`) when reachable, and transparently routes
+/// to in-process fallback on transport failure (`daemon-unreachable`).
+/// Domain errors from the daemon (e.g. `pin-active`) are returned as-is.
+#[derive(Clone)]
+pub struct AutoBackend {
+    client: crate::client::DaemonClient,
+    folder_path: Option<PathBuf>,
+    fallback: Option<Arc<dyn UiBackend>>,
+}
+
+impl std::fmt::Debug for AutoBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AutoBackend")
+            .field("client", &self.client)
+            .field("folder_path", &self.folder_path)
+            .finish()
+    }
+}
+
+impl AutoBackend {
+    #[must_use]
+    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        Self {
+            client: crate::client::DaemonClient::new(socket_path),
+            folder_path: None,
+            fallback: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_client(client: crate::client::DaemonClient) -> Self {
+        Self {
+            client,
+            folder_path: None,
+            fallback: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_fallback(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.folder_path = Some(folder.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_fallback_backend(mut self, fallback: Arc<dyn UiBackend>) -> Self {
+        self.fallback = Some(fallback);
+        self
+    }
+
+    #[must_use]
+    pub fn client(&self) -> &crate::client::DaemonClient {
+        &self.client
+    }
+
+    #[must_use]
+    pub fn folder_path(&self) -> Option<&PathBuf> {
+        self.folder_path.as_ref()
+    }
+}
+
+/// Unified factory constructing an `AutoBackend` for the given socket path and optional folder path.
+#[must_use]
+pub fn connect_auto(
+    socket_path: impl Into<PathBuf>,
+    folder_path: impl Into<Option<PathBuf>>,
+) -> AutoBackend {
+    let mut auto = AutoBackend::new(socket_path);
+    if let Some(folder) = folder_path.into() {
+        auto = auto.with_fallback(folder);
+    }
+    auto
+}
+
+impl StatusDomain for AutoBackend {
+    fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        let folder_path = self.folder_path.clone();
+        Box::pin(async move {
+            match client.get_status().await {
+                Ok(snap) => Ok(snap),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.get_status().await
+                    } else {
+                        let folder_str = folder_path
+                            .map_or_else(|| ".".to_string(), |p| p.display().to_string());
+                        Ok(EngineSnapshot::new(folder_str, "", "", "offline"))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.list_conflicts().await {
+                Ok(list) => Ok(list),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.list_conflicts().await
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.trigger_scan().await {
+                Ok(()) => Ok(()),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.trigger_scan().await
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.subscribe_events().await {
+                Ok(stream) => Ok(stream),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.subscribe_events().await
+                    } else {
+                        let (_tx, rx) = broadcast::channel(16);
+                        Ok(UiEventStream::new(rx))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+}
+
+impl InventoryDomain for AutoBackend {
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.list_directory(path.clone()).await {
+                Ok(resp) => Ok(resp),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.list_directory(path).await
+                    } else {
+                        let validated = validate_path(path)?;
+                        let validated_clone = validated.clone();
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home())
+                                .inspect_dir(Some(validated_clone))
+                                .map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "inspect worker failed")
+                        })?
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.list_folders().await {
+                Ok(folders) => Ok(folders),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.list_folders().await
+                    } else {
+                        tokio::task::spawn_blocking(|| {
+                            FolderInventory::new(&ferry_home())
+                                .list()
+                                .map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| OpError::new("internal", e.to_string(), "list worker failed"))?
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.register_folder(path.clone()).await {
+                Ok(record) => Ok(record),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.register_folder(path).await
+                    } else {
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home())
+                                .register(&path)
+                                .map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "register worker failed")
+                        })?
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.remove_folder(folder_id.clone()).await {
+                Ok(()) => Ok(()),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.remove_folder(folder_id).await
+                    } else {
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home())
+                                .unregister(&folder_id)
+                                .map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "remove worker failed")
+                        })?
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+}
+
+impl SessionDomain for AutoBackend {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.start_pin(paths.clone(), hours).await {
+                Ok(pin) => Ok(pin),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.start_pin(paths, hours).await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.stop_pin().await {
+                Ok(summary) => Ok(summary),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.stop_pin().await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn release_pin(&self) -> BoxFuture<'_, Result<PinReleaseSummary, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.release_pin().await {
+                Ok(summary) => Ok(summary),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.release_pin().await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            if let Some(fb) = fallback {
+                fb.share_initiate(folder, i_know).await
+            } else {
+                client.share_initiate(folder, i_know).await
+            }
+        })
+    }
+
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            if let Some(fb) = fallback {
+                fb.share_status(folder).await
+            } else {
+                client.share_status(folder).await
+            }
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            if let Some(fb) = fallback {
+                fb.pair_accept(code_or_payload, dir).await
+            } else {
+                client.pair_accept(code_or_payload, dir).await
+            }
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.create_pairing_session(req.clone()).await {
+                Ok(resp) => Ok(resp),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.create_pairing_session(req).await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            match client.join_pairing_session(req.clone()).await {
+                Ok(res) => Ok(res),
+                Err(e) if e.is_transport() => {
+                    if let Some(fb) = fallback {
+                        fb.join_pairing_session(req).await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+}
+

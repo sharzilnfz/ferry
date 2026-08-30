@@ -147,7 +147,7 @@ fn run_gui_mode(folder_path: &Path, test_mode: bool) -> CliResult<Output> {
 
     let socket_path = ferry_ipc::paths::socket_path_for_dir(folder_path);
     let backend: Arc<dyn ferry_ipc::backend::UiBackend> = Arc::new(
-        ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(folder_path.to_path_buf()),
+        ferry_ipc::backend::connect_auto(socket_path, folder_path.to_path_buf()),
     );
 
     let handle = rt.handle().clone();

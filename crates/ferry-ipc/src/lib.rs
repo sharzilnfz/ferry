@@ -13,9 +13,9 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::{
-    BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary,
-    PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiBackend, UiEvent,
-    UiEventStream,
+    connect_auto, AutoBackend, BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult,
+    PinRecord, PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus,
+    StatusDomain, UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
 };
 pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;

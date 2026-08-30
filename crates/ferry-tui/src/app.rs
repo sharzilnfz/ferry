@@ -56,6 +56,18 @@ impl TuiApp {
         }
     }
 
+    /// Construct a new `TuiApp` using automated backend connection.
+    #[must_use]
+    pub fn new_auto(
+        socket_path: impl Into<std::path::PathBuf>,
+        folder_path: impl Into<Option<std::path::PathBuf>>,
+    ) -> Self {
+        Self::new_with_backend(Arc::new(ferry_ipc::backend::connect_auto(
+            socket_path,
+            folder_path,
+        )))
+    }
+
     /// Attach a `UiBackend` to this application instance.
     #[must_use]
     pub fn with_backend(mut self, backend: Arc<dyn UiBackend>) -> Self {
