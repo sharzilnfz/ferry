@@ -804,7 +804,13 @@ fn sleep_slices(stop: &AtomicBool, total: Duration) {
 /// paths (non-UTF-8 components) yield None; correctness for those cases is
 /// carried by overflow-style safety nets rather than precise tracking.
 fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
-    let stripped = p.strip_prefix(root).ok()?;
+    let stripped = p.strip_prefix(root).ok().or_else(|| {
+        let p_str = p.to_str()?;
+        let root_str = root.to_str()?;
+        let clean_root = root_str.strip_prefix("/private").unwrap_or(root_str);
+        let clean_p = p_str.strip_prefix("/private").unwrap_or(p_str);
+        clean_p.strip_prefix(clean_root).map(|rest| Path::new(rest.trim_start_matches('/')))
+    })?;
     let mut rel = Vec::with_capacity(stripped.as_os_str().len());
     for c in stripped.components() {
         let s = c.as_os_str().to_str()?;

@@ -170,17 +170,15 @@ fn settings_presets_and_overrides_are_respected() {
     let timeout = common::timeout_from_env();
     let fx = EngineFixture::start_with_cfg_a("ignore-presets", SEED + 3, |cfg_a| {
         fs::create_dir_all(cfg_a.tree_dir.join(".ferry")).unwrap();
-        ferry_folder::folder::save_settings(
-            &cfg_a.tree_dir,
-            &ferry_folder::folder::Settings {
-                format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
-                folder_id: hex(&cfg_a.folder_id),
-                honor_gitignore: false,
-                presets: vec!["claude".to_string()],
-                overrides: vec!["custom_build/".to_string(), "*.cache".to_string()],
-            },
-        )
-        .unwrap();
+        let settings = ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: hex(&cfg_a.folder_id),
+            honor_gitignore: false,
+            presets: vec!["claude".to_string()],
+            overrides: vec!["custom_build/".to_string(), "*.cache".to_string()],
+        };
+        ferry_folder::folder::save_settings(&cfg_a.tree_dir, &settings).unwrap();
+        ferry_folder::folder::save_settings(&cfg_a.store_dir, &settings).unwrap();
     });
 
     let tree_a = fx.tree_a();

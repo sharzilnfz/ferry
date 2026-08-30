@@ -706,6 +706,9 @@ impl SessionDomain for DaemonClient {
         folder: Option<PathBuf>,
         _i_know: bool,
     ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+        // Intentional refused bequest: DaemonClient never implements the
+        // pairing ritual; AutoBackend catches not-supported and falls back to
+        // in-process backend. Keeps the daemon wire surface minimal.
         let dir = folder.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
             Err(OpError::new(
@@ -737,6 +740,7 @@ impl SessionDomain for DaemonClient {
         code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        // Intentional refused bequest — see share_initiate above.
         let folder = dir.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
             Err(OpError::new(

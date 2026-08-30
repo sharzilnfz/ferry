@@ -23,6 +23,7 @@ ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-platform.workspace = true
+notify = "8"
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

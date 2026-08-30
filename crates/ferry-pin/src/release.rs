@@ -108,7 +108,7 @@ pub fn release_peer(
 /// the full engine vocabulary (reconcile, divergence, missing blobs); the
 /// hint is the caller's job.
 pub(crate) fn pin_convergence(e: ConvergenceError) -> PinError {
-    PinError::Converge(e)
+    PinError::Converge(e.to_string())
 }
 
 pub(crate) fn load_manifest(

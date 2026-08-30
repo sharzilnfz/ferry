@@ -17,18 +17,19 @@
 //!   transactional convergence engine; outcomes are exactly ADR-0004
 //!   outcomes.
 
-pub mod error;
-pub mod held;
-pub mod hold;
+pub use ferry_sync_engine::held;
+pub use ferry_sync_engine::hold;
+pub use ferry_sync_engine::matcher;
+pub use ferry_sync_engine::pin;
+pub use ferry_sync_engine::pin_error as error;
+
 pub mod manager;
-pub mod matcher;
-pub mod pin;
 pub mod release;
 
-pub use error::PinError;
-pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
-pub use hold::{hold_matcher, record_held};
+pub use ferry_sync_engine::pin_error::PinError;
+pub use ferry_sync_engine::{
+    distinct_paths, hold_matcher, record_held, HeldChunk, HeldEntry, HeldLedger, Liveness,
+    PathMatcher, PinRecord, PinStore, PIN_FORMAT_VERSION,
+};
 pub use manager::{HeldSummary, PinManager, ReleasePeerResult, ReleaseSummary};
-pub use matcher::PathMatcher;
-pub use pin::{Liveness, PinRecord, PinStore, PIN_FORMAT_VERSION};
 pub use release::{release_peer, ReleasePeerPlan};

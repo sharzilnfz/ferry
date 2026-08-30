@@ -326,6 +326,7 @@ impl GuiApp {
     }
 
     /// Construct a fully wired `GuiApp` using automated backend connection.
+    /// Thin `new_auto` adapter is intentional — see `ferry-tui` counterpart.
     #[must_use]
     pub fn new_auto(
         socket_path: impl Into<std::path::PathBuf>,

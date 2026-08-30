@@ -130,9 +130,6 @@ impl EngineFixture {
         fs::create_dir_all(dir.path().join("b/tree")).unwrap();
 
         let mut cfg_a = self_cfg(dir.path(), "a", format!("{name}-a"), poly);
-        if let Some(hook) = hook_cfg_a {
-            hook(&mut cfg_a);
-        }
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
         let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
 
@@ -153,6 +150,11 @@ impl EngineFixture {
             },
         )
         .unwrap();
+
+        if let Some(hook) = hook_cfg_a {
+            hook(&mut cfg_a);
+        }
+
         store_a.flush().unwrap();
         store_a.write_index_snapshot().unwrap();
 
@@ -178,8 +180,20 @@ impl EngineFixture {
         store_b.flush().unwrap();
         store_b.write_index_snapshot().unwrap();
 
-        let mut engine_a = SyncEngine::with_store(cfg_a, default_transport(), Arc::new(store_a))
+        let mut engine_a = SyncEngine::with_store(cfg_a.clone(), default_transport(), Arc::new(store_a))
             .expect("engine A");
+        let rules_a = if let Ok(s) = ferry_folder::folder::load_settings(&cfg_a.tree_dir) {
+            ferry_folder::folder::load_rules(&cfg_a.tree_dir, &s).ok()
+        } else if let Ok(s) = ferry_folder::folder::load_settings(&cfg_a.store_dir) {
+            ferry_folder::folder::load_rules(&cfg_a.tree_dir, &s).ok()
+        } else {
+            None
+        };
+        if let Some(r) = rules_a {
+            engine_a.set_ignore_policy(Arc::new(r));
+        } else if let Ok(opened_a) = ferry_folder::folder::open_folder(&cfg_a.store_dir, &id_a) {
+            engine_a.set_ignore_policy(opened_a.ignore_policy());
+        }
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
@@ -190,7 +204,19 @@ impl EngineFixture {
 
         cfg_b.connect_to = Some(addr);
         let tb = transport_b.unwrap_or_else(default_transport);
-        let mut engine_b = SyncEngine::with_store(cfg_b, tb, Arc::new(store_b)).expect("engine B");
+        let mut engine_b = SyncEngine::with_store(cfg_b.clone(), tb, Arc::new(store_b)).expect("engine B");
+        let rules_b = if let Ok(s) = ferry_folder::folder::load_settings(&cfg_b.tree_dir) {
+            ferry_folder::folder::load_rules(&cfg_b.tree_dir, &s).ok()
+        } else if let Ok(s) = ferry_folder::folder::load_settings(&cfg_b.store_dir) {
+            ferry_folder::folder::load_rules(&cfg_b.tree_dir, &s).ok()
+        } else {
+            None
+        };
+        if let Some(r) = rules_b {
+            engine_b.set_ignore_policy(Arc::new(r));
+        } else if let Ok(opened_b) = ferry_folder::folder::open_folder(&cfg_b.store_dir, &id_b) {
+            engine_b.set_ignore_policy(opened_b.ignore_policy());
+        }
         engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let b = engine_b.start();
 

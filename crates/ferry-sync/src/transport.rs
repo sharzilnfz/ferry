@@ -82,6 +82,9 @@ pub struct TcpTransport;
 impl Transport for TcpTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>> {
         let stream = TcpStream::connect(addr)?;
+        // 5s is the intentional M0 throwaway scope — prevents indefinite block on
+        // localhost TCP during tests without adding config plumbing. T-009
+        // replaces this impl with iroh QUIC; no configurability is warranted here.
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         Ok(Box::new(TcpConn(stream)))

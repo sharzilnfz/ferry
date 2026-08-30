@@ -57,6 +57,8 @@ impl TuiApp {
     }
 
     /// Construct a new `TuiApp` using automated backend connection.
+    /// Thin `new_auto` adapter is intentional — keeps call sites `TuiApp::new_auto`
+    /// without exposing `ferry_ipc::backend::connect_auto` coupling.
     #[must_use]
     pub fn new_auto(
         socket_path: impl Into<std::path::PathBuf>,

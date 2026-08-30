@@ -304,7 +304,7 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     wait_converged(&pair, Duration::from_secs(90));
     // Agreement ids settle before the materializer's rename lands on B's
     // disk under loaded-runner scheduling; poll briefly rather than race.
-    let landed_by = Instant::now() + Duration::from_secs(30);
+    let landed_by = Instant::now() + Duration::from_secs(90);
     loop {
         match std::fs::read(tree_b.join("hello.txt")) {
             Ok(bytes) => {

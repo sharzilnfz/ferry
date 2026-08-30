@@ -1047,23 +1047,31 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            if let Some(fb) = fallback {
-                fb.share_initiate(folder, i_know).await
-            } else {
-                client.share_initiate(folder, i_know).await
+            match client.share_initiate(folder.clone(), i_know).await {
+                Ok(offer) => Ok(offer),
+                Err(e) if e.is_transport() || e.code == "not-supported" => {
+                    if let Some(fb) = fallback {
+                        fb.share_initiate(folder, i_know).await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
             }
         })
     }
 
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
-        let client = self.client.clone();
         let fallback = self.fallback.clone();
+        let client = self.client.clone();
         Box::pin(async move {
-            if let Some(fb) = fallback {
-                fb.share_status(folder).await
-            } else {
-                client.share_status(folder).await
+            // Share ritual is file-based (pair-offer on disk); DaemonClient
+            // has no IPC command for it and stub-returns Ok(none). Always
+            // prefer the local fallback when present, otherwise query daemon.
+            if let Some(fb) = fallback.as_ref() {
+                return fb.share_status(folder).await;
             }
+            client.share_status(folder).await
         })
     }
 
@@ -1075,10 +1083,16 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            if let Some(fb) = fallback {
-                fb.pair_accept(code_or_payload, dir).await
-            } else {
-                client.pair_accept(code_or_payload, dir).await
+            match client.pair_accept(code_or_payload.clone(), dir.clone()).await {
+                Ok(res) => Ok(res),
+                Err(e) if e.is_transport() || e.code == "not-supported" => {
+                    if let Some(fb) = fallback {
+                        fb.pair_accept(code_or_payload, dir).await
+                    } else {
+                        Err(e)
+                    }
+                }
+                Err(e) => Err(e),
             }
         })
     }

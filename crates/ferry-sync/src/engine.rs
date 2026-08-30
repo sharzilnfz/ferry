@@ -569,6 +569,12 @@ impl FolderState {
     fn wake_all(&self) {
         self.changed.notify_all();
     }
+
+    fn wait_for_change(&self, timeout: Duration) -> bool {
+        let guard = self.inner.lock().unwrap();
+        let (_guard, res) = self.changed.wait_timeout(guard, timeout).unwrap();
+        !res.timed_out()
+    }
 }
 
 struct SharedState {
@@ -1550,6 +1556,12 @@ impl EngineHandle {
 
     pub fn pending_changes(&self) -> Option<i64> {
         self.folder.pending_changes()
+    }
+
+    /// Block the caller until the folder state changes or `timeout` elapses.
+    /// Used by FolderEngine's push-based watcher to avoid 50ms polling.
+    pub fn wait_for_change(&self, timeout: Duration) -> bool {
+        self.folder.wait_for_change(timeout)
     }
 
     pub fn stats(&self) -> EngineStats {

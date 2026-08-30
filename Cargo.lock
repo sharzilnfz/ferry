@@ -1884,6 +1884,7 @@ dependencies = [
  "ferry-store",
  "ferry-sync",
  "ferry-sync-engine",
+ "notify",
  "rand 0.8.7",
  "serde",
  "serde_json",

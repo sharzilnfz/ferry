@@ -9,6 +9,7 @@ use ferry_ipc::backend::UiEvent;
 use ferry_ipc::protocol::{EngineSnapshot, ScanStatsView};
 use ferry_store::format::hex as hex_str;
 use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
+use notify::Watcher as _;
 
 use super::SupervisorError;
 
@@ -27,6 +28,7 @@ pub struct FolderEngine {
     pub handle: Arc<EngineHandle>,
     pub folder_id_bytes: [u8; 16],
     pub restart_count: u32,
+    pub next_restart_at: Option<std::time::Instant>,
     identity: DeviceIdentity,
     transport: Arc<dyn ferry_sync::Transport>,
     options: EngineSpawnOptions,
@@ -150,6 +152,7 @@ impl FolderEngine {
             handle,
             folder_id_bytes: opened.folder_id,
             restart_count,
+            next_restart_at: None,
             identity: identity.clone(),
             transport,
             options,
@@ -161,6 +164,12 @@ impl FolderEngine {
 
     /// Supervision tick: detect unhealthy engine loops and recover with exponential backoff.
     pub fn tick(&mut self) -> bool {
+        if let Some(deadline) = self.next_restart_at {
+            if std::time::Instant::now() < deadline {
+                return false;
+            }
+        }
+
         if self.watcher_task.is_none() {
             let (tx, task) = spawn_engine_watcher(
                 Arc::clone(&self.handle),
@@ -193,11 +202,14 @@ impl FolderEngine {
                 Some(self.record.clone()),
                 self.restart_count.saturating_add(1),
             ) {
-                Ok(new_engine) => {
+                Ok(mut new_engine) => {
+                    new_engine.next_restart_at = None;
                     *self = new_engine;
                     true
                 }
                 Err(e) => {
+                    self.next_restart_at =
+                        Some(std::time::Instant::now() + Duration::from_millis(backoff_ms));
                     let _ = self.broadcast_tx.send(UiEvent::Error {
                         code: e.code,
                         message: e.message,
@@ -301,34 +313,85 @@ fn spawn_engine_watcher(
     if let Ok(rt_handle) = tokio::runtime::Handle::try_current() {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let task = rt_handle.spawn(async move {
-            let mut last_manifest = None;
-            let mut last_agreed = None;
-            let mut last_scanned = None;
-            let mut last_pending = None;
+            let mut last_manifest = handle.current_manifest_id();
+            let mut last_agreed = handle.agreed_id();
+            let mut last_scanned = handle.scan_counts().map(|s| {
+                ScanStatsView::new(
+                    s.files as u64,
+                    s.dirs as u64,
+                    s.symlinks as u64,
+                    s.bytes_chunked,
+                )
+            });
+            let mut last_pending = handle.pending_changes();
+            if last_manifest.is_some() || last_agreed.is_some() || last_scanned.is_some() {
+                let manifest_hex = last_manifest.map(|r| hex_str(&r)).unwrap_or_default();
+                let agreed_hex = last_agreed.map(|a| hex_str(&a));
+                let state_str = if last_manifest.is_some() {
+                    "idle".to_string()
+                } else {
+                    "initializing".to_string()
+                };
+                let _ = broadcast_tx.send(UiEvent::StateChanged {
+                    state: state_str,
+                    manifest_id: manifest_hex,
+                    agreed_id: agreed_hex,
+                    pending_changes: last_pending,
+                    stats: last_scanned,
+                });
+            }
 
-            let conflicts_file = state_dir.join("conflicts.jsonl");
-            let mut last_meta = std::fs::metadata(&conflicts_file)
-                .ok()
-                .map(|m| (m.len(), m.modified().ok()));
-            let mut last_conflicts_count = if last_meta.is_some() {
-                ferry_sync_engine::list_conflicts(&state_dir).map_or(0, |c| c.len())
-            } else {
-                0
+            let mut last_conflicts_count = ferry_sync_engine::list_conflicts(&state_dir)
+                .map_or(0, |c| c.len());
+
+            let (conflict_tx, mut conflict_rx) =
+                tokio::sync::mpsc::unbounded_channel::<()>();
+            let _conflicts_watcher: Option<notify::RecommendedWatcher> = {
+                let tx = conflict_tx.clone();
+                let watch_path = state_dir.clone();
+                if std::fs::create_dir_all(&watch_path).is_ok() {
+                    match notify::RecommendedWatcher::new(
+                        move |res: Result<notify::Event, notify::Error>| {
+                            if let Ok(ev) = res {
+                                let is_conflict = ev.paths.iter().any(|p| {
+                                    p.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .is_some_and(|n| n == "conflicts.jsonl")
+                                }) || ev.paths.is_empty();
+                                if is_conflict {
+                                    let _ = tx.send(());
+                                }
+                            } else {
+                                let _ = tx.send(());
+                            }
+                        },
+                        notify::Config::default(),
+                    ) {
+                        Ok(mut w) => {
+                            let _ = w.watch(&watch_path, notify::RecursiveMode::NonRecursive);
+                            Some(w)
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
             };
 
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
             loop {
+                let handle_for_block = Arc::clone(&handle);
+                let wait_future =
+                    tokio::task::spawn_blocking(move || handle_for_block.wait_for_change(Duration::from_secs(1)));
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() {
                             break;
                         }
                     }
-                    _ = interval.tick() => {
+                    _ = wait_future => {
                         if *shutdown_rx.borrow() {
                             break;
                         }
-
                         let cur_manifest = handle.current_manifest_id();
                         let cur_agreed = handle.agreed_id();
                         let cur_scan = handle.scan_counts().map(|s| {
@@ -340,18 +403,15 @@ fn spawn_engine_watcher(
                             )
                         });
                         let cur_pending = handle.pending_changes();
-
                         let changed = cur_manifest != last_manifest
                             || cur_agreed != last_agreed
                             || cur_scan != last_scanned
                             || cur_pending != last_pending;
-
                         if changed {
                             last_manifest = cur_manifest;
                             last_agreed = cur_agreed;
                             last_scanned = cur_scan;
                             last_pending = cur_pending;
-
                             let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
                             let agreed_hex = cur_agreed.map(|a| hex_str(&a));
                             let state_str = if cur_manifest.is_some() {
@@ -359,7 +419,6 @@ fn spawn_engine_watcher(
                             } else {
                                 "initializing".to_string()
                             };
-
                             let _ = broadcast_tx.send(UiEvent::StateChanged {
                                 state: state_str,
                                 manifest_id: manifest_hex,
@@ -368,32 +427,29 @@ fn spawn_engine_watcher(
                                 stats: cur_scan,
                             });
                         }
-
-                        let cur_meta = std::fs::metadata(&conflicts_file)
-                            .ok()
-                            .map(|m| (m.len(), m.modified().ok()));
-                        if cur_meta != last_meta {
-                            last_meta = cur_meta;
-                            if let Ok(conflicts) = ferry_sync_engine::list_conflicts(&state_dir) {
-                                if conflicts.len() > last_conflicts_count {
-                                    for entry in &conflicts[last_conflicts_count..] {
-                                        let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
-                                            .unwrap_or_else(|| ferry_platform::time::now_unix().0 as u64);
-                                        let _ = broadcast_tx.send(UiEvent::ConflictRecorded {
-                                            path: entry.path.clone(),
-                                            conflict_path: entry
-                                                .quarantined_as
-                                                .clone()
-                                                .unwrap_or_else(|| entry.path.clone()),
-                                            timestamp: ts,
-                                            quarantined_as: entry.quarantined_as.clone(),
-                                        });
-                                    }
-                                    last_conflicts_count = conflicts.len();
-                                } else if conflicts.len() < last_conflicts_count {
-                                    last_conflicts_count = conflicts.len();
+                    }
+                    _ = conflict_rx.recv() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                        if let Ok(conflicts) = ferry_sync_engine::list_conflicts(&state_dir) {
+                            if conflicts.len() > last_conflicts_count {
+                                for entry in &conflicts[last_conflicts_count..] {
+                                    let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
+                                        .unwrap_or_else(|| ferry_platform::time::now_unix().0 as u64);
+                                    let _ = broadcast_tx.send(UiEvent::ConflictRecorded {
+                                        path: entry.path.clone(),
+                                        conflict_path: entry
+                                            .quarantined_as
+                                            .clone()
+                                            .unwrap_or_else(|| entry.path.clone()),
+                                        timestamp: ts,
+                                        quarantined_as: entry.quarantined_as.clone(),
+                                    });
                                 }
                             }
+                            last_conflicts_count = conflicts.len();
                         }
                     }
                 }

@@ -68,6 +68,16 @@
 //! conflicts/quarantine (T-010), no cross-machine transports or pairing
 //! (T-007/T-008/T-009), no Windows path handling beyond cfg-gated unix
 //! extras (T-012).
+//!
+//! ## Crate split: ferry-sync vs ferry-sync-engine
+//!
+//! Wire exchange loop lives here; transactional three-way convergence lives in
+//! `ferry-sync-engine`. Spec spec.md:39 proposed merging them into one deep
+//! crate. Split remains intentional for this milestone: convergence is a pure,
+//! store-agnostic decision engine (manifests in, plan out) consumed by both the
+//! live sync loop and the offline `PinManager::release` path; folding it into
+//! the transport owning crate would couple unrelated concerns and widen the
+//! sync crate's API surface. Revisit only when a measured seam requires it.
 
 pub mod engine;
 pub mod exchange;

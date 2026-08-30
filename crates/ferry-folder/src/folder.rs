@@ -453,6 +453,20 @@ pub fn save_settings(root: &Path, settings: &Settings) -> FolderResult<()> {
     Ok(())
 }
 
+/// Load settings from `.ferry/settings.json`.
+pub fn load_settings(root: &Path) -> FolderResult<Settings> {
+    let settings_path = dot_dir(root).join(SETTINGS_FILE);
+    let content = std::fs::read_to_string(&settings_path)
+        .code("io", format!("could not read {}", settings_path.display()))?;
+    serde_json::from_str(&content).code(
+        "settings-corrupt",
+        format!(
+            "restore or delete {} and re-run setup",
+            settings_path.display()
+        ),
+    )
+}
+
 /// First 8 hex of a device id — display-only shorthand.
 pub fn short_device(dev: &[u8; 32]) -> String {
     hex(dev)[..8].to_string()

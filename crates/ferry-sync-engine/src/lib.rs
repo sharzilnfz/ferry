@@ -60,6 +60,14 @@
 //! (the folder's `.ferry` in production); the agreement ledger lives under
 //! the store directory. Tests keep both outside the synced trees because
 //! the scanner does not yet exclude `.ferry`.
+//!
+//! ## Crate split: ferry-sync-engine vs ferry-sync
+//!
+//! This crate owns only convergence (pure three-way decision + transactional
+//! materialization); `ferry-sync` owns the wire loop and transport. Merging the
+//! two as spec.md:39 proposed would couple the pure decision core to the I/O
+//! owning crate and prevent reuse from the offline release path. Split is
+//! intentional for this milestone.
 
 pub mod converge;
 pub mod held;
