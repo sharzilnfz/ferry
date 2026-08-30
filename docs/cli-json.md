@@ -25,11 +25,11 @@ Types below use JSON Schema-ish shorthand: `string`, `int`, `bool`,
 | `-v/--verbose` | more stderr detail |
 | `--version` | version string |
 
-## `ferry init [path]` / `ferry add <path>`
+## `ferry init [path]`
 
 ```json
 {
-  "command": "init" | "add",
+  "command": "init",
   "folder": string,             // as given on the command line
   "folder_id": string,          // 32 lowercase hex
   "device_id": string,          // 64 lowercase hex (X25519 public key)

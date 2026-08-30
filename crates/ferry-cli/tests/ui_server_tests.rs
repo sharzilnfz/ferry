@@ -68,7 +68,7 @@ fn test_ui_test_flag_and_random_port() {
     let work = env.work();
 
     // Initialize folder first
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     let out = ui::run(UiArgs {
         folder: Some(&work),
@@ -99,7 +99,7 @@ fn test_ui_test_flag_and_random_port() {
 async fn test_token_auth_enforcement_and_static_assets() {
     let env = common::Env::new("token_auth");
     let work = env.work();
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     let token = ui::generate_token();
     let state = Arc::new(UiServerState::new(work.clone(), token.clone()));
@@ -244,7 +244,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
 async fn test_endpoint_proxying_over_ipc() {
     let env = common::Env::new("endpoint_ipc");
     let work = env.work();
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&work);
 
@@ -406,7 +406,7 @@ async fn test_endpoint_proxying_over_ipc() {
 async fn test_endpoint_disk_fallback_when_daemon_offline() {
     let env = common::Env::new("disk_fallback");
     let work = env.work();
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     let token = ui::generate_token();
     let state = Arc::new(UiServerState::new(work.clone(), token.clone()));
@@ -706,7 +706,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
 async fn test_async_pairing_workflow_and_status_polling() {
     let env = common::Env::new("async_pairing");
     let work = env.work();
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     let token = ui::generate_token();
     let state = Arc::new(UiServerState::new(work.clone(), token.clone()));
@@ -834,7 +834,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
 fn test_ui_gui_and_tui_dispatch_modes() {
     let env = common::Env::new("gui_tui_dispatch");
     let work = env.work();
-    ferry_cli::commands::init::run(&work, "init").expect("init");
+    ferry_cli::commands::init::run(&work).expect("init");
 
     // 1. Dispatch --gui in test mode
     let out_gui = ui::run(UiArgs {

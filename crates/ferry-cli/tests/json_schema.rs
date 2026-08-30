@@ -81,7 +81,7 @@ fn assert_matches_expected(name: &str, actual: &str) {
 fn init_document_schema_is_stable() {
     let env = Env::new("schema-init");
     let proj = env.work().join("proj");
-    let out = commands::init::run(&proj, "init").unwrap();
+    let out = commands::init::run(&proj).unwrap();
     assert_matches_expected("init", &schema_of(&out.json));
 }
 
@@ -89,7 +89,7 @@ fn init_document_schema_is_stable() {
 fn status_document_schema_is_stable() {
     let env = Env::new("schema-status");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("a.txt"), b"x").unwrap();
     let out = commands::status::run(&proj).unwrap();
     assert_matches_expected("status", &schema_of(&out.json));
@@ -99,7 +99,7 @@ fn status_document_schema_is_stable() {
 fn conflicts_document_schema_is_stable() {
     let env = Env::new("schema-conflicts");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     ferry_sync_engine::append_entries(
         &ferry_cli::folder::state_dir(&proj),
         &[ferry_sync_engine::ConflictEntry {
@@ -129,7 +129,7 @@ fn conflicts_document_schema_is_stable() {
 fn ignore_list_document_schema_is_stable() {
     let env = Env::new("schema-ignore");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     commands::ignore_cmd::run(&proj, Some("*.log"), None, false).unwrap();
     commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
     let out = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
@@ -140,7 +140,7 @@ fn ignore_list_document_schema_is_stable() {
 fn ignore_mutations_share_one_document_shape() {
     let env = Env::new("schema-ignore-mutate");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     let added = commands::ignore_cmd::run(&proj, Some("dist/"), None, false).unwrap();
     assert_matches_expected("ignore-added", &schema_of(&added.json));
     let preset = commands::ignore_cmd::run(&proj, None, Some("opencode"), false).unwrap();
@@ -151,7 +151,7 @@ fn ignore_mutations_share_one_document_shape() {
 fn store_gc_document_schema_is_stable() {
     let env = Env::new("schema-store-gc");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     // Orphan content: blobs with no manifest referencing them must show up
     // as garbage in the dry-run report (and pin the array element shape).
@@ -189,7 +189,7 @@ fn store_gc_document_schema_is_stable() {
 fn pin_documents_are_stable_across_the_lifecycle() {
     let env = Env::new("schema-pin");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
 

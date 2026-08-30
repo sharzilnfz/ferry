@@ -242,7 +242,7 @@ fn test_cli_pin_hours_persists_across_cli_invocations() {
     let proj = env.work().join("pin_proj");
     fs::create_dir_all(&proj).unwrap();
 
-    commands::init::run(&proj, "init").expect("init proj");
+    commands::init::run(&proj).expect("init proj");
     let daemon = RunningDaemon::start(&proj);
 
     // Run pin start with --hours 8
@@ -274,7 +274,7 @@ fn test_cli_ignore_external_folder_targeting() {
     let proj = env.work().join("ext_proj");
     fs::create_dir_all(&proj).unwrap();
 
-    commands::init::run(&proj, "init").expect("init ext proj");
+    commands::init::run(&proj).expect("init ext proj");
 
     // Run ignore list specifying the external folder path
     let list_out = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list");
@@ -317,7 +317,7 @@ fn test_ui_events_and_token_auth_flow() {
     let env = Env::new("ui_events_and_auth");
     let proj = env.work().join("ui_proj");
     fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").expect("init ui proj");
+    commands::init::run(&proj).expect("init ui proj");
 
     let token = generate_token();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&proj);

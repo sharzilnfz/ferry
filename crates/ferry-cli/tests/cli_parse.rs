@@ -41,14 +41,14 @@ fn init_defaults_to_cwd_and_takes_a_path() {
 }
 
 #[test]
-fn add_requires_path() {
-    match parse(&["add", "x"]).command.unwrap() {
-        Command::Add { path } => assert_eq!(path, PathBuf::from("x")),
-        other => panic!("{other:?}"),
-    }
+fn add_is_rejected() {
+    assert!(
+        Cli::try_parse_from(["ferry", "add", "x"]).is_err(),
+        "add subcommand should be rejected"
+    );
     assert!(
         Cli::try_parse_from(["ferry", "add"]).is_err(),
-        "path required"
+        "add without path should be rejected"
     );
 }
 

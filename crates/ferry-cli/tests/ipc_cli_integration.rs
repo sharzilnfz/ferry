@@ -71,7 +71,7 @@ fn test_status_ipc_query_and_schema_matching() {
     let env = Env::new("status-ipc");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("initial.txt"), b"initial content\n").unwrap();
 
     // 1. First verify offline status returns valid schema
@@ -117,7 +117,7 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     let env = Env::new("pin-ipc");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/lib.rs"), b"// lib\n").unwrap();
 
@@ -174,7 +174,7 @@ fn test_pin_start_fails_when_no_daemon_active() {
     let env = Env::new("pin-no-daemon");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let err = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap_err();
     assert_eq!(err.code, "daemon-not-running");
@@ -187,7 +187,7 @@ fn test_pin_ownership_and_liveness_across_cli_queries() {
     let env = Env::new("pin-liveness");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/main.rs"), b"fn main() {}\n").unwrap();
 
@@ -231,7 +231,7 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     let env = Env::new("conflicts-ipc");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let entry = ferry_sync_engine::ConflictEntry {
         ts: "2026-08-25T12:00:00Z".into(),
@@ -293,7 +293,7 @@ fn test_pin_duration_hours_and_expiration() {
     let env = Env::new("pin-hours");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let _daemon = RunningDaemon::start(&proj);
     std::thread::sleep(Duration::from_millis(150));

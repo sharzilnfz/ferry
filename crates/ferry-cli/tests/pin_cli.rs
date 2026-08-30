@@ -14,7 +14,7 @@ fn setup() -> (Env, std::path::PathBuf, RunningDaemon) {
     let env = Env::new("pin-cli");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
     std::fs::write(proj.join("README.md"), b"hi\n").unwrap();
@@ -200,7 +200,7 @@ fn pin_start_fails_when_daemon_not_running() {
     let env = Env::new("pin-no-daemon");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let err = commands::pin::start(&proj, &[], 8).unwrap_err();
     assert_eq!(err.code, "daemon-not-running");

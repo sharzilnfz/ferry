@@ -11,7 +11,7 @@ fn share_refuses_and_redacts_until_i_know() {
     let env = Env::new("share-gate");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let secret = "AKIAIOSFODNN7EXAMPLE";
     std::fs::write(proj.join(".env"), format!("AWS_ACCESS_KEY_ID={secret}\n")).unwrap();
@@ -70,7 +70,7 @@ fn share_clean_folder_emits_payload_without_gate() {
     let env = Env::new("share-clean");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("README.md"), b"clean").unwrap();
 
     // New path: share returns immediately with a code (no blocking).

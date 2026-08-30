@@ -117,9 +117,8 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
     match cmd {
         Command::Init { path } => {
             let p: PathBuf = path.clone().unwrap_or_else(|| PathBuf::from("."));
-            ferry_cli::commands::init::run(&p, "init")
+            ferry_cli::commands::init::run(&p)
         }
-        Command::Add { path } => ferry_cli::commands::init::run(path, "add"),
         Command::Pair {
             accept,
             dir,

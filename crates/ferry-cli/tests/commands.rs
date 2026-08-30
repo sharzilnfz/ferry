@@ -40,7 +40,7 @@ fn init_creates_store_config_settings_and_ignore_file() {
     let proj = work.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
 
-    let out = commands::init::run(&proj, "init").expect("init succeeds");
+    let out = commands::init::run(&proj).expect("init succeeds");
     assert_eq!(out.json["command"], "init");
     assert_eq!(out.json["created"], true);
     let folder_id = out.json["folder_id"].as_str().unwrap();
@@ -68,17 +68,17 @@ fn init_creates_store_config_settings_and_ignore_file() {
 fn init_twice_is_a_friendly_error() {
     let (_e, _home, work) = setup();
     let proj = work.join("proj");
-    commands::init::run(&proj, "init").unwrap();
-    let err = commands::init::run(&proj, "init").unwrap_err();
+    commands::init::run(&proj).unwrap();
+    let err = commands::init::run(&proj).unwrap_err();
     assert_eq!(err.code, "already-initialized");
 }
 
 #[test]
-fn add_uses_same_machinery_with_add_wording() {
+fn init_creates_second_folder_under_same_identity() {
     let (_e, home, work) = setup();
     let other = work.join("other");
-    let out = commands::init::run(&other, "add").unwrap();
-    assert_eq!(out.json["command"], "add");
+    let out = commands::init::run(&other).unwrap();
+    assert_eq!(out.json["command"], "init");
     // Same device id as the first folder's identity would be: identity file
     // lives under the shared home.
     assert!(home.join("identity/device.key").is_file());
@@ -94,7 +94,7 @@ fn status_reports_scan_manifest_and_empty_peers_conflicts() {
         std::fs::write(proj.join("a.txt"), b"hello ferry").unwrap();
     });
 
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     let out = commands::status::run(&proj).unwrap();
     let doc = &out.json;
 
@@ -113,7 +113,7 @@ fn status_reports_scan_manifest_and_empty_peers_conflicts() {
 fn conflicts_list_reads_jsonl_written_behind_it() {
     let (_e, _home, work) = setup();
     let proj = work.join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     let entry = ferry_sync_engine::ConflictEntry {
         ts: "2026-08-24T10:00:00Z".into(),
@@ -145,7 +145,7 @@ fn conflicts_list_reads_jsonl_written_behind_it() {
 fn ignore_append_preset_and_layered_listing() {
     let (_e, _home, work) = setup();
     let proj = work.join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     // Append a pattern.
     let out = commands::ignore_cmd::run(&proj, Some("*.log"), None, false).unwrap();
@@ -195,7 +195,7 @@ fn ignore_append_preset_and_layered_listing() {
 fn ignore_targets_explicit_folder_and_external_directory() {
     let (_e, _home, work) = setup();
     let proj = work.join("external_proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
     // Append pattern to explicit folder
     let out = commands::ignore_cmd::run(&proj, Some("temp/"), None, false).unwrap();
@@ -227,7 +227,7 @@ fn read_settings(proj: &Path) -> Settings {
 fn settings_format_version_is_stable_in_json() {
     let (_e, _home, work) = setup();
     let proj = work.join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     let raw = std::fs::read_to_string(proj.join(".ferry/settings.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(v["format_version"], SETTINGS_FORMAT_VERSION);
