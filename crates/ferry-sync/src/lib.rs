@@ -78,8 +78,8 @@ pub mod transport;
 // Re-exports so tests, bins, and future crates reach the vocabulary through
 // one facade.
 pub use engine::{
-    pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError, PeerPolicy,
-    PeerState, SessionError, SyncEngine,
+    pick_donor, select_donor, EngineConfig, EngineHandle, EngineStats, IngestError,
+    PeerExpectation, PeerPolicy, PeerState, SessionError, SyncEngine,
 };
 pub use exchange::{ingest_pack_verified, run_v1_session, CurrentState, ExchangeHost};
 pub use ferry_crypto::identity::DeviceIdentity;

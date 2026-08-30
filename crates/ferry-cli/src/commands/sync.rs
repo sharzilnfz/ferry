@@ -78,7 +78,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         opportunistic_every: 1,
         bind_addr: None,
         connect_to: Some(peer),
-        expected_peer_id: None,
+        allow_trust_on_first_use: false,
         pin_state_dir: Some(opened.state_dir()),
         quiet: true,
     };

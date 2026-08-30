@@ -77,13 +77,12 @@ pub struct EngineConfig {
     /// Connect role: dial this peer address. Exactly one of bind/connect
     /// should be set per daemon; the connector drives sessions.
     pub connect_to: Option<SocketAddr>,
-    /// Strictly expect this peer device id at the handshake (ADR-0003).
-    /// If set to `Some(pin)`, the engine strictly enforces that single peer identity.
-    /// `None` indicates default policy: if a `CONFIG_HEAD` exists in the folder,
-    /// an allow-list is seeded from its wrapped keys (deny-unknown by default);
-    /// otherwise Trust-On-First-Use (TOFU) persists the first authenticated peer
-    /// identity per folder under `.ferry/peers/` and refuses any subsequent mismatches.
-    pub expected_peer_id: Option<BlobId>,
+    /// Opt-in trust-on-first-use (ADR-0007) for folders with no `CONFIG_HEAD`:
+    /// the engine then seeds its policy from the persisted TOFU ledger and
+    /// pins the first authenticated peer identity per folder under
+    /// `.ferry/peers/`. `false` (the default) keeps the refuse-by-default
+    /// policy of an empty allow-list.
+    pub allow_trust_on_first_use: bool,
     /// The folder's `.ferry` directory whose pin-state.json gates tree
     /// mutation at the shared execution boundary (T-06 session pinning).
     /// `None` (the default) is the no-pin policy: materialization never
@@ -94,17 +93,41 @@ pub struct EngineConfig {
 }
 
 /// Local peer authorization policy (T-18).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// The default is an empty allow-list, which refuses every remote peer: a
+/// folder only syncs with devices explicitly paired into its `CONFIG_HEAD`
+/// (ADR-0002). Trust-on-first-use exists only as an explicit opt-in
+/// (ADR-0007).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerPolicy {
-    /// Trust on first use (TOFU): accepts the first peer that proves key
-    /// possession, persists its identity per-folder to disk under `.ferry/peers/`,
-    /// and strictly enforces that pinned identity on subsequent sessions
-    /// (refusing any mismatches loudly).
-    #[default]
-    TrustOnFirstUse,
-    /// Explicit allow-list: accepts only peers whose device ID is in the set.
-    /// Denies unknown peers by default. Does not perform TOFU.
+    /// Accepts only peers whose device ID is in the set (minus self). An
+    /// empty set — the default — refuses every peer. Does not perform TOFU.
     AllowList(HashSet<BlobId>),
+    /// Opt-in trust on first use (ADR-0007): accepts the first peer that
+    /// proves key possession, persists its identity per-folder to disk under
+    /// `.ferry/peers/`, and strictly enforces that pinned identity on
+    /// subsequent sessions (refusing any mismatches loudly).
+    TrustOnFirstUse,
+}
+
+impl Default for PeerPolicy {
+    fn default() -> Self {
+        PeerPolicy::AllowList(HashSet::new())
+    }
+}
+
+/// What one session requires of the remote peer, resolved from a
+/// [`PeerPolicy`] and the persisted TOFU ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerExpectation {
+    /// The policy names no eligible remote peer; the session is refused
+    /// before the handshake.
+    Refuse,
+    /// Require exactly this device id at the handshake.
+    Pin(BlobId),
+    /// Accept whichever identity proves key possession. `pin` records the
+    /// first proven identity for next time; only ever true under opt-in TOFU.
+    TrustOnFirstUse { pin: bool },
 }
 
 impl PeerPolicy {
@@ -121,6 +144,55 @@ impl PeerPolicy {
         let ch = ferry_crypto::config_head::parse_config_head(bytes)?;
         let set: HashSet<BlobId> = ch.entries.into_iter().map(|e| e.device_pub).collect();
         Ok(PeerPolicy::AllowList(set))
+    }
+
+    /// The configured device set minus `self_id`, sorted for determinism.
+    /// TOFU has no configured set and returns an empty vector.
+    pub fn remote_peers(&self, self_id: &BlobId) -> Vec<BlobId> {
+        match self {
+            PeerPolicy::AllowList(set) => {
+                let mut peers: Vec<BlobId> =
+                    set.iter().copied().filter(|p| p != self_id).collect();
+                peers.sort_unstable();
+                peers
+            }
+            PeerPolicy::TrustOnFirstUse => Vec::new(),
+        }
+    }
+
+    /// Resolve the handshake expectation for the next session. An allow-list
+    /// that names no remote peer after the self-filter resolves to
+    /// [`PeerExpectation::Refuse`]: pairing is explicit, never assumed.
+    pub fn expected_peer(
+        &self,
+        self_id: &BlobId,
+        folder_id: &[u8; 16],
+        ledger: &PeerLedger,
+    ) -> Result<PeerExpectation, std::io::Error> {
+        match self {
+            PeerPolicy::AllowList(_) => Ok(match self.remote_peers(self_id).as_slice() {
+                [] => PeerExpectation::Refuse,
+                [only] => PeerExpectation::Pin(*only),
+                _ => PeerExpectation::TrustOnFirstUse { pin: false },
+            }),
+            PeerPolicy::TrustOnFirstUse => {
+                let known = ledger.list_peers(folder_id)?;
+                Ok(match known.first() {
+                    Some(first) => PeerExpectation::Pin(*first),
+                    None => PeerExpectation::TrustOnFirstUse { pin: true },
+                })
+            }
+        }
+    }
+
+    /// Post-handshake authorization: whether the authenticated identity may
+    /// exchange data. Under TOFU the handshake itself enforces the pin (first
+    /// use or ledger), so every key-proof identity passes here.
+    pub fn admits(&self, peer: &BlobId) -> bool {
+        match self {
+            PeerPolicy::AllowList(set) => set.contains(peer),
+            PeerPolicy::TrustOnFirstUse => true,
+        }
     }
 }
 
@@ -199,6 +271,9 @@ impl PeerLedger {
 }
 
 /// Check candidate paths for a `CONFIG_HEAD` file to seed allow-list mode.
+/// A missing or entry-less `CONFIG_HEAD` yields the default policy — an empty
+/// allow-list, which refuses every peer — unless TOFU is explicitly enabled
+/// on the engine config (ADR-0007).
 fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolicy {
     let candidates = [
         store.store_dir().join("config"),
@@ -209,16 +284,16 @@ fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolic
         if path.is_file() {
             if let Ok(bytes) = std::fs::read(path) {
                 if let Ok(policy) = PeerPolicy::from_config_head(&bytes) {
-                    if let PeerPolicy::AllowList(ref set) = policy {
-                        if !set.is_empty() {
-                            return policy;
-                        }
-                    }
+                    return policy;
                 }
             }
         }
     }
-    PeerPolicy::TrustOnFirstUse
+    if cfg.allow_trust_on_first_use {
+        PeerPolicy::TrustOnFirstUse
+    } else {
+        PeerPolicy::default()
+    }
 }
 
 impl EngineConfig {
@@ -236,7 +311,7 @@ impl EngineConfig {
             opportunistic_every: 3,
             bind_addr: None,
             connect_to: None,
-            expected_peer_id: None,
+            allow_trust_on_first_use: false,
             pin_state_dir: None,
             quiet: true,
         }
@@ -973,7 +1048,7 @@ impl Ctx {
                 }
             },
             Err(e) => {
-                if let Some(peer) = self.cfg.expected_peer_id {
+                if let [peer] = self.peer_policy.remote_peers(self.identity.public())[..] {
                     self.shared.record_peer_connectivity(peer, "unreachable");
                 }
                 self.status(&format!("SESSION dial error: {e}"));
@@ -1023,60 +1098,39 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     };
 
     let ledger = PeerLedger::new(ctx.store.store_dir());
-    let (expect, is_tofu_fresh) = match &ctx.peer_policy {
-        PeerPolicy::AllowList(set) => {
-            let remote_peers: Vec<BlobId> = set
-                .iter()
-                .copied()
-                .filter(|p| p != ctx.identity.public())
-                .collect();
-            if remote_peers.len() == 1 {
-                (ExpectPeer::Pin(remote_peers[0]), false)
-            } else if remote_peers.is_empty() {
-                (ExpectPeer::TrustOnFirstUse, true)
-            } else {
-                (ExpectPeer::TrustOnFirstUse, false)
-            }
+    let resolved =
+        ctx.peer_policy
+            .expected_peer(ctx.identity.public(), &ctx.cfg.folder_id, &ledger)?;
+    let expect = match resolved {
+        PeerExpectation::Refuse => {
+            ctx.status("PEER refused: allow-list names no paired peer");
+            return Err(SessionError::PeerUnauthorized(
+                "allow-list names no paired peer".into(),
+            ));
         }
-        PeerPolicy::TrustOnFirstUse => {
-            let known = ledger.list_peers(&ctx.cfg.folder_id)?;
-            if let Some(first) = known.first() {
-                (ExpectPeer::Pin(*first), false)
-            } else {
-                (ExpectPeer::TrustOnFirstUse, true)
-            }
-        }
+        PeerExpectation::Pin(id) => ExpectPeer::Pin(id),
+        PeerExpectation::TrustOnFirstUse { .. } => ExpectPeer::TrustOnFirstUse,
     };
 
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
 
-    match &ctx.peer_policy {
-        PeerPolicy::AllowList(set) => {
-            let remote_peers: Vec<BlobId> = set
-                .iter()
-                .copied()
-                .filter(|p| p != ctx.identity.public())
-                .collect();
-            if !remote_peers.is_empty() && !set.contains(&est.peer) {
-                let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
-                ctx.shared.record_peer_connectivity(est.peer, "unreachable");
-                ctx.status(&format!(
-                    "PEER unauthorized: {} not in allow-list",
-                    hex(&est.peer)
-                ));
-                return Err(SessionError::PeerUnauthorized(hex(&est.peer)));
-            }
-        }
-        PeerPolicy::TrustOnFirstUse => {
-            if is_tofu_fresh {
-                ctx.status(&format!(
-                    "PEER new device trusted (TOFU): {}",
-                    hex(&est.peer)
-                ));
-                ledger.record_peer(&ctx.cfg.folder_id, &est.peer)?;
-            }
-        }
+    if !ctx.peer_policy.admits(&est.peer) {
+        let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
+        ctx.shared.record_peer_connectivity(est.peer, "unreachable");
+        ctx.status(&format!(
+            "PEER unauthorized: {} not in allow-list",
+            hex(&est.peer)
+        ));
+        return Err(SessionError::PeerUnauthorized(hex(&est.peer)));
+    }
+
+    if let PeerExpectation::TrustOnFirstUse { pin: true } = resolved {
+        ctx.status(&format!(
+            "PEER new device trusted (TOFU): {}",
+            hex(&est.peer)
+        ));
+        ledger.record_peer(&ctx.cfg.folder_id, &est.peer)?;
     }
 
     ctx.status(&format!(
@@ -1319,8 +1373,6 @@ impl SyncEngine {
         }
         let peer_policy = if let Some(policy) = self.peer_policy.take() {
             policy
-        } else if let Some(pin) = self.cfg.expected_peer_id {
-            PeerPolicy::AllowList([pin].into())
         } else {
             resolve_peer_policy_from_disk(&self.cfg, &self.store)
         };

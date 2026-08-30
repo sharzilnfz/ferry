@@ -198,7 +198,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             opportunistic_every: (args.interval_secs * 5).max(1) as u32,
             bind_addr: bind,
             connect_to: peer_addr,
-            expected_peer_id: None,
+            allow_trust_on_first_use: false,
             pin_state_dir: Some(opened.state_dir()),
             quiet: true,
         };

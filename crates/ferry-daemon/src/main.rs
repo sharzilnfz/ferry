@@ -433,9 +433,9 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         opportunistic_every: d.opportunistic_every,
         bind_addr: None,
         connect_to: None,
-        // Strict peer pinning arrives with T-007's pairing ritual; the
-        // skeleton accepts whichever identity proves key possession.
-        expected_peer_id: None,
+        // Trust-on-first-use stays opt-in (ADR-0007); paired folders seed
+        // their allow-list from `CONFIG_HEAD`.
+        allow_trust_on_first_use: false,
         // T-06: production daemons enforce session pins at the engine's
         // execution boundary. The --store dir IS the folder root whose
         // `.ferry/` holds pin-state.json and the held ledgers.

@@ -120,16 +120,20 @@ impl EngineFixture {
             hook(&mut cfg_a);
         }
         cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-        let engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
+        let mut engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A");
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
+        // Trust policy is refuse-by-default; these fixtures test convergence,
+        // not pairing, so both nodes opt into TOFU explicitly (ADR-0007).
+        engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let a = engine_a.start();
 
         let mut cfg_b = self_cfg(dir.path(), "b", format!("{name}-b"), poly);
         cfg_b.connect_to = Some(addr);
         let tb = transport_b.unwrap_or_else(default_transport);
-        let engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
+        let mut engine_b = SyncEngine::new(cfg_b, tb).expect("engine B");
+        engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let b = engine_b.start();
 
         EngineFixture {
@@ -151,7 +155,8 @@ impl EngineFixture {
     /// Stop the default B and start a fresh one through `transport`.
     pub fn replace_b(&mut self, transport: Arc<dyn ferry_sync::Transport>) -> EngineHandle {
         self.b.shutdown();
-        let engine_b = SyncEngine::new(self.b_config(), transport).expect("engine B");
+        let mut engine_b = SyncEngine::new(self.b_config(), transport).expect("engine B");
+        engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         self.b = engine_b.start();
         self.b.clone()
     }
