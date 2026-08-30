@@ -4,8 +4,8 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `IrohTransport` encapsulates its background runtime lifecycle with clean shutdown on drop
-- [ ] No nested Tokio runtime panic paths exist in synchronous transport calls
-- [ ] Integration tests in `crates/ferry-iroh/tests/` pass reliably
+- [x] `IrohTransport` encapsulates its background runtime lifecycle with clean shutdown on drop
+- [x] No nested Tokio runtime panic paths exist in synchronous transport calls
+- [x] Integration tests in `crates/ferry-iroh/tests/` pass reliably

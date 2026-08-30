@@ -96,16 +96,22 @@ struct Inner {
     routes: RouteTable,
 }
 
-fn block_on<F>(handle: &Handle, f: F) -> F::Output
+fn block_on<F, T>(handle: &Handle, f: F) -> T
 where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let h = handle.clone();
-        std::thread::spawn(move || h.block_on(f)).join().unwrap()
-    } else {
-        handle.block_on(f)
+    match tokio::runtime::Handle::try_current() {
+        Ok(curr) if curr.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(f))
+        }
+        Ok(_) => {
+            let h = handle.clone();
+            std::thread::spawn(move || h.block_on(f))
+                .join()
+                .unwrap_or_else(|p| std::panic::resume_unwind(p))
+        }
+        Err(_) => handle.block_on(f),
     }
 }
 
@@ -124,12 +130,22 @@ impl Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
         if let Ok(mut g) = self.rt.lock() {
             if let Some(rt) = g.take() {
+                let ep = self.ep.clone();
+                let handle = rt.handle().clone();
+                let close_and_shutdown = move || {
+                    handle.block_on(async move {
+                        let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
+                    });
+                    rt.shutdown_timeout(Duration::from_millis(500));
+                };
+
                 if tokio::runtime::Handle::try_current().is_ok() {
-                    let _ = std::thread::spawn(move || drop(rt)).join();
+                    let _ = std::thread::spawn(close_and_shutdown).join();
                 } else {
-                    drop(rt);
+                    close_and_shutdown();
                 }
             }
         }
@@ -315,10 +331,10 @@ impl IrohTransport {
         let obs = self.inner.observe(conn.remote_id());
         spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
-            rt: self.inner.rt_handle().clone(),
+            inner: Arc::clone(&self.inner),
             conn,
-            send: Mutex::new(send),
-            recv: Mutex::new(recv),
+            send: Arc::new(tokio::sync::Mutex::new(send)),
+            recv: Arc::new(tokio::sync::Mutex::new(recv)),
         }))
     }
 
@@ -335,7 +351,9 @@ impl IrohTransport {
 
     /// Best-effort graceful close; also runs on Drop.
     pub fn shutdown(&self) {
-        self.inner.closed.store(true, Ordering::SeqCst);
+        if self.inner.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let ep = self.inner.ep.clone();
         block_on(self.inner.rt_handle(), async move {
             let _ = tokio::time::timeout(Duration::from_millis(500), ep.close()).await;
@@ -494,7 +512,9 @@ impl DynListener for IrohListener {
     }
 
     fn close(&self) -> io::Result<()> {
-        self.closed.store(true, Ordering::SeqCst);
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let ep = self.inner.ep.clone();
         block_on(self.inner.rt_handle(), async move {
             let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
@@ -541,10 +561,10 @@ impl DynListener for IrohListener {
             })
             .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
-                rt: self.inner.rt_handle().clone(),
+                inner: Arc::clone(&self.inner),
                 conn,
-                send: Mutex::new(streams.0),
-                recv: Mutex::new(streams.1),
+                send: Arc::new(tokio::sync::Mutex::new(streams.0)),
+                recv: Arc::new(tokio::sync::Mutex::new(streams.1)),
             }));
         }
     }
@@ -555,11 +575,11 @@ impl DynListener for IrohListener {
 // ---------------------------------------------------------------------------
 
 struct FramedConnection {
-    rt: Handle,
+    inner: Arc<Inner>,
     #[allow(dead_code)]
     conn: IrohConn,
-    send: Mutex<iroh::endpoint::SendStream>,
-    recv: Mutex<iroh::endpoint::RecvStream>,
+    send: Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
+    recv: Arc<tokio::sync::Mutex<iroh::endpoint::RecvStream>>,
 }
 
 fn io_error(kind: io::ErrorKind, msg: String) -> io::Error {
@@ -589,21 +609,24 @@ fn check_incoming_len(len: u32) -> io::Result<()> {
 impl DynConnection for FramedConnection {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         check_outgoing_len(payload.len())?;
-        let mut send = lock(&self.send);
         let len = (payload.len() as u32).to_le_bytes();
-        self.rt.block_on(async {
+        let payload = payload.to_vec();
+        let send = Arc::clone(&self.send);
+        block_on(self.inner.rt_handle(), async move {
+            let mut send = send.lock().await;
             send.write_all(&len).await?;
             if !payload.is_empty() {
-                send.write_all(payload).await?;
+                send.write_all(&payload).await?;
             }
             Ok::<(), io::Error>(())
         })
     }
 
     fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut recv = lock(&self.recv);
-        let mut len_buf = [0u8; 4];
-        self.rt.block_on(async {
+        let recv = Arc::clone(&self.recv);
+        block_on(self.inner.rt_handle(), async move {
+            let mut recv = recv.lock().await;
+            let mut len_buf = [0u8; 4];
             match recv.read_exact(&mut len_buf).await {
                 Ok(()) => {}
                 // FinishedEarly(0): peer closed cleanly at a frame boundary.
@@ -633,5 +656,115 @@ impl DynConnection for FramedConnection {
             }
             Ok(payload)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::RngCore as _;
+
+    fn test_transport(seed_byte: u8) -> IrohTransport {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        seed[1] = seed_byte;
+        rand::thread_rng().fill_bytes(&mut seed[2..]);
+        IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
+    }
+
+    #[test]
+    fn synchronous_calls_work_inside_multithread_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let a = test_transport(0x31);
+            let b = test_transport(0x32);
+
+            let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+            let addr = lst.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                let mut c = lst.accept().unwrap();
+                let msg = c.recv_frame().unwrap();
+                assert_eq!(msg, b"ping");
+                c.send_frame(b"pong").unwrap();
+            });
+
+            let mut cli = b.dial(addr).unwrap();
+            cli.send_frame(b"ping").unwrap();
+            let reply = cli.recv_frame().unwrap();
+            assert_eq!(reply, b"pong");
+
+            server.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn synchronous_calls_work_inside_current_thread_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let a = test_transport(0x41);
+            let b = test_transport(0x42);
+
+            let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+            let addr = lst.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                let mut c = lst.accept().unwrap();
+                let msg = c.recv_frame().unwrap();
+                assert_eq!(msg, b"current-thread-ping");
+                c.send_frame(b"current-thread-pong").unwrap();
+            });
+
+            let mut cli = b.dial(addr).unwrap();
+            cli.send_frame(b"current-thread-ping").unwrap();
+            let reply = cli.recv_frame().unwrap();
+            assert_eq!(reply, b"current-thread-pong");
+
+            server.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn connection_and_listener_survive_transport_drop() {
+        let a = test_transport(0x51);
+        let b = test_transport(0x52);
+
+        let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = lst.local_addr().unwrap();
+        drop(a); // Drop listener's original transport handle
+
+        let server = std::thread::spawn(move || {
+            let mut c = lst.accept().unwrap();
+            let msg = c.recv_frame().unwrap();
+            assert_eq!(msg, b"survived-transport-drop");
+            c.send_frame(b"ack").unwrap();
+            let _ = c.recv_frame();
+        });
+
+        let mut cli = b.dial(addr).unwrap();
+        drop(b); // Drop dialer's original transport handle
+
+        cli.send_frame(b"survived-transport-drop").unwrap();
+        let reply = cli.recv_frame().unwrap();
+        assert_eq!(reply, b"ack");
+        drop(cli);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn transport_shutdown_is_idempotent() {
+        let a = test_transport(0x61);
+        a.shutdown();
+        a.shutdown();
     }
 }
