@@ -513,6 +513,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     )
     .unwrap();
     engine_a.set_identity(identity_a.clone());
+    engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
@@ -531,6 +532,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     )
     .unwrap();
     engine_b.set_identity(identity_b.clone());
+    engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
     let handle_b = engine_b.start();
 
     // Wait for nodes to synchronize

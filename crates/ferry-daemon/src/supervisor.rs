@@ -139,24 +139,19 @@ impl Supervisor {
 
         let mut bind_addr = None;
         let mut connect_to = None;
-        let mut expected_peer_id = None;
 
+        // Dial-target derivation only; trust policy is resolved by the
+        // engine itself from the same `CONFIG_HEAD`. The direct config read
+        // goes away when the supervisor consumes `open_folder`.
         if let Some(ref iroh) = self.iroh_transport {
             bind_addr = Some("127.0.0.1:0".parse().unwrap());
             let config_path = record.path.join(".ferry").join("config");
             if config_path.is_file() {
                 if let Ok(bytes) = std::fs::read(&config_path) {
-                    if let Ok(ferry_sync::PeerPolicy::AllowList(set)) =
-                        ferry_sync::PeerPolicy::from_config_head(&bytes)
-                    {
-                        let remote: Vec<[u8; 32]> = set
-                            .into_iter()
-                            .filter(|p| p != self.identity.public())
-                            .collect();
-                        if let Some(peer) = remote.first() {
+                    if let Ok(policy) = ferry_sync::PeerPolicy::from_config_head(&bytes) {
+                        if let Some(peer) = policy.remote_peers(self.identity.public()).first() {
                             let alias = iroh.register_peer(*peer);
                             connect_to = Some(alias);
-                            expected_peer_id = Some(*peer);
                         }
                     }
                 }
@@ -173,7 +168,7 @@ impl Supervisor {
             opportunistic_every: 50,
             bind_addr,
             connect_to,
-            expected_peer_id,
+            allow_trust_on_first_use: false,
             pin_state_dir: Some(record.path.join(".ferry")),
             quiet: true,
         };
