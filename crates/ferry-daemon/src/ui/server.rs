@@ -537,11 +537,12 @@ async fn api_registry_register(
 ) -> Result<Json<Value>, ApiError> {
     let Json(req) = payload.map_err(bad_body)?;
     if !ferry_folder::is_initialized(&req.path) {
+        let err = ferry_folder::FolderError::not_initialized(&req.path);
         return Err(ApiError::new(
             StatusCode::CONFLICT,
-            "not-initialized",
-            format!("{} is not an initialized Ferry folder", req.path.display()),
-            "run `ferry init` or `ferry pair` in this directory first",
+            err.code,
+            err.message,
+            err.hint,
         ));
     }
     let record = server.backend.register_folder(req.path).await?;

@@ -73,9 +73,11 @@ pub fn status_for_code(code: &str) -> StatusCode {
         "pairing-expired" => StatusCode::GONE,
         "warming-up" => StatusCode::SERVICE_UNAVAILABLE,
         "not-implemented" => StatusCode::NOT_IMPLEMENTED,
-        "secrets-found" | "pin-active" | "already-initialized" | "pair-timeout" => {
-            StatusCode::CONFLICT
-        }
+        "secrets-found"
+        | "pin-active"
+        | "already-initialized"
+        | "not-initialized"
+        | "pair-timeout" => StatusCode::CONFLICT,
         "io"
         | "store"
         | "store-open"

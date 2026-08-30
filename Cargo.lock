@@ -2143,6 +2143,7 @@ name = "ferry-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "ferry-folder",
  "ferry-ipc",
  "ferry-platform",
  "ratatui",
