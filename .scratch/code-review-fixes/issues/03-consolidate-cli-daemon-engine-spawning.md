@@ -4,8 +4,8 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status: completed**
 
-- [ ] Duplicate store opening and polynomial validation in `ferry-cli/src/commands/daemon.rs` are deleted
-- [ ] Ad-hoc CLI daemon runs delegate engine construction and supervision to the supervisor or unified daemon interface
-- [ ] CLI daemon tests in `crates/ferry-cli/tests/` and unit tests in `daemon.rs` pass cleanly
+- [x] Duplicate store opening and polynomial validation in `ferry-cli/src/commands/daemon.rs` are deleted
+- [x] Ad-hoc CLI daemon runs delegate engine construction and supervision to the supervisor or unified daemon interface
+- [x] CLI daemon tests in `crates/ferry-cli/tests/` and unit tests in `daemon.rs` pass cleanly
