@@ -12,7 +12,7 @@ use ferry_gui::modals::{
 };
 use ferry_gui::telemetry::{format_short_hex, render_telemetry_hairline};
 use ferry_gui::theme::{colors, Theme};
-use ferry_gui::{format_bytes, GuiApp};
+use ferry_gui::{format_bytes, BackendAction, GuiApp};
 use ferry_ipc::backend::{FakeBackend, ShareOffer, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, ScanStatsView, TransferDirection,
@@ -282,4 +282,64 @@ fn test_gui_app_full_lifecycle() {
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
+}
+
+async fn wait_for_status_banner(app: &mut GuiApp, needle: &str) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        app.drain_events();
+        if let Some((msg, _, _)) = &app.status_message {
+            if msg.contains(needle) {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn register_uninitialized_folder_is_blocked_with_init_banner() {
+    let fake = Arc::new(FakeBackend::new());
+    let mut app = GuiApp::new(fake, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+
+    app.dispatch(BackendAction::RegisterFolder {
+        path: dir.path().to_path_buf(),
+    });
+
+    let blocked = wait_for_status_banner(&mut app, "ferry init").await;
+    assert!(blocked, "guard banner pointing at `ferry init` must appear");
+    assert!(
+        app.status_message
+            .as_ref()
+            .is_some_and(|(m, _, _)| m.contains("not an initialized Ferry folder")),
+        "banner names the uninitialized directory"
+    );
+}
+
+#[tokio::test]
+async fn register_initialized_folder_reaches_backend_unchanged() {
+    let fake = Arc::new(FakeBackend::new());
+    let mut app = GuiApp::new(fake, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".ferry")).unwrap();
+    std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
+
+    app.dispatch(BackendAction::RegisterFolder {
+        path: dir.path().to_path_buf(),
+    });
+
+    // The guard passes; FakeBackend answers with its own wave-0 stub error,
+    // proving the dispatch was not blocked client-side.
+    let reached = wait_for_status_banner(&mut app, "not-implemented").await;
+    assert!(reached, "initialized path must reach the backend");
+    assert!(
+        !app.status_message
+            .as_ref()
+            .is_some_and(|(m, _, _)| m.contains("not an initialized Ferry folder")),
+        "initialized path must not be blocked"
+    );
 }

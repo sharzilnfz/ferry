@@ -231,6 +231,15 @@ impl TuiApp {
                                 .activity_log
                                 .push_warn(current_time_str(), "already synced");
                         }
+                        PickerSelectResult::NotInitialized(_) => {
+                            if let Some(p) = self.picker.as_mut() {
+                                p.hint = Some(picker::NOT_INITIALIZED_HINT.to_string());
+                            }
+                            self.state.activity_log.push_warn(
+                                current_time_str(),
+                                picker::NOT_INITIALIZED_HINT.to_string(),
+                            );
+                        }
                         PickerSelectResult::Selected(_) => {
                             self.state.activity_log.push_info(
                                 current_time_str(),
@@ -377,6 +386,13 @@ impl TuiApp {
                     let result = self.picker.as_mut().map(PickerState::try_select);
                     match result {
                         Some(PickerSelectResult::Selected(entry)) => {
+                            if !entry.is_initialized {
+                                self.state.activity_log.push_warn(
+                                    current_time_str(),
+                                    picker::NOT_INITIALIZED_HINT.to_string(),
+                                );
+                                return;
+                            }
                             match backend.register_folder(entry.path.clone()).await {
                                 Ok(rec) => {
                                     self.state.activity_log.push_info(
@@ -397,6 +413,12 @@ impl TuiApp {
                             self.state
                                 .activity_log
                                 .push_warn(current_time_str(), "already synced");
+                        }
+                        Some(PickerSelectResult::NotInitialized(_)) => {
+                            self.state.activity_log.push_warn(
+                                current_time_str(),
+                                picker::NOT_INITIALIZED_HINT.to_string(),
+                            );
                         }
                         Some(PickerSelectResult::Nothing) | None => {}
                     }

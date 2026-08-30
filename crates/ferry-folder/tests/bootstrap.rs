@@ -5,8 +5,8 @@ use std::path::Path;
 
 use ferry_crypto::identity::load_or_create;
 use ferry_folder::folder::{
-    create_folder, dot_dir, find_polynomial, open_folder, save_settings, short_device,
-    write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
+    create_folder, dot_dir, find_polynomial, is_initialized, open_folder, save_settings,
+    short_device, write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
 };
 use ferry_store::format::BlobKind;
 use ferry_store::store::Store;
@@ -85,6 +85,27 @@ fn open_without_ferry_directory_is_not_a_folder() {
         code_of(open_folder(&work.path().join("empty"), &id)),
         "not-a-folder"
     );
+}
+
+#[test]
+fn is_initialized_answers_structurally_without_unwrapping_keys() {
+    let work = tempfile::tempdir().unwrap();
+    let (_id_home, id) = identity_at("identity");
+
+    let plain = work.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert!(!is_initialized(&plain), "no .ferry at all");
+
+    let dot_only = work.path().join("dot_only");
+    std::fs::create_dir_all(dot_only.join(".ferry")).unwrap();
+    assert!(!is_initialized(&dot_only), ".ferry without config");
+
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+    assert!(is_initialized(&root), "a created folder is initialized");
+
+    assert!(!is_initialized(&work.path().join("missing")));
 }
 
 #[test]

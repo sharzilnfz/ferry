@@ -965,6 +965,16 @@ async function doRegisterFolder(force) {
     await loadStatus();
     return doc;
   } catch (err) {
+    if (err && (err.code === "not-initialized" || err.code === "not_initialized")) {
+      if (warn) {
+        warn.style.display = "block";
+        warn.textContent = (err.error || "Not an initialized Ferry folder") +
+          " — " + (err.hint || "run `ferry init` or `ferry pair` first");
+      }
+      playHapticFeedback("alert");
+      addActivity("Folder register blocked: not initialized");
+      return;
+    }
     if (err && (err.code === "secrets-found" || err.code === "secrets_found")) {
       if (warn) {
         warn.style.display = "block";

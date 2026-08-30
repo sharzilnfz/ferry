@@ -19,6 +19,7 @@ pub mod pairing;
 
 pub use error::{CodeInto, FolderError, FolderResult};
 // Test-harness helper; compile-gated by the `test-util` feature.
+pub use folder::is_initialized;
 #[cfg(any(test, feature = "test-util"))]
 pub use folder::open_or_create_test_store;
 pub use inventory::{
