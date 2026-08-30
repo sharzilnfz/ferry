@@ -11,7 +11,7 @@ unencrypted.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] One interface opens a folder's store: derive key, pick cipher, fail loud
 - [ ] Key-unwrap failure is a typed error, never a plaintext or zero-key reopen
