@@ -11,7 +11,7 @@ explicit config flag, recorded in a new ADR.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Remote-peer derivation and expected-peer resolution exist once, on PeerPolicy
 - [x] Empty allow-list refuses connections to unpaired devices; no TOFU default

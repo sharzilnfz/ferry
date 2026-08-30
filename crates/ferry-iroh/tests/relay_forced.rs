@@ -130,15 +130,17 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
     store_b.flush().unwrap();
     store_b.write_index_snapshot().unwrap();
 
-    let engine_a =
+    let mut engine_a =
         SyncEngine::with_store(cfg_a, Arc::new(t_a.clone()), Arc::new(store_a)).expect("engine A");
+    engine_a.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*id_b.public()]));
     let addr = engine_a.listen_addr().expect("A bound an alias");
 
     cfg_b.connect_to = Some(addr);
 
-    let engine_a_started = engine_a.start();
-    let engine_b =
+    let mut engine_b =
         SyncEngine::with_store(cfg_b, Arc::new(t_b.clone()), Arc::new(store_b)).expect("engine B");
+    engine_b.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*id_a.public()]));
+    let engine_a_started = engine_a.start();
     let engine_b_started = engine_b.start();
 
     PairFixture {

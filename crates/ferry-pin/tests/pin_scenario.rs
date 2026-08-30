@@ -256,11 +256,11 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         write_file(&b.tree.join(rel), b"v0", (mt, 0));
     }
     let sa_base = a.snap();
-    let sb_base = b.snap();
-    // Trees are identical, so each side records its own snapshot as the
-    // last-agreed ancestor (same rule the exchange uses at equal roots).
+    transfer_meta(&a.store, &b.store, &sa_base);
+    b.parent = sa_base.manifest_id;
+    // Both sides record the proven common ancestor
     record_agreement(&a, DEV_B, sa_base.manifest_id);
-    record_agreement(&b, DEV_A, sb_base.manifest_id);
+    record_agreement(&b, DEV_A, sa_base.manifest_id);
 
     // ---- device A pins src/** -------------------------------------------
     let base_hex = hex(&sa_base.manifest_id);

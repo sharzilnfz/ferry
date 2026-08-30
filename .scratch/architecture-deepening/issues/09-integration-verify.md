@@ -8,10 +8,10 @@ itself.
 
 **Blocked by:** 02, 04, 05, 06, 07, 08.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `cargo fmt --all --check` passes
-- [ ] `cargo clippy --workspace --all-targets` is clean
-- [ ] The full test suite passes per crate across the workspace, zero failures
-- [ ] Every acceptance criterion of the spec (`.scratch/architecture-deepening/spec.md`) is demonstrably met on this branch
-- [ ] The dual-device end-to-end flow from the manual testing guide still works: init, share, join, sync both ways
+- [x] `cargo fmt --all --check` passes
+- [x] `cargo clippy --workspace --all-targets` is clean
+- [x] The full test suite passes per crate across the workspace, zero failures
+- [x] Every acceptance criterion of the spec (`.scratch/architecture-deepening/spec.md`) is demonstrably met on this branch
+- [x] The dual-device end-to-end flow from the manual testing guide still works: init, share, join, sync both ways

@@ -452,4 +452,3 @@ async fn uninitialized_folder_fails_supervisor_registration_loudly() {
     assert_eq!(err.code, "not-a-folder");
     sup.shutdown();
 }
-

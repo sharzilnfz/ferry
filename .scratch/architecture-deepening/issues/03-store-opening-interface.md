@@ -13,9 +13,9 @@ unencrypted.
 
 **Status:** done
 
-- [ ] One interface opens a folder's store: derive key, pick cipher, fail loud
-- [ ] Key-unwrap failure is a typed error, never a plaintext or zero-key reopen
-- [ ] The plaintext cipher and zero master key are unreachable from sync, scan, and daemon call sites
-- [ ] Sync engine, scan engine, and supervisor open stores through the folder interface
-- [ ] Tests through the interface assert: valid folder opens encrypted, missing or stale key fails with the typed error, no fallback path exists
-- [ ] Existing at-rest encryption tests (pin enforcement, store format) pass
+- [x] One interface opens a folder's store: derive key, pick cipher, fail loud
+- [x] Key-unwrap failure is a typed error, never a plaintext or zero-key reopen
+- [x] The plaintext cipher and zero master key are unreachable from sync, scan, and daemon call sites
+- [x] Sync engine, scan engine, and supervisor open stores through the folder interface
+- [x] Tests through the interface assert: valid folder opens encrypted, missing or stale key fails with the typed error, no fallback path exists
+- [x] Existing at-rest encryption tests (pin enforcement, store format) pass

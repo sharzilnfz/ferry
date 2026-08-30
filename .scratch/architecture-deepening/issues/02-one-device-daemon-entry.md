@@ -14,9 +14,9 @@ the DaemonLock interface).
 
 **Status:** done
 
-- [ ] One function in the daemon crate runs the device daemon; the CLI delegates to it
-- [ ] Signal handling, registration, tick loop, and lock teardown each exist once in the codebase
-- [ ] SIGINT and SIGTERM produce identical cleanup whether launched directly or via CLI
-- [ ] `cargo fmt --all --check` passes
-- [ ] `cargo clippy` stays clean
-- [ ] Existing CLI and daemon tests pass unchanged
+- [x] One function in the daemon crate runs the device daemon; the CLI delegates to it
+- [x] Signal handling, registration, tick loop, and lock teardown each exist once in the codebase
+- [x] SIGINT and SIGTERM produce identical cleanup whether launched directly or via CLI
+- [x] `cargo fmt --all --check` passes
+- [x] `cargo clippy` stays clean
+- [x] Existing CLI and daemon tests pass unchanged
