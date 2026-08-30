@@ -6,6 +6,7 @@ fn temp_home() -> tempfile::TempDir {
 
 #[test]
 fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
+    let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
     // Ensure no socket exists
@@ -33,6 +34,7 @@ fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
 
 #[test]
 fn ensure_daemon_ping_within_200ms_when_running() {
+    let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
     // Start ensure once to have daemon
