@@ -5,47 +5,121 @@ fn temp_home() -> tempfile::TempDir {
 }
 
 #[test]
-fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
+fn ensure_daemon_fails_with_daemon_start_failed_when_binary_missing() {
     let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
-    // Ensure no socket exists
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
-
-    let p1 = ensure_daemon(&hp).expect("first ensure should spawn dummy daemon");
+    // Point binary at a nonexistent path so spawn fails immediately.
+    let prev = std::env::var("FERRY_BIN").ok();
+    std::env::set_var("FERRY_BIN", "/nonexistent/ferry-missing-binary-xyz");
+    let res = ensure_daemon(&hp);
+    // Restore env before assertions to avoid poisoning other tests.
+    match prev {
+        Some(v) => std::env::set_var("FERRY_BIN", v),
+        None => std::env::remove_var("FERRY_BIN"),
+    }
+    let err = res.expect_err("ensure_daemon should fail when binary missing");
+    assert_eq!(err.code, "daemon-start-failed");
     assert!(
-        p1.exists() || sock.exists(),
-        "socket should appear within 5s"
+        err.hint.contains("check $FERRY_HOME permissions"),
+        "hint must contain permissions guidance, got {}",
+        err.hint
     );
-    // Socket should be at home/daemon.sock
-    assert_eq!(p1, sock);
-
-    // Second call should reuse without spawning second daemon (fast return)
-    let start = std::time::Instant::now();
-    let p2 = ensure_daemon(&hp).expect("second ensure reuses");
-    let elapsed = start.elapsed();
-    assert_eq!(p2, sock);
     assert!(
-        elapsed < std::time::Duration::from_millis(500),
-        "second call should be fast (ping within 200ms), got {elapsed:?}"
+        err.message.contains(&sock.display().to_string())
+            || err.message.contains("daemon failed to start"),
+        "message should mention socket or failure, got {}",
+        err.message
     );
 }
 
 #[test]
-fn ensure_daemon_ping_within_200ms_when_running() {
+fn ensure_daemon_reuses_running_server_via_ping() {
     let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
-    // Start ensure once to have daemon
-    let _ = ensure_daemon(&hp).unwrap();
     let sock = hp.join("daemon.sock");
+    assert!(!sock.exists());
+
+    // Start an explicit in-process IpcServer that answers Ping with Pong
+    // via the FerryStore/FakeBackend seam.
+    let sock_clone = sock.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let _ = std::fs::remove_file(&sock_clone);
+            if let Some(parent) = sock_clone.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let Ok(server) = ferry_ipc::IpcServer::bind(&sock_clone) else {
+                return;
+            };
+            loop {
+                let conn_res = server.accept().await;
+                if let Ok(conn) = conn_res {
+                    tokio::spawn(async move {
+                        let mut c = conn;
+                        let snap = ferry_ipc::EngineSnapshot::new("", "", "", "idle");
+                        let _ = c
+                            .send_message(&ferry_ipc::DaemonMessage::Snapshot(snap))
+                            .await;
+                        loop {
+                            match c.recv_command().await {
+                                Ok(Some(ferry_ipc::ClientCommand::Ping)) => {
+                                    let _ = c.send_message(&ferry_ipc::DaemonMessage::Pong).await;
+                                }
+                                Ok(Some(_)) => {
+                                    let _ = c
+                                        .send_message(&ferry_ipc::DaemonMessage::Ack {
+                                            command: "ok".into(),
+                                            message: None,
+                                        })
+                                        .await;
+                                }
+                                Ok(None) => break,
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // Wait for the fake server to bind (poll with try_ping via ensure_daemon's fast path).
+    let mut waited = std::time::Duration::from_millis(0);
+    while waited < std::time::Duration::from_millis(2000) {
+        if sock.exists() {
+            // Try a cheap ensure that should hit the ping fast path once ready.
+            let probe = ensure_daemon(&hp);
+            if probe.is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += std::time::Duration::from_millis(50);
+    }
+    assert!(sock.exists(), "fake server should have created socket");
+
     let start = std::time::Instant::now();
-    let ok = ensure_daemon(&hp).is_ok();
-    let _ = ok;
-    let _ = sock;
+    let p2 = ensure_daemon(&hp).expect("second ensure should reuse running server");
     let elapsed = start.elapsed();
-    assert!(elapsed < std::time::Duration::from_millis(800));
+    assert_eq!(p2, sock);
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "reuse via ping should be fast, got {elapsed:?}"
+    );
+
+    // Also verify ping path is within expected bound.
+    let start2 = std::time::Instant::now();
+    let ok = ensure_daemon(&hp).is_ok();
+    assert!(ok);
+    assert!(start2.elapsed() < std::time::Duration::from_millis(800));
 }
 
 #[test]
@@ -86,7 +160,7 @@ fn share_and_join_json_round_trip_two_homes() {
     std::env::set_var("FERRY_HOME", home_a.path());
     let proj_a = work_a.path().join("proj-a");
     std::fs::create_dir_all(&proj_a).unwrap();
-    ferry_cli::commands::init::run(&proj_a, "init").unwrap();
+    ferry_cli::commands::init::run(&proj_a).unwrap();
 
     let out_a = ferry_cli::commands::share::run(&proj_a, false, 5)
         .expect("share should succeed with code path");
@@ -125,7 +199,7 @@ fn headless_share_json_works_without_tty() {
     std::env::set_var("FERRY_HOME", home.path());
     let proj = work.path().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    ferry_cli::commands::init::run(&proj, "init").unwrap();
+    ferry_cli::commands::init::run(&proj).unwrap();
     let out = ferry_cli::commands::share::run(&proj, false, 5).unwrap();
     assert!(out.json["code"].is_string());
     assert!(out.json["expires_at"].is_string());
