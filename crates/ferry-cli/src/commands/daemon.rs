@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ferry_platform::{DaemonLock, DaemonLockError, TerminateOutcome, TERMINATE_DEADLINE};
+use ferry_platform::{DaemonLockError, TerminateOutcome, TERMINATE_DEADLINE};
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine};
 
@@ -48,112 +48,9 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     };
     if listen_addr.is_none() && peer_addr.is_none() {
         let home = crate::home::ferry_home()?;
-        let _lock = DaemonLock::acquire(&home).map_err(|e| match e {
-            DaemonLockError::AlreadyRunning(pid) => {
-                let pid_str = pid.map(|p| format!(" (PID {p})")).unwrap_or_default();
-                CliError::new(
-                    "daemon-already-running",
-                    format!("A Ferry daemon is already running{pid_str}"),
-                    "run `ferry daemon stop` first or check active processes",
-                )
-            }
-            DaemonLockError::Io(err) => {
-                CliError::new("io", err.to_string(), "check permissions on FERRY_HOME")
-            }
-        })?;
-
         let identity = crate::ensure_identity()?;
-        let mut supervisor =
-            ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
-        for p in args.folders {
-            let abs = if p.is_relative() {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(p))
-                    .unwrap_or_else(|_| p.clone())
-            } else {
-                p.clone()
-            };
-            if abs.as_os_str().is_empty() {
-                continue;
-            }
-            match supervisor.handle_register(abs.clone()) {
-                Ok(rec) => eprintln!("registered {} -> {}", rec.path.display(), rec.folder_id),
-                Err(e) if e.code == "already-synced" => {
-                    eprintln!("already-synced {}: {}", p.display(), e.message)
-                }
-                Err(e) => {
-                    return Err(CliError::new(
-                        Box::leak(e.code.into_boxed_str()),
-                        e.message,
-                        e.hint,
-                    ))
-                }
-            }
-        }
-        supervisor.spawn_engines().map_err(|e| {
-            CliError::new(
-                Box::leak(e.code.into_boxed_str()),
-                e.message,
-                "check daemon log",
-            )
-        })?;
-        let socket_path = ferry_ipc::paths::default_socket_path();
-        if let Some(parent) = socket_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                CliError::new("runtime-error", e.to_string(), "failed to start runtime")
-            })?;
-        rt.block_on(async move {
-            let sup_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-            let ipc_handle = ferry_daemon::ipc::spawn_supervisor_ipc_server(
-                socket_path.clone(),
-                std::sync::Arc::clone(&sup_arc),
-            )
-            .map_err(|e| e.to_string())
-            .expect("ipc bind");
-            eprintln!("ferry device daemon listening at {}", socket_path.display());
-
-            let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-            let s_tx = shutdown_tx.clone();
-            tokio::spawn(async move {
-                let _ = tokio::signal::ctrl_c().await;
-                let _ = s_tx.send(true);
-            });
-            #[cfg(unix)]
-            {
-                let s_tx2 = shutdown_tx.clone();
-                tokio::spawn(async move {
-                    if let Ok(mut sig) =
-                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    {
-                        sig.recv().await;
-                        let _ = s_tx2.send(true);
-                    }
-                });
-            }
-
-            let mut interval = tokio::time::interval(Duration::from_millis(500));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let mut sup = sup_arc.lock().await;
-                        sup.tick();
-                    }
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            eprintln!("Shutting down ferry daemon cleanly...");
-                            break;
-                        }
-                    }
-                }
-            }
-            ipc_handle.shutdown();
-        });
+        ferry_daemon::device_daemon::run(&home, identity, args.folders)
+            .map_err(render_daemon_error)?;
         return Ok(Output::new(
             serde_json::json!({"command":"daemon","status":"stopped"}),
             "Daemon stopped.\n",
@@ -415,5 +312,34 @@ fn check_transport(kind: &str) -> CliResult<()> {
             format!("transport {other:?} is not implemented yet"),
             "use --transport tcp or --transport iroh",
         )),
+    }
+}
+
+/// Render the daemon entry's typed failures as coded CLI errors. The codes,
+/// messages, and hints here are the CLI's stable output contract.
+fn render_daemon_error(e: ferry_daemon::device_daemon::DeviceDaemonError) -> CliError {
+    use ferry_daemon::device_daemon::DeviceDaemonError as DaemonError;
+    match e {
+        DaemonError::AlreadyRunning { pid } => CliError::new(
+            "daemon-already-running",
+            format!(
+                "A Ferry daemon is already running{}",
+                pid.map(|p| format!(" (PID {p})")).unwrap_or_default()
+            ),
+            "run `ferry daemon stop` first or check active processes",
+        ),
+        DaemonError::Lock(err) => {
+            CliError::new("io", err.to_string(), "check permissions on FERRY_HOME")
+        }
+        DaemonError::Register { error, .. } => CliError::new(error.code, error.message, error.hint),
+        DaemonError::Spawn { code, message } => CliError::new(code, message, "check daemon log"),
+        DaemonError::Runtime(err) => {
+            CliError::new("runtime-error", err.to_string(), "failed to start runtime")
+        }
+        DaemonError::Ipc(message) => CliError::new(
+            "ipc-server",
+            message,
+            "check socket permissions or remove stale socket",
+        ),
     }
 }

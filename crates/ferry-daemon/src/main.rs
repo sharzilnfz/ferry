@@ -201,116 +201,18 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
 
 fn run_central_daemon(args: &[String]) -> Result<(), String> {
     let home = ferry_home();
-    std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
-
-    let _lock = ferry_platform::DaemonLock::acquire(&home).map_err(|e| match e {
-        ferry_platform::DaemonLockError::AlreadyRunning(pid) => {
-            let pid_str = pid.map(|p| format!(" (PID {p})")).unwrap_or_default();
-            format!("A Ferry daemon is already running{pid_str}. Run `ferry daemon stop` first.")
-        }
-        ferry_platform::DaemonLockError::Io(err) => {
-            format!("Failed to acquire daemon lock: {err}")
-        }
-    })?;
-
+    let folders: Vec<std::path::PathBuf> = args
+        .iter()
+        .filter(|a| !a.starts_with('-') && a.as_str() != "daemon")
+        .map(std::path::PathBuf::from)
+        .collect();
     // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
     let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
         .or_else(|_| {
             ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
         })
         .map_err(|e| format!("device identity: {e}"))?;
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-    let mut supervisor = ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
-    // Register any folder args before spawning (e.g., `ferry daemon /tmp/a /tmp/b`)
-    for arg in args {
-        if arg.starts_with('-') {
-            continue;
-        }
-        if arg == "daemon" {
-            continue;
-        }
-        let p = std::path::PathBuf::from(arg);
-        if p.as_os_str().is_empty() {
-            continue;
-        }
-        let abs = if p.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&p))
-                .unwrap_or(p.clone())
-        } else {
-            p.clone()
-        };
-        // handle_register may need tokio runtime for engine spawn; run inside runtime
-        let rec = rt.block_on(async { supervisor.handle_register(abs.clone()) });
-        match rec {
-            Ok(r) => eprintln!("registered {} -> {}", r.path.display(), r.folder_id),
-            Err(e) if e.code == "already-synced" => {
-                eprintln!("already-synced {}: {}", p.display(), e.message);
-            }
-            Err(e) => return Err(format!("register {}: {}", p.display(), e.message)),
-        }
-    }
-    rt.block_on(async {
-        supervisor
-            .spawn_engines()
-            .map_err(|e| format!("spawn engines: {}: {}", e.code, e.message))
-    })?;
-    let socket_path = ferry_ipc::paths::default_socket_path();
-    if let Some(parent) = socket_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let supervisor_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-    let sup_for_ipc = std::sync::Arc::clone(&supervisor_arc);
-    let ipc_handle = rt
-        .block_on(async {
-            ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
-        })
-        .map_err(|e| format!("ipc server: {e}"))?;
-    eprintln!("ferry device daemon listening at {}", socket_path.display());
-
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-    let s_tx = shutdown_tx.clone();
-    rt.spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        let _ = s_tx.send(true);
-    });
-    #[cfg(unix)]
-    {
-        let s_tx2 = shutdown_tx.clone();
-        rt.spawn(async move {
-            if let Ok(mut sig) =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            {
-                sig.recv().await;
-                let _ = s_tx2.send(true);
-            }
-        });
-    }
-
-    // Supervision loop with backoff — runs until shutdown signal
-    rt.block_on(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    let mut sup = supervisor_arc.lock().await;
-                    sup.tick();
-                }
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        eprintln!("Shutting down ferry daemon cleanly...");
-                        break;
-                    }
-                }
-            }
-        }
-    });
-    ipc_handle.shutdown();
-    Ok(())
+    ferry_daemon::device_daemon::run(&home, identity, &folders).map_err(|e| e.to_string())
 }
 
 enum TransportKind {
