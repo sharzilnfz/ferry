@@ -33,7 +33,10 @@ impl FolderError {
     pub fn not_initialized(path: impl AsRef<Path>) -> Self {
         FolderError::new(
             Self::NOT_INITIALIZED_CODE,
-            format!("{} is not an initialized Ferry folder", path.as_ref().display()),
+            format!(
+                "{} is not an initialized Ferry folder",
+                path.as_ref().display()
+            ),
             Self::NOT_INITIALIZED_HINT,
         )
     }
@@ -74,7 +77,10 @@ mod tests {
         let err = FolderError::not_initialized("/tmp/test_dir");
         assert_eq!(err.code, FolderError::NOT_INITIALIZED_CODE);
         assert_eq!(err.code, "not-initialized");
-        assert_eq!(err.message, "/tmp/test_dir is not an initialized Ferry folder");
+        assert_eq!(
+            err.message,
+            "/tmp/test_dir is not an initialized Ferry folder"
+        );
         assert_eq!(
             err.hint,
             "run 'ferry init' or 'ferry pair' before syncing this folder"
@@ -89,6 +95,9 @@ mod tests {
         let err2 = FolderError::not_initialized(&path);
         assert_eq!(err2.code, FolderError::NOT_INITIALIZED_CODE);
         assert_eq!(err2.hint, FolderError::NOT_INITIALIZED_HINT);
-        assert_eq!(err2.message, "/another/path is not an initialized Ferry folder");
+        assert_eq!(
+            err2.message,
+            "/another/path is not an initialized Ferry folder"
+        );
     }
 }

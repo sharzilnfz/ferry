@@ -309,8 +309,8 @@ fn test_cli_ignore_external_folder_targeting() {
 #[test]
 #[allow(deprecated)]
 fn test_ui_events_and_token_auth_flow() {
-    use ferry_ipc::backend::connect_auto;
     use ferry_daemon::ui::server::{generate_token, DashboardServer};
+    use ferry_ipc::backend::connect_auto;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

@@ -284,11 +284,16 @@ fn test_gui_app_full_lifecycle() {
     assert!(app
         .status_message
         .as_ref()
-        .is_some_and(|(msg, _, color)| msg == "Folder added: /test/registered/folder"
-            && *color == colors::FERRY_GREEN));
-    assert!(app.activity_log.iter().any(|entry| entry.category == "Folder"
-        && entry.message == "Folder added: /test/registered/folder"
-        && entry.color == colors::FERRY_GREEN));
+        .is_some_and(
+            |(msg, _, color)| msg == "Folder added: /test/registered/folder"
+                && *color == colors::FERRY_GREEN
+        ));
+    assert!(app
+        .activity_log
+        .iter()
+        .any(|entry| entry.category == "Folder"
+            && entry.message == "Folder added: /test/registered/folder"
+            && entry.color == colors::FERRY_GREEN));
 
     // 6. Test Full Frame Update in Headless egui Context
     let ctx = Context::default();
@@ -435,8 +440,10 @@ impl ferry_ipc::backend::SessionDomain for SuccessRegisterBackend {
         &self,
         paths: Vec<String>,
         hours: Option<u64>,
-    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::backend::PinRecord, ferry_ipc::backend::OpError>>
-    {
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinRecord, ferry_ipc::backend::OpError>,
+    > {
         self.fake.start_pin(paths, hours)
     }
     fn stop_pin(
@@ -517,12 +524,15 @@ async fn register_initialized_folder_success_emits_typed_folder_registered_event
 
     let success_message = format!("Folder added: {}", target_path.display());
     let reached = wait_for_status_banner(&mut app, &success_message).await;
-    assert!(reached, "successful registration must show Folder added banner");
-    assert_eq!(
-        app.status_message.as_ref().unwrap().2,
-        colors::FERRY_GREEN
+    assert!(
+        reached,
+        "successful registration must show Folder added banner"
     );
-    assert!(app.activity_log.iter().any(|entry| entry.category == "Folder"
-        && entry.message == success_message
-        && entry.color == colors::FERRY_GREEN));
+    assert_eq!(app.status_message.as_ref().unwrap().2, colors::FERRY_GREEN);
+    assert!(app
+        .activity_log
+        .iter()
+        .any(|entry| entry.category == "Folder"
+            && entry.message == success_message
+            && entry.color == colors::FERRY_GREEN));
 }

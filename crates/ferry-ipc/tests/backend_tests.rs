@@ -232,4 +232,3 @@ async fn test_auto_backend_with_custom_fallback() {
     let status = auto.get_status().await.expect("fake backend status");
     assert_eq!(status.folder, "/test/folder");
 }
-

@@ -798,12 +798,14 @@ async fn api_events(
                         })
                         .to_string(),
                     ),
-                    UiEvent::FolderRegistered { path } => Event::default().event("folder_registered").data(
-                        json!({
-                            "path": path,
-                        })
-                        .to_string(),
-                    ),
+                    UiEvent::FolderRegistered { path } => {
+                        Event::default().event("folder_registered").data(
+                            json!({
+                                "path": path,
+                            })
+                            .to_string(),
+                        )
+                    }
                     UiEvent::Error { code, message } => Event::default().event("error").data(
                         json!({
                             "code": code,

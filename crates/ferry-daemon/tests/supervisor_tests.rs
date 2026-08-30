@@ -462,14 +462,9 @@ async fn folder_engine_direct_lifecycle_and_state_broadcast() {
         std::sync::Arc::new(ferry_sync::TcpTransport);
     let options = ferry_daemon::supervisor::EngineSpawnOptions::default();
 
-    let mut engine = ferry_daemon::FolderEngine::start(
-        dir.path(),
-        &identity,
-        transport,
-        options,
-        tx,
-    )
-    .expect("start folder engine");
+    let mut engine =
+        ferry_daemon::FolderEngine::start(dir.path(), &identity, transport, options, tx)
+            .expect("start folder engine");
 
     assert_eq!(engine.restart_count(), 0);
     assert!(engine.is_healthy());
@@ -477,8 +472,9 @@ async fn folder_engine_direct_lifecycle_and_state_broadcast() {
     // Wait for direct UiEvent broadcast delivery without any full daemon harness
     let mut got_state_changed = false;
     for _ in 0..50 {
-        if let Ok(ferry_ipc::backend::UiEvent::StateChanged { state, manifest_id, .. }) =
-            rx.try_recv()
+        if let Ok(ferry_ipc::backend::UiEvent::StateChanged {
+            state, manifest_id, ..
+        }) = rx.try_recv()
         {
             if !manifest_id.is_empty() {
                 assert_eq!(state, "idle");
@@ -488,7 +484,10 @@ async fn folder_engine_direct_lifecycle_and_state_broadcast() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(got_state_changed, "FolderEngine should stream StateChanged event directly to broadcast");
+    assert!(
+        got_state_changed,
+        "FolderEngine should stream StateChanged event directly to broadcast"
+    );
 
     let snap = engine.snapshot();
     assert!(snap.manifest_id.is_some());
@@ -506,14 +505,9 @@ async fn folder_engine_crash_recovery_and_backoff_escalation() {
         std::sync::Arc::new(ferry_sync::TcpTransport);
     let options = ferry_daemon::supervisor::EngineSpawnOptions::default();
 
-    let mut engine = ferry_daemon::FolderEngine::start(
-        dir.path(),
-        &identity,
-        transport,
-        options,
-        tx,
-    )
-    .expect("start folder engine");
+    let mut engine =
+        ferry_daemon::FolderEngine::start(dir.path(), &identity, transport, options, tx)
+            .expect("start folder engine");
 
     let handle_before = std::sync::Arc::clone(engine.handle());
 
@@ -552,4 +546,3 @@ async fn folder_engine_crash_recovery_and_backoff_escalation() {
 
     engine.shutdown();
 }
-

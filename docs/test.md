@@ -1,13 +1,13 @@
 ui:
 
-  Run the complete automated Dual-Device Ferry Test Suite (P2P Sync, Interactive TUI, and Web UI) across this Mac and the Arch Linux laptop (`sharzilx`) inside Herdr.
+  Run the complete automated Dual-Device Ferry Test Suite (P2P Sync, Interactive TUI, and Web UI) across two test machines inside Herdr.
 
     ### Environment & System Topology
-    - **Mac Host (Local)**: `/Users/sharzilnafis/Projects/dumps/idea2` (IP: `100.91.38.24`)
-    - **Arch Linux Host (Remote)**: `sharzil@sharzilx` (IP: `100.122.159.26`)
+    - **Host A (Local)**: `<LOCAL_REPO_PATH>` (IP: `<DEVICE_A_IP>`)
+    - **Host B (Remote)**: `<USER>@<DEVICE_B_HOST>` (IP: `<DEVICE_B_IP>`)
     - **Ferry Binaries**:
-      - Mac: `target/release/ferry`
-      - Arch: `~/.cargo/bin/ferry`
+      - Host A: `target/release/ferry`
+      - Host B: `~/.cargo/bin/ferry`
     - **Herdr Environment**: `HERDR_ENV=1`
 
     ---
@@ -35,13 +35,10 @@ ui:
 
 
 cli:
-
-Run the automated dual-device Ferry end-to-end regression test suite between this Mac and the Arch Linux laptop (`sharzilx`) inside Herdr.
-
     ### Environment & Pre-requisites
-    - **Mac Repo**: `/Users/sharzilnafis/Projects/dumps/idea2`
-    - **Mac Binary**: `target/release/ferry` (IP: `100.91.38.24`)
-    - **Arch Laptop**: `sharzil@sharzilx` (IP: `100.122.159.26`, Binary: `~/.cargo/bin/ferry`)
+    - **Host A Repo**: `<LOCAL_REPO_PATH>`
+    - **Host A Binary**: `target/release/ferry` (IP: `<DEVICE_A_IP>`)
+    - **Host B Laptop**: `<USER>@<DEVICE_B_HOST>` (IP: `<DEVICE_B_IP>`, Binary: `~/.cargo/bin/ferry`)
     - **Herdr Multiplexer**: `HERDR_ENV=1`
 
     ### Execution Task

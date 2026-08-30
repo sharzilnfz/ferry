@@ -809,7 +809,9 @@ fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
         let root_str = root.to_str()?;
         let clean_root = root_str.strip_prefix("/private").unwrap_or(root_str);
         let clean_p = p_str.strip_prefix("/private").unwrap_or(p_str);
-        clean_p.strip_prefix(clean_root).map(|rest| Path::new(rest.trim_start_matches('/')))
+        clean_p
+            .strip_prefix(clean_root)
+            .map(|rest| Path::new(rest.trim_start_matches('/')))
     })?;
     let mut rel = Vec::with_capacity(stripped.as_os_str().len());
     for c in stripped.components() {

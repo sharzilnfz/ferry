@@ -54,6 +54,9 @@ jobs:
       - name: Adversarial fixture
         run: bash scripts/adversarial-fixture.sh
 
+      - name: Quickstart E2E
+        run: bash scripts/quickstart-e2e.sh
+
   # Non-blocking until the remaining unix-assumption test failures are
   # worked off (see probe/win-tui-diag). Flip continue-on-error off once
   # two consecutive windows runs are green. Kept as a separate job because

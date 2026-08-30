@@ -826,8 +826,6 @@ impl SessionDomain for AutoBackend {
     }
 }
 
-
-
 /// Direct backend adapter wrapping cached in-memory daemon state (`Arc<UiState>`).
 pub struct DirectBackend {
     state: Arc<UiState>,

@@ -294,7 +294,10 @@ fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolic
 
 /// Resolves ignore rules from the tree directory's settings and rule files,
 /// falling back to built-in default ignore policies.
-fn resolve_ignore_policy_from_disk(cfg: &EngineConfig, store: &Store) -> Arc<dyn ferry_scan::IgnorePolicy> {
+fn resolve_ignore_policy_from_disk(
+    cfg: &EngineConfig,
+    store: &Store,
+) -> Arc<dyn ferry_scan::IgnorePolicy> {
     let candidates = [
         cfg.tree_dir.join(".ferry").join("settings.json"),
         store.store_dir().join("settings.json"),
@@ -305,7 +308,9 @@ fn resolve_ignore_policy_from_disk(cfg: &EngineConfig, store: &Store) -> Arc<dyn
     for path in &candidates {
         if path.is_file() {
             if let Ok(content) = std::fs::read_to_string(path) {
-                if let Ok(settings) = serde_json::from_str::<ferry_folder::folder::Settings>(&content) {
+                if let Ok(settings) =
+                    serde_json::from_str::<ferry_folder::folder::Settings>(&content)
+                {
                     ignore_config = settings.ignore_config();
                     break;
                 }
@@ -891,7 +896,7 @@ impl Ctx {
         Ok(())
     }
 
-    /// Handle a completed scan update from ScanEngine.
+    /// Handle a completed scan update from `ScanEngine`.
     fn handle_scan_update(&self, cur: &CurrentScan) {
         let manifest_bytes = serialize_manifest(&cur.manifest);
         let data = Arc::new(SnapshotData {
@@ -1307,13 +1312,8 @@ impl SyncEngine {
             device_id: *device.device_id(),
         };
         let scan_engine = Arc::new(
-            ScanEngine::watch_with(
-                &self.cfg.tree_dir,
-                scan_handle,
-                scan_cfg,
-                ignore_policy,
-            )
-            .expect("start scan engine"),
+            ScanEngine::watch_with(&self.cfg.tree_dir, scan_handle, scan_cfg, ignore_policy)
+                .expect("start scan engine"),
         );
         if let Some(agreed_id) = folder.agreed_id() {
             scan_engine.set_parent_manifest_id(agreed_id);
@@ -1464,12 +1464,11 @@ fn accept_loop(
     }
 }
 
-fn sync_loop(
-    ctx: Arc<Ctx>,
-    shared: Arc<SharedState>,
-    rx: std::sync::mpsc::Receiver<ScanEvent>,
-) {
-    let backstop_interval = ctx.cfg.poll_interval.saturating_mul(ctx.cfg.opportunistic_every);
+fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Receiver<ScanEvent>) {
+    let backstop_interval = ctx
+        .cfg
+        .poll_interval
+        .saturating_mul(ctx.cfg.opportunistic_every);
     let mut last_backstop = Instant::now();
 
     while !shared.shutting_down() {
@@ -1559,7 +1558,7 @@ impl EngineHandle {
     }
 
     /// Block the caller until the folder state changes or `timeout` elapses.
-    /// Used by FolderEngine's push-based watcher to avoid 50ms polling.
+    /// Used by `FolderEngine`'s push-based watcher to avoid 50ms polling.
     pub fn wait_for_change(&self, timeout: Duration) -> bool {
         self.folder.wait_for_change(timeout)
     }
@@ -1937,7 +1936,9 @@ mod tests {
         folder.update_from_scan(own, stats_own);
 
         // Initial snapshot
-        let before = folder.wait_current(Instant::now() + Duration::from_secs(1)).unwrap();
+        let before = folder
+            .wait_current(Instant::now() + Duration::from_secs(1))
+            .unwrap();
         assert_eq!(before.manifest.root_tree_id, [1; 32]);
 
         // Adopt + agree while no reader holds the lock.
@@ -1946,7 +1947,9 @@ mod tests {
         folder.record_agreed(peer_snap.manifest.clone(), peer_snap.manifest_id);
 
         // Snapshot after adoption: fully-new pair.
-        let after = folder.wait_current(Instant::now() + Duration::from_secs(1)).unwrap();
+        let after = folder
+            .wait_current(Instant::now() + Duration::from_secs(1))
+            .unwrap();
         assert_eq!(after.manifest_id, peer_snap.manifest_id);
         assert_eq!(after.manifest.root_tree_id, [2; 32]);
 

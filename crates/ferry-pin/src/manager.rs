@@ -311,14 +311,7 @@ impl PinManager {
 
         let peers = self.held_peers()?;
         for peer_hex in peers {
-            let plan = self.release_peer(
-                &peer_hex,
-                store,
-                root,
-                local_manifest,
-                None,
-                now,
-            )?;
+            let plan = self.release_peer(&peer_hex, store, root, local_manifest, None, now)?;
             if plan.held_entries == 0 {
                 continue;
             }

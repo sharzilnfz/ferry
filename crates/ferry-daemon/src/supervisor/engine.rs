@@ -97,10 +97,7 @@ impl FolderEngine {
             }
         })?;
         let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
-        let tag = format!(
-            "ferry-{}",
-            &folder_id_hex[..8.min(folder_id_hex.len())]
-        );
+        let tag = format!("ferry-{}", &folder_id_hex[..8.min(folder_id_hex.len())]);
 
         let opportunistic_every = options.opportunistic_every.unwrap_or(50);
         let poll_interval = options
@@ -180,7 +177,9 @@ impl FolderEngine {
             self.watcher_task = task;
         }
 
-        if !self.handle.is_healthy() {
+        if self.handle.is_healthy() {
+            false
+        } else {
             let backoff_ms = 100u64.saturating_mul(1u64 << self.restart_count.min(5));
             self.stop_watcher();
             self.handle.shutdown();
@@ -217,8 +216,6 @@ impl FolderEngine {
                     false
                 }
             }
-        } else {
-            false
         }
     }
 

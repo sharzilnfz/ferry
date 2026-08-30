@@ -919,7 +919,9 @@ impl InventoryDomain for AutoBackend {
                                 .map_err(OpError::from)
                         })
                         .await
-                        .map_err(|e| OpError::new("internal", e.to_string(), "list worker failed"))?
+                        .map_err(|e| {
+                            OpError::new("internal", e.to_string(), "list worker failed")
+                        })?
                     }
                 }
                 Err(e) => Err(e),
@@ -1083,7 +1085,10 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.pair_accept(code_or_payload.clone(), dir.clone()).await {
+            match client
+                .pair_accept(code_or_payload.clone(), dir.clone())
+                .await
+            {
                 Ok(res) => Ok(res),
                 Err(e) if e.is_transport() || e.code == "not-supported" => {
                     if let Some(fb) = fallback {
@@ -1139,4 +1144,3 @@ impl SessionDomain for AutoBackend {
         })
     }
 }
-

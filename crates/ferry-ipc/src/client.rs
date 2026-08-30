@@ -760,7 +760,10 @@ impl SessionDomain for DaemonClient {
     ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
         let client = self.clone();
         Box::pin(async move {
-            match client.call(ClientCommand::CreatePairingSession { req }).await? {
+            match client
+                .call(ClientCommand::CreatePairingSession { req })
+                .await?
+            {
                 DaemonMessage::PairingCreated { response } => Ok(response),
                 DaemonMessage::Error { code, message } => {
                     Err(OpError::new(code, message, "check daemon"))
@@ -776,7 +779,10 @@ impl SessionDomain for DaemonClient {
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let client = self.clone();
         Box::pin(async move {
-            match client.call(ClientCommand::JoinPairingSession { req }).await? {
+            match client
+                .call(ClientCommand::JoinPairingSession { req })
+                .await?
+            {
                 DaemonMessage::PairingJoined { result } => Ok(result),
                 DaemonMessage::Error { code, message } => {
                     Err(OpError::new(code, message, "check daemon"))
@@ -786,4 +792,3 @@ impl SessionDomain for DaemonClient {
         })
     }
 }
-

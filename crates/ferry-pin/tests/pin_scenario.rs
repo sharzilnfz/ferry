@@ -21,9 +21,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use ferry_pin::{
-    hold_matcher, release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION,
-};
+use ferry_pin::{hold_matcher, release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};

@@ -90,7 +90,6 @@ impl ApplyStats {
     }
 }
 
-
 /// What one apply actually did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApplyOutcome {

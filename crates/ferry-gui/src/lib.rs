@@ -59,4 +59,3 @@ pub fn run_gui_auto(
     let backend = Arc::new(connect_auto(socket_path, folder_path));
     run_gui(backend, rt_handle)
 }
-

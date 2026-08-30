@@ -41,13 +41,7 @@ fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
     .unwrap();
 }
 
-fn snap(
-    store: &Store,
-    tree: &Path,
-    dev: [u8; 32],
-    parent: [u8; 32],
-    clock: i64,
-) -> SnapshotOutput {
+fn snap(store: &Store, tree: &Path, dev: [u8; 32], parent: [u8; 32], clock: i64) -> SnapshotOutput {
     let idn = SnapshotIdentity {
         folder_id: FOLDER,
         device_id: dev,
@@ -176,7 +170,9 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     transfer_meta(&b_store, &a_store, &sb_edit);
 
     let remote_manifest = parse_manifest(
-        &a_store.get(BlobKind::Manifest, &sb_edit.manifest_id).unwrap(),
+        &a_store
+            .get(BlobKind::Manifest, &sb_edit.manifest_id)
+            .unwrap(),
     )
     .unwrap();
 
@@ -192,9 +188,19 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         .converge(&sa_edit.manifest, &remote_manifest, Some(&sa_base.manifest))
         .unwrap();
 
-    assert_eq!(result.held.len(), 3, "src, src/lib.rs, and src/main.rs are held");
-    assert_eq!(std::fs::read(a_tree.join("docs/readme.md")).unwrap(), b"v1-b-doc");
-    assert_eq!(std::fs::read(a_tree.join("src/lib.rs")).unwrap(), b"v1-a-lib");
+    assert_eq!(
+        result.held.len(),
+        3,
+        "src, src/lib.rs, and src/main.rs are held"
+    );
+    assert_eq!(
+        std::fs::read(a_tree.join("docs/readme.md")).unwrap(),
+        b"v1-b-doc"
+    );
+    assert_eq!(
+        std::fs::read(a_tree.join("src/lib.rs")).unwrap(),
+        b"v1-a-lib"
+    );
 
     // 5. SIMULATE DAEMON CRASH (flush store to disk and drop everything in memory)
     a_store.flush().unwrap();
@@ -211,7 +217,11 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     assert_eq!(summary.total_held_paths, 3);
     assert_eq!(
         summary.held_by_peer.get(&hex(&DEV_B)).unwrap(),
-        &vec!["src".to_string(), "src/lib.rs".to_string(), "src/main.rs".to_string()]
+        &vec![
+            "src".to_string(),
+            "src/lib.rs".to_string(),
+            "src/main.rs".to_string()
+        ]
     );
 
     let loaded_entries = pin_mgr_restarted.load_held_peer(&hex(&DEV_B)).unwrap();
@@ -227,7 +237,13 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     let a_store_restarted = Store::open(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
     let pin_mgr_final = PinManager::new(&a_state);
 
-    let sa_prescan = snap(&a_store_restarted, &a_tree, DEV_A, sa_edit.manifest_id, 3500);
+    let sa_prescan = snap(
+        &a_store_restarted,
+        &a_tree,
+        DEV_A,
+        sa_edit.manifest_id,
+        3500,
+    );
 
     let release_summary = pin_mgr_final
         .release(&a_store_restarted, &a_tree, &sa_prescan.manifest, NOW)
@@ -244,8 +260,14 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     // Winners are live:
     // lib.rs: A (3000) > B (2900) -> A wins
     // main.rs: B (3000) > A (2500) -> B wins
-    assert_eq!(std::fs::read(a_tree.join("src/lib.rs")).unwrap(), b"v1-a-lib");
-    assert_eq!(std::fs::read(a_tree.join("src/main.rs")).unwrap(), b"v1-b-main");
+    assert_eq!(
+        std::fs::read(a_tree.join("src/lib.rs")).unwrap(),
+        b"v1-a-lib"
+    );
+    assert_eq!(
+        std::fs::read(a_tree.join("src/main.rs")).unwrap(),
+        b"v1-b-main"
+    );
 
     // Losers quarantined:
     let conflicts = list_conflicts(&a_state).unwrap();

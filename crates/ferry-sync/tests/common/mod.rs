@@ -180,8 +180,9 @@ impl EngineFixture {
         store_b.flush().unwrap();
         store_b.write_index_snapshot().unwrap();
 
-        let mut engine_a = SyncEngine::with_store(cfg_a.clone(), default_transport(), Arc::new(store_a))
-            .expect("engine A");
+        let mut engine_a =
+            SyncEngine::with_store(cfg_a.clone(), default_transport(), Arc::new(store_a))
+                .expect("engine A");
         let rules_a = if let Ok(s) = ferry_folder::folder::load_settings(&cfg_a.tree_dir) {
             ferry_folder::folder::load_rules(&cfg_a.tree_dir, &s).ok()
         } else if let Ok(s) = ferry_folder::folder::load_settings(&cfg_a.store_dir) {
@@ -204,7 +205,8 @@ impl EngineFixture {
 
         cfg_b.connect_to = Some(addr);
         let tb = transport_b.unwrap_or_else(default_transport);
-        let mut engine_b = SyncEngine::with_store(cfg_b.clone(), tb, Arc::new(store_b)).expect("engine B");
+        let mut engine_b =
+            SyncEngine::with_store(cfg_b.clone(), tb, Arc::new(store_b)).expect("engine B");
         let rules_b = if let Ok(s) = ferry_folder::folder::load_settings(&cfg_b.tree_dir) {
             ferry_folder::folder::load_rules(&cfg_b.tree_dir, &s).ok()
         } else if let Ok(s) = ferry_folder::folder::load_settings(&cfg_b.store_dir) {

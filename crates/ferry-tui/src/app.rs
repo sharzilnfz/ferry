@@ -184,10 +184,9 @@ impl TuiApp {
                 .state
                 .apply_conflict_recorded(path, conflict_path, timestamp, quarantined_as),
             UiEvent::FolderRegistered { path } => {
-                self.state.activity_log.push_info(
-                    current_time_str(),
-                    format!("Folder registered: {path}"),
-                );
+                self.state
+                    .activity_log
+                    .push_info(current_time_str(), format!("Folder registered: {path}"));
             }
             UiEvent::Error { code, message } => self.state.apply_error(code, message),
         }
@@ -257,10 +256,7 @@ impl TuiApp {
                             if let Some(p) = self.picker.as_mut() {
                                 p.hint = Some(msg.clone());
                             }
-                            self.state.activity_log.push_warn(
-                                current_time_str(),
-                                msg,
-                            );
+                            self.state.activity_log.push_warn(current_time_str(), msg);
                         }
                         PickerSelectResult::Selected(_) => {
                             self.state.activity_log.push_info(

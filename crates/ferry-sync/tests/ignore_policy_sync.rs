@@ -1,4 +1,4 @@
-//! Integration tests verifying that compiled FerryIgnore rules are bound
+//! Integration tests verifying that compiled `FerryIgnore` rules are bound
 //! authoritatively at the scan seam during sync, so that ignored files
 //! are excluded from generated manifests and never synchronized over the wire.
 
@@ -57,9 +57,17 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
 
     // Default ignored files: .env, .env.*, node_modules/, .DS_Store, *.swp, *~
     fs::write(tree_a.join(".env"), b"SECRET_KEY=12345\n").unwrap();
-    fs::write(tree_a.join(".env.production"), b"DATABASE_URL=postgres://\n").unwrap();
+    fs::write(
+        tree_a.join(".env.production"),
+        b"DATABASE_URL=postgres://\n",
+    )
+    .unwrap();
     fs::create_dir_all(tree_a.join("node_modules/pkg")).unwrap();
-    fs::write(tree_a.join("node_modules/pkg/index.js"), b"module.exports = {};\n").unwrap();
+    fs::write(
+        tree_a.join("node_modules/pkg/index.js"),
+        b"module.exports = {};\n",
+    )
+    .unwrap();
     fs::write(tree_a.join(".DS_Store"), b"\0\0\0\x01").unwrap();
     fs::write(tree_a.join("file.swp"), b"swap content\n").unwrap();
     fs::write(tree_a.join("backup~"), b"backup content\n").unwrap();
@@ -75,7 +83,8 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
             fx.a.stats(),
             fx.b.stats()
         );
-        let got_allowed = tree_b.join("allowed.txt").is_file() && tree_b.join("src/main.rs").is_file();
+        let got_allowed =
+            tree_b.join("allowed.txt").is_file() && tree_b.join("src/main.rs").is_file();
         if let (Some(a), Some(b)) = (fx.a.agreed_id(), fx.b.agreed_id()) {
             if a == b && a != [0u8; 32] && got_allowed && fx.converged() {
                 break a;
@@ -96,9 +105,18 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
 
     // Verify ignored files are absent on B
     assert!(!tree_b.join(".env").exists(), ".env must not sync");
-    assert!(!tree_b.join(".env.production").exists(), ".env.production must not sync");
-    assert!(!tree_b.join("node_modules").exists(), "node_modules/ must not sync");
-    assert!(!tree_b.join(".DS_Store").exists(), ".DS_Store must not sync");
+    assert!(
+        !tree_b.join(".env.production").exists(),
+        ".env.production must not sync"
+    );
+    assert!(
+        !tree_b.join("node_modules").exists(),
+        "node_modules/ must not sync"
+    );
+    assert!(
+        !tree_b.join(".DS_Store").exists(),
+        ".DS_Store must not sync"
+    );
     assert!(!tree_b.join("file.swp").exists(), "*.swp must not sync");
     assert!(!tree_b.join("backup~").exists(), "*~ must not sync");
 
@@ -110,9 +128,20 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
             let man = parse_manifest(&bytes).expect("parse agreed manifest");
             let all_paths = extract_all_paths(&store, &man);
             for p in &all_paths {
-                assert!(!p.starts_with(".env"), "manifest contained ignored path: {p}");
-                assert!(!p.starts_with("node_modules"), "manifest contained ignored path: {p}");
-                assert!(!p.ends_with(".swp"), "manifest contained ignored path: {p}");
+                assert!(
+                    !p.starts_with(".env"),
+                    "manifest contained ignored path: {p}"
+                );
+                assert!(
+                    !p.starts_with("node_modules"),
+                    "manifest contained ignored path: {p}"
+                );
+                assert!(
+                    !std::path::Path::new(p)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("swp")),
+                    "manifest contained ignored path: {p}"
+                );
                 assert!(!p.ends_with('~'), "manifest contained ignored path: {p}");
                 assert_ne!(p, ".DS_Store", "manifest contained .DS_Store");
             }
@@ -206,7 +235,8 @@ fn settings_presets_and_overrides_are_respected() {
             fx.a.stats(),
             fx.b.stats()
         );
-        let got_claude = tree_b.join("CLAUDE.md").is_file() && tree_b.join("skills/skill.md").is_file();
+        let got_claude =
+            tree_b.join("CLAUDE.md").is_file() && tree_b.join("skills/skill.md").is_file();
         if let (Some(a), Some(b)) = (fx.a.agreed_id(), fx.b.agreed_id()) {
             if a == b && a != [0u8; 32] && got_claude && fx.converged() {
                 break a;
@@ -217,9 +247,18 @@ fn settings_presets_and_overrides_are_respected() {
 
     assert!(tree_b.join("CLAUDE.md").is_file());
     assert!(tree_b.join("skills/skill.md").is_file());
-    assert!(!tree_b.join("telemetry").exists(), "telemetry/ must not sync");
-    assert!(!tree_b.join("output.log").exists(), "*.log must not sync under claude preset");
-    assert!(!tree_b.join("custom_build").exists(), "custom_build/ must not sync");
+    assert!(
+        !tree_b.join("telemetry").exists(),
+        "telemetry/ must not sync"
+    );
+    assert!(
+        !tree_b.join("output.log").exists(),
+        "*.log must not sync under claude preset"
+    );
+    assert!(
+        !tree_b.join("custom_build").exists(),
+        "custom_build/ must not sync"
+    );
     assert!(!tree_b.join("temp.cache").exists(), "*.cache must not sync");
 }
 

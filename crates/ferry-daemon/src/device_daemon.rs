@@ -194,12 +194,13 @@ pub fn run_adhoc(
             poll_interval: Some(Duration::from_millis(200)),
         };
 
-        let supervised = supervisor.spawn_engine(p, options).map_err(|e| {
-            DeviceDaemonError::Spawn {
-                code: e.code,
-                message: e.message,
-            }
-        })?;
+        let supervised =
+            supervisor
+                .spawn_engine(p, options)
+                .map_err(|e| DeviceDaemonError::Spawn {
+                    code: e.code,
+                    message: e.message,
+                })?;
 
         if let Some(addr) = supervised.handle.listen_addr() {
             println!("LISTENING {addr}");
@@ -218,8 +219,8 @@ pub fn run_adhoc(
 
         #[allow(deprecated)]
         let socket_path = ferry_ipc::paths::socket_path_for_dir(&supervised.record.path);
-        let ipc_handle =
-            crate::ipc::spawn_ipc_server(socket_path, Arc::clone(&daemon_state)).map_err(|e| {
+        let ipc_handle = crate::ipc::spawn_ipc_server(socket_path, Arc::clone(&daemon_state))
+            .map_err(|e| {
                 DeviceDaemonError::Ipc(format!(
                     "cannot bind IPC server for {}: {e}",
                     supervised.record.path.display()
