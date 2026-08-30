@@ -7,7 +7,7 @@ use std::time::Duration;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
-use ferry_daemon::ui::backend::{AutoBackend, InProcessAdapter};
+use ferry_daemon::ui::backend::AutoBackend;
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::backend::{SessionDomain, StatusDomain};
 use ferry_ipc::client::DaemonClient;

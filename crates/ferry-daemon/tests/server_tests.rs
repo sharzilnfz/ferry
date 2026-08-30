@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferry_daemon::ui::server::{generate_token, DashboardServer};
-use ferry_daemon::ui::{AutoBackend, InProcessAdapter};
+use ferry_daemon::ui::AutoBackend;
 use ferry_ipc::backend::FakeBackend;
 use ferry_ipc::protocol::{ConflictEntry, DeviceStamp};
 use serde_json::Value;

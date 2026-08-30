@@ -1250,12 +1250,28 @@ impl SyncEngine {
             folder_id: self.cfg.folder_id,
             device_id: *device.device_id(),
         };
+        let ignore_policy: Arc<dyn ferry_scan::IgnorePolicy> = {
+            let settings_path = self.cfg.store_dir.join(".ferry").join("settings.json");
+            let ignore_cfg = if let Ok(content) = std::fs::read_to_string(&settings_path) {
+                if let Ok(settings) = serde_json::from_str::<ferry_folder::folder::Settings>(&content) {
+                    settings.ignore_config()
+                } else {
+                    ferry_ignore::IgnoreConfig::default()
+                }
+            } else {
+                ferry_ignore::IgnoreConfig::default()
+            };
+            match ferry_ignore::FerryIgnore::new(&self.cfg.tree_dir, &ignore_cfg) {
+                Ok(rules) => Arc::new(rules),
+                Err(_) => Arc::new(ferry_scan::NoIgnores),
+            }
+        };
         let scan_engine = Arc::new(
             ScanEngine::watch_with(
                 &self.cfg.tree_dir,
                 scan_handle,
                 scan_cfg,
-                Arc::new(ferry_scan::NoIgnores),
+                ignore_policy,
             )
             .expect("start scan engine"),
         );
