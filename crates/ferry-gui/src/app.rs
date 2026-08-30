@@ -325,6 +325,21 @@ impl GuiApp {
         }
     }
 
+    /// Construct a fully wired `GuiApp` using automated backend connection.
+    #[must_use]
+    pub fn new_auto(
+        socket_path: impl Into<std::path::PathBuf>,
+        folder_path: impl Into<Option<std::path::PathBuf>>,
+        ctx: egui::Context,
+        rt_handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self::new(
+            Arc::new(ferry_ipc::backend::connect_auto(socket_path, folder_path)),
+            ctx,
+            rt_handle,
+        )
+    }
+
     /// Dispatch a user action to the asynchronous worker.
     pub fn dispatch(&self, action: BackendAction) {
         if let Some(ref tx) = self.action_tx {

@@ -27,10 +27,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 use crate::backend::{
-    BoxFuture, InventoryDomain, OpError, StatusDomain, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
+    BoxFuture, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary,
+    SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiEvent, UiEventStream,
+    DAEMON_UNREACHABLE,
 };
 use crate::error::IpcError;
 use crate::framing::{IpcReceiver, IpcSender};
+use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{ClientCommand, ConflictEntry, DaemonMessage, EngineSnapshot};
 use crate::{validate_path, FolderRecord, ListDirectoryResponse};
 
@@ -632,3 +635,151 @@ impl InventoryDomain for DaemonClient {
         })
     }
 }
+
+impl SessionDomain for DaemonClient {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client
+                .call(ClientCommand::StartPin {
+                    paths: paths.clone(),
+                    duration_hours: hours,
+                })
+                .await?
+            {
+                DaemonMessage::Ack { command, message } => Ok(PinRecord {
+                    folder: String::new(),
+                    paths,
+                    status: command,
+                    expires_at: None,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "stop existing pin"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::ReleasePin).await? {
+                DaemonMessage::Ack { command, message } => Ok(PinStopSummary {
+                    folder: String::new(),
+                    status: command,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn release_pin(&self) -> BoxFuture<'_, Result<PinReleaseSummary, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::ReleasePin).await? {
+                DaemonMessage::Ack { command, message } => Ok(PinReleaseSummary {
+                    folder: String::new(),
+                    released_changes: 0,
+                    status: command,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        _i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+        let dir = folder.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "share_initiate for {} requires in-process or daemon ritual",
+                    dir.display()
+                ),
+                "use AutoBackend with fallback or run ferry share",
+            ))
+        })
+    }
+
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
+        let dir = folder.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Ok(ShareStatus {
+                folder: dir.display().to_string(),
+                status: "none".to_string(),
+                active: false,
+                peer_device_id: None,
+                offer: None,
+            })
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let folder = dir.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "pair_accept {code_or_payload} for {} requires in-process ritual",
+                    folder.display()
+                ),
+                "use AutoBackend with fallback or run ferry pair",
+            ))
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::CreatePairingSession { req }).await? {
+                DaemonMessage::PairingCreated { response } => Ok(response),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::JoinPairingSession { req }).await? {
+                DaemonMessage::PairingJoined { result } => Ok(result),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+}
+

@@ -309,7 +309,7 @@ fn test_cli_ignore_external_folder_targeting() {
 #[test]
 #[allow(deprecated)]
 fn test_ui_events_and_token_auth_flow() {
-    use ferry_daemon::ui::backend::IpcBackend;
+    use ferry_ipc::backend::connect_auto;
     use ferry_daemon::ui::server::{generate_token, DashboardServer};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -321,7 +321,7 @@ fn test_ui_events_and_token_auth_flow() {
 
     let token = generate_token();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&proj);
-    let backend = Arc::new(IpcBackend::new(socket_path).with_fallback(proj.clone()));
+    let backend = Arc::new(connect_auto(socket_path, proj.clone()));
     let server = DashboardServer::new(backend).with_token(token.clone());
 
     let rt = tokio::runtime::Builder::new_current_thread()

@@ -22,8 +22,8 @@ use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
 pub use backend::{
-    snapshot_to_status_doc, AutoBackend, BoxFuture, DaemonIpcAdapter, DashboardBackend,
-    DirectBackend, InProcessAdapter, IpcBackend,
+    snapshot_to_status_doc, AutoBackend, BoxFuture, DashboardBackend, DirectBackend,
+    InProcessAdapter, IpcBackend,
 };
 #[cfg(feature = "web-ui")]
 pub use error::{status_for_code, ApiError, OpError};
