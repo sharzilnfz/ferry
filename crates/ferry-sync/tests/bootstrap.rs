@@ -31,7 +31,10 @@ fn empty_peer_hydrates_whole_tree_from_scratch() {
             fx.a.stats(),
             fx.b.stats()
         );
-        if fx.converged() && common::trees_identical(&fx.tree_a(), &fx.tree_b()) {
+        if fx.converged()
+            && count_files(&fx.tree_b()) == 27
+            && common::trees_identical(&fx.tree_a(), &fx.tree_b())
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
