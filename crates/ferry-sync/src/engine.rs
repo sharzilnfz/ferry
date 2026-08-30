@@ -1408,14 +1408,17 @@ impl SyncEngine {
             dial_backoff: Mutex::new((0, None)),
         });
 
+        // Session handlers join through `joins`; the long-lived accept and
+        // poll loops join through `loops`, whose liveness is engine health.
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+        let loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
         if let Some(ref listener) = listener {
             let listener = Arc::clone(listener);
             let ctx2 = Arc::clone(&ctx);
             let shared2 = Arc::clone(&shared);
             let joins2 = Arc::clone(&joins);
-            joins.lock().unwrap().push(
+            loops.lock().unwrap().push(
                 std::thread::Builder::new()
                     .name(format!("{}-accept", self.cfg.tag))
                     .spawn(move || accept_loop(listener, ctx2, shared2, joins2))
@@ -1426,7 +1429,7 @@ impl SyncEngine {
         {
             let ctx = Arc::clone(&ctx);
             let shared = Arc::clone(&shared);
-            joins.lock().unwrap().push(
+            loops.lock().unwrap().push(
                 std::thread::Builder::new()
                     .name(format!("{}-poll", self.cfg.tag))
                     .spawn(move || poll_loop(ctx, shared))
@@ -1438,6 +1441,7 @@ impl SyncEngine {
             shared,
             folder,
             joins,
+            loops,
             listen_addr,
             listener,
             transport: Arc::clone(&self.transport),
@@ -1550,6 +1554,9 @@ pub struct EngineHandle {
     shared: Arc<SharedState>,
     folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    /// The long-lived accept and poll loops. Their liveness is engine
+    /// health; session handlers live in `joins` and finish routinely.
+    loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     listener: Option<Arc<dyn crate::transport::Listener>>,
     transport: Arc<dyn Transport>,
@@ -1561,6 +1568,12 @@ pub struct EngineHandle {
 impl EngineHandle {
     pub fn tag(&self) -> &str {
         &self.tag
+    }
+
+    /// True while the engine's long-lived loops are all still running.
+    /// False once either loop has died or the engine has been shut down.
+    pub fn is_healthy(&self) -> bool {
+        !self.shared.shutting_down() && self.loops.lock().unwrap().iter().all(|j| !j.is_finished())
     }
 
     pub fn agreed_id(&self) -> Option<BlobId> {
@@ -1635,6 +1648,9 @@ impl EngineHandle {
             let _ = self.transport.dial(addr);
         }
         while let Some(j) = self.joins.lock().unwrap().pop() {
+            let _ = j.join();
+        }
+        while let Some(j) = self.loops.lock().unwrap().pop() {
             let _ = j.join();
         }
         // Handlers counted before spawn (T-07): wait for any that were in
@@ -2250,5 +2266,52 @@ mod tests {
         assert_eq!(handle.peer_connectivity(&peer_dev), "reachable");
 
         handle.shutdown();
+    }
+
+    #[test]
+    fn engine_handle_is_healthy_detects_crash_and_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        let tree_dir = dir.path().join("tree");
+        std::fs::create_dir_all(&tree_dir).unwrap();
+
+        let mut cfg = EngineConfig::default_for_test(54321);
+        cfg.store_dir = store_dir;
+        cfg.tree_dir = tree_dir;
+        cfg.poll_interval = Duration::from_millis(20);
+        cfg.bind_addr = None;
+        cfg.connect_to = None;
+
+        let mut engine = SyncEngine::with_store(
+            cfg,
+            Arc::new(crate::transport::TcpTransport),
+            test_store(&dir.path().join("store"), "t-healthy-crash"),
+        )
+        .unwrap();
+
+        // Inject a snapshot_source that panics on tick to simulate a thread crash
+        engine.set_test_injections(
+            system_clock(),
+            Arc::new(|_store, _poly, _source, _identity| {
+                panic!("simulated scan thread crash");
+            }),
+        );
+        let handle = engine.start();
+
+        // Wait for the poll loop thread to panic and exit
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while handle.is_healthy() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            !handle.is_healthy(),
+            "handle must report unhealthy after thread panics"
+        );
+        handle.shutdown();
+        assert!(
+            !handle.is_healthy(),
+            "handle remains unhealthy after shutdown"
+        );
     }
 }

@@ -9,10 +9,10 @@ asserts on task handles.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A genuinely crashed engine is detected by the tick and restarted with backoff
-- [ ] A crash of one engine does not disturb other supervised engines
-- [ ] The fake sleep-loop task, abort helper, and finished-check helper are deleted
-- [ ] Restart tests assert observable behavior (engine revived, others untouched), never task handles
-- [ ] Existing supervisor tests pass with the fake task removed
+- [x] A genuinely crashed engine is detected by the tick and restarted with backoff
+- [x] A crash of one engine does not disturb other supervised engines
+- [x] The fake sleep-loop task, abort helper, and finished-check helper are deleted
+- [x] Restart tests assert observable behavior (engine revived, others untouched), never task handles
+- [x] Existing supervisor tests pass with the fake task removed

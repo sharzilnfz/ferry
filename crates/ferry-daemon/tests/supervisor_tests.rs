@@ -222,7 +222,7 @@ async fn ipc_dispatch_list_folders_over_loopback() {
 }
 
 #[tokio::test]
-async fn resilience_restart_one_engine_other_unaffected() {
+async fn crashed_engine_restarts_and_other_unaffected() {
     let home = tmp_home();
     let (mut sup, identity) = new_supervisor(&home);
     let dir_a = init_folder(&identity);
@@ -232,58 +232,74 @@ async fn resilience_restart_one_engine_other_unaffected() {
     assert!(sup.wait_for_manifests(Duration::from_secs(5)));
     let handle_a_before = sup.get_engine_handle(&rec_a.folder_id).unwrap();
     let handle_b_before = sup.get_engine_handle(&rec_b.folder_id).unwrap();
-    let ptr_b_before = std::sync::Arc::as_ptr(&handle_b_before) as *const ();
+    let manifest_b_before = handle_b_before.current_manifest_id();
 
-    // abort task for a
-    assert!(sup.abort_task(&rec_a.folder_id));
-    // give abort time to propagate
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(sup.task_is_finished(&rec_a.folder_id), Some(true));
-    // other should still be running
-    assert_eq!(sup.task_is_finished(&rec_b.folder_id), Some(false));
-
-    // tick should restart a
+    handle_a_before.shutdown();
     sup.tick();
-    // allow restart
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(sup.task_is_finished(&rec_a.folder_id), Some(false));
-    // b unaffected
-    assert_eq!(sup.task_is_finished(&rec_b.folder_id), Some(false));
+
     let handle_a_after = sup.get_engine_handle(&rec_a.folder_id).unwrap();
     let handle_b_after = sup.get_engine_handle(&rec_b.folder_id).unwrap();
-    let ptr_b_after = std::sync::Arc::as_ptr(&handle_b_after) as *const ();
-    assert_eq!(
-        ptr_b_before, ptr_b_after,
-        "other engine handle should be same Arc"
-    );
-    // a's handle should be new (different Arc)
     assert_ne!(
         std::sync::Arc::as_ptr(&handle_a_before) as *const (),
-        std::sync::Arc::as_ptr(&handle_a_after) as *const ()
+        std::sync::Arc::as_ptr(&handle_a_after) as *const (),
+        "crashed engine should be running on a fresh handle"
     );
-    // broadcast should contain engine-crashed
+    assert!(
+        std::sync::Arc::ptr_eq(&handle_b_before, &handle_b_after),
+        "other engine handle should be the same Arc"
+    );
+    assert!(handle_b_after.is_healthy(), "other engine still healthy");
+    assert_eq!(
+        handle_b_after.current_manifest_id(),
+        manifest_b_before,
+        "other engine untouched"
+    );
+    assert!(sup.wait_for_manifests(Duration::from_secs(5)));
+    assert_eq!(sup.list_folders().len(), 2);
+    sup.shutdown();
+}
+
+#[tokio::test]
+async fn crash_restart_emits_backoff_event_and_escalates() {
+    let home = tmp_home();
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let rec_a = sup.handle_register(dir_a.path().to_path_buf()).unwrap();
+    assert!(sup.wait_for_manifests(Duration::from_secs(5)));
     let mut rx = sup.broadcast_tx().subscribe();
-    // tick already sent, but we subscribed after; trigger another abort/tick to test broadcast
-    sup.abort_task(&rec_a.folder_id);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    sup.get_engine_handle(&rec_a.folder_id).unwrap().shutdown();
     sup.tick();
-    // give broadcast time
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    // there may be lagged, try recv
-    let mut found = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let ferry_ipc::backend::UiEvent::Error { code, .. } = ev {
+    let first = expect_engine_crashed(&mut rx).await;
+    assert!(
+        first.contains("100ms"),
+        "first restart should record 100ms backoff, got: {first}"
+    );
+    assert!(sup.wait_for_manifests(Duration::from_secs(5)));
+
+    sup.get_engine_handle(&rec_a.folder_id).unwrap().shutdown();
+    sup.tick();
+    let second = expect_engine_crashed(&mut rx).await;
+    assert!(
+        second.contains("200ms"),
+        "second restart should double the backoff, got: {second}"
+    );
+    assert_eq!(sup.list_folders().len(), 1);
+    sup.shutdown();
+}
+
+async fn expect_engine_crashed(
+    rx: &mut tokio::sync::broadcast::Receiver<ferry_ipc::backend::UiEvent>,
+) -> String {
+    for _ in 0..20 {
+        if let Ok(ferry_ipc::backend::UiEvent::Error { code, message }) = rx.try_recv() {
             if code == "engine-crashed" {
-                found = true;
-                break;
+                return message;
             }
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // if not found due to race, at least ensure supervisor still has both engines
-    assert_eq!(sup.list_folders().len(), 2);
-    // we consider broadcast optional for this assertion, but ensure engines count
-    let _ = found;
-    sup.shutdown();
+    panic!("no engine-crashed event received");
 }
 
 #[tokio::test]

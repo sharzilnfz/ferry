@@ -27,7 +27,6 @@ impl std::error::Error for SupervisorError {}
 pub struct SupervisedEngine {
     pub record: FolderRecord,
     pub handle: Arc<EngineHandle>,
-    pub task: tokio::task::JoinHandle<()>,
     pub folder_id_bytes: [u8; 16],
     pub restart_count: u32,
 }
@@ -189,15 +188,9 @@ impl Supervisor {
             })?;
         engine.set_identity(self.identity.clone());
         let handle = Arc::new(engine.start());
-        let task = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
-            }
-        });
         Ok(SupervisedEngine {
             record,
             handle,
-            task,
             folder_id_bytes,
             restart_count: 0,
         })
@@ -235,7 +228,6 @@ impl Supervisor {
             .map_err(OpError::from)?;
         if let Some(entry) = self.engines.remove(folder_id) {
             entry.handle.shutdown();
-            entry.task.abort();
         }
         Ok(())
     }
@@ -305,25 +297,12 @@ impl Supervisor {
         self.engines.get(folder_id).map(|e| Arc::clone(&e.handle))
     }
 
-    /// Test helper: abort one engine's supervision task.
-    pub fn abort_task(&self, folder_id: &str) -> bool {
-        if let Some(e) = self.engines.get(folder_id) {
-            e.task.abort();
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn task_is_finished(&self, folder_id: &str) -> Option<bool> {
-        self.engines.get(folder_id).map(|e| e.task.is_finished())
-    }
-
-    /// Supervision tick: detect crashed tasks and restart with backoff.
+    /// Supervision tick: detect crashed engines (dead loops on the engine
+    /// handle) and restart them with backoff.
     pub fn tick(&mut self) {
         let mut to_restart: Vec<String> = Vec::new();
         for (id, entry) in &self.engines {
-            if entry.task.is_finished() {
+            if !entry.handle.is_healthy() {
                 to_restart.push(id.clone());
             }
         }
@@ -356,7 +335,6 @@ impl Supervisor {
     pub fn shutdown(&mut self) {
         for (_, entry) in self.engines.drain() {
             entry.handle.shutdown();
-            entry.task.abort();
         }
     }
 
@@ -380,13 +358,8 @@ impl Supervisor {
     }
 }
 
-// Need to allow HashMap value to be private but accessed via method; expose type via pub(crate) helper.
-// We'll provide a public accessor for supervision task manipulation.
 impl SupervisedEngine {
     pub fn handle(&self) -> &Arc<EngineHandle> {
         &self.handle
-    }
-    pub fn task(&self) -> &tokio::task::JoinHandle<()> {
-        &self.task
     }
 }
