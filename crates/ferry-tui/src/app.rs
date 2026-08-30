@@ -169,6 +169,12 @@ impl TuiApp {
             } => self
                 .state
                 .apply_conflict_recorded(path, conflict_path, timestamp, quarantined_as),
+            UiEvent::FolderRegistered { path } => {
+                self.state.activity_log.push_info(
+                    current_time_str(),
+                    format!("Folder registered: {path}"),
+                );
+            }
             UiEvent::Error { code, message } => self.state.apply_error(code, message),
         }
     }

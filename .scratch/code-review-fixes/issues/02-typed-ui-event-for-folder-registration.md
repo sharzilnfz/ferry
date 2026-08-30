@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] `UiEvent` or the GUI backend action response channel uses a typed success event rather than `UiEvent::Error { code: "folder_registered", .. }`
-- [ ] `ferry-gui` handles the typed success event to update its folder list and activity status
-- [ ] Error dispatch across GUI and backend remains strictly for error conditions
-- [ ] GUI tests in `crates/ferry-gui/tests/gui_tests.rs` pass with the typed event
+- [x] `UiEvent` or the GUI backend action response channel uses a typed success event rather than `UiEvent::Error { code: "folder_registered", .. }`
+- [x] `ferry-gui` handles the typed success event to update its folder list and activity status
+- [x] Error dispatch across GUI and backend remains strictly for error conditions
+- [x] GUI tests in `crates/ferry-gui/tests/gui_tests.rs` pass with the typed event

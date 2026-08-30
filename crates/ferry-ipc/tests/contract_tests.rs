@@ -343,3 +343,15 @@ async fn fake_backend_trait_object_works() {
     assert_eq!(err.code, "not-found");
     assert_eq!(err.message, "not-implemented");
 }
+
+#[test]
+fn ui_event_folder_registered_round_trip() {
+    let event = ferry_ipc::UiEvent::FolderRegistered {
+        path: "/home/user/workspace/project-a".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("folder_registered"));
+    assert!(json.contains("/home/user/workspace/project-a"));
+    let back: ferry_ipc::UiEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+}

@@ -277,7 +277,20 @@ fn test_gui_app_full_lifecycle() {
     assert_eq!(app.beacon_state(), BeaconState::Conflict);
     assert_eq!(app.conflicts.len(), 1);
 
-    // 5. Test Full Frame Update in Headless egui Context
+    // 5. Receive Typed FolderRegistered Event
+    app.handle_event(UiEvent::FolderRegistered {
+        path: "/test/registered/folder".to_string(),
+    });
+    assert!(app
+        .status_message
+        .as_ref()
+        .is_some_and(|(msg, _, color)| msg == "Folder added: /test/registered/folder"
+            && *color == colors::FERRY_GREEN));
+    assert!(app.activity_log.iter().any(|entry| entry.category == "Folder"
+        && entry.message == "Folder added: /test/registered/folder"
+        && entry.color == colors::FERRY_GREEN));
+
+    // 6. Test Full Frame Update in Headless egui Context
     let ctx = Context::default();
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
@@ -342,4 +355,174 @@ async fn register_initialized_folder_reaches_backend_unchanged() {
             .is_some_and(|(m, _, _)| m.contains("not an initialized Ferry folder")),
         "initialized path must not be blocked"
     );
+}
+
+struct SuccessRegisterBackend {
+    fake: FakeBackend,
+}
+
+impl ferry_ipc::backend::StatusDomain for SuccessRegisterBackend {
+    fn get_status(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<EngineSnapshot, ferry_ipc::backend::OpError>>
+    {
+        self.fake.get_status()
+    }
+    fn list_conflicts(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<Vec<ConflictEntry>, ferry_ipc::backend::OpError>>
+    {
+        self.fake.list_conflicts()
+    }
+    fn trigger_scan(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<(), ferry_ipc::backend::OpError>> {
+        self.fake.trigger_scan()
+    }
+    fn subscribe_events(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::UiEventStream, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.subscribe_events()
+    }
+}
+
+impl ferry_ipc::backend::InventoryDomain for SuccessRegisterBackend {
+    fn list_directory(
+        &self,
+        path: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::ListDirectoryResponse, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.list_directory(path)
+    }
+    fn list_folders(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<Vec<ferry_ipc::FolderRecord>, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.list_folders()
+    }
+    fn register_folder(
+        &self,
+        path: std::path::PathBuf,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::FolderRecord, ferry_ipc::backend::OpError>,
+    > {
+        Box::pin(async move {
+            Ok(ferry_ipc::FolderRecord {
+                folder_id: "0123456789abcdef0123456789abcdef".to_string(),
+                path,
+                added_at: "2026-08-30T12:00:00Z".to_string(),
+            })
+        })
+    }
+    fn remove_folder(
+        &self,
+        folder_id: String,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<(), ferry_ipc::backend::OpError>> {
+        self.fake.remove_folder(folder_id)
+    }
+}
+
+impl ferry_ipc::backend::SessionDomain for SuccessRegisterBackend {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::backend::PinRecord, ferry_ipc::backend::OpError>>
+    {
+        self.fake.start_pin(paths, hours)
+    }
+    fn stop_pin(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinStopSummary, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.stop_pin()
+    }
+    fn release_pin(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinReleaseSummary, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.release_pin()
+    }
+    fn share_initiate(
+        &self,
+        folder: Option<std::path::PathBuf>,
+        i_know: bool,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::ShareOffer, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.share_initiate(folder, i_know)
+    }
+    fn share_status(
+        &self,
+        folder: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::ShareStatus, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.share_status(folder)
+    }
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::PairResult, ferry_ipc::backend::OpError>>
+    {
+        self.fake.pair_accept(code_or_payload, dir)
+    }
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::CreatePairingRequest,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::CreatePairingResponse, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.create_pairing_session(req)
+    }
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::JoinPairingRequest,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::PairResult, ferry_ipc::backend::OpError>>
+    {
+        self.fake.join_pairing_session(req)
+    }
+}
+
+#[tokio::test]
+async fn register_initialized_folder_success_emits_typed_folder_registered_event() {
+    let mock = Arc::new(SuccessRegisterBackend {
+        fake: FakeBackend::new(),
+    });
+    let mut app = GuiApp::new(mock, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".ferry")).unwrap();
+    std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
+
+    let target_path = dir.path().to_path_buf();
+    app.dispatch(BackendAction::RegisterFolder {
+        path: target_path.clone(),
+    });
+
+    let success_message = format!("Folder added: {}", target_path.display());
+    let reached = wait_for_status_banner(&mut app, &success_message).await;
+    assert!(reached, "successful registration must show Folder added banner");
+    assert_eq!(
+        app.status_message.as_ref().unwrap().2,
+        colors::FERRY_GREEN
+    );
+    assert!(app.activity_log.iter().any(|entry| entry.category == "Folder"
+        && entry.message == success_message
+        && entry.color == colors::FERRY_GREEN));
 }
