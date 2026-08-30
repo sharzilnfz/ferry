@@ -206,6 +206,9 @@ pub enum UiEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quarantined_as: Option<String>,
     },
+    FolderRegistered {
+        path: String,
+    },
     Error {
         code: String,
         message: String,

@@ -271,9 +271,8 @@ impl GuiApp {
                         if ferry_folder::is_initialized(&path) {
                             match b_actions.register_folder(path.clone()).await {
                                 Ok(record) => {
-                                    let _ = ev_tx_actions.send(UiEvent::Error {
-                                        code: "folder_registered".to_string(),
-                                        message: record.path.display().to_string(),
+                                    let _ = ev_tx_actions.send(UiEvent::FolderRegistered {
+                                        path: record.path.display().to_string(),
                                     });
                                     if let Ok(snap) = b_actions.get_status().await {
                                         let _ = ev_tx_actions.send(UiEvent::State(snap));
@@ -490,6 +489,12 @@ impl GuiApp {
                     });
                 }
             }
+            UiEvent::FolderRegistered { path } => {
+                let msg = format!("Folder added: {path}");
+                self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
+                self.activity_log
+                    .push(ActivityEntry::new("Folder", msg, colors::FERRY_GREEN));
+            }
             UiEvent::Error { code, message } => {
                 if code == "share_offer" {
                     if let Ok(offer) = serde_json::from_str::<ShareOffer>(&message) {
@@ -516,11 +521,6 @@ impl GuiApp {
                         message,
                         colors::FERRY_GREEN,
                     ));
-                } else if code == "folder_registered" {
-                    let msg = format!("Folder added: {message}");
-                    self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
-                    self.activity_log
-                        .push(ActivityEntry::new("Folder", msg, colors::FERRY_GREEN));
                 } else {
                     self.status_message = Some((
                         format!("{code}: {message}"),
