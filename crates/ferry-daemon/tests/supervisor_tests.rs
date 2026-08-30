@@ -5,29 +5,64 @@ use std::time::Duration;
 
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::supervisor::Supervisor;
+use ferry_folder::folder::{save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::protocol::{ClientCommand, DaemonMessage};
 use ferry_ipc::{create_in_memory_pair, default_socket_path};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use tempfile::TempDir;
 
 fn tmp_home() -> TempDir {
     tempfile::tempdir().expect("home tempdir")
 }
 
-fn make_temp_folder() -> TempDir {
-    tempfile::tempdir().expect("folder tempdir")
+/// An initialized, device-shared folder: the only thing a supervisor engine
+/// can open through ferry-folder.
+fn init_folder(identity: &DeviceIdentity) -> TempDir {
+    let dir = tempfile::tempdir().expect("folder tempdir");
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&dir.path(), &mut h);
+    let seed = std::hash::Hasher::finish(&h);
+    let mut folder_id = [0u8; 16];
+    folder_id[..8].copy_from_slice(&seed.to_le_bytes());
+    folder_id[8..].copy_from_slice(&seed.to_be_bytes());
+    let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed));
+    let (store, _fmk) = ferry_folder::folder::create_folder(dir.path(), identity, folder_id, poly)
+        .expect("init fixture folder");
+    store.flush().unwrap();
+    store.write_index_snapshot().unwrap();
+    save_settings(
+        dir.path(),
+        &Settings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_store::format::hex(&folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    dir
 }
 
-fn new_supervisor(home: &TempDir) -> Supervisor {
+fn new_supervisor(home: &TempDir) -> (Supervisor, DeviceIdentity) {
     let identity = DeviceIdentity::generate();
-    Supervisor::new(home.path().to_path_buf(), identity)
+    (
+        Supervisor::new(home.path().to_path_buf(), identity.clone()),
+        identity,
+    )
+}
+
+fn new_supervisor_with(home: &std::path::Path, identity: DeviceIdentity) -> Supervisor {
+    Supervisor::new(home.to_path_buf(), identity)
 }
 
 #[tokio::test]
 async fn supervisor_two_engines_distinct_status() {
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
-    let mut sup = new_supervisor(&home);
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
     // register two folders via supervisor (needs runtime for spawn)
     let rec_a = sup
         .handle_register(dir_a.path().to_path_buf())
@@ -63,14 +98,14 @@ async fn supervisor_two_engines_distinct_status() {
 #[tokio::test]
 async fn register_adds_and_list_returns_three() {
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
-    let mut sup = new_supervisor(&home);
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
     sup.handle_register(dir_a.path().to_path_buf()).unwrap();
     sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     assert_eq!(sup.list_folders().len(), 2);
     // third registration
-    let dir_c = make_temp_folder();
+    let dir_c = init_folder(&identity);
     let rec_c = sup
         .handle_register(dir_c.path().to_path_buf())
         .expect("register c");
@@ -88,10 +123,10 @@ async fn register_adds_and_list_returns_three() {
 #[tokio::test]
 async fn remove_stops_and_list_returns_two() {
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
-    let dir_c = make_temp_folder();
-    let mut sup = new_supervisor(&home);
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
+    let dir_c = init_folder(&identity);
     let rec_a = sup.handle_register(dir_a.path().to_path_buf()).unwrap();
     let rec_b = sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     let rec_c = sup.handle_register(dir_c.path().to_path_buf()).unwrap();
@@ -143,9 +178,9 @@ fn central_socket_default_path_respects_ferry_home() {
 #[tokio::test]
 async fn ipc_dispatch_list_folders_over_loopback() {
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
-    let mut sup = new_supervisor(&home);
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
     sup.handle_register(dir_a.path().to_path_buf()).unwrap();
     sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     let expected_count = sup.list_folders().len();
@@ -189,9 +224,9 @@ async fn ipc_dispatch_list_folders_over_loopback() {
 #[tokio::test]
 async fn resilience_restart_one_engine_other_unaffected() {
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
-    let mut sup = new_supervisor(&home);
+    let (mut sup, identity) = new_supervisor(&home);
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
     let rec_a = sup.handle_register(dir_a.path().to_path_buf()).unwrap();
     let rec_b = sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     assert!(sup.wait_for_manifests(Duration::from_secs(5)));
@@ -255,14 +290,15 @@ async fn resilience_restart_one_engine_other_unaffected() {
 async fn supervisor_spawn_engines_from_existing_registry() {
     // Test spawn_engines loads from folders.toml written externally
     let home = tmp_home();
-    let dir_a = make_temp_folder();
-    let dir_b = make_temp_folder();
+    let identity = DeviceIdentity::generate();
+    let dir_a = init_folder(&identity);
+    let dir_b = init_folder(&identity);
     // manually seed the registry through the FolderInventory seam
     let inv = ferry_folder::inventory::FolderInventory::new(home.path());
     inv.register(dir_a.path()).unwrap();
     inv.register(dir_b.path()).unwrap();
 
-    let mut sup = new_supervisor(&home);
+    let mut sup = new_supervisor_with(home.path(), identity);
     sup.spawn_engines().expect("spawn");
     assert_eq!(sup.list_folders().len(), 2);
     assert_eq!(sup.engines_map().len(), 2);

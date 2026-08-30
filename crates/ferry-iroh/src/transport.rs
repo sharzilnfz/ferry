@@ -96,49 +96,43 @@ struct Inner {
     routes: RouteTable,
 }
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.rt.lock() {
-            if let Some(rt) = guard.take() {
-                if Handle::try_current().is_ok() {
-                    std::thread::spawn(move || drop(rt)).join().ok();
-                } else {
-                    drop(rt);
-                }
-            }
-        }
+fn block_on<F>(handle: &Handle, f: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let h = handle.clone();
+        std::thread::spawn(move || h.block_on(f)).join().unwrap()
+    } else {
+        handle.block_on(f)
     }
 }
 
 impl Inner {
-    fn block_on<F, T>(&self, f: F) -> T
-    where
-        F: std::future::Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        block_on_rt(&self.rt_handle, f)
-    }
-
     fn observe(&self, id: EndpointId) -> Arc<PathObservation> {
         let mut map = lock(&self.observations);
         map.entry(*id.as_bytes())
             .or_insert_with(|| Arc::new(PathObservation::default()))
             .clone()
     }
+
+    fn rt_handle(&self) -> &Handle {
+        &self.rt_handle
+    }
 }
 
-fn block_on_rt<F, T>(handle: &Handle, f: F) -> T
-where
-    F: std::future::Future<Output = T> + Send + 'static,
-    T: Send + 'static,
-{
-    if Handle::try_current().is_ok() {
-        let handle = handle.clone();
-        std::thread::spawn(move || handle.block_on(f))
-            .join()
-            .unwrap()
-    } else {
-        handle.block_on(f)
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.rt.lock() {
+            if let Some(rt) = g.take() {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    let _ = std::thread::spawn(move || drop(rt)).join();
+                } else {
+                    drop(rt);
+                }
+            }
+        }
     }
 }
 
@@ -292,7 +286,7 @@ impl IrohTransport {
         // back a ready pipe, and accept_bi on the peer resolves immediately.
         let ep = self.inner.ep.clone();
         let budget = self.inner.dial_timeout;
-        let opened = self.inner.block_on(async move {
+        let opened = block_on(self.inner.rt_handle(), async move {
             match tokio::time::timeout(budget, async {
                 let conn = ep
                     .connect(addr, FERRY_ALPN)
@@ -319,12 +313,12 @@ impl IrohTransport {
             Err(detail) => return Err(DialFailure::Connect(detail)),
         };
         let obs = self.inner.observe(conn.remote_id());
-        spawn_path_sampler(&self.inner.rt_handle, &conn, obs);
+        spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
-            rt: self.inner.rt_handle.clone(),
+            rt: self.inner.rt_handle().clone(),
             conn,
-            send: Arc::new(tokio::sync::Mutex::new(send)),
-            recv: Arc::new(tokio::sync::Mutex::new(recv)),
+            send: Mutex::new(send),
+            recv: Mutex::new(recv),
         }))
     }
 
@@ -343,8 +337,8 @@ impl IrohTransport {
     pub fn shutdown(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         let ep = self.inner.ep.clone();
-        let _ = self.inner.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(500), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(500), ep.close()).await;
         });
     }
 }
@@ -502,8 +496,8 @@ impl DynListener for IrohListener {
     fn close(&self) -> io::Result<()> {
         self.closed.store(true, Ordering::SeqCst);
         let ep = self.inner.ep.clone();
-        let _ = self.inner.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(200), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
         });
         Ok(())
     }
@@ -517,7 +511,7 @@ impl DynListener for IrohListener {
                 ));
             }
             let ep = self.inner.ep.clone();
-            let next = self.inner.block_on(async move {
+            let next = block_on(self.inner.rt_handle(), async move {
                 tokio::time::timeout(Duration::from_millis(200), ep.accept()).await
             });
             let incoming = match next {
@@ -530,7 +524,7 @@ impl DynListener for IrohListener {
                 }
                 Err(_elapsed) => continue,
             };
-            let conn = self.inner.block_on(async move {
+            let conn = block_on(self.inner.rt_handle(), async move {
                 match incoming.accept() {
                     Ok(accepting) => accepting
                         .await
@@ -539,18 +533,18 @@ impl DynListener for IrohListener {
                 }
             })?;
             let obs = self.inner.observe(conn.remote_id());
-            spawn_path_sampler(&self.inner.rt_handle, &conn, obs);
+            spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
 
-            let conn_clone = conn.clone();
-            let streams = self
-                .inner
-                .block_on(async move { conn_clone.accept_bi().await })
-                .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
+            let conn_for_streams = conn.clone();
+            let streams = block_on(self.inner.rt_handle(), async move {
+                conn_for_streams.accept_bi().await
+            })
+            .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
-                rt: self.inner.rt_handle.clone(),
+                rt: self.inner.rt_handle().clone(),
                 conn,
-                send: Arc::new(tokio::sync::Mutex::new(streams.0)),
-                recv: Arc::new(tokio::sync::Mutex::new(streams.1)),
+                send: Mutex::new(streams.0),
+                recv: Mutex::new(streams.1),
             }));
         }
     }
@@ -564,8 +558,8 @@ struct FramedConnection {
     rt: Handle,
     #[allow(dead_code)]
     conn: IrohConn,
-    send: Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
-    recv: Arc<tokio::sync::Mutex<iroh::endpoint::RecvStream>>,
+    send: Mutex<iroh::endpoint::SendStream>,
+    recv: Mutex<iroh::endpoint::RecvStream>,
 }
 
 fn io_error(kind: io::ErrorKind, msg: String) -> io::Error {
@@ -595,24 +589,21 @@ fn check_incoming_len(len: u32) -> io::Result<()> {
 impl DynConnection for FramedConnection {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         check_outgoing_len(payload.len())?;
+        let mut send = lock(&self.send);
         let len = (payload.len() as u32).to_le_bytes();
-        let payload = payload.to_vec();
-        let send_arc = Arc::clone(&self.send);
-        block_on_rt(&self.rt, async move {
-            let mut send = send_arc.lock().await;
+        self.rt.block_on(async {
             send.write_all(&len).await?;
             if !payload.is_empty() {
-                send.write_all(&payload).await?;
+                send.write_all(payload).await?;
             }
             Ok::<(), io::Error>(())
         })
     }
 
     fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let recv_arc = Arc::clone(&self.recv);
-        block_on_rt(&self.rt, async move {
-            let mut recv = recv_arc.lock().await;
-            let mut len_buf = [0u8; 4];
+        let mut recv = lock(&self.recv);
+        let mut len_buf = [0u8; 4];
+        self.rt.block_on(async {
             match recv.read_exact(&mut len_buf).await {
                 Ok(()) => {}
                 // FinishedEarly(0): peer closed cleanly at a frame boundary.

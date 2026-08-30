@@ -42,6 +42,8 @@ lean = []
 
 [dev-dependencies]
 tempfile.workspace = true
+# Test fixtures open stores through ferry-folder's test-util helper.
+ferry-folder = { workspace = true, features = ["test-util"] }
 # Test fixtures spawn a cross-platform sleeper child (see ferry-platform).
 ferry-platform = { path = "../ferry-platform" }
 axum = { workspace = true }

@@ -19,9 +19,9 @@
 //!   (`scan_once` after events have settled), not notification latency or
 //!   the debounce window. Both are engine-quality concerns measured
 //!   elsewhere; the SPEC risk is scan throughput.
-//! - `PassthroughCipher` isolates scan/chunking cost from encryption cost;
-//!   ChaCha20-Poly1305 would add a near-constant per-byte multiplier and is
-//!   not part of this gate.
+//! - The store uses the production ChaCha20-Poly1305 cipher, so the gates
+//!   measure the real end-to-end scan cost (encryption adds a near-constant
+//!   per-byte multiplier on top of chunking).
 //! - Machine info is printed for the record; gates are absolute per ticket.
 
 use std::io::Write as _;
@@ -29,9 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_scan::config::ScanConfig;
 use ferry_scan::engine::{ScanEngine, StoreHandle};
-use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::diff_manifests;
 use ferry_store::store::Store;
 
@@ -140,7 +140,7 @@ fn main() {
     );
 
     // ---- 2. store inside the watched root ----------------------------------
-    let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap());
+    let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(ChaChaCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
         poly: ferry_store::chunker::ValidatedPoly::new(0x0025_b468_838d_cb75 | (1 << 53))

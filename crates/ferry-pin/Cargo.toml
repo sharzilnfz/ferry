@@ -33,6 +33,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+# Tests and examples use the test-util-gated fixture cipher.
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 rand.workspace = true
 

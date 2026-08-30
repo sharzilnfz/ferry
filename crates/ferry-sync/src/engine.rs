@@ -33,7 +33,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_crypto::identity::DeviceIdentity;
-use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
 use ferry_store::manifest::{parse_manifest, serialize_manifest, RootManifest};
@@ -199,7 +198,11 @@ impl PeerLedger {
 }
 
 /// Check candidate paths for a `CONFIG_HEAD` file to seed allow-list mode.
-fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolicy {
+fn resolve_peer_policy_from_disk(
+    cfg: &EngineConfig,
+    store: &Store,
+    local_device: &DeviceIdentity,
+) -> PeerPolicy {
     let candidates = [
         store.store_dir().join("config"),
         cfg.store_dir.join("config"),
@@ -208,11 +211,13 @@ fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolic
     for path in &candidates {
         if path.is_file() {
             if let Ok(bytes) = std::fs::read(path) {
-                if let Ok(policy) = PeerPolicy::from_config_head(&bytes) {
-                    if let PeerPolicy::AllowList(ref set) = policy {
-                        if !set.is_empty() {
-                            return policy;
-                        }
+                if let Ok(PeerPolicy::AllowList(set)) = PeerPolicy::from_config_head(&bytes) {
+                    let remote: Vec<_> = set
+                        .iter()
+                        .filter(|p| **p != *local_device.public())
+                        .collect();
+                    if !remote.is_empty() {
+                        return PeerPolicy::AllowList(set);
                     }
                 }
             }
@@ -1214,20 +1219,17 @@ pub struct SyncEngine {
 }
 
 impl SyncEngine {
-    /// Build (but do not start) an engine. Opens or creates the store,
-    /// creates the tree dir, binds the listener when configured.
+    /// Build an engine around an already-opened `Store` (e.g. from
+    /// `OpenFolder`). Opening the store — key unwrap, cipher choice — belongs
+    /// to ferry-folder; there is deliberately no constructor that opens or
+    /// creates a store itself, so no call site can pick a cipher or fall back
+    /// to plaintext.
     ///
     /// Startup also runs the T-20 crash-residue sweep, bounded older-than:
     /// store-side temps under `.ferry/` (pack staging, sidecar and ledger
     /// temps — `ferry_store::reclaim`) plus tree-side materialize temps
     /// (`ferry_materialize::sweep_stale_temps`). Failures are best-effort
     /// and never block startup.
-    pub fn new(cfg: EngineConfig, transport: Arc<dyn Transport>) -> Result<Self, EngineError> {
-        let store = Arc::new(open_or_create_store(&cfg.store_dir)?);
-        Self::with_store(cfg, transport, store)
-    }
-
-    /// Build an engine around an already-opened `Store` (e.g. from `OpenFolder`).
     pub fn with_store(
         cfg: EngineConfig,
         transport: Arc<dyn Transport>,
@@ -1287,13 +1289,11 @@ impl SyncEngine {
     /// refuses bytes whose BLAKE3 differs from the claimed pack name BEFORE
     /// anything is written, exactly as the session path does.
     pub fn ingest_pack_bytes_for_test(
-        cfg: &EngineConfig,
+        store: &Store,
         claimed_name: &PackId,
         bytes: &[u8],
     ) -> Result<(), IngestError> {
-        let store =
-            open_or_create_store(&cfg.store_dir).map_err(|e| IngestError::Other(format!("{e}")))?;
-        crate::exchange::ingest_pack_verified(&store, claimed_name, bytes)
+        crate::exchange::ingest_pack_verified(store, claimed_name, bytes)
     }
 
     /// Spawn poll (+ accept) threads. Dropping the returned handle shuts
@@ -1318,13 +1318,6 @@ impl SyncEngine {
                 }
             }
         }
-        let peer_policy = if let Some(policy) = self.peer_policy.take() {
-            policy
-        } else if let Some(pin) = self.cfg.expected_peer_id {
-            PeerPolicy::AllowList([pin].into())
-        } else {
-            resolve_peer_policy_from_disk(&self.cfg, &self.store)
-        };
         let store_dir = self.store.store_dir().to_path_buf();
         let folder_id = self.cfg.folder_id;
         // Production daemon (ferry-daemon/src/main.rs) always calls
@@ -1337,6 +1330,13 @@ impl SyncEngine {
             .identity
             .take()
             .unwrap_or_else(|| device_identity_for_tag(&self.cfg.tag));
+        let peer_policy = if let Some(policy) = self.peer_policy.take() {
+            policy
+        } else if let Some(pin) = self.cfg.expected_peer_id {
+            PeerPolicy::AllowList([pin].into())
+        } else {
+            resolve_peer_policy_from_disk(&self.cfg, &self.store, &device)
+        };
         let injected_scan = self.snapshot_source.is_some();
         let snapshot_source = self
             .snapshot_source
@@ -1360,7 +1360,8 @@ impl SyncEngine {
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
-        if let Some(listener) = listener.as_ref().map(Arc::clone) {
+        if let Some(ref listener) = listener {
+            let listener = Arc::clone(listener);
             let ctx2 = Arc::clone(&ctx);
             let shared2 = Arc::clone(&shared);
             let joins2 = Arc::clone(&joins);
@@ -1397,24 +1398,6 @@ impl SyncEngine {
     }
 }
 
-fn open_or_create_store(store_dir: &std::path::Path) -> Result<Store, EngineError> {
-    // Store::create uses non-recursive mkdir for `.ferry`; make sure the
-    // parent chain exists first.
-    std::fs::create_dir_all(store_dir)?;
-    if store_dir.join(ferry_store::store::STORE_DIR_NAME).is_dir() {
-        if let Ok(s) = Store::open(store_dir, FMK, Box::new(ChaChaCipher)) {
-            return Ok(s);
-        }
-        Ok(Store::open(
-            store_dir,
-            FMK,
-            Box::new(ferry_store::crypto::PassthroughCipher),
-        )?)
-    } else {
-        Ok(Store::create(store_dir, FMK, Box::new(ChaChaCipher))?)
-    }
-}
-
 /// Deterministic per-tag device identity — TEST-ONLY (ticket 12). The one
 /// production identity source is a persisted keypair via
 /// `ferry_crypto::identity::load_or_create`; tag derivation exists so engine
@@ -1436,10 +1419,6 @@ pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
     rng.fill_bytes(&mut seed);
     DeviceIdentity::from_secret_bytes(&seed)
 }
-
-/// v0 folder master key: zeros under the pass-through cipher. T-007 replaces
-/// this with real key material; nothing else changes.
-const FMK: [u8; ferry_store::crypto::KEY_LEN] = [0u8; ferry_store::crypto::KEY_LEN];
 
 fn accept_loop(
     listener: Arc<dyn crate::transport::Listener>,
@@ -1649,6 +1628,13 @@ mod tests {
         dir_entry, file_entry, serialize_manifest, RootManifest, TreeNode,
     };
 
+    /// Fresh store through the one opening interface (ferry-folder); no test
+    /// here names a cipher or a key.
+    fn test_store(store_dir: &Path, tag: &str) -> Arc<Store> {
+        ferry_folder::open_or_create_test_store(store_dir, &device_identity_for_tag(tag))
+            .expect("test store")
+    }
+
     fn manifest_at(sec: i64, dev: [u8; 32], root: BlobId) -> RootManifest {
         RootManifest {
             folder_id: [1; 16],
@@ -1776,10 +1762,11 @@ mod tests {
     ) -> (Ctx, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store_dir = dir.path().join("root");
-        let store = Arc::new(open_or_create_store(&store_dir.join("store")).expect("test store"));
+        let cfg_store_dir = store_dir.join("store");
+        let store = test_store(&cfg_store_dir, tag);
         let mut cfg = EngineConfig::default_for_test(11);
         cfg.tag = tag.into();
-        cfg.store_dir = store_dir.join("store");
+        cfg.store_dir = cfg_store_dir;
         cfg.tree_dir = store_dir.join("tree");
         std::fs::create_dir_all(&cfg.tree_dir).unwrap();
         let ctx = Ctx {
@@ -1905,10 +1892,12 @@ mod tests {
 
     #[test]
     fn startup_sweep_removes_planted_stale_temps_at_every_site() {
-        // T-20 acceptance: SyncEngine::new is the documented startup hook;
-        // residue planted before startup must be reclaimed, live files kept.
+        // T-20 acceptance: the documented startup hook (with_store) sweeps
+        // residue planted before startup; live files are kept.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("root");
+        let store = test_store(&root, "t20-sweep");
+        drop(store);
         let sd = root.join(".ferry");
         for d in ["tmp", "peers", "agreement", "index"] {
             std::fs::create_dir_all(sd.join(d)).unwrap();
@@ -1942,7 +1931,12 @@ mod tests {
         let mut cfg = EngineConfig::default_for_test(11);
         cfg.store_dir = root.clone();
         cfg.tree_dir = tree_dir.clone();
-        let _engine = SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).unwrap();
+        let _engine = SyncEngine::with_store(
+            cfg,
+            Arc::new(crate::transport::TcpTransport),
+            test_store(&root, "t20-sweep"),
+        )
+        .unwrap();
 
         for p in &stale {
             assert!(!p.exists(), "startup must sweep {p:?}");
@@ -2071,8 +2065,12 @@ mod tests {
         cfg.bind_addr = Some("127.0.0.1:0".parse().unwrap());
         cfg.connect_to = None;
 
-        let mut engine =
-            SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).expect("engine");
+        let mut engine = SyncEngine::with_store(
+            cfg,
+            Arc::new(crate::transport::TcpTransport),
+            test_store(&root.join("store"), "t07-shutdown"),
+        )
+        .expect("engine");
         engine.set_test_injections(
             system_clock(),
             Arc::new(move |store, poly, source, identity| {
@@ -2170,7 +2168,12 @@ mod tests {
         cfg.bind_addr = None;
         cfg.connect_to = None;
 
-        let engine = SyncEngine::new(cfg, Arc::new(crate::transport::TcpTransport)).unwrap();
+        let engine = SyncEngine::with_store(
+            cfg,
+            Arc::new(crate::transport::TcpTransport),
+            test_store(&dir.path().join("store"), "t-scan-counts"),
+        )
+        .unwrap();
         let handle = engine.start();
 
         // Wait for first tick to scan tree

@@ -16,7 +16,7 @@ use std::time::Duration;
 use ferry_crypto::config_head::{write_config_head, WrappedKeyEntry};
 use ferry_crypto::folder_key::WRAPPED_LEN;
 use ferry_sync::engine::{device_identity_for_tag, PeerPolicy};
-use ferry_sync::{BlobId, EngineConfig, SyncEngine, TcpTransport, DEFAULT_FOLDER_ID};
+use ferry_sync::{BlobId, EngineConfig, TcpTransport, DEFAULT_FOLDER_ID};
 
 const SEED: u64 = 20260825;
 
@@ -32,7 +32,7 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
+    let engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
@@ -51,7 +51,7 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
 
     // Write a file on B and start B.
     fs::write(dir.path().join("b/tree/file1.txt"), b"hello from b").unwrap();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
+    let engine_b = common::engine(cfg_b, Arc::new(TcpTransport));
     let handle_b = engine_b.start();
 
     // Wait for A and B to converge.
@@ -85,7 +85,7 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     fs::create_dir_all(&cfg_c.tree_dir).unwrap();
 
     fs::write(dir.path().join("c/tree/file_c.txt"), b"evil c bytes").unwrap();
-    let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
+    let engine_c = common::engine(cfg_c, Arc::new(TcpTransport));
     let handle_c = engine_c.start();
 
     // Wait and verify Node C fails to sync to Node A.
@@ -122,7 +122,7 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     cfg_b2.connect_to = Some(addr_a);
 
     fs::write(dir.path().join("b/tree/file2.txt"), b"second sync from b").unwrap();
-    let engine_b2 = SyncEngine::new(cfg_b2, Arc::new(TcpTransport)).unwrap();
+    let engine_b2 = common::engine(cfg_b2, Arc::new(TcpTransport));
     let handle_b2 = engine_b2.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -166,7 +166,7 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
+    let engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
     // Write config to Node A's store directory: `<store_dir>/.ferry/config`.
     let dot_ferry_a = dir.path().join("a/store/.ferry");
     fs::write(dot_ferry_a.join("config"), &config_bytes).unwrap();
@@ -183,7 +183,7 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     fs::create_dir_all(&cfg_b.tree_dir).unwrap();
 
     fs::write(dir.path().join("b/tree/file_b.txt"), b"bytes from b").unwrap();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
+    let engine_b = common::engine(cfg_b, Arc::new(TcpTransport));
     let handle_b = engine_b.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -210,7 +210,7 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     fs::create_dir_all(&cfg_c.tree_dir).unwrap();
 
     fs::write(dir.path().join("c/tree/file_c.txt"), b"unauthorized c").unwrap();
-    let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
+    let engine_c = common::engine(cfg_c, Arc::new(TcpTransport));
     let handle_c = engine_c.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -253,7 +253,7 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
-    let mut engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
+    let mut engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
     // Pre-seed allow list with Node B and Node D.
     engine_a.set_peer_policy(PeerPolicy::from_allowed([id_b, id_d]));
     let addr_a = engine_a.listen_addr().unwrap();
@@ -268,7 +268,7 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     fs::create_dir_all(&cfg_b.tree_dir).unwrap();
 
     fs::write(dir.path().join("b/tree/b.txt"), b"from b").unwrap();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
+    let engine_b = common::engine(cfg_b, Arc::new(TcpTransport));
     let handle_b = engine_b.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -293,7 +293,7 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     fs::create_dir_all(&cfg_d.tree_dir).unwrap();
 
     fs::write(dir.path().join("d/tree/d.txt"), b"from d").unwrap();
-    let engine_d = SyncEngine::new(cfg_d, Arc::new(TcpTransport)).unwrap();
+    let engine_d = common::engine(cfg_d, Arc::new(TcpTransport));
     let handle_d = engine_d.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -318,7 +318,7 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     fs::create_dir_all(&cfg_c.tree_dir).unwrap();
 
     fs::write(dir.path().join("c/tree/c.txt"), b"from c").unwrap();
-    let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
+    let engine_c = common::engine(cfg_c, Arc::new(TcpTransport));
     let handle_c = engine_c.start();
 
     std::thread::sleep(Duration::from_millis(500));
@@ -350,7 +350,7 @@ fn tofu_pinned_identity_survives_engine_restart() {
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(TcpTransport)).unwrap();
+    let engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
@@ -365,7 +365,7 @@ fn tofu_pinned_identity_survives_engine_restart() {
     fs::create_dir_all(&cfg_b.tree_dir).unwrap();
 
     fs::write(dir.path().join("b/tree/initial.txt"), b"first content").unwrap();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(TcpTransport)).unwrap();
+    let engine_b = common::engine(cfg_b, Arc::new(TcpTransport));
     let handle_b = engine_b.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -390,7 +390,7 @@ fn tofu_pinned_identity_survives_engine_restart() {
     cfg_a_restarted.tree_dir = tree_dir_a;
     cfg_a_restarted.bind_addr = Some("127.0.0.1:0".parse().unwrap());
 
-    let engine_a_restarted = SyncEngine::new(cfg_a_restarted, Arc::new(TcpTransport)).unwrap();
+    let engine_a_restarted = common::engine(cfg_a_restarted, Arc::new(TcpTransport));
     let addr_a_restarted = engine_a_restarted.listen_addr().unwrap();
     let handle_a_restarted = engine_a_restarted.start();
 
@@ -407,7 +407,7 @@ fn tofu_pinned_identity_survives_engine_restart() {
     fs::create_dir_all(&cfg_c.tree_dir).unwrap();
 
     fs::write(dir.path().join("c/tree/bad.txt"), b"evil").unwrap();
-    let engine_c = SyncEngine::new(cfg_c, Arc::new(TcpTransport)).unwrap();
+    let engine_c = common::engine(cfg_c, Arc::new(TcpTransport));
     let handle_c = engine_c.start();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -439,7 +439,7 @@ fn tofu_pinned_identity_survives_engine_restart() {
     cfg_b_restarted.connect_to = Some(addr_a_restarted);
 
     fs::write(dir.path().join("b/tree/second.txt"), b"second content").unwrap();
-    let engine_b_restarted = SyncEngine::new(cfg_b_restarted, Arc::new(TcpTransport)).unwrap();
+    let engine_b_restarted = common::engine(cfg_b_restarted, Arc::new(TcpTransport));
     let handle_b_restarted = engine_b_restarted.start();
 
     // Heaviest wait in this file: B reconnects to a RESTARTED A (TOFU
