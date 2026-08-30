@@ -56,12 +56,11 @@
 //!    survive without a donor message. `pick_donor`/`select_donor` remain
 //!    exported for tests and future reuse. Simultaneous edits still LOSE
 //!    the older writer's changes until T-010 ships quarantine.
-//! 7. **Crypto insertion points** — the store cipher is v0 pass-through
-//!    (`ferry_store::crypto::PassthroughCipher`) and the FMK zeros; T-007
-//!    wraps key material around [`state`] records and container files
-//!    without touching the wire story: sessions already seal every
-//!    post-auth frame under ephemeral per-direction keys derived from
-//!    device identity keys.
+//! 7. **Crypto insertion points** — the store is opened by ferry-folder
+//!    (key unwrap + ChaCha20-Poly1305); this crate never names a cipher or a
+//!    key. [`SyncEngine::with_store`] only accepts an already-opened store.
+//!    Sessions seal every post-auth frame under ephemeral per-direction keys
+//!    derived from device identity keys.
 //!
 //! ## What M0 deliberately does NOT do
 //!

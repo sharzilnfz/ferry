@@ -504,7 +504,33 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         }
     };
 
-    let mut engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    // Store opening goes through ferry-folder, the one module that owns key
+    // unwrap and cipher choice. First run on an uninitialized directory
+    // initializes a real folder (fresh FMK wrapped to this device's
+    // identity); an existing folder must unwrap its key or we fail loud —
+    // there is no plaintext or zero-key reopen.
+    let store: Arc<ferry_store::store::Store> =
+        if ferry_folder::folder::dot_dir(&d.store_dir).is_dir() {
+            ferry_folder::folder::open_folder(&d.store_dir, &device)
+                .map_err(|e| format!("startup failed: {e}"))?
+                .store
+        } else {
+            let (store, _fmk) =
+                ferry_folder::folder::create_folder(&d.store_dir, &device, d.folder_id, d.poly)
+                    .map_err(|e| format!("startup failed: {e}"))?;
+            // Same ritual as `ferry init`: flush so the polynomial record
+            // leaves staging and a restart can reopen through `open_folder`.
+            store
+                .flush()
+                .map_err(|e| format!("startup failed: flush: {e}"))?;
+            store
+                .write_index_snapshot()
+                .map_err(|e| format!("startup failed: index snapshot: {e}"))?;
+            Arc::new(store)
+        };
+
+    let mut engine = SyncEngine::with_store(cfg, transport, store)
+        .map_err(|e| format!("startup failed: {e}"))?;
     engine.set_identity(device.clone());
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");

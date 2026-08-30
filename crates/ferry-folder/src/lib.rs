@@ -18,6 +18,9 @@ pub mod inventory;
 pub mod pairing;
 
 pub use error::{CodeInto, FolderError, FolderResult};
+// Test-harness helper; compile-gated by the `test-util` feature.
+#[cfg(any(test, feature = "test-util"))]
+pub use folder::open_or_create_test_store;
 pub use inventory::{
     default_listing_root, ferry_home, sort_entries, validate_and_normalize, validate_path,
     DirectoryEntry, FolderInventory, FolderRecord, ListDirectoryRequest, ListDirectoryResponse,

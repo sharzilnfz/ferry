@@ -62,15 +62,20 @@ fn pack_name_verification_rejects_tampered_bytes_directly() {
         ..ferry_sync::EngineConfig::default_for_test(42)
     };
     std::fs::create_dir_all(&cfg.tree_dir).unwrap();
+    let store = common::test_store(&cfg);
+
+    let initial_packs = std::fs::read_dir(cfg.store_dir.join(".ferry/packs"))
+        .unwrap()
+        .count();
 
     let real = vec![1u8, 2, 3];
     let fake_name = [9u8; 32];
-    let err = SyncEngine::ingest_pack_bytes_for_test(&cfg, &fake_name, &real).unwrap_err();
+    let err = SyncEngine::ingest_pack_bytes_for_test(&store, &fake_name, &real).unwrap_err();
     assert!(matches!(err, IngestError::NameMismatch { .. }), "{err}");
 
     // The bad pack never landed on disk.
     let packs = std::fs::read_dir(cfg.store_dir.join(".ferry/packs"))
         .unwrap()
         .count();
-    assert_eq!(packs, 0);
+    assert_eq!(packs, initial_packs);
 }

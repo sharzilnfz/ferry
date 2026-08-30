@@ -39,13 +39,51 @@ fn poly() -> ferry_store::chunker::ValidatedPoly {
 }
 
 fn open_store(dir: &Path) -> Arc<Store> {
-    let fmk = [0u8; ferry_store::crypto::KEY_LEN];
-    std::fs::create_dir_all(dir).unwrap();
-    if dir.join(ferry_store::store::STORE_DIR_NAME).is_dir() {
-        Arc::new(Store::open(dir, fmk, Box::new(ferry_store::crypto::PassthroughCipher)).unwrap())
-    } else {
-        Arc::new(Store::create(dir, fmk, Box::new(ferry_store::crypto::PassthroughCipher)).unwrap())
-    }
+    // Opened through ferry-folder: real FMK, real cipher, no fixture stubs.
+    let identity = DeviceIdentity::from_secret_bytes(&[0xA1u8; 32]);
+    ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
+}
+
+fn pair_stores(
+    dir_a: &Path,
+    id_a: &DeviceIdentity,
+    dir_b: &Path,
+    id_b: &DeviceIdentity,
+) -> (Arc<Store>, Arc<Store>) {
+    let p = poly().get();
+    let (store_a, fmk) =
+        ferry_folder::folder::create_folder(dir_a, id_a, DEFAULT_FOLDER_ID, p).unwrap();
+    ferry_folder::folder::save_settings(
+        dir_a,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_store::format::hex(&DEFAULT_FOLDER_ID),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_a.flush().unwrap();
+    store_a.write_index_snapshot().unwrap();
+
+    let store_b =
+        ferry_folder::folder::adopt_folder(dir_b, id_b, DEFAULT_FOLDER_ID, &fmk, p).unwrap();
+    ferry_folder::folder::save_settings(
+        dir_b,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_store::format::hex(&DEFAULT_FOLDER_ID),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_b.flush().unwrap();
+    store_b.write_index_snapshot().unwrap();
+
+    (Arc::new(store_a), Arc::new(store_b))
 }
 
 /// Deterministic identity per tag; only stability within this process
@@ -188,8 +226,12 @@ fn ferry_sync_stack_interops_with_reference_engine() {
 
     let id_ref = ident("ref-node");
     let id_my = ident("my-node");
-    let store_ref = open_store(&dir.path().join("ref"));
-    let store_my = open_store(&dir.path().join("my"));
+    let (store_ref, store_my) = pair_stores(
+        &dir.path().join("ref"),
+        &id_ref,
+        &dir.path().join("my"),
+        &id_my,
+    );
 
     // Reference side holds content (older clock); our side is a fresh
     // empty device with a NEWER clock — bootstrap adoption must ignore
@@ -294,8 +336,12 @@ fn reference_initiator_ferry_sync_responder_interop() {
 
     let id_ref = ident("ri-ref");
     let id_my = ident("ri-my");
-    let store_ref = open_store(&dir.path().join("ref"));
-    let store_my = open_store(&dir.path().join("my"));
+    let (store_ref, store_my) = pair_stores(
+        &dir.path().join("ref"),
+        &id_ref,
+        &dir.path().join("my"),
+        &id_my,
+    );
 
     // Content lives on OUR side now. The reference starts as a FRESH
     // device (current_manifest None): after pulling our manifest it

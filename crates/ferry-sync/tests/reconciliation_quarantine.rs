@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ferry_sync::format::hex;
-use ferry_sync::{engine, EngineConfig, EngineHandle, SyncEngine};
+use ferry_sync::{engine, EngineConfig, EngineHandle};
 use ferry_sync_engine::report::ConflictEntry;
 
 use common::{default_transport, timeout_from_env, EngineFixture};
@@ -49,7 +49,7 @@ fn restart_engines(fx: &EngineFixture, tag_a: &str, tag_b: &str) -> (EngineHandl
     cfg_a.store_dir = fx._dir.path().join("a/store");
     cfg_a.tree_dir = fx._dir.path().join("a/tree");
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-    let engine_a = SyncEngine::new(cfg_a, default_transport()).expect("engine A restart");
+    let engine_a = common::engine(cfg_a, default_transport());
     let addr = engine_a
         .listen_addr()
         .expect("A must report its bound port");
@@ -60,7 +60,7 @@ fn restart_engines(fx: &EngineFixture, tag_a: &str, tag_b: &str) -> (EngineHandl
     cfg_b.store_dir = fx._dir.path().join("b/store");
     cfg_b.tree_dir = fx._dir.path().join("b/tree");
     cfg_b.connect_to = Some(addr);
-    let engine_b = SyncEngine::new(cfg_b, default_transport()).expect("engine B restart");
+    let engine_b = common::engine(cfg_b, default_transport());
     let handle_b = engine_b.start();
 
     (handle_a, handle_b)

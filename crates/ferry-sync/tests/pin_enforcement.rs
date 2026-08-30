@@ -17,12 +17,9 @@ use std::time::{Duration, Instant};
 
 use rand::SeedableRng;
 
-use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_pin::{HeldLedger, PinRecord, PinStore};
 use ferry_store::agreement::AgreementLedger;
-use ferry_store::crypto::KEY_LEN;
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
-use ferry_store::store::Store;
 use ferry_sync::format::{hex, unhex};
 use ferry_sync::{engine, DEFAULT_FOLDER_ID};
 
@@ -179,12 +176,12 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     // path (`release_peer` — the exact machinery `ferry pin release`
     // drives), reconciling against the last-agreed base frozen at pin
     // start through the transactional convergence engine.
-    let store = Store::open(
+    let opened = ferry_folder::folder::open_folder(
         &fx._dir.path().join("a/store"),
-        [0u8; KEY_LEN],
-        Box::new(ChaChaCipher),
+        &engine::device_identity_for_tag(TAG_A),
     )
     .unwrap();
+    let store = opened.store;
     let poly =
         ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(SEED));
     let snap = snapshot_dir(

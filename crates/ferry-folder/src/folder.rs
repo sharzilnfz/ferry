@@ -281,6 +281,52 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
     })
 }
 
+/// Create-or-open a folder's store, for TEST harnesses only (compile-gated
+/// behind the `test-util` feature). Production code always knows which
+/// ritual applies — `ferry init` creates, everything else opens — and must
+/// never grow a silent create-or-open fallback: that path is how a folder
+/// whose key cannot be unwrapped gets "reopened" as a fresh store.
+#[cfg(any(test, feature = "test-util"))]
+pub fn open_or_create_test_store(
+    root: &Path,
+    identity: &DeviceIdentity,
+) -> FolderResult<Arc<Store>> {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    if dot_dir(root).is_dir() {
+        return Ok(open_folder(root, identity)?.store);
+    }
+    // Deterministic folder_id/poly from the path so a harness that drops and
+    // reopens the same directory sees the same identities.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&root, &mut hasher);
+    let seed = std::hash::Hasher::finish(&hasher);
+    let mut folder_id = [0u8; 16];
+    folder_id[..8].copy_from_slice(&seed.to_le_bytes());
+    folder_id[8..].copy_from_slice(&seed.to_be_bytes());
+    let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed));
+
+    let (store, _fmk) = create_folder(root, identity, folder_id, poly)?;
+    save_settings(
+        root,
+        &Settings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            folder_id: hex(&folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )?;
+    // The polynomial record sits in staging until flush; a harness that
+    // drops this handle and reopens via `open_folder` needs it on disk.
+    store.flush().code("store", "is this path writable?")?;
+    store
+        .write_index_snapshot()
+        .code("store", "is this path writable?")?;
+    Ok(Arc::new(store))
+}
+
 fn open_store(root: &Path, fmk: Fmk) -> FolderResult<Store> {
     Store::open(root, fmk, Box::new(ChaChaCipher)).map_err(|e| match e {
         StoreError::Io(io) => FolderError::new(

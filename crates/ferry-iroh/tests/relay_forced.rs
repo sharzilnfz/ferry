@@ -86,18 +86,59 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
     cfg_a.tree_dir = dir.path().join("a/tree");
     cfg_a.quiet = true;
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(t_a.clone())).expect("engine A");
-    let addr = engine_a.listen_addr().expect("A bound an alias");
 
     let mut cfg_b = EngineConfig::default_for_test(poly);
     cfg_b.tag = format!("{name}-b");
     cfg_b.store_dir = dir.path().join("b/store");
     cfg_b.tree_dir = dir.path().join("b/tree");
     cfg_b.quiet = true;
+
+    let id_a = ferry_sync::engine::device_identity_for_tag(&cfg_a.tag);
+    let id_b = ferry_sync::engine::device_identity_for_tag(&cfg_b.tag);
+
+    let (store_a, fmk) =
+        ferry_folder::folder::create_folder(&cfg_a.store_dir, &id_a, cfg_a.folder_id, poly)
+            .expect("create folder a");
+    ferry_folder::folder::save_settings(
+        &cfg_a.store_dir,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_sync::format::hex(&cfg_a.folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_a.flush().unwrap();
+    store_a.write_index_snapshot().unwrap();
+
+    let store_b =
+        ferry_folder::folder::adopt_folder(&cfg_b.store_dir, &id_b, cfg_b.folder_id, &fmk, poly)
+            .expect("adopt folder b");
+    ferry_folder::folder::save_settings(
+        &cfg_b.store_dir,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_sync::format::hex(&cfg_b.folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_b.flush().unwrap();
+    store_b.write_index_snapshot().unwrap();
+
+    let engine_a =
+        SyncEngine::with_store(cfg_a, Arc::new(t_a.clone()), Arc::new(store_a)).expect("engine A");
+    let addr = engine_a.listen_addr().expect("A bound an alias");
+
     cfg_b.connect_to = Some(addr);
 
     let engine_a_started = engine_a.start();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(t_b.clone())).expect("engine B");
+    let engine_b =
+        SyncEngine::with_store(cfg_b, Arc::new(t_b.clone()), Arc::new(store_b)).expect("engine B");
     let engine_b_started = engine_b.start();
 
     PairFixture {
