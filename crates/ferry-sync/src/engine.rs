@@ -1299,7 +1299,8 @@ impl SyncEngine {
     /// Spawn poll (+ accept) threads. Dropping the returned handle shuts
     /// everything down and joins.
     pub fn start(mut self) -> EngineHandle {
-        let listener = self.listener.take();
+        let listener: Option<Arc<dyn crate::transport::Listener>> =
+            self.listener.take().map(Arc::from);
         let listen_addr = listener.as_ref().and_then(|l| l.local_addr().ok());
         let shared = Arc::new(SharedState::new());
         let folder = Arc::new(FolderState::new());
@@ -1359,7 +1360,7 @@ impl SyncEngine {
 
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
-        if let Some(listener) = listener {
+        if let Some(listener) = listener.as_ref().map(Arc::clone) {
             let ctx2 = Arc::clone(&ctx);
             let shared2 = Arc::clone(&shared);
             let joins2 = Arc::clone(&joins);
@@ -1387,6 +1388,7 @@ impl SyncEngine {
             folder,
             joins,
             listen_addr,
+            listener,
             transport: Arc::clone(&self.transport),
             store_dir,
             folder_id,
@@ -1440,7 +1442,7 @@ pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
 const FMK: [u8; ferry_store::crypto::KEY_LEN] = [0u8; ferry_store::crypto::KEY_LEN];
 
 fn accept_loop(
-    listener: Box<dyn crate::transport::Listener>,
+    listener: Arc<dyn crate::transport::Listener>,
     ctx: Arc<Ctx>,
     shared: Arc<SharedState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
@@ -1520,6 +1522,7 @@ pub struct EngineHandle {
     folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
+    listener: Option<Arc<dyn crate::transport::Listener>>,
     transport: Arc<dyn Transport>,
     store_dir: PathBuf,
     folder_id: [u8; 16],
@@ -1595,6 +1598,9 @@ impl EngineHandle {
         // while the engine dies; they re-check and exit on deadline/flag.
         self.folder.wake_all();
         self.shared.wake_parked();
+        if let Some(ref l) = self.listener {
+            let _ = l.close();
+        }
         // Unblock a possibly-blocked accept() with a throwaway connection.
         if let Some(addr) = self.listen_addr {
             let _ = self.transport.dial(addr);

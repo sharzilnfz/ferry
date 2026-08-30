@@ -1,5 +1,6 @@
 //! `ferry-daemon`: Local sync daemon with typed IPC server and headless operation.
 
+pub mod device_daemon;
 pub mod ipc;
 pub mod state;
 pub mod supervisor;
