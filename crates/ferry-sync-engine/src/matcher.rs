@@ -1,23 +1,8 @@
 //! Compiled pin-path globs.
-//!
-//! `ferry pin start --paths 'src/**'` scopes the hold with gitignore-style
-//! syntax, compiled by the SAME engine as `ferry.ignore` (the `ignore`
-//! crate) so semantics match the rules users already know: `src/**`,
-//! `docs/*`, bare directory names reach their children, last pattern wins
-//! so `!` negation works too (supported by the engine; not required by the
-//! ticket and not exercised as a scenario).
-//!
-//! The literal pattern `*` is special-cased to match EVERY path — the
-//! ticket's `paths` glob-list-or-star whole-folder pin — because plain
-//! gitignore `*` would not cross directory separators cleanly for every
-//! shape of input.
-//!
-//! Invalid globs are refused loudly at `pin start` time ([`PathMatcher::
-//! new`] errors), so a stored pin always compiles.
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::error::PinError;
+use crate::pin_error::PinError;
 
 #[derive(Clone, Debug)]
 pub struct PathMatcher {
@@ -57,8 +42,6 @@ impl PathMatcher {
     }
 
     /// Does this stored-path scope cover `rel` ('/'-joined components)?
-    /// Directory-scoped patterns reach their descendants (a pinned
-    /// directory pins everything beneath it).
     pub fn matches(&self, rel: &[String]) -> bool {
         if self.match_all {
             return true;
@@ -114,55 +97,6 @@ mod tests {
         assert!(src.matches(&rel("src/deep/mod.rs")));
         assert!(!src.matches(&rel("docs/readme.md")));
         assert!(!src.matches(&rel("srcx/main.rs")), "no prefix bleed");
-    }
-
-    #[test]
-    fn bare_directory_pattern_holds_its_children() {
-        let src = m(&["src"]);
-        assert!(src.matches(&rel("src/main.rs")));
-        assert!(src.matches(&rel("src/nested/a.rs")));
-        assert!(!src.matches(&rel("other/a.rs")));
-    }
-
-    #[test]
-    fn overlapping_globs_union() {
-        let both = m(&["src/**", "src/gen/**"]);
-        assert!(both.matches(&rel("src/gen/out.rs")));
-        assert!(both.matches(&rel("src/main.rs")));
-        assert!(!both.matches(&rel("lib/gen/out.rs")));
-    }
-
-    #[test]
-    fn non_matching_paths_bypass_the_hold_entirely() {
-        let scoped = m(&["src/**"]);
-        assert!(!scoped.matches(&rel("README.md")));
-        assert!(!scoped.matches(&rel("assets/logo.png")));
-        assert!(!scoped.matches(&rel("docs/readme.md")));
-    }
-
-    #[test]
-    fn single_exact_path_pins_only_that_path() {
-        // Bare gitignore names match at ANY depth, so pinning one exact file
-        // needs the leading slash. Assert both behaviors explicitly.
-        let bare = m(&["Cargo.toml"]);
-        assert!(bare.matches(&rel("Cargo.toml")));
-        assert!(
-            bare.matches(&rel("sub/Cargo.toml")),
-            "bare names reach every level, like ferry.ignore"
-        );
-
-        let anchored = m(&["/Cargo.toml"]);
-        assert!(anchored.matches(&rel("Cargo.toml")));
-        assert!(!anchored.matches(&rel("sub/Cargo.toml")));
-    }
-
-    #[test]
-    fn negation_last_match_wins_engine_supported() {
-        // Documented behavior: the same last-match-wins rule as
-        // ferry.ignore applies inside one pin's pattern list.
-        let neg = m(&["*.log", "!keep.log"]);
-        assert!(neg.matches(&rel("noise.log")));
-        assert!(!neg.matches(&rel("keep.log")));
     }
 
     #[test]

@@ -2131,12 +2131,15 @@ dependencies = [
  "ferry-platform",
  "ferry-store",
  "filetime",
+ "ignore",
+ "libc",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "unicode-normalization",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

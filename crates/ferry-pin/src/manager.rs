@@ -58,6 +58,28 @@ impl HeldSummary {
     }
 }
 
+/// Detailed outcome of releasing one peer's held entries.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleasePeerResult {
+    pub device_id: String,
+    pub remote_manifest_id: String,
+    pub held_entries: usize,
+    pub held_paths: Vec<String>,
+    pub ops_applied: usize,
+    pub quarantined: usize,
+    pub conflicts_recorded: usize,
+}
+
+/// Outcome of a transactional release across all held peers.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseSummary {
+    pub peers: Vec<ReleasePeerResult>,
+    pub total_quarantined: usize,
+    pub total_conflicts: usize,
+    pub total_ops: usize,
+    pub pin_ended: bool,
+}
+
 /// Cohesive manager coordinating pin lifecycle, held-entry ledgers,
 /// glob path validation, and release reconciliation.
 #[derive(Clone, Debug)]
@@ -266,6 +288,87 @@ impl PinManager {
     /// Clear one peer's held ledger after successful release.
     pub fn clear_peer(&self, peer_hex: &str) -> Result<bool, PinError> {
         self.ledger.clear_peer(peer_hex)
+    }
+
+    /// Transactionally release all held peer changes through the convergence engine.
+    ///
+    /// Reconciles held entries per peer, updates the tree, clears each peer's
+    /// ledger atomically upon successful convergence, and ends the active pin session.
+    ///
+    /// If convergence fails for any peer, the error is returned immediately and
+    /// remaining held entries remain intact on disk for retry.
+    pub fn release(
+        &self,
+        store: &Store,
+        root: &Path,
+        local_manifest: &RootManifest,
+        now: (i64, u32),
+    ) -> Result<ReleaseSummary, PinError> {
+        let mut peer_results = Vec::new();
+        let mut total_quarantined = 0;
+        let mut total_conflicts = 0;
+        let mut total_ops = 0;
+
+        let peers = self.held_peers()?;
+        for peer_hex in peers {
+            let plan = self.release_peer(
+                &peer_hex,
+                store,
+                root,
+                local_manifest,
+                None,
+                now,
+            )?;
+            if plan.held_entries == 0 {
+                continue;
+            }
+            self.clear_peer(&peer_hex)?;
+
+            let quarantined = plan.result.quarantined.len();
+            let conflicts_recorded = plan.result.conflicts.len();
+            let ops_applied = plan.result.apply.mutations();
+
+            total_quarantined += quarantined;
+            total_conflicts += conflicts_recorded;
+            total_ops += ops_applied;
+
+            peer_results.push(ReleasePeerResult {
+                device_id: plan.device_id,
+                remote_manifest_id: plan.remote_manifest_id,
+                held_entries: plan.held_entries,
+                held_paths: plan.held_paths,
+                ops_applied,
+                quarantined,
+                conflicts_recorded,
+            });
+        }
+
+        let pin_ended = self.stop_session()?;
+
+        Ok(ReleaseSummary {
+            peers: peer_results,
+            total_quarantined,
+            total_conflicts,
+            total_ops,
+            pin_ended,
+        })
+    }
+
+    /// Reconcile and clear one peer's held ledger atomically.
+    pub fn release_peer_transactional(
+        &self,
+        peer_hex: &str,
+        store: &Store,
+        root: &Path,
+        local_manifest: &RootManifest,
+        agreed_base: Option<&RootManifest>,
+        now: (i64, u32),
+    ) -> Result<ReleasePeerPlan, PinError> {
+        let plan = self.release_peer(peer_hex, store, root, local_manifest, agreed_base, now)?;
+        if plan.held_entries > 0 {
+            self.clear_peer(peer_hex)?;
+        }
+        Ok(plan)
     }
 
     /// Append a batch of held entries for one peer.

@@ -28,7 +28,7 @@ pub mod release;
 pub use error::PinError;
 pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
 pub use hold::{hold_matcher, record_held};
-pub use manager::{HeldSummary, PinManager};
+pub use manager::{HeldSummary, PinManager, ReleasePeerResult, ReleaseSummary};
 pub use matcher::PathMatcher;
 pub use pin::{Liveness, PinRecord, PinStore, PIN_FORMAT_VERSION};
 pub use release::{release_peer, ReleasePeerPlan};

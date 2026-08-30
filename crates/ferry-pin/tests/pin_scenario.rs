@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ferry_pin::{
-    hold_matcher, record_held, release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION,
+    hold_matcher, release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION,
 };
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
@@ -315,17 +315,14 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     .unwrap();
     let peer_hex = hex(&DEV_B);
     let manifest_hex = hex(&sb.manifest_id);
-    let matcher = hold_matcher(&a.state)
-        .unwrap()
-        .expect("an active scoped pin must gate the convergence");
     let mut fetch = PeerFetch {
         from: &b.store,
         to: &a.store,
     };
+    // The engine natively checks the active pin and writes to HeldLedger.
     let result = ConvergenceEngine::new(&a.store, &a.tree)
         .state_dir(&a.state)
         .at(NOW)
-        .hold(move |p| matcher.matches(p))
         .fetch_with(&mut fetch)
         .converge(
             &sa2.manifest,
@@ -363,14 +360,11 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert_eq!(read_tree_file(&a.tree, "src/b.rs"), b"A-version-b");
     assert_eq!(read_tree_file(&a.tree, "src/c.rs"), b"A-version-c");
 
-    // Ledger persists the held set for status surfaces and release.
+    // Ledger was automatically persisted by the engine for status surfaces and release.
     let ledger = HeldLedger::new(&a.state);
-    assert_eq!(
-        record_held(&a.state, &peer_hex, &manifest_hex, &result.held, NOW).unwrap(),
-        3
-    );
     assert_eq!(ledger.peers().unwrap(), vec![peer_hex.clone()]);
     let entries = ledger.load_peer(&peer_hex).unwrap();
+    assert_eq!(entries.len(), 3);
     for e in &entries {
         assert_eq!(e.device_id, peer_hex);
         assert_eq!(e.remote_manifest_id, manifest_hex);

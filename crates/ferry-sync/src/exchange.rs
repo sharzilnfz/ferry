@@ -449,7 +449,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
     fn pull_content(
         &mut self,
         man: &RootManifest,
-        remote_manifest_id: BlobId,
+        _remote_manifest_id: BlobId,
     ) -> Result<PullOutcome, SessionError> {
         // 1. Breadth-first walk of the peer's tree: fetch missing nodes.
         let mut queue = vec![man.root_tree_id];
@@ -495,8 +495,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         //    report → agree. Disjoint field borrows: the wire hook takes
         //    the session transport; the engine takes the store, tree root,
         //    and current manifest.
-        let peer_hex = hex(&self.est.peer);
-        let remote_hex = hex(&remote_manifest_id);
         let now = crate::engine::now_parts();
         let state_dir = self
             .host
@@ -511,29 +509,16 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
                 max_retries: self.max_retries,
                 adverts: &self.peer_adverts,
             };
-            let mut engine =
-                ferry_sync_engine::ConvergenceEngine::new(self.store, self.host.tree_root())
-                    .state_dir(state_dir)
-                    .at(now)
-                    .fetch_with(&mut wire);
-            if let Some(matcher) = ferry_pin::hold_matcher(state_dir)
-                .map_err(|e| SessionError::Apply(format!("hold filter: {e}")))?
-            {
-                engine = engine.hold(move |p| matcher.matches(p));
-            }
-            engine
+            let res = ferry_sync_engine::ConvergenceEngine::new(self.store, self.host.tree_root())
+                .state_dir(state_dir)
+                .at(now)
+                .fetch_with(&mut wire)
                 .converge(&self.cur.manifest, man, base_manifest.as_ref())
-                .map_err(|e| SessionError::Apply(format!("{e}")))?
+                .map_err(|e| SessionError::Apply(format!("{e}")))?;
+            res
         };
 
-        // 4. Ledger the pin-held decisions for status surfaces and release.
-        let held_count = if result.held.is_empty() {
-            0
-        } else {
-            ferry_pin::record_held(state_dir, &peer_hex, &remote_hex, &result.held, now)
-                .map_err(|e| SessionError::Apply(format!("held ledger: {e}")))?;
-            result.held.len()
-        };
+        let held_count = result.held.len();
 
         let mutated = result.apply.mutations() > 0
             || !result.quarantined.is_empty()
