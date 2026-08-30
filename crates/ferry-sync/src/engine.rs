@@ -1313,7 +1313,12 @@ impl SyncEngine {
             {
                 if let Ok(bytes) = self.store.get(BlobKind::Manifest, &rec.manifest_id) {
                     if let Ok(manifest) = parse_manifest(&bytes) {
-                        folder.record_agreed(manifest, rec.manifest_id);
+                        folder.record_agreed(manifest.clone(), rec.manifest_id);
+                        folder.adopt_peer(Arc::new(SnapshotData {
+                            manifest_id: rec.manifest_id,
+                            manifest_bytes: bytes,
+                            manifest,
+                        }));
                     }
                 }
             }

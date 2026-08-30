@@ -238,7 +238,11 @@ fn test_local_rollback_preserves_restored_local_files() {
 
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let res = engine
-        .converge(&snap_local.manifest, &snap_m2.manifest, Some(&snap_m1.manifest))
+        .converge(
+            &snap_local.manifest,
+            &snap_m2.manifest,
+            Some(&snap_m1.manifest),
+        )
         .unwrap();
 
     // The restored local edit survives verbatim: broken local lineage must
@@ -249,7 +253,10 @@ fn test_local_rollback_preserves_restored_local_files() {
         "locally restored file must survive its own broken lineage"
     );
     // The remote addition still lands on disk.
-    assert_eq!(fs::read(a.tree.join("file2.txt")).unwrap(), b"remote addition");
+    assert_eq!(
+        fs::read(a.tree.join("file2.txt")).unwrap(),
+        b"remote addition"
+    );
     // Local files are preserved in the plan: the restored edit ships to the
     // peer instead of being discarded.
     assert!(
@@ -276,14 +283,21 @@ fn test_broken_lineage_on_both_sides_degrades_to_empty_base() {
 
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let res = engine
-        .converge(&snap_a.manifest, &snap_b.manifest, Some(&snap_base.manifest))
+        .converge(
+            &snap_a.manifest,
+            &snap_b.manifest,
+            Some(&snap_base.manifest),
+        )
         .unwrap();
 
     // Empty-base degradation: every file on both sides survives as an
     // addition; nothing is pruned.
     assert_eq!(fs::read(a.tree.join("local-only.txt")).unwrap(), b"a data");
     assert_eq!(fs::read(a.tree.join("remote-only.txt")).unwrap(), b"b data");
-    assert!(res.conflicts.is_empty(), "disjoint additions never conflict");
+    assert!(
+        res.conflicts.is_empty(),
+        "disjoint additions never conflict"
+    );
     assert!(
         !res.send.is_empty(),
         "local additions must ship to the peer"

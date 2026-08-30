@@ -319,9 +319,8 @@ fn resolve_safe_base<'a>(
     remote: &'a RootManifest,
     base: Option<&'a RootManifest>,
 ) -> SafeBase<'a> {
-    let b = match base {
-        Some(b) => b,
-        None => return SafeBase::Empty,
+    let Some(b) = base else {
+        return SafeBase::Empty;
     };
     let base_id = *blake3::hash(&serialize_manifest(b)).as_bytes();
     if is_ancestor(store, &base_id, local) && is_ancestor(store, &base_id, remote) {
