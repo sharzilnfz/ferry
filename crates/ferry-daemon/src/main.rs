@@ -203,12 +203,12 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
     let home = ferry_home();
     std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
 
-    let _lock = ferry_platform::ProcessLock::acquire(&home).map_err(|e| match e {
-        ferry_platform::ProcessLockError::AlreadyRunning(pid) => {
+    let _lock = ferry_platform::DaemonLock::acquire(&home).map_err(|e| match e {
+        ferry_platform::DaemonLockError::AlreadyRunning(pid) => {
             let pid_str = pid.map(|p| format!(" (PID {p})")).unwrap_or_default();
             format!("A Ferry daemon is already running{pid_str}. Run `ferry daemon stop` first.")
         }
-        ferry_platform::ProcessLockError::Io(err) => {
+        ferry_platform::DaemonLockError::Io(err) => {
             format!("Failed to acquire daemon lock: {err}")
         }
     })?;
@@ -282,7 +282,9 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
     {
         let s_tx2 = shutdown_tx.clone();
         rt.spawn(async move {
-            if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            if let Ok(mut sig) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            {
                 sig.recv().await;
                 let _ = s_tx2.send(true);
             }

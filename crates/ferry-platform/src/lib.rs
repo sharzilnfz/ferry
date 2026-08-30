@@ -36,7 +36,10 @@ pub mod winpath;
 
 pub use casefold::{find_case_conflict, fold_key, host_folds_case, CaseConflict, CaseFoldIndex};
 pub use links::{allow_windows_dir_links, classify_link, LinkDecision, LinkRefusal};
-pub use lock::{ProcessLock, ProcessLockError};
+pub use lock::{
+    is_running, read_pid, running_pid, terminate, DaemonLock, DaemonLockError, PidRecord,
+    TerminateOutcome, PID_FILENAME, TERMINATE_DEADLINE,
+};
 pub use procs::{process_start_token, spawn_sleeper};
 pub use reserved::is_reserved_device_name;
 pub use time::{

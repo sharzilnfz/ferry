@@ -33,9 +33,6 @@ thiserror.workspace = true
 qrcode.workspace = true
 subtle.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-
 [features]
 default = ["web-ui", "tui", "gui"]
 web-ui = ["dep:axum", "ferry-daemon/web-ui"]

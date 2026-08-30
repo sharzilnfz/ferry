@@ -178,17 +178,16 @@ impl Supervisor {
             quiet: true,
         };
         let transport = Arc::clone(&self.transport);
-        let mut engine = if let Ok(opened) =
-            ferry_folder::folder::open_folder(&record.path, &self.identity)
-        {
-            SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
-        } else {
-            SyncEngine::new(cfg, transport)
-        }
-        .map_err(|e| SupervisorError {
-            code: "engine-init".to_string(),
-            message: e.to_string(),
-        })?;
+        let mut engine =
+            if let Ok(opened) = ferry_folder::folder::open_folder(&record.path, &self.identity) {
+                SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
+            } else {
+                SyncEngine::new(cfg, transport)
+            }
+            .map_err(|e| SupervisorError {
+                code: "engine-init".to_string(),
+                message: e.to_string(),
+            })?;
         engine.set_identity(self.identity.clone());
         let handle = Arc::new(engine.start());
         let task = tokio::spawn(async move {

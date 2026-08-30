@@ -118,7 +118,9 @@ fn macos_token(pid: u32) -> Option<u64> {
             0,
         )
     };
-    if rc != 0 {
+    // A vanished pid yields rc == 0 with size 0: no record was written, so
+    // the zeroed buffer must NOT be read as a birth time of zero.
+    if rc != 0 || size < std::mem::size_of::<DarwinTimeVal>() {
         return None;
     }
     let tv = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast::<DarwinTimeVal>()) };
