@@ -2,10 +2,11 @@
 //! peer over TCP in the background using the unified `SyncEngine`.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ferry_platform::{DaemonLock, DaemonLockError, TerminateOutcome, TERMINATE_DEADLINE};
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine};
 
@@ -47,8 +48,8 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
     };
     if listen_addr.is_none() && peer_addr.is_none() {
         let home = crate::home::ferry_home()?;
-        let _lock = ferry_platform::ProcessLock::acquire(&home).map_err(|e| match e {
-            ferry_platform::ProcessLockError::AlreadyRunning(pid) => {
+        let _lock = DaemonLock::acquire(&home).map_err(|e| match e {
+            DaemonLockError::AlreadyRunning(pid) => {
                 let pid_str = pid.map(|p| format!(" (PID {p})")).unwrap_or_default();
                 CliError::new(
                     "daemon-already-running",
@@ -56,7 +57,7 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
                     "run `ferry daemon stop` first or check active processes",
                 )
             }
-            ferry_platform::ProcessLockError::Io(err) => {
+            DaemonLockError::Io(err) => {
                 CliError::new("io", err.to_string(), "check permissions on FERRY_HOME")
             }
         })?;
@@ -127,7 +128,9 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             {
                 let s_tx2 = shutdown_tx.clone();
                 tokio::spawn(async move {
-                    if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    if let Ok(mut sig) =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    {
                         sig.recv().await;
                         let _ = s_tx2.send(true);
                     }
@@ -200,8 +203,8 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
             quiet: true,
         };
 
-        let mut engine =
-            SyncEngine::with_store(cfg, transport.clone(), Arc::clone(&opened.store)).map_err(|e| {
+        let mut engine = SyncEngine::with_store(cfg, transport.clone(), Arc::clone(&opened.store))
+            .map_err(|e| {
                 CliError::new(
                     "bind",
                     format!(
@@ -262,88 +265,145 @@ pub fn run(args: DaemonArgs<'_>) -> CliResult<Output> {
 }
 
 pub fn stop() -> CliResult<Output> {
-    let home = crate::home::ferry_home()?;
-    let pid_file = home.join("daemon.pid");
-    let socket_path = ferry_ipc::paths::default_socket_path();
+    stop_in(&crate::home::ferry_home()?)
+}
 
-    let pid = if pid_file.is_file() {
-        std::fs::read_to_string(&pid_file)
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-    } else {
-        None
-    };
+/// Stop whatever daemon `home` records. A pure function of the directory:
+/// termination, liveness polling, and PID-file ownership live in
+/// ferry-platform; this only renders outcomes.
+pub fn stop_in(home: &Path) -> CliResult<Output> {
+    stop_with_deadline(home, TERMINATE_DEADLINE)
+}
 
-    if let Some(pid) = pid {
-        #[cfg(unix)]
-        {
-            let res = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            if res == 0 {
-                // Wait up to 2 seconds for process to exit
-                for _ in 0..20 {
-                    std::thread::sleep(Duration::from_millis(100));
-                    let probe = unsafe { libc::kill(pid as i32, 0) };
-                    if probe != 0 {
-                        break;
-                    }
-                }
-            }
+/// The socket the central daemon binds for `home`: `<home>/daemon.sock`
+/// on Unix, the fixed named pipe on Windows. Derived from the directory
+/// so stop and status stay pure functions of it.
+fn socket_path_for_home(home: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let _ = home;
+        ferry_ipc::paths::default_socket_path()
+    }
+    #[cfg(not(windows))]
+    {
+        home.join(ferry_ipc::paths::DEFAULT_SOCKET_FILENAME)
+    }
+}
+
+fn stop_with_deadline(home: &Path, deadline: Duration) -> CliResult<Output> {
+    let socket_path = socket_path_for_home(home);
+    match ferry_platform::terminate(home, deadline) {
+        Ok(TerminateOutcome::Stopped { pid }) => {
+            let _ = std::fs::remove_file(&socket_path);
+            Ok(Output::new(
+                serde_json::json!({"command": "daemon", "action": "stop", "status": "stopped", "pid": pid}),
+                format!("Ferry daemon (PID {pid}) stopped.\n"),
+            ))
         }
-        let _ = std::fs::remove_file(&pid_file);
-        let _ = std::fs::remove_file(&socket_path);
-        return Ok(Output::new(
-            serde_json::json!({"command": "daemon", "action": "stop", "status": "stopped", "pid": pid}),
-            format!("Ferry daemon (PID {pid}) stopped.\n"),
-        ));
+        Ok(TerminateOutcome::NotRunning) => {
+            let _ = std::fs::remove_file(&socket_path);
+            Ok(Output::new(
+                serde_json::json!({"command": "daemon", "action": "stop", "status": "not_running"}),
+                "No Ferry daemon is running.\n",
+            ))
+        }
+        Ok(TerminateOutcome::Timeout { pid }) => Err(CliError::new(
+            "daemon-stop-timeout",
+            format!(
+                "Ferry daemon (PID {pid}) did not exit within {}s",
+                deadline.as_secs()
+            ),
+            "the daemon is still running; inspect it with `ferry daemon status` and escalate manually",
+        )),
+        Err(DaemonLockError::AlreadyRunning(pid)) => Err(CliError::new(
+            "daemon-already-running",
+            format!(
+                "A Ferry daemon is already running{}",
+                pid.map(|p| format!(" (PID {p})")).unwrap_or_default()
+            ),
+            "run `ferry daemon stop` first or check active processes",
+        )),
+        Err(DaemonLockError::Io(err)) => {
+            Err(CliError::new("io", err.to_string(), "check permissions on FERRY_HOME"))
+        }
     }
-
-    if socket_path.exists() {
-        let _ = std::fs::remove_file(&socket_path);
-    }
-
-    Ok(Output::new(
-        serde_json::json!({"command": "daemon", "action": "stop", "status": "not_running"}),
-        "No Ferry daemon is running.\n",
-    ))
 }
 
 pub fn status() -> CliResult<Output> {
-    let home = crate::home::ferry_home()?;
-    let pid_file = home.join("daemon.pid");
-    let socket_path = ferry_ipc::paths::default_socket_path();
+    status_in(&crate::home::ferry_home()?)
+}
 
-    let pid = if pid_file.is_file() {
-        std::fs::read_to_string(&pid_file)
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-    } else {
-        None
-    };
-
-    let is_alive = if let Some(pid) = pid {
-        #[cfg(unix)]
-        {
-            unsafe { libc::kill(pid as i32, 0) == 0 }
-        }
-        #[cfg(not(unix))]
-        {
-            true
-        }
-    } else {
-        false
-    };
-
-    if is_alive {
-        let pid = pid.unwrap();
-        Ok(Output::new(
+/// Report whether the daemon `home` records is alive. A pure function of
+/// the directory: liveness is the platform's start-token check, never a
+/// blind pid probe.
+pub fn status_in(home: &Path) -> CliResult<Output> {
+    let socket_path = socket_path_for_home(home);
+    match ferry_platform::running_pid(home) {
+        Some(pid) => Ok(Output::new(
             serde_json::json!({"command": "daemon", "action": "status", "status": "running", "pid": pid, "socket": socket_path}),
-            format!("Ferry daemon is running (PID {pid}, socket: {})\n", socket_path.display()),
-        ))
-    } else {
-        Ok(Output::new(
+            format!(
+                "Ferry daemon is running (PID {pid}, socket: {})\n",
+                socket_path.display()
+            ),
+        )),
+        None => Ok(Output::new(
             serde_json::json!({"command": "daemon", "action": "status", "status": "stopped"}),
             "No Ferry daemon is running.\n",
-        ))
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// A SIGTERM-immune stand-in daemon, so stop's timeout path runs in
+    /// milliseconds instead of the real five-second deadline.
+    fn spawn_term_immune_sleeper() -> std::process::Child {
+        let child = Command::new("sh")
+            .args(["-c", "trap \"\" TERM; sleep 30"])
+            .spawn()
+            .expect("spawn TERM-immune sleeper");
+        // Let the trap install before anything signals the child.
+        std::thread::sleep(Duration::from_millis(100));
+        child
+    }
+
+    fn stamp(pid: u32, token: Option<u64>) -> String {
+        match token {
+            Some(token) => format!("{pid} {token}\n"),
+            None => format!("{pid}\n"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_timeout_is_a_coded_error_that_preserves_the_pid_file() {
+        let home = tempfile::tempdir().unwrap();
+        let mut child = spawn_term_immune_sleeper();
+        let token = ferry_platform::process_start_token(child.id());
+        std::fs::write(home.path().join("daemon.pid"), stamp(child.id(), token)).unwrap();
+
+        let err = stop_with_deadline(home.path(), Duration::from_millis(300)).unwrap_err();
+
+        assert_eq!(err.code, "daemon-stop-timeout");
+        assert_eq!(
+            err.exit_code(),
+            4,
+            "CI asserts the distinct timeout exit code"
+        );
+        assert!(
+            home.path().join("daemon.pid").is_file(),
+            "pid file preserved so status can report the live daemon"
+        );
+
+        let status = status_in(home.path()).unwrap();
+        assert_eq!(status.json["status"], "running");
+        assert_eq!(status.json["pid"].as_u64(), Some(u64::from(child.id())));
+
+        child.kill().expect("kill sleeper");
+        child.wait().expect("reap sleeper");
     }
 }
 

@@ -30,10 +30,12 @@ impl CliError {
 
     /// Process exit status. Usage errors never get here (clap exits 2 on
     /// its own); everything else is a generic failure per the ticket
-    /// ("all errors exit nonzero").
+    /// ("all errors exit nonzero"), except the codes a CI script must be
+    /// able to tell apart.
     pub fn exit_code(&self) -> u8 {
         match self.code {
             "secrets-found" => 3,
+            "daemon-stop-timeout" => 4,
             _ => 1,
         }
     }
