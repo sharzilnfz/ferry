@@ -452,3 +452,104 @@ async fn uninitialized_folder_fails_supervisor_registration_loudly() {
     assert_eq!(err.code, "not-a-folder");
     sup.shutdown();
 }
+
+#[tokio::test]
+async fn folder_engine_direct_lifecycle_and_state_broadcast() {
+    let identity = DeviceIdentity::generate();
+    let dir = init_folder(&identity);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+    let transport: std::sync::Arc<dyn ferry_sync::Transport> =
+        std::sync::Arc::new(ferry_sync::TcpTransport);
+    let options = ferry_daemon::supervisor::EngineSpawnOptions::default();
+
+    let mut engine = ferry_daemon::FolderEngine::start(
+        dir.path(),
+        &identity,
+        transport,
+        options,
+        tx,
+    )
+    .expect("start folder engine");
+
+    assert_eq!(engine.restart_count(), 0);
+    assert!(engine.is_healthy());
+
+    // Wait for direct UiEvent broadcast delivery without any full daemon harness
+    let mut got_state_changed = false;
+    for _ in 0..50 {
+        if let Ok(ferry_ipc::backend::UiEvent::StateChanged { state, manifest_id, .. }) =
+            rx.try_recv()
+        {
+            if !manifest_id.is_empty() {
+                assert_eq!(state, "idle");
+                got_state_changed = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(got_state_changed, "FolderEngine should stream StateChanged event directly to broadcast");
+
+    let snap = engine.snapshot();
+    assert!(snap.manifest_id.is_some());
+    assert_eq!(snap.state, "idle");
+
+    engine.shutdown();
+}
+
+#[tokio::test]
+async fn folder_engine_crash_recovery_and_backoff_escalation() {
+    let identity = DeviceIdentity::generate();
+    let dir = init_folder(&identity);
+    let (tx, mut rx) = tokio::sync::broadcast::channel(64);
+    let transport: std::sync::Arc<dyn ferry_sync::Transport> =
+        std::sync::Arc::new(ferry_sync::TcpTransport);
+    let options = ferry_daemon::supervisor::EngineSpawnOptions::default();
+
+    let mut engine = ferry_daemon::FolderEngine::start(
+        dir.path(),
+        &identity,
+        transport,
+        options,
+        tx,
+    )
+    .expect("start folder engine");
+
+    let handle_before = std::sync::Arc::clone(engine.handle());
+
+    // Simulate engine crash
+    handle_before.shutdown();
+    assert!(!engine.is_healthy());
+
+    let restarted = engine.tick();
+    assert!(restarted, "engine tick must recover from crash");
+    assert_eq!(engine.restart_count(), 1);
+    assert!(engine.is_healthy());
+    assert!(!std::sync::Arc::ptr_eq(&handle_before, engine.handle()));
+
+    // Verify first crash emitted 100ms backoff
+    let first_msg = expect_engine_crashed(&mut rx).await;
+    assert!(
+        first_msg.contains("100ms"),
+        "first restart should emit 100ms backoff, got: {first_msg}"
+    );
+
+    // Second crash
+    let handle_second = std::sync::Arc::clone(engine.handle());
+    handle_second.shutdown();
+    assert!(!engine.is_healthy());
+
+    let restarted_second = engine.tick();
+    assert!(restarted_second);
+    assert_eq!(engine.restart_count(), 2);
+    assert!(engine.is_healthy());
+
+    let second_msg = expect_engine_crashed(&mut rx).await;
+    assert!(
+        second_msg.contains("200ms"),
+        "second restart should emit 200ms backoff, got: {second_msg}"
+    );
+
+    engine.shutdown();
+}
+

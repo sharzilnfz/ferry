@@ -226,7 +226,7 @@ pub fn run_adhoc(
                 ))
             })?;
         ipc_handles.push(ipc_handle);
-        handles.push(supervised.handle);
+        handles.push(supervised.handle.clone());
     }
 
     if let Some(first) = handles.first() {
