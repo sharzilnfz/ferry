@@ -2106,6 +2106,7 @@ dependencies = [
  "ferry-pin",
  "ferry-platform",
  "ferry-proto",
+ "ferry-scan",
  "ferry-store",
  "ferry-sync-engine",
  "filetime",

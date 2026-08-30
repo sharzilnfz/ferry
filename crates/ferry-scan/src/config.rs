@@ -15,6 +15,8 @@ pub struct ScanConfig {
     /// Poll fallback cadence for unwatchable subtrees (Linux descriptor
     /// exhaustion) and for root liveness checks everywhere else.
     pub poll_interval: Duration,
+    /// Seed parent manifest id for the initial scan pass (e.g. from last agreement).
+    pub parent_manifest_id: Option<ferry_store::BlobId>,
 }
 
 impl Default for ScanConfig {
@@ -23,6 +25,7 @@ impl Default for ScanConfig {
             quiet_window: Duration::from_millis(500),
             audit_interval: Duration::from_hours(24),
             poll_interval: Duration::from_secs(10),
+            parent_manifest_id: None,
         }
     }
 }

@@ -57,6 +57,7 @@ fn fast_cfg() -> ScanConfig {
         quiet_window: Duration::from_millis(150),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(100),
+        parent_manifest_id: None,
     }
 }
 
@@ -194,6 +195,7 @@ fn audit_timer_detects_silent_same_length_rewrite() {
         quiet_window: Duration::from_millis(50),
         audit_interval: Duration::from_millis(250),
         poll_interval: Duration::from_millis(100),
+        parent_manifest_id: None,
     };
     let engine = ScanEngine::watch_with(
         env.root.clone(),

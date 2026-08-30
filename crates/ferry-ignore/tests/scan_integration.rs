@@ -105,6 +105,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         quiet_window: Duration::from_millis(10),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(50),
+        parent_manifest_id: None,
     };
     let engine = ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();
 

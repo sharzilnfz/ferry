@@ -90,14 +90,6 @@ impl ApplyStats {
     }
 }
 
-/// Policy hook allowing session pins to evaluate and withhold changes
-/// before disk mutation (T-03).
-pub trait PinGate {
-    /// Evaluates the change set against the pin gate before disk mutation.
-    /// Returns the filtered change set to apply and how many paths were withheld.
-    fn evaluate_changes(&self, changes: &ChangeSet)
-        -> Result<(ChangeSet, usize), MaterializeError>;
-}
 
 /// What one apply actually did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -310,7 +302,6 @@ pub struct Applier<'a> {
     overwrite: Overwrite,
     style: TempStyle,
     pace_ms: u64,
-    pin: Option<Box<dyn PinGate + 'a>>,
     /// Per-parent NFC live-fold cache, reset at the start of every apply
     /// (T-13): each parent directory is read at most once per apply
     /// instead of once per resolved component.
@@ -327,16 +318,8 @@ impl<'a> Applier<'a> {
             overwrite: Overwrite::Always,
             style: TempStyle::current(),
             pace_ms: 0,
-            pin: None,
             fold: NfcFoldCache::refusing(),
         }
-    }
-
-    /// Enforce session pinning during materialization (T-03): install a [`PinGate`]
-    /// that withholds matching paths before tree mutation.
-    pub fn with_pin_gate(mut self, gate: impl PinGate + 'a) -> Self {
-        self.pin = Some(Box::new(gate));
-        self
     }
 
     /// Set the overwrite policy (default [`Overwrite::Always`]).
@@ -455,24 +438,16 @@ impl<'a> Applier<'a> {
         self.run(removes, upserts)
     }
 
-    /// The v1 sync session contract (T-05, T-03): apply this change set,
-    /// respecting any configured [`PinGate`], then restore every directory
-    /// mtime from the TARGET tree, deepest first.
-    ///
-    /// Under pin enforcement the applied set is `changes` MINUS whatever
-    /// the active pin withholds; see [`ApplyOutcome::held`].
+    /// The v1 sync session contract: apply this change set,
+    /// then restore every directory mtime from the TARGET tree, deepest first.
     pub fn apply_session_change_set(
         &mut self,
         cs: &ChangeSet,
         target_root_tree_id: &BlobId,
     ) -> Result<ApplyOutcome, MaterializeError> {
-        let (to_apply, held) = match &self.pin {
-            Some(gate) => gate.evaluate_changes(cs)?,
-            None => (cs.clone(), 0),
-        };
-        self.apply_change_set(&to_apply)?;
+        self.apply_change_set(cs)?;
         self.restore_dir_mtimes_from_tree(target_root_tree_id)?;
-        Ok(ApplyOutcome { held })
+        Ok(ApplyOutcome { held: 0 })
     }
 
     /// Stamp every DIRECTORY of the target tree with its recorded mtime,

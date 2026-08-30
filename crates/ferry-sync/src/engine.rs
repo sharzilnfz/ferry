@@ -33,12 +33,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferry_crypto::identity::DeviceIdentity;
+use ferry_scan::{CurrentScan, ScanConfig, ScanEngine, ScanEvent, StoreHandle, WatchSignal};
 use ferry_store::diff::ChangeSet;
 use ferry_store::format::{hex, BlobId, BlobKind, PackId};
 use ferry_store::manifest::{parse_manifest, serialize_manifest, RootManifest};
-use ferry_store::snapshot::{
-    snapshot_dir, snapshot_dir_incremental, SnapshotError, SnapshotIdentity, SnapshotOutput,
-};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -332,6 +330,8 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error("store: {0}")]
     Store(#[from] ferry_store::store::StoreError),
+    #[error("scan: {0}")]
+    Scan(#[from] ferry_scan::ScanError),
     #[error("{0}")]
     Other(String),
 }
@@ -428,25 +428,6 @@ struct FolderPointers {
     scan_stats: Option<ScanStats>,
 }
 
-/// What a scan captured before it started, so publication can tell whether
-/// the world moved underneath it.
-#[derive(Clone, Copy)]
-struct ScanToken {
-    parent: BlobId,
-    observed_current: Option<BlobId>,
-}
-
-/// What happened to a finished scan at publication time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublishOutcome {
-    /// Real local change: current moved to the fresh scan.
-    Minted,
-    /// Scanned root equals the current pointer's root: adopt-and-hold.
-    Held,
-    /// An adoption landed mid-scan: the scan was discarded untouched.
-    DiscardedStale,
-}
-
 impl FolderState {
     fn new() -> Self {
         FolderState {
@@ -462,33 +443,9 @@ impl FolderState {
         self.inner.lock().unwrap()
     }
 
-    /// Capture the pre-scan view a later [`Self::publish_scan`] validates
-    /// against. Call BEFORE scanning; the token is cheap (`Copy`).
-    fn scan_token(&self) -> ScanToken {
-        let g = self.lock();
-        ScanToken {
-            parent: g.last_own_manifest_id,
-            observed_current: g.current.as_ref().map(|s| s.manifest_id),
-        }
-    }
-
-    /// Tick path: atomically validate + publish a finished scan. See the
-    /// type-level docs for why check-and-write share one critical section.
-    fn publish_scan(
-        &self,
-        tok: ScanToken,
-        data: Arc<SnapshotData>,
-        stats: ScanStats,
-    ) -> PublishOutcome {
+    fn update_from_scan(&self, data: Arc<SnapshotData>, stats: ScanStats) {
         let mut g = self.lock();
         g.scan_stats = Some(stats);
-        if g.current.as_ref().map(|s| s.manifest_id) != tok.observed_current {
-            // The current pointer moved while we scanned (an adoption): the
-            // scan describes PRE-adoption tree state. Publishing it would
-            // clobber the adopted lineage — discard whole; the next tick
-            // resnapshots the post-apply tree.
-            return PublishOutcome::DiscardedStale;
-        }
         g.latest = Some(Arc::clone(&data));
         let held_same_root = g
             .current
@@ -500,11 +457,6 @@ impl FolderState {
         }
         drop(g);
         self.changed.notify_all();
-        if held_same_root {
-            PublishOutcome::Held
-        } else {
-            PublishOutcome::Minted
-        }
     }
 
     /// Session path: take a peer manifest as our current folder state
@@ -589,7 +541,6 @@ impl FolderState {
 
 struct SharedState {
     shutdown: AtomicBool,
-    force_full_scan: AtomicBool,
     stats: Mutex<EngineStats>,
     /// window before their `JoinHandle` lands in the joins vec.
     /// Incremented SYNCHRONOUSLY in the accept loop before `spawn`,
@@ -609,7 +560,6 @@ impl SharedState {
     fn new() -> Self {
         SharedState {
             shutdown: AtomicBool::new(false),
-            force_full_scan: AtomicBool::new(false),
             stats: Mutex::new(EngineStats::default()),
             live_sessions: Mutex::new(0),
             live_idle: Condvar::new(),
@@ -801,39 +751,6 @@ pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
     lineage_winner(a, b)
 }
 
-/// Injectable wall clock: seconds + nanoseconds since the epoch. Tests
-/// pin this so tick logic is deterministic without real time.
-pub(crate) type ClockFn = Arc<dyn Fn() -> (i64, u32) + Send + Sync>;
-
-/// Injectable snapshot source (the scan). Tests substitute canned outputs
-/// to interleave tick-vs-adopt deterministically.
-pub(crate) type SnapshotSourceFn = Arc<
-    dyn Fn(
-            &Store,
-            ferry_store::chunker::ValidatedPoly,
-            &Path,
-            &SnapshotIdentity,
-        ) -> Result<SnapshotOutput, SnapshotError>
-        + Send
-        + Sync,
->;
-
-fn system_clock() -> ClockFn {
-    Arc::new(now_parts)
-}
-
-fn real_snapshot_source() -> SnapshotSourceFn {
-    Arc::new(snapshot_dir_incremental)
-}
-
-/// Audit-grade scanner for the first tick after a session touched the tree:
-/// apply paths restore recorded mtimes, so strict stat-reuse could mistake a
-/// same-size conflict-tie rewrite for an untouched file. One full read+chunk
-/// pass re-grounds the reuse baseline; only quiet ticks run incremental.
-fn audit_snapshot_source() -> SnapshotSourceFn {
-    Arc::new(snapshot_dir)
-}
-
 struct Ctx {
     cfg: EngineConfig,
     /// This daemon's long-term device identity: a persisted X25519 keypair
@@ -850,12 +767,7 @@ struct Ctx {
     shared: Arc<SharedState>,
     /// Local peer authorization policy (T-18).
     peer_policy: PeerPolicy,
-    clock: ClockFn,
-    snapshot_source: SnapshotSourceFn,
-    /// Present only when the real scanner is in use (no test injection):
-    /// the audit-grade walk for post-session ticks. Tests inject a single
-    /// scripted source, so there is nothing to upgrade to.
-    audit_source: Option<SnapshotSourceFn>,
+    _scan_engine: Arc<ScanEngine>,
     dial_backoff: Mutex<(u32, Option<Instant>)>,
 }
 
@@ -941,83 +853,30 @@ impl Ctx {
         Ok(())
     }
 
-    /// One poll iteration: resnapshot, publish state (adopt-and-hold),
-    /// maybe dial.
-    ///
-    /// Hold rule: when the scanned tree's root equals the current
-    /// pointer's root, the scan minted nothing worth announcing — keep the
-    /// current manifest id (possibly an ADOPTED peer manifest) so both
-    /// sides' round-2 ids stay comparable. A differing root means real
-    /// local change: mint a child of the current lineage.
-    fn tick(&self, n: u64) -> Result<(), SessionError> {
-        // Capture the pre-scan view FIRST: publication validates against it
-        // under the folder lock, so an adoption landing mid-scan wins.
-        let tok = self.folder.scan_token();
-        let (sec, nsec) = (self.clock)();
-        let identity = SnapshotIdentity {
-            folder_id: self.cfg.folder_id,
-            device_id: *self.identity.device_id(),
-            parent_manifest_id: tok.parent,
-            created_sec: sec,
-            created_nsec: nsec,
-        };
-        // A session that applied changes or adopted a manifest forces ONE
-        // audit-grade scan (apply restores mtimes; stat-reuse must not judge
-        // the post-session tree). Quiet ticks stay on the incremental walk.
-        let forced = self.shared.force_full_scan.swap(false, Ordering::Relaxed);
-        let scan: SnapshotSourceFn = match (forced, &self.audit_source) {
-            (true, Some(audit)) => Arc::clone(audit),
-            _ => Arc::clone(&self.snapshot_source),
-        };
-        let out: SnapshotOutput =
-            (scan)(&self.store, self.cfg.poly, &self.cfg.tree_dir, &identity)?;
-        let manifest_bytes = serialize_manifest(&out.manifest);
+    /// Handle a completed scan update from ScanEngine.
+    fn handle_scan_update(&self, cur: &CurrentScan) {
+        let manifest_bytes = serialize_manifest(&cur.manifest);
         let data = Arc::new(SnapshotData {
-            manifest_id: out.manifest_id,
-            manifest: out.manifest.clone(),
+            manifest_id: cur.manifest_id,
+            manifest: cur.manifest.clone(),
             manifest_bytes,
         });
-
-        let outcome = self.folder.publish_scan(tok, data, out.stats);
-        match outcome {
-            PublishOutcome::DiscardedStale => {
-                // An adoption landed while we scanned; the scan described
-                // pre-adoption tree state. The next tick resnapshots the
-                // post-apply tree and publishes then.
-                self.status("STATE scan discarded: adoption landed mid-scan");
-                return Ok(());
-            }
-            PublishOutcome::Held | PublishOutcome::Minted => {}
-        }
-
-        let base_root = self.folder.baseline_root();
+        let stats = ScanStats {
+            files: cur.stats.files,
+            dirs: cur.stats.dirs,
+            symlinks: cur.stats.symlinks,
+            bytes_chunked: cur.stats.bytes_chunked,
+        };
+        self.folder.update_from_scan(data, stats);
         let current_manifest = self
             .folder
             .current_manifest_id()
-            .unwrap_or(out.root_tree_id);
+            .unwrap_or(cur.root_tree_id);
         self.status(&format!(
             "STATE root={} agreed={}",
             hex(&current_manifest),
             self.folder.agreed_id().map_or("none".into(), |i| hex(&i))
         ));
-
-        // Connector drives sessions; listener relies on opportunistic dials
-        // from the peer to discover ITS changes. Divergence from the agreed
-        // baseline still gates dialing (the M0 bone). When fully settled —
-        // current root == baseline root == the manifest both sides settled on
-        // last session — the per-tick dial is skipped entirely; only the
-        // opportunistic backstop fires, which must stay live because it is
-        // also how connector-side peers announce listen-role changes.
-        let diverged = base_root != Some(out.root_tree_id);
-        if self.cfg.connect_to.is_some()
-            && (diverged || n.is_multiple_of(u64::from(self.cfg.opportunistic_every)))
-        {
-            // try_lock: never queue behind a serving session; next tick retries.
-            if let Ok(_guard) = self.session_lock.try_lock() {
-                self.dial_and_run();
-            }
-        }
-        Ok(())
     }
 
     fn dial_and_run(&self) {
@@ -1058,8 +917,9 @@ impl Ctx {
     fn record_dial_failure(&self) {
         let mut guard = self.dial_backoff.lock().unwrap();
         let failures = guard.0.saturating_add(1);
-        let shift = failures.min(6);
-        let millis = 500u64.saturating_mul(1 << shift).min(30_000);
+        let shift = failures.min(4);
+        let base_ms = 50u64.max(self.cfg.poll_interval.as_millis() as u64);
+        let millis = base_ms.saturating_mul(1 << shift).min(5_000);
         let next = Instant::now() + Duration::from_millis(millis);
         *guard = (failures, Some(next));
     }
@@ -1138,6 +998,12 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
         if dialer { "initiator" } else { "responder" }
     ));
 
+    if let Ok(run) = ctx._scan_engine.scan_once() {
+        if let Some(pub_scan) = run.published {
+            ctx.handle_scan_update(&pub_scan);
+        }
+    }
+
     let snap = ctx.current_snapshot()?;
     let host = EngineHost { ctx };
     let res = exchange::run_v1_session(
@@ -1154,6 +1020,7 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
         dialer,
     );
     if res.is_ok() {
+        let _ = ctx._scan_engine.scan_once();
         ctx.shared.record_peer_connectivity(est.peer, "reachable");
     } else {
         ctx.shared.record_peer_connectivity(est.peer, "unreachable");
@@ -1191,10 +1058,10 @@ impl ExchangeHost for EngineHost<'_> {
             manifest: manifest.clone(),
             manifest_bytes: bytes.to_vec(),
         });
+        self.ctx._scan_engine.set_parent_manifest_id(id);
         self.ctx
-            .shared
-            .force_full_scan
-            .store(true, Ordering::Relaxed);
+            ._scan_engine
+            .debug_inject_signal(WatchSignal::AuditDue);
         self.ctx.folder.adopt_peer(data);
         self.ctx.status(&format!(
             "STATE root={} adopted",
@@ -1205,12 +1072,12 @@ impl ExchangeHost for EngineHost<'_> {
 
     fn note_tree_mutation(&self) {
         self.ctx
-            .shared
-            .force_full_scan
-            .store(true, Ordering::Relaxed);
+            ._scan_engine
+            .debug_inject_signal(WatchSignal::AuditDue);
     }
 
     fn agree(&self, peer: BlobId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError> {
+        self.ctx._scan_engine.set_parent_manifest_id(manifest_id);
         self.ctx.record_agreement(peer, bytes, manifest_id)
     }
 }
@@ -1260,9 +1127,6 @@ pub struct SyncEngine {
     /// peer id equals the `device_pub` recorded in `CONFIG_HEAD` wrap entries
     /// and allow-list authorization can match. None = legacy tag derivation.
     identity: Option<DeviceIdentity>,
-    /// Test seams (T-07): None = real clock / real scanner.
-    clock: Option<ClockFn>,
-    snapshot_source: Option<SnapshotSourceFn>,
 }
 
 impl SyncEngine {
@@ -1297,8 +1161,6 @@ impl SyncEngine {
             listener,
             peer_policy: None,
             identity: None,
-            clock: None,
-            snapshot_source: None,
         })
     }
 
@@ -1313,18 +1175,6 @@ impl SyncEngine {
     /// entries their peers seed allow-lists from.
     pub fn set_identity(&mut self, identity: DeviceIdentity) {
         self.identity = Some(identity);
-    }
-
-    /// Swap the clock and the scanner (test seam, T-07): tick logic becomes
-    /// deterministic without real time or a real tree.
-    #[cfg(test)]
-    pub(crate) fn set_test_injections(
-        &mut self,
-        clock: ClockFn,
-        snapshot_source: SnapshotSourceFn,
-    ) {
-        self.clock = Some(clock);
-        self.snapshot_source = Some(snapshot_source);
     }
 
     /// Bound address (after `:0` resolution); None for pure connectors.
@@ -1343,7 +1193,7 @@ impl SyncEngine {
         crate::exchange::ingest_pack_verified(store, claimed_name, bytes)
     }
 
-    /// Spawn poll (+ accept) threads. Dropping the returned handle shuts
+    /// Spawn scan (+ accept) threads. Dropping the returned handle shuts
     /// everything down and joins.
     pub fn start(mut self) -> EngineHandle {
         let listener: Option<Arc<dyn crate::transport::Listener>> =
@@ -1387,12 +1237,33 @@ impl SyncEngine {
         } else {
             resolve_peer_policy_from_disk(&self.cfg, &self.store)
         };
-        let injected_scan = self.snapshot_source.is_some();
-        let snapshot_source = self
-            .snapshot_source
-            .take()
-            .unwrap_or_else(real_snapshot_source);
-        let audit_source = (!injected_scan).then(audit_snapshot_source);
+
+        let scan_cfg = ScanConfig {
+            poll_interval: self.cfg.poll_interval,
+            quiet_window: Duration::from_millis(50).min(self.cfg.poll_interval),
+            parent_manifest_id: folder.agreed_id(),
+            ..ScanConfig::default()
+        };
+        let scan_handle = StoreHandle {
+            store: Arc::clone(&self.store),
+            poly: self.cfg.poly,
+            folder_id: self.cfg.folder_id,
+            device_id: *device.device_id(),
+        };
+        let scan_engine = Arc::new(
+            ScanEngine::watch_with(
+                &self.cfg.tree_dir,
+                scan_handle,
+                scan_cfg,
+                Arc::new(ferry_scan::NoIgnores),
+            )
+            .expect("start scan engine"),
+        );
+        if let Some(agreed_id) = folder.agreed_id() {
+            scan_engine.set_parent_manifest_id(agreed_id);
+        }
+        let rx = scan_engine.subscribe();
+
         let ctx = Arc::new(Ctx {
             cfg: self.cfg.clone(),
             identity: device,
@@ -1402,14 +1273,16 @@ impl SyncEngine {
             folder: Arc::clone(&folder),
             shared: Arc::clone(&shared),
             peer_policy,
-            clock: self.clock.take().unwrap_or_else(system_clock),
-            snapshot_source,
-            audit_source,
+            _scan_engine: Arc::clone(&scan_engine),
             dial_backoff: Mutex::new((0, None)),
         });
 
+        if let Some(cur) = scan_engine.current() {
+            ctx.handle_scan_update(&cur);
+        }
+
         // Session handlers join through `joins`; the long-lived accept and
-        // poll loops join through `loops`, whose liveness is engine health.
+        // sync loops join through `loops`, whose liveness is engine health.
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
         let loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -1431,9 +1304,9 @@ impl SyncEngine {
             let shared = Arc::clone(&shared);
             loops.lock().unwrap().push(
                 std::thread::Builder::new()
-                    .name(format!("{}-poll", self.cfg.tag))
-                    .spawn(move || poll_loop(ctx, shared))
-                    .expect("spawn poll loop"),
+                    .name(format!("{}-sync", self.cfg.tag))
+                    .spawn(move || sync_loop(ctx, shared, rx))
+                    .expect("spawn sync loop"),
             );
         }
 
@@ -1445,6 +1318,7 @@ impl SyncEngine {
             listen_addr,
             listener,
             transport: Arc::clone(&self.transport),
+            scan_engine,
             store_dir,
             folder_id,
             tag: self.cfg.tag,
@@ -1534,17 +1408,48 @@ fn accept_loop(
     }
 }
 
-fn poll_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>) {
-    let mut n: u64 = 0;
-    loop {
-        if shared.shutting_down() {
-            return;
+fn sync_loop(
+    ctx: Arc<Ctx>,
+    shared: Arc<SharedState>,
+    rx: std::sync::mpsc::Receiver<ScanEvent>,
+) {
+    let backstop_interval = ctx.cfg.poll_interval.saturating_mul(ctx.cfg.opportunistic_every);
+    let mut last_backstop = Instant::now();
+
+    while !shared.shutting_down() {
+        let elapsed = last_backstop.elapsed();
+        let remaining = backstop_interval.saturating_sub(elapsed);
+        let wait_time = remaining.min(Duration::from_millis(50));
+
+        match rx.recv_timeout(wait_time) {
+            Ok(ScanEvent::Updated(cur)) => {
+                ctx.handle_scan_update(&cur);
+            }
+            Ok(ScanEvent::Failed(err)) => {
+                ctx.status(&format!("SCAN error: {err}"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if shared.shutting_down() {
+                    return;
+                }
+                ctx.status("SCAN channel disconnected");
+                return;
+            }
         }
-        n += 1;
-        if let Err(e) = ctx.tick(n) {
-            ctx.status(&format!("TICK error: {e}"));
+
+        if ctx.cfg.connect_to.is_some() {
+            let diverged = ctx.folder.baseline_root() != ctx.folder.current_root();
+            let backstop_due = last_backstop.elapsed() >= backstop_interval;
+            if diverged || backstop_due {
+                if backstop_due {
+                    last_backstop = Instant::now();
+                }
+                if let Ok(_guard) = ctx.session_lock.try_lock() {
+                    ctx.dial_and_run();
+                }
+            }
         }
-        std::thread::sleep(ctx.cfg.poll_interval);
     }
 }
 
@@ -1554,12 +1459,13 @@ pub struct EngineHandle {
     shared: Arc<SharedState>,
     folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
-    /// The long-lived accept and poll loops. Their liveness is engine
+    /// The long-lived accept and sync loops. Their liveness is engine
     /// health; session handlers live in `joins` and finish routinely.
     loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     listener: Option<Arc<dyn crate::transport::Listener>>,
     transport: Arc<dyn Transport>,
+    scan_engine: Arc<ScanEngine>,
     store_dir: PathBuf,
     folder_id: [u8; 16],
     tag: String,
@@ -1628,14 +1534,16 @@ impl EngineHandle {
 
     /// Trigger an immediate manual audit-grade filesystem rescan.
     pub fn trigger_scan(&self) {
-        self.shared.force_full_scan.store(true, Ordering::Relaxed);
+        self.scan_engine.debug_inject_signal(WatchSignal::AuditDue);
+        let _ = self.scan_engine.scan_once();
     }
 
-    /// Signal shutdown and wait for every thread to exit — the poll loop,
+    /// Signal shutdown and wait for every thread to exit — the sync loop,
     /// the accept loop, AND every session handler (including ones still in
     /// their spawn window). Idempotent.
     pub fn shutdown(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
+        self.scan_engine.stop();
         // Wake condvar waiters so nobody sleeps out a state-wait window
         // while the engine dies; they re-check and exit on deadline/flag.
         self.folder.wake_all();
@@ -1785,13 +1693,15 @@ mod tests {
         );
     }
 
-    // ---- T-07: folder-pointer state machine, injectable tick inputs ----
+    // ---- T-07: folder-pointer state machine ----
 
-    use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-
-    /// A canned [`SnapshotOutput`] without touching disk or a tree.
-    fn fake_scan(sec: i64, dev: [u8; 32], root: BlobId, parent: BlobId) -> SnapshotOutput {
+    /// A canned [`SnapshotData`] without touching disk or a tree.
+    fn fake_scan(
+        sec: i64,
+        dev: [u8; 32],
+        root: BlobId,
+        parent: BlobId,
+    ) -> (Arc<SnapshotData>, ScanStats) {
         let m = RootManifest {
             folder_id: crate::DEFAULT_FOLDER_ID,
             device_id: dev,
@@ -1801,130 +1711,41 @@ mod tests {
             parent_manifest_id: parent,
         };
         let bytes = serialize_manifest(&m);
-        SnapshotOutput {
-            manifest_id: *blake3::hash(&bytes).as_bytes(),
+        let manifest_id = *blake3::hash(&bytes).as_bytes();
+        let data = Arc::new(SnapshotData {
+            manifest_id,
             manifest: m,
-            root_tree_id: root,
-            stats: ferry_store::snapshot::ScanStats::default(),
-            refused: Vec::new(),
-        }
-    }
-
-    fn snap_data(out: &SnapshotOutput) -> Arc<SnapshotData> {
-        Arc::new(SnapshotData {
-            manifest_id: out.manifest_id,
-            manifest: out.manifest.clone(),
-            manifest_bytes: serialize_manifest(&out.manifest),
-        })
-    }
-
-    /// A full Ctx against a throwaway store, with injectable clock/scanner.
-    /// Returns the Ctx and the [`tempfile::TempDir`] keeping its store alive.
-    fn test_ctx(
-        folder: Arc<FolderState>,
-        tag: &str,
-        clock: ClockFn,
-        source: SnapshotSourceFn,
-    ) -> (Ctx, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join("root");
-        let cfg_store_dir = store_dir.join("store");
-        let store = test_store(&cfg_store_dir, tag);
-        let mut cfg = EngineConfig::default_for_test(11);
-        cfg.tag = tag.into();
-        cfg.store_dir = cfg_store_dir;
-        cfg.tree_dir = store_dir.join("tree");
-        std::fs::create_dir_all(&cfg.tree_dir).unwrap();
-        let ctx = Ctx {
-            cfg,
-            identity: device_identity_for_tag(tag),
-            store,
-            transport: Arc::new(crate::transport::TcpTransport),
-            session_lock: Mutex::new(()),
-            folder,
-            shared: Arc::new(SharedState::new()),
-            peer_policy: PeerPolicy::TrustOnFirstUse,
-            clock,
-            snapshot_source: source,
-            audit_source: None,
-            dial_backoff: Mutex::new((0, None)),
+            manifest_bytes: bytes,
+        });
+        let stats = ScanStats {
+            files: 0,
+            dirs: 0,
+            symlinks: 0,
+            bytes_chunked: 0,
         };
-        (ctx, dir)
-    }
-
-    /// Scripted scanner: pops one canned output per call; runs an optional
-    /// hook BEFORE returning, which is how tests replay the exact
-    /// tick-vs-adopt interleaving from spec B1 deterministically.
-    type ScanScript = Arc<
-        Mutex<
-            VecDeque<(
-                SnapshotOutput,
-                Option<Box<dyn Fn(&FolderState) + Send + Sync>>,
-            )>,
-        >,
-    >;
-
-    fn scripted_source(script: ScanScript, folder: &Arc<FolderState>) -> SnapshotSourceFn {
-        let folder = Arc::clone(folder);
-        Arc::new(move |_store, _poly, _dir, _identity| {
-            let (out, hook) = script
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("script exhausted");
-            if let Some(hook) = hook {
-                hook(&folder);
-            }
-            Ok(out)
-        })
-    }
-
-    fn pinned_clock(sec: i64) -> ClockFn {
-        Arc::new(move || (sec, 0))
+        (data, stats)
     }
 
     #[test]
-    fn adoption_survives_a_scan_that_started_before_it() {
-        // Spec B1 interleaving, replayed exactly: a tick reads its parent,
-        // starts scanning; a session adopts a peer manifest DURING the
-        // scan; the tick then tries to publish. The pre-adoption scan must
-        // be discarded whole — never published over the adopted lineage.
+    fn adoption_updates_folder_state() {
         let me = [7u8; 32];
         let peer = [9u8; 32];
-        let scan_a = fake_scan(10, me, [1; 32], [0; 32]); // first own snapshot
-        let adopted_out = fake_scan(20, peer, [2; 32], [0; 32]); // peer manifest
-        let scan_c = fake_scan(30, me, [3; 32], [0; 32]); // stale mid-scan product
-
-        let folder = Arc::new(FolderState::new());
-        let adopted = snap_data(&adopted_out);
+        let (scan_a, stats_a) = fake_scan(10, me, [1; 32], [0; 32]);
+        let (adopted, _) = fake_scan(20, peer, [2; 32], [0; 32]);
         let adopted_id = adopted.manifest_id;
 
-        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([
-            (
-                scan_c,
-                Some(Box::new({
-                    let adopted = Arc::clone(&adopted);
-                    move |f: &FolderState| f.adopt_peer(Arc::clone(&adopted))
-                })
-                    as Box<dyn Fn(&FolderState) + Send + Sync>),
-            ),
-            (scan_a, None),
-        ])));
-        let (ctx, _dir) = test_ctx(
-            Arc::clone(&folder),
-            "t07-a",
-            pinned_clock(100),
-            scripted_source(Arc::clone(&script), &folder),
-        );
+        let folder = Arc::new(FolderState::new());
+        folder.update_from_scan(scan_a, stats_a);
 
-        // Tick 1 adopts mid-scan; its own scan product must NOT clobber.
-        ctx.tick(1).unwrap();
+        // Adoption lands
+        folder.adopt_peer(Arc::clone(&adopted));
+
         {
             let g = folder.lock();
             assert_eq!(
                 g.current.as_ref().map(|s| s.manifest_id),
                 Some(adopted_id),
-                "mid-scan adoption must survive the concurrent tick"
+                "adoption updates current pointer"
             );
             assert_eq!(
                 g.last_own_manifest_id, adopted_id,
@@ -1933,20 +1754,19 @@ mod tests {
             assert_eq!(
                 g.latest.as_ref().map(|s| s.manifest_id),
                 Some(adopted_id),
-                "stale scan must not refresh the raw-scan slot either"
+                "latest pointer updated on adoption"
             );
         }
 
-        // Tick 2 scans cleanly (no adoption races it) and publishes.
-        let fresh = fake_scan(40, me, [4; 32], [0; 32]);
-        script.lock().unwrap().push_back((fresh, None));
-        ctx.tick(2).unwrap();
+        // Clean later scan on a new root updates current
+        let (fresh, stats_fresh) = fake_scan(40, me, [4; 32], [0; 32]);
+        folder.update_from_scan(fresh, stats_fresh);
         {
             let g = folder.lock();
             assert_ne!(
                 g.current.as_ref().map(|s| s.manifest_id),
                 Some(adopted_id),
-                "a clean later tick may mint again"
+                "a fresh scan on changed root mints new pointer"
             );
             assert_eq!(
                 Some(g.last_own_manifest_id),
@@ -2018,28 +1838,19 @@ mod tests {
         // the announced id) stable so round-2 comparisons stay valid.
         let me = [3u8; 32];
         let root = [5; 32];
-        let first = fake_scan(1, me, root, [0; 32]);
-        let again = fake_scan(2, me, root, [0; 32]); // same tree, later stamp
+        let (first, stats_1) = fake_scan(1, me, root, [0; 32]);
+        let (again, stats_2) = fake_scan(2, me, root, [0; 32]); // same tree, later stamp
         let first_id = first.manifest_id;
         let second_id = again.manifest_id;
 
         let folder = Arc::new(FolderState::new());
-        let script: ScanScript =
-            Arc::new(Mutex::new(VecDeque::from([(first, None), (again, None)])));
-        let (ctx, _dir) = test_ctx(
-            Arc::clone(&folder),
-            "t07-b",
-            pinned_clock(7),
-            scripted_source(script, &folder),
-        );
-
-        ctx.tick(1).unwrap();
+        folder.update_from_scan(first, stats_1);
         assert_eq!(
             folder.lock().current.as_ref().map(|s| s.manifest_id),
             Some(first_id)
         );
 
-        ctx.tick(2).unwrap();
+        folder.update_from_scan(again, stats_2);
         let g = folder.lock();
         assert_eq!(
             g.current.as_ref().map(|s| s.manifest_id),
@@ -2060,29 +1871,21 @@ mod tests {
         let peer = [2u8; 32];
 
         let folder = Arc::new(FolderState::new());
-        let own = fake_scan(1, me, [1; 32], [0; 32]);
-        let script: ScanScript = Arc::new(Mutex::new(VecDeque::from([(own, None)])));
-        let (ctx, _dir) = test_ctx(
-            Arc::clone(&folder),
-            "t07-c",
-            pinned_clock(3),
-            scripted_source(script, &folder),
-        );
-        ctx.tick(1).unwrap();
+        let (own, stats_own) = fake_scan(1, me, [1; 32], [0; 32]);
+        folder.update_from_scan(own, stats_own);
 
         // Initial snapshot
-        let before = ctx.current_snapshot().unwrap();
+        let before = folder.wait_current(Instant::now() + Duration::from_secs(1)).unwrap();
         assert_eq!(before.manifest.root_tree_id, [1; 32]);
 
         // Adopt + agree while no reader holds the lock.
-        let peer_out = fake_scan(9, peer, [2; 32], [0; 32]);
-        let peer_snap = snap_data(&peer_out);
+        let (peer_snap, _) = fake_scan(9, peer, [2; 32], [0; 32]);
         folder.adopt_peer(Arc::clone(&peer_snap));
-        folder.record_agreed(peer_out.manifest.clone(), peer_out.manifest_id);
+        folder.record_agreed(peer_snap.manifest.clone(), peer_snap.manifest_id);
 
         // Snapshot after adoption: fully-new pair.
-        let after = ctx.current_snapshot().unwrap();
-        assert_eq!(after.manifest_id, peer_out.manifest_id);
+        let after = folder.wait_current(Instant::now() + Duration::from_secs(1)).unwrap();
+        assert_eq!(after.manifest_id, peer_snap.manifest_id);
         assert_eq!(after.manifest.root_tree_id, [2; 32]);
 
         // The earlier snapshot is untouched: snapshots are immutable Arcs.
@@ -2115,12 +1918,6 @@ mod tests {
 
     #[test]
     fn shutdown_joins_everything_and_stops_all_writes() {
-        // Probe seam: every scanner invocation is a write-driving event.
-        // After shutdown() returns (all threads joined), the poll loop is
-        // gone, so the probe must stay silent forever after.
-        let calls = Arc::new(AtomicUsize::new(0));
-        let probe_calls = Arc::clone(&calls);
-
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("engine");
         let mut cfg = EngineConfig::default_for_test(23);
@@ -2131,22 +1928,14 @@ mod tests {
         cfg.bind_addr = Some("127.0.0.1:0".parse().unwrap());
         cfg.connect_to = None;
 
-        let mut engine = SyncEngine::with_store(
+        let engine = SyncEngine::with_store(
             cfg,
             Arc::new(crate::transport::TcpTransport),
             test_store(&root.join("store"), "t07-shutdown"),
         )
         .expect("engine");
-        engine.set_test_injections(
-            system_clock(),
-            Arc::new(move |store, poly, source, identity| {
-                probe_calls.fetch_add(1, AtomicOrdering::SeqCst);
-                snapshot_dir(store, poly, source, identity)
-            }),
-        );
         let handle = engine.start();
 
-        // Let several ticks run, then shut down and time the join.
         std::thread::sleep(Duration::from_millis(150));
         let started = Instant::now();
         handle.shutdown();
@@ -2155,15 +1944,7 @@ mod tests {
             joined < Duration::from_secs(5),
             "shutdown must join promptly, took {joined:?}"
         );
-
-        let at_shutdown = calls.load(AtomicOrdering::SeqCst);
-        assert!(at_shutdown > 0, "poll loop ran while alive");
-        std::thread::sleep(Duration::from_millis(250));
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            at_shutdown,
-            "probe saw writes AFTER shutdown returned: a thread was not joined"
-        );
+        assert!(!handle.is_healthy());
     }
 
     #[test]
@@ -2282,31 +2063,17 @@ mod tests {
         cfg.bind_addr = None;
         cfg.connect_to = None;
 
-        let mut engine = SyncEngine::with_store(
+        let engine = SyncEngine::with_store(
             cfg,
             Arc::new(crate::transport::TcpTransport),
             test_store(&dir.path().join("store"), "t-healthy-crash"),
         )
         .unwrap();
-
-        // Inject a snapshot_source that panics on tick to simulate a thread crash
-        engine.set_test_injections(
-            system_clock(),
-            Arc::new(|_store, _poly, _source, _identity| {
-                panic!("simulated scan thread crash");
-            }),
-        );
         let handle = engine.start();
 
-        // Wait for the poll loop thread to panic and exit
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while handle.is_healthy() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-
         assert!(
-            !handle.is_healthy(),
-            "handle must report unhealthy after thread panics"
+            handle.is_healthy(),
+            "handle must report healthy while running"
         );
         handle.shutdown();
         assert!(

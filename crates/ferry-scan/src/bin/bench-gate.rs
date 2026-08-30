@@ -154,6 +154,7 @@ fn main() {
         quiet_window: Duration::from_millis(150),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_secs(10),
+        parent_manifest_id: None,
     };
     let t0 = Instant::now();
     let engine = ScanEngine::watch_with(

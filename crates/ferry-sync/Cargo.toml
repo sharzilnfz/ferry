@@ -18,6 +18,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
+ferry-scan = { path = "../ferry-scan" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true

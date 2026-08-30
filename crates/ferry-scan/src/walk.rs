@@ -382,10 +382,16 @@ impl<'a> Walker<'a> {
                     symlink_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), &target)
                 }
                 AdmittedKind::Dir => {
-                    let child_id = self.ensure_child(&child_rel, &disk, dirty_closed)?;
+                    let mt = (mtime_sec(&meta), mtime_nsec(&meta));
+                    let mtime_changed = match old_entries.get(component.as_str()) {
+                        Some(prev) => prev.mtime_sec != mt.0 || prev.mtime_nsec != mt.1,
+                        None => true,
+                    };
+                    let child_id =
+                        self.ensure_child(&child_rel, &disk, dirty_closed, mtime_changed)?;
                     listed_dirs.push(child_rel.clone());
                     self.stats.dirs += 1;
-                    dir_entry(&component, mtime_sec(&meta), mtime_nsec(&meta), child_id)
+                    dir_entry(&component, mt.0, mt.1, child_id)
                 }
                 AdmittedKind::File => {
                     let size = meta.len();
@@ -507,20 +513,17 @@ impl<'a> Walker<'a> {
         child_rel: &RelPath,
         _parent_disk: &Path,
         dirty_closed: &BTreeSet<RelPath>,
+        mtime_changed: bool,
     ) -> Result<BlobId, ScanError> {
         if let Some(id) = self.rebuilt.get(child_rel) {
             return Ok(*id);
         }
-        if dirty_closed.contains(child_rel) {
-            // Ordering guarantees deepest-first, but a defensive inline
-            // rebuild keeps correctness independent of sort details.
-            return self.rebuild_dir(child_rel, dirty_closed);
+        if !mtime_changed && !dirty_closed.contains(child_rel) {
+            if let Some(cached) = self.cache.node(child_rel) {
+                return Ok(cached.id);
+            }
         }
-        if let Some(cached) = self.cache.node(child_rel) {
-            return Ok(cached.id);
-        }
-        // Not cached and not marked: appeared without a matching event (or
-        // cache gap). Walk it now — correctness first.
+        // Dirty, mtime changed, not cached, or gap: walk it now.
         self.rebuild_dir(child_rel, dirty_closed)
     }
 

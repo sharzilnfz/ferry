@@ -479,7 +479,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             }
         }
 
-        // 2. Read last-agreed base manifest from AgreementLedger if present.
         let base_rec = ferry_store::agreement::AgreementLedger::new(self.store.store_dir())
             .get(&self.folder_id, &self.est.peer)
             .map_err(|e| SessionError::Other(format!("agreement ledger: {e}")))?;

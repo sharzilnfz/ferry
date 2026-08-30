@@ -483,6 +483,7 @@ impl ScanEngine {
         let disk_root = std::fs::canonicalize(&disk_root)
             .map_err(|e| ScanError::Watch(format!("cannot resolve watch root: {e}")))?;
 
+        let prev_manifest_id = cfg.parent_manifest_id.unwrap_or([0u8; 32]);
         let parts = Arc::new(Parts {
             queue: Arc::new(SignalQueue::new()),
             core: Arc::new(Mutex::new(Core {
@@ -492,7 +493,7 @@ impl ScanEngine {
                 disk_root: disk_root.clone(),
                 cache: DirCache::new(),
                 policy: PolicyState::default(),
-                prev_manifest_id: [0u8; 32],
+                prev_manifest_id,
                 prev_root_tree_id: [0u8; 32],
                 root_gone: false,
                 last_pass: None,
@@ -543,6 +544,13 @@ impl ScanEngine {
     /// (tests, debugging, future metrics).
     pub fn last_pass(&self) -> Option<(Trigger, PassStats)> {
         self.parts.core.lock().expect("core").last_pass.clone()
+    }
+
+    /// Update the parent manifest id for subsequent scans (e.g. when an external
+    /// manifest is adopted).
+    pub fn set_parent_manifest_id(&self, id: BlobId) {
+        let mut core = self.parts.core.lock().expect("core lock");
+        core.prev_manifest_id = id;
     }
 
     /// Subscribe to scan completions/failures.
