@@ -231,13 +231,15 @@ impl TuiApp {
                                 .activity_log
                                 .push_warn(current_time_str(), "already synced");
                         }
-                        PickerSelectResult::NotInitialized(_) => {
+                        PickerSelectResult::NotInitialized(entry) => {
+                            let err = ferry_folder::FolderError::not_initialized(&entry.path);
+                            let msg = format!("{} — {}", err.message, err.hint);
                             if let Some(p) = self.picker.as_mut() {
-                                p.hint = Some(picker::NOT_INITIALIZED_HINT.to_string());
+                                p.hint = Some(msg.clone());
                             }
                             self.state.activity_log.push_warn(
                                 current_time_str(),
-                                picker::NOT_INITIALIZED_HINT.to_string(),
+                                msg,
                             );
                         }
                         PickerSelectResult::Selected(_) => {
@@ -387,9 +389,10 @@ impl TuiApp {
                     match result {
                         Some(PickerSelectResult::Selected(entry)) => {
                             if !entry.is_initialized {
+                                let err = ferry_folder::FolderError::not_initialized(&entry.path);
                                 self.state.activity_log.push_warn(
                                     current_time_str(),
-                                    picker::NOT_INITIALIZED_HINT.to_string(),
+                                    format!("{} — {}", err.message, err.hint),
                                 );
                                 return;
                             }
@@ -414,10 +417,11 @@ impl TuiApp {
                                 .activity_log
                                 .push_warn(current_time_str(), "already synced");
                         }
-                        Some(PickerSelectResult::NotInitialized(_)) => {
+                        Some(PickerSelectResult::NotInitialized(entry)) => {
+                            let err = ferry_folder::FolderError::not_initialized(&entry.path);
                             self.state.activity_log.push_warn(
                                 current_time_str(),
-                                picker::NOT_INITIALIZED_HINT.to_string(),
+                                format!("{} — {}", err.message, err.hint),
                             );
                         }
                         Some(PickerSelectResult::Nothing) | None => {}

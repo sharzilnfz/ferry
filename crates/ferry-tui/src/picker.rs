@@ -291,18 +291,14 @@ impl PickerState {
             return PickerSelectResult::AlreadySynced(entry);
         }
         if !entry.is_initialized {
-            self.hint = Some(NOT_INITIALIZED_HINT.to_string());
+            let err = ferry_folder::FolderError::not_initialized(&entry.path);
+            self.hint = Some(format!("{} — {}", err.message, err.hint));
             return PickerSelectResult::NotInitialized(entry);
         }
         self.hint = None;
         PickerSelectResult::Selected(entry)
     }
 }
-
-/// Inline banner text for an uninitialized directory; points at the two ways
-/// to initialize one.
-pub const NOT_INITIALIZED_HINT: &str =
-    "not an initialized Ferry folder — run `ferry init` or `ferry pair`";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerSelectResult {

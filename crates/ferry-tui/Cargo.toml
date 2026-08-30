@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 crossterm = { workspace = true, features = ["event-stream"] }
+ferry-folder.workspace = true
 ferry-ipc.workspace = true
 ferry-platform.workspace = true
 ratatui.workspace = true

@@ -287,12 +287,10 @@ impl GuiApp {
                                 }
                             }
                         } else {
+                            let err = ferry_folder::FolderError::not_initialized(&path);
                             let _ = ev_tx_actions.send(UiEvent::Error {
-                                code: "not-initialized".to_string(),
-                                message: format!(
-                                    "{} is not an initialized Ferry folder — run `ferry init` or `ferry pair`",
-                                    path.display()
-                                ),
+                                code: err.code.to_string(),
+                                message: format!("{} — {}", err.message, err.hint),
                             });
                         }
                     }
