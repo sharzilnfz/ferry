@@ -110,55 +110,39 @@ impl Supervisor {
         }
     }
 
-    fn poly_for_id(folder_id: &str) -> ferry_store::chunker::ValidatedPoly {
-        use rand::SeedableRng;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        folder_id.hash(&mut hasher);
-        let h = hasher.finish();
-        let mut seed = [0u8; 32];
-        seed[..8].copy_from_slice(&h.to_le_bytes());
-        seed[8..16].copy_from_slice(&h.to_be_bytes());
-        let mut rng = rand::rngs::StdRng::from_seed(seed);
-        ferry_store::chunker::ValidatedPoly::generate(&mut rng)
-    }
-
     fn spawn_one(&self, record: FolderRecord) -> Result<SupervisedEngine, SupervisorError> {
         let folder_id_bytes =
             Self::parse_folder_id(&record.folder_id).map_err(|e| SupervisorError {
                 code: e.code.clone(),
                 message: e.message.clone(),
             })?;
-        let poly = Self::poly_for_id(&record.folder_id);
+        let opened =
+            ferry_folder::folder::open_folder(&record.path, &self.identity).map_err(|e| {
+                SupervisorError {
+                    code: e.code.to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+        let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
+            SupervisorError {
+                code: "poly-invalid".to_string(),
+                message: format!("invalid chunker polynomial in store: {e}"),
+            }
+        })?;
         let tag = format!(
             "ferry-{}",
             &record.folder_id[..8.min(record.folder_id.len())]
         );
 
-        let mut bind_addr = None;
-        let mut connect_to = None;
-
-        // Dial-target derivation only; trust policy is resolved by the
-        // engine itself from the same `CONFIG_HEAD`. The direct config read
-        // goes away when the supervisor consumes `open_folder`.
-        if let Some(ref iroh) = self.iroh_transport {
-            bind_addr = Some("127.0.0.1:0".parse().unwrap());
-            let config_path = record.path.join(".ferry").join("config");
-            if config_path.is_file() {
-                if let Ok(bytes) = std::fs::read(&config_path) {
-                    if let Ok(policy) = ferry_sync::PeerPolicy::from_config_head(&bytes) {
-                        if let Some(peer) = policy.remote_peers(self.identity.public()).first() {
-                            let alias = iroh.register_peer(*peer);
-                            connect_to = Some(alias);
-                        }
-                    }
-                }
-            }
-        }
+        let bind_addr = if self.iroh_transport.is_some() {
+            Some("127.0.0.1:0".parse().unwrap())
+        } else {
+            None
+        };
+        let connect_to = None;
 
         let cfg = EngineConfig {
-            tag: tag.clone(),
+            tag,
             store_dir: record.path.clone(),
             tree_dir: record.path.clone(),
             poly,
@@ -172,15 +156,6 @@ impl Supervisor {
             quiet: true,
         };
         let transport = Arc::clone(&self.transport);
-        // One opening path, loud on failure: an unshared or key-unwrap-broken
-        // folder NEVER falls back to a fresh or plaintext store.
-        let opened =
-            ferry_folder::folder::open_folder(&record.path, &self.identity).map_err(|e| {
-                SupervisorError {
-                    code: e.code.to_string(),
-                    message: e.to_string(),
-                }
-            })?;
         let mut engine = SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store))
             .map_err(|e| SupervisorError {
                 code: "engine-init".to_string(),

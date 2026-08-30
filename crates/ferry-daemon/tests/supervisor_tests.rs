@@ -327,3 +327,129 @@ async fn supervisor_spawn_engines_from_existing_registry() {
     }
     sup.shutdown();
 }
+
+#[tokio::test]
+async fn polynomial_stability_across_supervisor_instances() {
+    let home1 = tmp_home();
+    let identity1 = DeviceIdentity::generate();
+    let home2 = tmp_home();
+    let identity2 = DeviceIdentity::generate();
+
+    let folder_id = [7u8; 16];
+    let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(42));
+
+    // Device 1
+    let dir1 = tempfile::tempdir().expect("folder 1");
+    let (store1, _) =
+        ferry_folder::folder::create_folder(dir1.path(), &identity1, folder_id, poly).unwrap();
+    store1.flush().unwrap();
+    store1.write_index_snapshot().unwrap();
+    save_settings(
+        dir1.path(),
+        &Settings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_store::format::hex(&folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    std::fs::write(dir1.path().join("file.txt"), b"deterministic payload").unwrap();
+
+    // Device 2
+    let dir2 = tempfile::tempdir().expect("folder 2");
+    let (store2, _) =
+        ferry_folder::folder::create_folder(dir2.path(), &identity2, folder_id, poly).unwrap();
+    store2.flush().unwrap();
+    store2.write_index_snapshot().unwrap();
+    save_settings(
+        dir2.path(),
+        &Settings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_store::format::hex(&folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    std::fs::write(dir2.path().join("file.txt"), b"deterministic payload").unwrap();
+
+    // Spawn supervisor 1 on dir 1
+    let mut sup1 = new_supervisor_with(home1.path(), identity1.clone());
+    let rec1 = sup1
+        .handle_register(dir1.path().to_path_buf())
+        .expect("register in sup1");
+    assert!(sup1.wait_for_manifests(Duration::from_secs(5)));
+    let snap1 = sup1.get_status(Some(rec1.folder_id.clone())).unwrap();
+    let manifest_id1 = snap1.manifest_id.expect("manifest1");
+    let handle1 = sup1.get_engine_handle(&rec1.folder_id).unwrap();
+    assert!(handle1.is_healthy());
+    sup1.shutdown();
+
+    // Spawn supervisor 2 on dir 2
+    let mut sup2 = new_supervisor_with(home2.path(), identity2.clone());
+    let rec2 = sup2
+        .handle_register(dir2.path().to_path_buf())
+        .expect("register in sup2");
+    assert!(sup2.wait_for_manifests(Duration::from_secs(5)));
+    let snap2 = sup2.get_status(Some(rec2.folder_id.clone())).unwrap();
+    let manifest_id2 = snap2.manifest_id.expect("manifest2");
+    let handle2 = sup2.get_engine_handle(&rec2.folder_id).unwrap();
+    assert!(handle2.is_healthy());
+    sup2.shutdown();
+
+    // Verify chunks generated across instances match due to identical chunker polynomials
+    let m1_id = ferry_store::format::unhex::<32>(&manifest_id1).expect("unhex m1");
+    let m2_id = ferry_store::format::unhex::<32>(&manifest_id2).expect("unhex m2");
+
+    let opened1 = ferry_folder::folder::open_folder(dir1.path(), &identity1).unwrap();
+    let opened2 = ferry_folder::folder::open_folder(dir2.path(), &identity2).unwrap();
+
+    assert_eq!(opened1.poly, poly);
+    assert_eq!(opened2.poly, poly);
+
+    let m1_bytes = opened1
+        .store
+        .get(ferry_store::format::BlobKind::Manifest, &m1_id)
+        .unwrap();
+    let m2_bytes = opened2
+        .store
+        .get(ferry_store::format::BlobKind::Manifest, &m2_id)
+        .unwrap();
+    let m1 = ferry_store::manifest::parse_manifest(&m1_bytes).unwrap();
+    let m2 = ferry_store::manifest::parse_manifest(&m2_bytes).unwrap();
+
+    let node1_bytes = opened1
+        .store
+        .get(ferry_store::format::BlobKind::TreeNode, &m1.root_tree_id)
+        .unwrap();
+    let node2_bytes = opened2
+        .store
+        .get(ferry_store::format::BlobKind::TreeNode, &m2.root_tree_id)
+        .unwrap();
+    let node1 = ferry_store::manifest::parse_tree_node(&node1_bytes).unwrap();
+    let node2 = ferry_store::manifest::parse_tree_node(&node2_bytes).unwrap();
+
+    assert_eq!(node1.entries[0].name, "file.txt");
+    assert_eq!(node2.entries[0].name, "file.txt");
+    assert_eq!(
+        node1.entries[0].payload, node2.entries[0].payload,
+        "chunks and blob hashes must be identical across devices when store polynomials match"
+    );
+}
+
+#[tokio::test]
+async fn uninitialized_folder_fails_supervisor_registration_loudly() {
+    let home = tmp_home();
+    let (mut sup, _identity) = new_supervisor(&home);
+    let uninit_dir = tempfile::tempdir().expect("uninit tempdir");
+
+    let err = sup
+        .handle_register(uninit_dir.path().to_path_buf())
+        .expect_err("uninitialized folder must fail registration");
+    assert_eq!(err.code, "not-a-folder");
+    sup.shutdown();
+}
+

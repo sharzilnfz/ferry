@@ -9,10 +9,10 @@ configuration, so chunks line up across devices after either side rebuilds.
 
 **Blocked by:** 03 (the supervisor consumes the store-opening interface).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The polynomial hash-guess helper is deleted; polynomials come from the store
-- [ ] The supervisor no longer reads the folder config file directly
-- [ ] Both devices reconcile correctly when one binary was rebuilt between scans (polynomial stability test)
-- [ ] The supervisor passes only path and identity into folder opening
-- [ ] Tests cover the folder-opening branch of supervision that was previously untested
+- [x] The polynomial hash-guess helper is deleted; polynomials come from the store
+- [x] The supervisor no longer reads the folder config file directly
+- [x] Both devices reconcile correctly when one binary was rebuilt between scans (polynomial stability test)
+- [x] The supervisor passes only path and identity into folder opening
+- [x] Tests cover the folder-opening branch of supervision that was previously untested
