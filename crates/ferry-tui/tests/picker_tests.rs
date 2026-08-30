@@ -37,6 +37,14 @@ fn entry(
         is_symlink: false,
         is_git_repo,
         is_already_synced,
+        is_initialized: true,
+    }
+}
+
+fn uninitialized_entry(name: &str, path: &str) -> DirectoryEntry {
+    DirectoryEntry {
+        is_initialized: false,
+        ..entry(name, path, true, false, false)
     }
 }
 
@@ -328,6 +336,105 @@ async fn app_space_on_already_synced_shows_hint_no_register() {
         .iter()
         .any(|e| e.message.contains("already synced"));
     assert!(has_warn, "log should contain already synced hint");
+}
+
+#[test]
+fn selection_uninitialized_dir_classifies_as_not_initialized() {
+    let mut p = PickerState::new();
+    p.set_entries(
+        vec![
+            uninitialized_entry("bare", "/bare"),
+            entry("ready", "/ready", true, false, false),
+        ],
+        PathBuf::from("/"),
+    );
+    let bare_idx = p
+        .visible_entries()
+        .iter()
+        .position(|e| e.name == "bare")
+        .unwrap();
+    p.cursor = bare_idx;
+    let r = p.try_select();
+    assert!(matches!(r, PickerSelectResult::NotInitialized(e) if e.name == "bare"));
+    let hint = p.hint.as_deref().expect("hint for uninitialized pick");
+    assert!(
+        hint.contains("ferry init") && hint.contains("ferry pair"),
+        "{hint}"
+    );
+
+    // An initialized directory is still Selected, hint cleared.
+    let ready_idx = p
+        .visible_entries()
+        .iter()
+        .position(|e| e.name == "ready")
+        .unwrap();
+    p.cursor = ready_idx;
+    let r2 = p.try_select();
+    assert!(matches!(r2, PickerSelectResult::Selected(e) if e.name == "ready"));
+    assert_eq!(p.hint, None);
+}
+
+#[tokio::test]
+async fn app_space_on_uninitialized_dir_blocks_registration_with_banner() {
+    let backend = Arc::new(FakeBackend::new());
+    let mut fixture: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
+    fixture.insert(
+        PathBuf::from("/"),
+        vec![
+            uninitialized_entry("bare", "/bare"),
+            entry("ready", "/ready", true, false, false),
+        ],
+    );
+    backend.set_fs_fixture(fixture).await;
+    let mut app = TuiApp::default();
+    app.headless_override = Some(false);
+    let be: Arc<dyn UiBackend> = backend.clone();
+    app.handle_key_action(&be, char_key('a')).await;
+    assert!(app.is_picker_open());
+
+    // Entries sort dirs-first by name: "bare" is cursor 0. Space must block.
+    app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
+    assert!(
+        app.is_picker_open(),
+        "picker stays open on blocked register"
+    );
+    let hint = app
+        .picker
+        .as_ref()
+        .unwrap()
+        .hint
+        .as_deref()
+        .expect("inline hint");
+    assert!(
+        hint.contains("ferry init") && hint.contains("ferry pair"),
+        "{hint}"
+    );
+    let warned = app
+        .state
+        .activity_log
+        .entries()
+        .iter()
+        .any(|e| e.message.contains("ferry init") || e.message.contains("ferry pair"));
+    assert!(warned, "banner must name `ferry init` or `ferry pair`");
+    let dispatched = app
+        .state
+        .activity_log
+        .entries()
+        .iter()
+        .any(|e| e.message.contains("Register folder"));
+    assert!(!dispatched, "registration must not reach the backend");
+
+    // An initialized directory registers exactly as before: the backend is
+    // reached (FakeBackend answers with its own error, not the guard's).
+    app.handle_key_action(&be, key(KeyCode::Down)).await;
+    app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
+    let reached_backend = app
+        .state
+        .activity_log
+        .entries()
+        .iter()
+        .any(|e| e.message.contains("Register folder"));
+    assert!(reached_backend, "initialized path dispatched to backend");
 }
 
 #[tokio::test]

@@ -9,11 +9,11 @@ inspection instead of its own. All three surfaces share one source of truth.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] One inspection in the folder module answers initialized-or-not for a path
-- [ ] TUI blocks uninitialized directory registration with an init-or-pair banner
-- [ ] GUI blocks uninitialized directory registration with an init-or-pair banner
-- [ ] The web UI check delegates to the shared inspection
-- [ ] Unit tests assert rejection states per surface for paths without a Ferry configuration
-- [ ] Initialized directories register exactly as before
+- [x] One inspection in the folder module answers initialized-or-not for a path
+- [x] TUI blocks uninitialized directory registration with an init-or-pair banner
+- [x] GUI blocks uninitialized directory registration with an init-or-pair banner
+- [x] The web UI check delegates to the shared inspection
+- [x] Unit tests assert rejection states per surface for paths without a Ferry configuration
+- [x] Initialized directories register exactly as before

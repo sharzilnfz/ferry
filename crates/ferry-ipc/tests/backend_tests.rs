@@ -23,6 +23,7 @@ async fn fake_backend_lists_fixture_with_correct_flags() {
                 is_symlink: false,
                 is_git_repo: false,
                 is_already_synced: false,
+                is_initialized: false,
             },
             DirectoryEntry {
                 name: "a_dir".to_string(),
@@ -31,6 +32,7 @@ async fn fake_backend_lists_fixture_with_correct_flags() {
                 is_symlink: false,
                 is_git_repo: true,
                 is_already_synced: true,
+                is_initialized: false,
             },
             DirectoryEntry {
                 name: "m_link".to_string(),
@@ -39,6 +41,7 @@ async fn fake_backend_lists_fixture_with_correct_flags() {
                 is_symlink: true,
                 is_git_repo: false,
                 is_already_synced: false,
+                is_initialized: false,
             },
             DirectoryEntry {
                 name: "b_dir".to_string(),
@@ -47,6 +50,7 @@ async fn fake_backend_lists_fixture_with_correct_flags() {
                 is_symlink: false,
                 is_git_repo: false,
                 is_already_synced: false,
+                is_initialized: false,
             },
         ],
     );
@@ -85,6 +89,7 @@ async fn fake_backend_traversal_protection() {
             is_symlink: false,
             is_git_repo: false,
             is_already_synced: false,
+            is_initialized: false,
         }],
     );
     backend.set_fs_fixture(fixture).await;
@@ -168,6 +173,7 @@ fn ipc_round_trip_serialization() {
             is_symlink: false,
             is_git_repo: false,
             is_already_synced: false,
+            is_initialized: false,
         }],
         absolute_path: PathBuf::from("/tmp"),
     };

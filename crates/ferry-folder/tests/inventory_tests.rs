@@ -452,6 +452,39 @@ fn inspect_dir_survives_corrupt_registry() {
     assert!(!resp.entries[0].is_already_synced);
 }
 
+#[test]
+fn inspect_dir_carries_initialization_verdict_per_entry() {
+    let home = tmp_home();
+    let inv = FolderInventory::new(home.path());
+    let root = tempfile::tempdir().unwrap();
+
+    std::fs::create_dir(root.path().join("plain")).unwrap();
+    let dot_only = root.path().join("dot_only");
+    std::fs::create_dir_all(dot_only.join(".ferry")).unwrap();
+    let ready = root.path().join("ready");
+    std::fs::create_dir_all(ready.join(".ferry")).unwrap();
+    std::fs::write(ready.join(".ferry").join("config"), b"head").unwrap();
+    std::fs::write(root.path().join("f.txt"), b"x").unwrap();
+
+    let resp = inv
+        .inspect_dir(Some(root.path().to_path_buf()))
+        .expect("inspect");
+    let initialized = |name: &str| {
+        resp.entries
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap()
+            .is_initialized
+    };
+    assert!(!initialized("plain"), "no .ferry at all");
+    assert!(
+        !initialized("dot_only"),
+        ".ferry without config is not initialized"
+    );
+    assert!(initialized("ready"));
+    assert!(!initialized("f.txt"), "files are never initialized");
+}
+
 // ---------------------------------------------------------------------------
 // Path guards
 // ---------------------------------------------------------------------------

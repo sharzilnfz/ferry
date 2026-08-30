@@ -13,7 +13,8 @@
 //!   `..` traversal rejection, `//` rejection.
 //! - **Directory inspection** — one-pass `read_dir` that classifies each
 //!   entry (dir/symlink/git repo) and computes `is_already_synced` against
-//!   the current registry, with no redundant registry re-reads by callers.
+//!   the current registry plus the shared `is_initialized` verdict, with no
+//!   redundant registry re-reads by callers.
 //!
 //! Callers (CLI, daemon, frontends) see only the compact surface:
 //! [`FolderInventory::register`], [`unregister`](FolderInventory::unregister),
@@ -62,6 +63,9 @@ pub struct DirectoryEntry {
     pub is_symlink: bool,
     pub is_git_repo: bool,
     pub is_already_synced: bool,
+    /// Verdict of the shared initialization inspection
+    /// ([`crate::folder::is_initialized`]) for this entry's path.
+    pub is_initialized: bool,
 }
 
 /// Request for [`FolderInventory::inspect_dir`].
@@ -651,11 +655,12 @@ impl FolderInventory {
                 .any(|rec| is_overlapping(&entry_path, &rec.path));
             entries.push(DirectoryEntry {
                 name,
-                path: entry_path,
+                path: entry_path.clone(),
                 is_dir,
                 is_symlink,
                 is_git_repo,
                 is_already_synced,
+                is_initialized: crate::folder::is_initialized(&entry_path),
             });
         }
         sort_entries(&mut entries);

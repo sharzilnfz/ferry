@@ -274,8 +274,10 @@ impl PickerState {
         self.visible_len() == 0
     }
 
-    // Selection logic respecting already-synced dimming.
-    // Returns Selected entry if eligible, Hint if already-synced, Nothing otherwise.
+    // Selection logic respecting already-synced dimming and the shared
+    // initialization inspection carried on each entry.
+    // Returns Selected entry if eligible, Hint if already-synced or
+    // uninitialized, Nothing otherwise.
     #[must_use]
     pub fn try_select(&mut self) -> PickerSelectResult {
         let Some(entry) = self.selected_owned() else {
@@ -288,15 +290,25 @@ impl PickerState {
             self.hint = Some("already synced".to_string());
             return PickerSelectResult::AlreadySynced(entry);
         }
+        if !entry.is_initialized {
+            self.hint = Some(NOT_INITIALIZED_HINT.to_string());
+            return PickerSelectResult::NotInitialized(entry);
+        }
         self.hint = None;
         PickerSelectResult::Selected(entry)
     }
 }
 
+/// Inline banner text for an uninitialized directory; points at the two ways
+/// to initialize one.
+pub const NOT_INITIALIZED_HINT: &str =
+    "not an initialized Ferry folder — run `ferry init` or `ferry pair`";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerSelectResult {
     Selected(DirectoryEntry),
     AlreadySynced(DirectoryEntry),
+    NotInitialized(DirectoryEntry),
     Nothing,
 }
 

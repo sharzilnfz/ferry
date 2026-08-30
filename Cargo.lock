@@ -1920,6 +1920,7 @@ dependencies = [
  "eframe",
  "egui",
  "ferry-daemon",
+ "ferry-folder",
  "ferry-ipc",
  "ferry-platform",
  "ferry-tui",
@@ -1927,6 +1928,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
 ]

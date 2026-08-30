@@ -104,6 +104,7 @@ impl DashboardServer {
             .route("/api/pin/start", post(api_pin_start))
             .route("/api/pin/stop", post(api_pin_stop))
             .route("/api/pin/release", post(api_pin_release))
+            .route("/api/registry/register", post(api_registry_register))
             .route("/api/fs/ls", get(api_fs_ls))
             .route("/api/events", get(api_events))
             .fallback(fallback)
@@ -518,6 +519,33 @@ async fn api_pin_start(
         "status": res.status,
         "message": res.message,
     })))
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterFolderBody {
+    path: PathBuf,
+    #[serde(default)]
+    #[allow(unused)]
+    force: bool,
+}
+
+/// Register a folder into sync. The shared initialization inspection runs
+/// first; an uninitialized path is rejected before the backend sees it.
+async fn api_registry_register(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<RegisterFolderBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(req) = payload.map_err(bad_body)?;
+    if !ferry_folder::is_initialized(&req.path) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "not-initialized",
+            format!("{} is not an initialized Ferry folder", req.path.display()),
+            "run `ferry init` or `ferry pair` in this directory first",
+        ));
+    }
+    let record = server.backend.register_folder(req.path).await?;
+    Ok(Json(json!({ "folder": record })))
 }
 
 async fn api_pin_stop(

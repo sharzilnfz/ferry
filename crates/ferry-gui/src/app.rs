@@ -268,22 +268,32 @@ impl GuiApp {
                         }
                     }
                     BackendAction::RegisterFolder { path } => {
-                        match b_actions.register_folder(path.clone()).await {
-                            Ok(record) => {
-                                let _ = ev_tx_actions.send(UiEvent::Error {
-                                    code: "folder_registered".to_string(),
-                                    message: record.path.display().to_string(),
-                                });
-                                if let Ok(snap) = b_actions.get_status().await {
-                                    let _ = ev_tx_actions.send(UiEvent::State(snap));
+                        if ferry_folder::is_initialized(&path) {
+                            match b_actions.register_folder(path.clone()).await {
+                                Ok(record) => {
+                                    let _ = ev_tx_actions.send(UiEvent::Error {
+                                        code: "folder_registered".to_string(),
+                                        message: record.path.display().to_string(),
+                                    });
+                                    if let Ok(snap) = b_actions.get_status().await {
+                                        let _ = ev_tx_actions.send(UiEvent::State(snap));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = ev_tx_actions.send(UiEvent::Error {
+                                        code: e.code,
+                                        message: e.message,
+                                    });
                                 }
                             }
-                            Err(e) => {
-                                let _ = ev_tx_actions.send(UiEvent::Error {
-                                    code: e.code,
-                                    message: e.message,
-                                });
-                            }
+                        } else {
+                            let _ = ev_tx_actions.send(UiEvent::Error {
+                                code: "not-initialized".to_string(),
+                                message: format!(
+                                    "{} is not an initialized Ferry folder — run `ferry init` or `ferry pair`",
+                                    path.display()
+                                ),
+                            });
                         }
                     }
                 }

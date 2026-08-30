@@ -74,6 +74,18 @@ pub fn dot_dir(folder: &Path) -> PathBuf {
     folder.join(DOT_DIR)
 }
 
+/// One inspection answering "is this path an initialized Ferry folder":
+/// `.ferry/` exists as a directory and contains a `config` file. Deliberately
+/// structural and cheap — no settings parse, no key unwrap — so frontends can
+/// call it (or consume its per-entry verdict from
+/// [`crate::inventory::FolderInventory::inspect_dir`]) before dispatching
+/// registration. An initialized folder whose keys this device cannot unwrap
+/// still counts as initialized.
+pub fn is_initialized(root: &Path) -> bool {
+    let dot = root.join(DOT_DIR);
+    dot.is_dir() && dot.join(CONFIG_FILE).is_file()
+}
+
 pub fn state_dir(folder: &Path) -> PathBuf {
     dot_dir(folder)
 }

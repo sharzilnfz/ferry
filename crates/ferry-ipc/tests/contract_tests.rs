@@ -17,6 +17,7 @@ fn directory_entry_json_round_trip() {
         is_symlink: false,
         is_git_repo: true,
         is_already_synced: false,
+        is_initialized: false,
     };
     let json = serde_json::to_string(&entry).expect("json ser");
     let back: DirectoryEntry = serde_json::from_str(&json).expect("json de");
@@ -32,6 +33,7 @@ fn directory_entry_json_symlink_variant() {
         is_symlink: true,
         is_git_repo: false,
         is_already_synced: true,
+        is_initialized: false,
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: DirectoryEntry = serde_json::from_str(&json).unwrap();
@@ -63,6 +65,7 @@ fn list_directory_response_round_trip() {
             is_symlink: false,
             is_git_repo: false,
             is_already_synced: false,
+            is_initialized: false,
         }],
         absolute_path: PathBuf::from("/tmp"),
     };
@@ -183,6 +186,7 @@ fn daemon_message_new_variants_round_trip() {
                 is_symlink: false,
                 is_git_repo: false,
                 is_already_synced: false,
+                is_initialized: false,
             }],
             absolute_path: PathBuf::from("/tmp"),
         },
