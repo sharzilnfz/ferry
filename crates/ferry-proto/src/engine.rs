@@ -1,29 +1,29 @@
-//! The conversation driver: hello → authenticate → offers → pull →
-//! re-offer → agree → bye.
-//!
-//! Both peers run THIS SAME function; [`Role`] decides who speaks first.
-//! The conversation is strict lockstep (one side writes while the other
-//! reads), so it cannot deadlock over bounded TCP buffers at harness scale.
-//! Documented limitation: v1 assumes each side's advert sequence for one
-//! folder fits within socket buffers per turn; chunked/streamed adverts are
-//! future-minor work (see `docs/store-format.md`, "Wire protocol v1").
-//!
-//! Pull flow per folder (`P` = puller, `S` = server):
-//!
-//! 1. P fetches S's root manifest BY ID, verifies `BLAKE3(pt) == id`, stores.
-//! 2. P walks S's tree breadth-first: requests missing TREE NODES by id,
-//!    verifying and storing each, accumulating every referenced CHUNK id.
-//! 3. Missing chunks are grouped through S's ADVERTISED index entries:
-//!    whole packs by ciphertext name where the granularity policy says so,
-//!    individual blobs otherwise. Every received item is verified AFTER
-//!    decryption (`BLAKE3(plaintext) == id`; packs `BLAKE3(ct) == name`)
-//!    BEFORE it touches the store; rejects are surfaced as typed errors
-//!    and re-requested up to the retry budget.
-//! 4. A second offer round lets both sides observe post-pull equality;
-//!    equal root manifest ids record the last-agreed pointer locally.
-//!
-//! An empty `REQUEST_ITEMS` is the end-of-pull marker: the server answers
-//! with a single empty `ITEM_BATCH` terminator and returns to listening.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -43,54 +43,54 @@ use crate::secure::SecureSession;
 use crate::stream::ByteStream;
 use crate::version::ProtocolVersion;
 
-/// Zero `folder_id` marks "end of announcement list" in offer rounds.
+
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 
-/// Which side of the conversation this engine is. The Initiator sends the
-/// first Hello; over TCP this is the dialing peer.
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     Initiator,
     Responder,
 }
 
-/// How the puller chooses between pack-granular and item-granular fetches.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Granularity {
-    /// Whole pack when ≥ 2 wanted chunks share one pack, items otherwise.
+    
     Auto,
-    /// Never request packs; always item-level.
+    
     ItemsOnly,
-    /// Always prefer whole packs for data chunks.
+    
     PacksOnly,
 }
 
-/// One synced folder this engine serves/wants.
+
 pub struct FolderState {
     pub folder_id: [u8; 16],
     pub store: Arc<Store>,
-    /// Our current root manifest id (`None` = fresh device for this folder).
+    
     pub current_manifest: Option<BlobId>,
 }
 
-/// Engine configuration. Consumed by [`run_engine`]; final state comes back
-/// in the [`SessionReport`].
+
+
 pub struct EngineConfig {
     pub identity: DeviceIdentity,
-    /// The ONLY peer we accept (ADR-0003: peers are their public keys).
+    
     pub expected_peer: DeviceId,
     pub folders: Vec<FolderState>,
-    /// Seal post-auth frames under session keys. Handshake authentication is
-    /// ALWAYS active regardless. `false` is a development/testing mode only;
-    /// production engines must leave this at the default (true).
+    
+    
+    
     pub encryption: bool,
     pub granularity: Granularity,
-    /// Re-request budget for corrupt/missing items before failing cleanly.
+    
     pub max_retries: u32,
 }
 
 impl EngineConfig {
-    /// Production defaults: encryption ON, auto granularity, 3 retries.
+    
     pub fn new(
         identity: DeviceIdentity,
         expected_peer: DeviceId,
@@ -107,23 +107,23 @@ impl EngineConfig {
     }
 }
 
-/// Per-folder result of one session.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderOutcome {
     pub folder_id: [u8; 16],
-    /// Our manifest pointer after the session (adopted the remote's if we
-    /// started empty).
+    
+    
     pub local_manifest_after: Option<BlobId>,
     pub remote_manifest: Option<BlobId>,
-    /// Set when both sides held equal manifests and the last-agreed pointer
-    /// was recorded.
+    
+    
     pub agreement_recorded: Option<BlobId>,
-    /// Received items that failed verification and were rejected
-    /// (re-requested afterwards).
+    
+    
     pub rejections: usize,
 }
 
-/// Everything one successful session produced.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionReport {
     pub peer: DeviceId,
@@ -132,7 +132,7 @@ pub struct SessionReport {
     pub folders: Vec<FolderOutcome>,
 }
 
-/// Run one full session over `io`.
+
 pub fn run_engine<S: ByteStream>(
     io: S,
     role: Role,
@@ -164,7 +164,7 @@ pub fn run_engine<S: ByteStream>(
         return abort(&mut sess, e);
     }
 
-    // Clean shutdown: initiator sends BYE first, responder mirrors it.
+    
     let bye_result = match role {
         Role::Initiator => sess
             .send_frame(
@@ -197,8 +197,8 @@ pub fn run_engine<S: ByteStream>(
     })
 }
 
-/// Best-effort BYE (post-auth ciphers when present) then propagate the
-/// original error untouched.
+
+
 fn abort<S: ByteStream>(
     sess: &mut SecureSession<S>,
     err: ProtoError,
@@ -230,9 +230,9 @@ fn unexpected(t: u8) -> ProtoError {
     ProtoError::ProtocolViolation("unexpected message in this state")
 }
 
-// --- folder phases ---------------------------------------------------------------
 
-/// Peer view of one folder, learned from offers.
+
+
 #[derive(Clone, Copy, Debug)]
 struct PeerFolder {
     manifest: Option<BlobId>,
@@ -240,33 +240,33 @@ struct PeerFolder {
 
 type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
-/// Payload flush threshold for `ITEM_BATCH` frames (8 MiB).
+
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
-/// BFS round guard for remote tree walks.
+
 const MAX_BFS_ROUNDS: usize = 64;
 
-// Session-wide RECEIVE budgets (T-016). Individual frames are capped by the
-// codec; these bound SEQUENCE-level loops so a hostile or corrupted peer can
-// neither pin memory nor run a receive loop forever. Each is a pure
-// receive-side guard — senders are untouched, so the wire format is
-// unchanged and both sides enforce symmetric limits.
 
-/// Total advert rows accepted for ONE folder across every `more=1` frame of
-/// its announcement. Legit stores advertise one row per indexed blob,
-/// chunked into [`IndexAdvert::MAX_ROWS`] (2048)-row frames; 262 144 rows
-/// (~128 full frames) sits far above any real folder today while bounding
-/// the receive map to tens of MB worst case.
+
+
+
+
+
+
+
+
+
+
 pub(crate) const MAX_ADVERT_ROWS_TOTAL: usize = 262_144;
 
-/// `ITEM_BATCH` frames read per `REQUEST_ITEMS` round. A conforming server
-/// answers with at most `ceil(MAX_REQUEST_ITEMS / MAX_BATCH_ITEMS)` = 1 data
-/// frame plus the terminator; 1 024 leaves >500× headroom while bounding any
-/// single round to ~512 Ki received items.
+
+
+
+
 const MAX_BATCHES_PER_ROUND: usize = 1_024;
 
-/// Frames read per `REQUEST_PACKS` round. A conforming server sends at most
-/// `MAX_REQUEST_PACKS` (128) `PACK_ITEM` frames plus one terminator batch;
-/// 1 024 leaves ~8× headroom for future multi-frame pack encodings.
+
+
+
 const MAX_PACK_FRAMES_PER_ROUND: usize = 1_024;
 
 fn now_secs_nsecs() -> (i64, u32) {
@@ -282,15 +282,15 @@ fn folder_phases<S: ByteStream>(
     cfg: &EngineConfig,
     outcomes: &mut [FolderOutcome],
 ) -> Result<(), ProtoError> {
-    // Round 1: full announcements with adverts.
+    
     let (peer_folders, peer_adverts) = exchange_offers(sess, role, cfg, outcomes, true)?;
     for out in outcomes.iter_mut() {
         out.remote_manifest = peer_folders.get(&out.folder_id).and_then(|p| p.manifest);
     }
 
-    // Pull stages are strictly serialized by ROLE so both sides agree on
-    // who writes and who serves without further negotiation. Both sides
-    // compute the same stage conditions from round-1 offer state.
+    
+    
+    
     let initiator_stage = stage_needed(cfg, &peer_folders, Role::Initiator, role);
     let responder_stage = stage_needed(cfg, &peer_folders, Role::Responder, role);
 
@@ -327,16 +327,16 @@ fn folder_phases<S: ByteStream>(
         }
     }
 
-    // Round 2 + agreement recording.
+    
     finish_after_sync(sess, role, cfg, outcomes)
 }
 
-/// Folders the given side would pull, as indices into `cfg.folders`.
-///
-/// `whose == my_role`: that side's current manifests are my own
-/// `current_manifest`s and its counterpart's come from the peer offers.
-/// Otherwise reversed. Both peers run this with identical inputs, so both
-/// agree on which stages exist without extra messages.
+
+
+
+
+
+
 fn stage_needed(
     cfg: &EngineConfig,
     peer_folders: &BTreeMap<[u8; 16], PeerFolder>,
@@ -346,7 +346,7 @@ fn stage_needed(
     let mut out = Vec::new();
     for (idx, f) in cfg.folders.iter().enumerate() {
         let Some(pf) = peer_folders.get(&f.folder_id) else {
-            continue; // peer does not share this folder
+            continue; 
         };
         let (that_side, counterpart) = if whose == my_role {
             (f.current_manifest, pf.manifest)
@@ -364,8 +364,8 @@ fn pull_needed(mine: Option<BlobId>, theirs: Option<BlobId>) -> bool {
     matches!(theirs, Some(t) if mine != Some(t))
 }
 
-/// One pull stage: fetch every listed folder, then send the empty
-/// `REQUEST_ITEMS` end-of-stage marker.
+
+
 fn run_stage<S: ByteStream>(
     sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
@@ -394,7 +394,7 @@ fn run_stage<S: ByteStream>(
             &mut outcomes[idx].rejections,
         )?;
         if f.current_manifest.is_none() {
-            outcomes[idx].local_manifest_after = Some(target); // adopted
+            outcomes[idx].local_manifest_after = Some(target); 
         }
     }
     sess.send_frame(
@@ -407,7 +407,7 @@ fn run_stage<S: ByteStream>(
     )
 }
 
-/// Serve the peer's pull stage until its end-of-stage marker arrives.
+
 fn serve_stage<S: ByteStream>(
     sess: &mut SecureSession<S>,
     cfg: &EngineConfig,
@@ -453,15 +453,15 @@ fn serve_items<S: ByteStream>(
             size += bytes.len();
             acc.push((kind, id, bytes));
         }
-        // Unserved ids are omitted; the requester detects the gap.
+        
         if acc.len() >= codec::MAX_BATCH_ITEMS || size >= BATCH_FLUSH_BYTES {
             let batch = std::mem::take(&mut acc);
             size = 0;
             sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: batch }.encode()?)?;
         }
     }
-    // Exactly one trailing EMPTY batch closes the response: flush any
-    // remainder first, then the terminator.
+    
+    
     if !acc.is_empty() {
         sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: acc }.encode()?)?;
     }
@@ -478,7 +478,7 @@ fn serve_packs<S: ByteStream>(
     for name in r.packs {
         let path = packs_dir.join(format!("{}.pack", hex(&name)));
         if let Ok(bytes) = std::fs::read(&path) {
-            // Serve only bytes that verify against their own name.
+            
             if *blake3::hash(&bytes).as_bytes() == name {
                 sess.send_frame(
                     codec::MSG_PACK_ITEM,
@@ -490,12 +490,12 @@ fn serve_packs<S: ByteStream>(
     sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch::TERMINATOR.encode()?)
 }
 
-// --- offer / advert exchange -------------------------------------------------
 
-/// Announce + mirror offers. With `with_adverts` each offer is followed by
-/// the announcer's index-advert sequence for that folder. A ZERO `folder_id`
-/// offer ends an announcement list. Round 2 (`with_adverts = false`)
-/// re-announces post-pull state so equality is observable on both sides.
+
+
+
+
+
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
 fn exchange_offers<S: ByteStream>(
@@ -514,8 +514,8 @@ fn exchange_offers<S: ByteStream>(
     let mut peer_folders: BTreeMap<[u8; 16], PeerFolder> = BTreeMap::new();
     let mut peer_adverts: BTreeMap<[u8; 16], AdvertMap> = BTreeMap::new();
 
-    // Our EFFECTIVE manifest for a folder: the post-pull outcome pointer
-    // when known (round 2 must reflect adoptions), else the configured one.
+    
+    
     fn effective_manifest(
         cfg: &EngineConfig,
         outcomes: &[FolderOutcome],
@@ -533,7 +533,7 @@ fn exchange_offers<S: ByteStream>(
             })
     }
 
-    // Announce one of OUR folders: offer (+adverts in round 1).
+    
     fn announce<T: ByteStream>(
         sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
@@ -556,7 +556,7 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    // As the MIRROR of an announced folder: reply with our state (+adverts).
+    
     fn echo<T: ByteStream>(
         sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
@@ -587,8 +587,8 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    // Mirror-side consumption: the offer is already read by the caller;
-    // this records it plus its advert tail.
+    
+    
     fn consume_announcement<T: ByteStream>(
         po: FolderOffer,
         sess: &mut SecureSession<T>,
@@ -613,8 +613,8 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    // Announcer-side consumption after announcing: read the echo offer and
-    // its advert tail.
+    
+    
     fn consume_echo<S: ByteStream>(
         sess: &mut SecureSession<S>,
         with_adverts: bool,
@@ -705,9 +705,9 @@ fn nonzero_manifest(id: BlobId) -> Option<BlobId> {
     }
 }
 
-/// Read one folder's advert sequence (until a more=0 frame), bounded by
-/// [`MAX_ADVERT_ROWS_TOTAL`] so a peer streaming endless more=1 frames fails
-/// with a typed resource limit instead of growing the map forever.
+
+
+
 pub(crate) fn recv_advert_map<S: ByteStream>(
     sess: &mut SecureSession<S>,
 ) -> Result<AdvertMap, ProtoError> {
@@ -716,8 +716,8 @@ pub(crate) fn recv_advert_map<S: ByteStream>(
     loop {
         let fb = sess.expect_frame(codec::MSG_INDEX_ADVERT)?;
         let adv = IndexAdvert::parse(&fb.payload)?;
-        // Count RAW rows, not distinct ids: duplicates collapse in the map,
-        // but the receive cost (parse + insert) was paid regardless.
+        
+        
         rows += adv.entries.len();
         if rows > MAX_ADVERT_ROWS_TOTAL {
             return Err(ProtoError::ResourceLimit {
@@ -734,8 +734,8 @@ pub(crate) fn recv_advert_map<S: ByteStream>(
     }
 }
 
-/// Send our index entries for one folder, chunked; a `None` store means we
-/// hold nothing for this folder (one empty advert closes the sequence).
+
+
 fn send_my_adverts<S: ByteStream>(
     sess: &mut SecureSession<S>,
     store: Option<&Arc<Store>>,
@@ -770,12 +770,12 @@ fn send_my_adverts<S: ByteStream>(
     Ok(())
 }
 
-// --- pulling -------------------------------------------------------------------
 
-/// Fetch a set of blobs of one kind by id, with verification-on-receipt and
-/// a re-request budget. Every accepted blob is already stored by the time
-/// this returns; corrupt or wrong-id items are counted as rejections and
-/// retried.
+
+
+
+
+
 #[allow(clippy::too_many_arguments)]
 fn fetch_blobs<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -812,9 +812,9 @@ fn fetch_blobs<S: ByteStream>(
     }
 }
 
-/// Read `ITEM_BATCH` frames until the terminator; verify EVERY item against
-/// its claimed id AFTER decryption and store only verified bytes. Returns
-/// the ids accepted into the store.
+
+
+
 fn read_item_batches<S: ByteStream>(
     sess: &mut SecureSession<S>,
     store: &Arc<Store>,
@@ -836,8 +836,8 @@ fn read_item_batches<S: ByteStream>(
             return Ok(got);
         }
         for (kind, id, bytes) in batch.items {
-            // The verify-after-decrypt rule: BLAKE3(plaintext) MUST equal
-            // the claimed id BEFORE anything touches the store.
+            
+            
             if *blake3::hash(&bytes).as_bytes() != id {
                 *rejections += 1;
                 continue;
@@ -848,9 +848,9 @@ fn read_item_batches<S: ByteStream>(
     }
 }
 
-/// Pack-granular fetch: request whole packs by ciphertext name where the
-/// granularity policy says they pay off. Returns the wanted ids satisfied
-/// through packs.
+
+
+
 fn fetch_via_packs<S: ByteStream>(
     sess: &mut SecureSession<S>,
     folder_id: [u8; 16],
@@ -901,9 +901,9 @@ fn fetch_via_packs<S: ByteStream>(
             let fb = sess.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
             if fb.msg_type == codec::MSG_PACK_ITEM {
                 let item = PackItem::parse(&fb.payload)?;
-                // Verify-before-store at pack level too: the NAME is the
-                // hash of the ciphertext; mismatch rejects without any
-                // decryption or disk write.
+                
+                
+                
                 if *blake3::hash(&item.bytes).as_bytes() != item.pack {
                     *rejections += 1;
                     continue;
@@ -931,23 +931,23 @@ fn fetch_via_packs<S: ByteStream>(
     Ok(satisfied)
 }
 
-/// Write a received pack into the store under its verified name (temp +
-/// rename), then fold its locations into the index INCREMENTALLY (T-15):
-/// no full-store rescan per delivery.
-///
-/// Durability discipline mirrors ferry-materialize's `write_temp_then_rename`
-/// (T-005): bytes are written and fsynced BEFORE an atomic rename inside
-/// [`Store::adopt_pack`], so a crash never leaves torn pack bytes under a
-/// valid BLAKE3 name, and the packs dir is fsynced where the platform
-/// allows. Crash residue in `tmp/` is reclaimed by ticket 20's startup
-/// sweeper, not here.
+
+
+
+
+
+
+
+
+
+
 pub(crate) fn ingest_pack(store: &Arc<Store>, bytes: &[u8]) -> Result<BlobId, ProtoError> {
     let name = *blake3::hash(bytes).as_bytes();
     store.adopt_pack(&name, bytes).map_err(store_err)?;
     Ok(name)
 }
 
-/// Full pull of one folder's content from the peer.
+
 #[allow(clippy::too_many_arguments)]
 fn pull_folder<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -960,7 +960,7 @@ fn pull_folder<S: ByteStream>(
     retries: u32,
     rejections: &mut usize,
 ) -> Result<(), ProtoError> {
-    // 1. The peer's root manifest, by id, verified after receipt.
+    
     fetch_blobs(
         sess,
         folder_id,
@@ -974,8 +974,8 @@ fn pull_folder<S: ByteStream>(
     let manifest = parse_manifest(&man_bytes)
         .map_err(|_| ProtoError::ProtocolViolation("peer manifest failed to parse"))?;
 
-    // 2. Breadth-first walk of the peer's tree: fetch missing nodes,
-    //    accumulate every referenced chunk id.
+    
+    
     let mut queue = vec![manifest.root_tree_id];
     let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
     let mut wanted_chunks: BTreeSet<BlobId> = BTreeSet::new();
@@ -1017,13 +1017,13 @@ fn pull_folder<S: ByteStream>(
         }
     }
 
-    // 3. Chunks missing locally are what we actually need.
+    
     let wanted: Vec<BlobId> = wanted_chunks
         .into_iter()
         .filter(|id| store.get(BlobKind::DataChunk, id).is_err())
         .collect();
 
-    // 4-5. Packs first (policy-driven), items for the remainder.
+    
     let satisfied = fetch_via_packs(sess, folder_id, &wanted, adverts, gran, store, rejections)?;
     let leftover: Vec<BlobId> = wanted
         .into_iter()
@@ -1041,15 +1041,15 @@ fn pull_folder<S: ByteStream>(
         )?;
     }
 
-    let _ = current; // adoption handled by run_stage via outcomes
+    let _ = current; 
     Ok(())
 }
 
-// --- round 2 + agreement ---------------------------------------------------------
 
-/// Re-announce post-pull state; when both sides now hold the same root
-/// manifest id for a folder, record the last-agreed pointer locally
-/// (ADR-0004 ancestor state).
+
+
+
+
 fn finish_after_sync<S: ByteStream>(
     sess: &mut SecureSession<S>,
     role: Role,

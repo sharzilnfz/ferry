@@ -1,26 +1,26 @@
-//! The pinned-session record: `.ferry/pin-state.json`.
-//!
-//! Shape (schema in docs/cli-json.md, "Per-folder pin state"):
-//!
-//! ```json
-//! {
-//!   "format_version": 1,
-//!   "device_id": "<64 hex>",          // who pins (this device)
-//!   "pid": 4242,                       // writer process, for liveness
-//!   "started_sec": 1787574896,
-//!   "started_nsec": 0,
-//!   "paths": ["src/**"],               // gitignore-style globs; ["*"] = all
-//!   "released": false,
-//!   "base_agreements": {"<peer-hex>": "<manifest-hex>"}
-//! }                                     // last-agreed base per peer, frozen
-//! ```                                   // at start; release's three-way base
-//!
-//! Crash safety: writes go through temp + rename inside `.ferry/`. A pin
-//! whose `pid` no longer runs is STALE — surfaced by every command that
-//! loads it (`holding() == false`, so nothing is held), but never deleted
-//! behind the user's back: `ferry pin release` recovers the held set, or
-//! `ferry pin stop` discards the marker deliberately. The file is only ever
-//! removed by an explicit command or overwritten by a new `start`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,52 +29,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::pin_error::{io_at, PinError};
 
-/// Current `format_version` for [`PinRecord`].
+
 pub const PIN_FORMAT_VERSION: u32 = 1;
 
-/// One pinned session for one folder.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinRecord {
     pub format_version: u32,
-    /// Device id (64 lowercase hex) of the pinning device.
+    
     pub device_id: String,
-    /// Process id of the declared writer (daemon/agent). Drives staleness.
+    
     pub pid: u32,
     pub started_sec: i64,
     pub started_nsec: u32,
-    /// Unix timestamp in seconds after which the pin expires and ceases holding.
+    
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_sec: Option<i64>,
-    /// Gitignore-style glob(s) scoping the hold; `["*"]` matches everything.
+    
     pub paths: Vec<String>,
-    /// True once stop/release ended the session.
+    
     pub released: bool,
-    /// Per-peer last-agreed manifest ids captured at pin START (peer hex →
-    /// manifest hex). Release reconciles against these as the three-way
-    /// base, exactly the "last-agreed before pin" ancestor.
+    
+    
+    
     #[serde(default)]
     pub base_agreements: BTreeMap<String, String>,
-    /// Opaque start-time identity of `pid`'s process instance, stamped by
-    /// [`PinStore::start`] when the declared writer is THIS process (T-06).
-    /// Whatever later reuses the pid carries a different value, so pid
-    /// reuse reads STALE instead of immortal. Absent in pre-T-06 records;
-    /// those degrade to existence-only liveness.
+    
+    
+    
+    
+    
     #[serde(default)]
     pub proc_start_token: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Liveness {
-    /// The recorded writer process still runs.
+    
     Alive,
-    /// The recorded writer process is gone (crash / kill -9 / reboot).
+    
     Stale,
 }
 
 impl PinRecord {
     pub fn liveness(&self) -> Liveness {
         if self.pid == 0 {
-            return Liveness::Alive; // "unknown writer" degrades to active
+            return Liveness::Alive; 
         }
         match self.proc_start_token {
             Some(stamped) => match ferry_platform::process_start_token(self.pid) {
@@ -88,8 +88,8 @@ impl PinRecord {
         }
     }
 
-    /// True while this record actually holds changes: unreleased AND its
-    /// writer looks alive AND it has not expired.
+    
+    
     pub fn holding(&self) -> bool {
         if self.released {
             return false;
@@ -105,7 +105,7 @@ impl PinRecord {
 
 fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
-        return true; // "unknown writer" degrades to active
+        return true; 
     }
     #[cfg(unix)]
     {
@@ -143,7 +143,7 @@ fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Filesystem home of the pin record for one folder.
+
 #[derive(Clone, Debug)]
 pub struct PinStore {
     path: PathBuf,
@@ -152,7 +152,7 @@ pub struct PinStore {
 impl PinStore {
     pub const FILE_NAME: &str = "pin-state.json";
 
-    /// `state_dir` is the folder's `.ferry` directory.
+    
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         PinStore {
             path: state_dir.into().join(Self::FILE_NAME),
@@ -163,8 +163,8 @@ impl PinStore {
         &self.path
     }
 
-    /// Load the record. Absent file → `Ok(None)`. Present-but-wrong
-    /// anything → loud [`PinError::Corrupt`], never a silent None.
+    
+    
     pub fn load(&self) -> Result<Option<PinRecord>, PinError> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -187,7 +187,7 @@ impl PinStore {
         Ok(Some(rec))
     }
 
-    /// Begin a session: write the record atomically.
+    
     pub fn start(&self, rec: &PinRecord) -> Result<(), PinError> {
         if let Some(existing) = self.load()? {
             if existing.holding() {
@@ -213,7 +213,7 @@ impl PinStore {
         Ok(())
     }
 
-    /// End the session: flip `released` to true in place (atomic rewrite).
+    
     pub fn mark_released(&self) -> Result<bool, PinError> {
         let Some(mut rec) = self.load()? else {
             return Ok(false);

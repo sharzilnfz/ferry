@@ -1,9 +1,9 @@
-//! Benchmarking and Zero-CPU Idle Verification for `ferry-gui`.
-//!
-//! Asserts:
-//! 1. Cold-start latency of `ferry-gui` initialization and snapshot projection is strictly sub-10ms.
-//! 2. Zero-CPU idle verification: `UiEventStream` and `FakeBackend` produce 0 wakeups when idle.
-//! 3. UI frame update throughput during idle periods consumes negligible resources.
+
+
+
+
+
+
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,7 +20,7 @@ use ferry_ipc::protocol::{
 fn test_cold_start_latency_benchmark_sub_10ms() {
     let fake = Arc::new(FakeBackend::new());
 
-    // Build a realistic enterprise-scale snapshot
+    
     let mut snap = EngineSnapshot::new(
         "/data/enterprise-monorepo",
         "folder-monorepo-999",
@@ -41,17 +41,17 @@ fn test_cold_start_latency_benchmark_sub_10ms() {
     for _ in 0..100 {
         let start = Instant::now();
 
-        // 1. App construction
+        
         let mut app = GuiApp::new_headless(fake.clone());
 
-        // 2. Headless egui Context + Theme initialization
+        
         let ctx = Context::default();
         Theme::apply(&ctx);
 
-        // 3. Snapshot event ingestion and projection
+        
         app.handle_event(UiEvent::State(snap.clone()));
 
-        // 4. First full UI frame render & layout calculation
+        
         let _ = ctx.run(RawInput::default(), |ctx| {
             app.update_ui(ctx);
         });
@@ -68,7 +68,7 @@ fn test_cold_start_latency_benchmark_sub_10ms() {
 
     eprintln!("Cold start benchmark: avg = {avg:?}, p99 = {p99:?}, max = {max:?}");
 
-    // Target: average sub-10ms in release builds (allowing headroom in unoptimized debug test builds)
+    
     let avg_threshold = if cfg!(debug_assertions) {
         Duration::from_millis(100)
     } else {
@@ -94,14 +94,14 @@ async fn test_zero_cpu_idle_verification() {
     let fake = Arc::new(FakeBackend::new());
     let mut stream = fake.subscribe_events().await.unwrap();
 
-    // 1. Initial idle verification: no events should arrive without backend mutation
+    
     let idle_timeout = tokio::time::timeout(Duration::from_millis(50), stream.recv()).await;
     assert!(
         idle_timeout.is_err(),
         "Expected zero wakeups during idle period, but received an event"
     );
 
-    // 2. Emit single event and verify it wakes up exactly once
+    
     fake.emit_event(UiEvent::StateChanged {
         state: "syncing".to_string(),
         manifest_id: "m-wakeup-test".to_string(),
@@ -118,7 +118,7 @@ async fn test_zero_cpu_idle_verification() {
         Ok(UiEvent::StateChanged { ref manifest_id, .. }) if manifest_id == "m-wakeup-test"
     ));
 
-    // 3. Subsequent idle period: assert zero wakeups again
+    
     let subsequent_idle = tokio::time::timeout(Duration::from_millis(50), stream.recv()).await;
     assert!(
         subsequent_idle.is_err(),
@@ -133,12 +133,12 @@ fn test_idle_frame_execution_efficiency() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    // Warm up
+    
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
 
-    // Run 60 consecutive idle frames
+    
     let start = Instant::now();
     for _ in 0..60 {
         let _ = ctx.run(RawInput::default(), |ctx| {
@@ -150,7 +150,7 @@ fn test_idle_frame_execution_efficiency() {
 
     eprintln!("60 idle frames completed in {duration:?} (avg {per_frame:?} per frame)");
 
-    // Headless frame updates without repaints should be fast
+    
     let threshold = if cfg!(debug_assertions) {
         Duration::from_millis(10)
     } else {
@@ -167,7 +167,7 @@ fn test_large_snapshot_memory_projection() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    // Populate with 200 conflicts and 100 peers
+    
     for i in 0..200 {
         let offset = i64::from(i);
         app.conflicts.push(ConflictEntry {
@@ -192,7 +192,7 @@ fn test_large_snapshot_memory_projection() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    // Verify modal and UI render smoothly under load
+    
     app.show_conflicts_modal = true;
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);

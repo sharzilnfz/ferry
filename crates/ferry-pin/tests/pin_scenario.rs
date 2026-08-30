@@ -1,22 +1,22 @@
-//! T-015 acceptance: the scripted two-device pin scenario.
-//!
-//! Device A pins `src/**`, mutates three pinned files; device B mutates the
-//! SAME three concurrently plus two disjoint ones. On A's next exchange
-//! round B's offer arrives and the hold filter partitions the plan:
-//!
-//! - exactly 3 held decisions (the pinned src paths), ledgered under
-//!   `.ferry/held/<peer>.jsonl`;
-//! - A's bytes stay live in the tree for every pinned path;
-//! - the disjoint B changes APPLY immediately;
-//! - release replays the held set through the ordinary three-way engine
-//!   with the pre-pin agreement as base: winner live, loser quarantined as
-//!   `path.ferry-conflict.<loser>-<ts>`, conflicts.jsonl entries recorded;
-//! - zero silent loss byte-verified across both trees;
-//! - a second release is a no-op.
-//!
-//! Structure mirrors ferry-sync-engine's T-010 matrix harness: simulated
-//! devices with isolated store/tree/state dirs, explicit mtimes so
-//! three-way outcomes are deterministic, metadata-first exchange.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -36,9 +36,9 @@ const DEV_B: [u8; 32] = [0xB2; 32];
 const FOLDER: [u8; 16] = [7; 16];
 const NOW: (i64, u32) = (1_787_574_896, 0);
 
-// ---------------------------------------------------------------------------
-// device harness (mirrors the T-010 matrix Dev)
-// ---------------------------------------------------------------------------
+
+
+
 
 struct Dev {
     _dir: tempfile::TempDir,
@@ -109,7 +109,7 @@ fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
     .unwrap();
 }
 
-/// Every file's full bytes under `root`, live and quarantined alike.
+
 fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     fn walk(dir: &Path, out: &mut HashSet<Vec<u8>>) {
@@ -126,7 +126,7 @@ fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     out
 }
 
-/// Quarantined copy names anywhere under `root`.
+
 fn quarantine_names(root: &Path) -> Vec<String> {
     let mut names = Vec::new();
     fn walk(dir: &Path, base: &Path, names: &mut Vec<String>) {
@@ -147,8 +147,8 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names
 }
 
-/// Metadata-first exchange step: move the snapshot's manifest object and its
-/// whole tree closure into the peer's store (what `REQ_META` serves).
+
+
 fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &s.manifest_id).is_err() {
         let b = from.get(BlobKind::Manifest, &s.manifest_id).unwrap();
@@ -172,10 +172,10 @@ fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     }
 }
 
-/// Data-phase step: pull every chunk the plan fetches from the peer's store
-/// (what `REQ_DATA` serves). The fetch runs BEFORE the hold decision and stays
-/// full across the split by design, so held versions' bytes are already in
-/// A's store when release runs offline.
+
+
+
+
 fn transfer_chunks(from: &Store, to: &Store, ids: &[(BlobId, u64)]) {
     for (id, _) in ids {
         if to.get(BlobKind::DataChunk, id).is_err() {
@@ -217,10 +217,10 @@ fn unhex_32(s: &str) -> Option<[u8; 32]> {
     ferry_store::format::unhex::<32>(s)
 }
 
-/// The convergence engine's fetch hook, wired to the peer's store (what
-/// the wire serves). Runs BEFORE any disk mutation, and stays full across
-/// a pin hold by design, so held versions' bytes land in A's store during
-/// the hold and release works offline.
+
+
+
+
 struct PeerFetch<'x> {
     from: &'x ferry_store::store::Store,
     to: &'x ferry_store::store::Store,
@@ -233,16 +233,16 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// the scripted scenario
-// ---------------------------------------------------------------------------
+
+
+
 
 #[test]
 fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     let mut a = Dev::new(1, DEV_A, poly(42));
     let mut b = Dev::new(2, DEV_B, poly(42));
 
-    // ---- common ancestor: identical trees on both devices ----------------
+    
     for (rel, mt) in [
         ("src/a.rs", 1000),
         ("src/b.rs", 1000),
@@ -256,11 +256,11 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     let sa_base = a.snap();
     transfer_meta(&a.store, &b.store, &sa_base);
     b.parent = sa_base.manifest_id;
-    // Both sides record the proven common ancestor
+    
     record_agreement(&a, DEV_B, sa_base.manifest_id);
     record_agreement(&b, DEV_A, sa_base.manifest_id);
 
-    // ---- device A pins src/** -------------------------------------------
+    
     let base_hex = hex(&sa_base.manifest_id);
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), base_hex);
@@ -270,42 +270,42 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         .start(&PinRecord {
             format_version: PIN_FORMAT_VERSION,
             device_id: hex(&DEV_A),
-            pid: std::process::id(), // this test process: alive => holding
+            pid: std::process::id(), 
             started_sec: NOW.0,
             started_nsec: NOW.1,
             expires_sec: None,
             paths: vec!["src/**".into()],
             released: false,
             base_agreements: base_agreements.clone(),
-            proc_start_token: None, // start() stamps its own writer
+            proc_start_token: None, 
         })
         .unwrap();
     assert!(pin_store.load().unwrap().expect("recorded").holding());
 
-    // ---- concurrent mutation --------------------------------------------
-    // A writes the three pinned files: two mtimes later than anything of
-    // B's, one earlier, so release exercises BOTH winner directions.
+    
+    
+    
     write_file(&a.tree.join("src/a.rs"), b"A-version-a", (3000, 0));
     write_file(&a.tree.join("src/b.rs"), b"A-version-b", (3000, 0));
     write_file(&a.tree.join("src/c.rs"), b"A-version-c", (2500, 0));
 
-    // B rewrites the same three (losing a/b, winning c) plus two disjoint
-    // docs files nobody pins.
+    
+    
     write_file(&b.tree.join("src/a.rs"), b"B-version-a", (2900, 0));
     write_file(&b.tree.join("src/b.rs"), b"B-version-b", (2950, 0));
     write_file(&b.tree.join("src/c.rs"), b"B-version-c", (3000, 0));
     write_file(&b.tree.join("docs/d1.txt"), b"B-docs-1", (2800, 0));
     write_file(&b.tree.join("docs/d2.txt"), b"B-docs-2", (2850, 0));
 
-    let sa2 = a.snap(); // A's fresh scan at exchange time
+    let sa2 = a.snap(); 
     let sb = b.snap();
 
-    // ---- exchange round on the pinned side -------------------------------
-    // One transactional convergence, gated by the active pin. The engine
-    // partitions its internal plan: pinned paths hold, everything else
-    // runs the ordinary three-way flow. The fetch hook (what the wire
-    // serves) pulls every chunk the FULL plan needs, so held versions'
-    // bytes land in A's store during the hold.
+    
+    
+    
+    
+    
+    
     transfer_meta(&b.store, &a.store, &sb);
     let remote = ferry_store::manifest::parse_manifest(
         &a.store.get(BlobKind::Manifest, &sb.manifest_id).unwrap(),
@@ -317,7 +317,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         from: &b.store,
         to: &a.store,
     };
-    // The engine natively checks the active pin and writes to HeldLedger.
+    
     let result = ConvergenceEngine::new(&a.store, &a.tree)
         .state_dir(&a.state)
         .at(NOW)
@@ -329,7 +329,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         )
         .unwrap();
 
-    // ---- the hold ----------------------------------------------------------
+    
     let held_paths: Vec<String> = result.held.iter().map(|h| h.path.clone()).collect();
     assert_eq!(
         held_paths,
@@ -344,8 +344,8 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         assert!(!h.chunks.is_empty(), "held edits carry their blob refs");
     }
 
-    // Disjoint B changes applied NOW in the same convergence; pinned paths
-    // keep A's bytes.
+    
+    
     assert_eq!(
         result.quarantined.len(),
         0,
@@ -358,7 +358,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert_eq!(read_tree_file(&a.tree, "src/b.rs"), b"A-version-b");
     assert_eq!(read_tree_file(&a.tree, "src/c.rs"), b"A-version-c");
 
-    // Ledger was automatically persisted by the engine for status surfaces and release.
+    
     let ledger = HeldLedger::new(&a.state);
     assert_eq!(ledger.peers().unwrap(), vec![peer_hex.clone()]);
     let entries = ledger.load_peer(&peer_hex).unwrap();
@@ -373,8 +373,8 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         "status surface sees exactly the held set"
     );
 
-    // ---- release -----------------------------------------------------------
-    let sa3 = a.snap(); // rescan: the apply half changed the tree
+    
+    let sa3 = a.snap(); 
     let base_hex = base_agreements.get(&peer_hex).unwrap();
     let base_bytes = a
         .store
@@ -396,14 +396,14 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert_eq!(rp.held_entries, 3);
     assert_eq!(rp.held_paths, held_paths);
 
-    // Every distinct version that existed on either device before release;
-    // nothing may vanish from the world afterwards.
+    
+    
     let mut truth = collect_bytes(&a.tree);
     truth.extend(collect_bytes(&b.tree));
 
     let stats = &rp.result;
 
-    // Winners live per three-way (newer mtime wins), losers quarantined.
+    
     assert_eq!(read_tree_file(&a.tree, "src/a.rs"), b"A-version-a");
     assert_eq!(read_tree_file(&a.tree, "src/b.rs"), b"A-version-b");
     assert_eq!(read_tree_file(&a.tree, "src/c.rs"), b"B-version-c");
@@ -413,7 +413,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         "every both-changed path reports explicitly"
     );
 
-    // Quarantine accounting: loser copies exist with loser bytes.
+    
     let qnames = quarantine_names(&a.tree);
     assert_eq!(qnames.len(), 3, "{qnames:?}");
     let qbytes: HashSet<Vec<u8>> = qnames
@@ -434,10 +434,10 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         );
     }
 
-    // Zero silent loss, byte-verified: everything that existed anywhere
-    // before release survives somewhere on A afterwards (live or
-    // quarantined). B's tree was never touched — prototype scope is manual
-    // release on the pinning device; B converges later via ordinary sync.
+    
+    
+    
+    
     let after = collect_bytes(&a.tree);
     for v in &truth {
         assert!(
@@ -447,8 +447,8 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         );
     }
 
-    // Structured conflict report: exactly the three releases, winners
-    // matching the three-way decisions above.
+    
+    
     let log = list_conflicts(&a.state).unwrap();
     assert_eq!(log.len(), 3);
     let by_path: BTreeMap<&str, &ferry_sync_engine::ConflictEntry> =
@@ -462,7 +462,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         assert!(e.quarantined_as.is_some());
     }
 
-    // ---- finalize: clear ledgers, mark released, second release no-op -----
+    
     assert!(ledger.clear_peer(&peer_hex).unwrap());
     assert!(pin_store.mark_released().unwrap());
     assert!(!pin_store.load().unwrap().unwrap().holding());
@@ -482,16 +482,16 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert!(ledger.peers().unwrap().is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// stale pins surface loudly but never hold
-// ---------------------------------------------------------------------------
+
+
+
 
 #[test]
 fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
     let mut a = Dev::new(3, DEV_A, poly(42));
 
-    // An orphaned daemon: a real process, killed, its pid stranded in the
-    // pin record.
+    
+    
     let mut child = ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
     let dead = {
         child.kill().expect("kill -9 equivalent");
@@ -515,20 +515,20 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
         })
         .unwrap();
 
-    // Surfaced, not silently dropped: the record is readable and reports
-    // WHY nothing is held (dead writer), and it was not quietly flipped to
-    // released or deleted behind the user's back.
+    
+    
+    
     let rec = pin_store.load().unwrap().expect("still on disk");
     assert!(!rec.holding(), "a dead writer cannot hold changes");
     assert!(!rec.released);
 
-    // Any incoming convergence passes through untouched while stale: no
-    // gate is compiled from a stale pin.
+    
+    
     let local = a.snap().manifest;
     assert!(hold_matcher(&a.state).unwrap().is_none());
     let _ = local;
 
-    // Recovery path: a new start replaces the stale marker without error.
+    
     pin_store
         .start(&PinRecord {
             pid: std::process::id(),

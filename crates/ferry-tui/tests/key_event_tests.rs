@@ -1,4 +1,4 @@
-//! Keyboard event and hotkey action handler tests.
+
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ferry_ipc::protocol::{ClientCommand, PinView};
@@ -59,7 +59,7 @@ fn test_key_pin_toggle() {
     app.state.engine_state = SyncState::Synced;
     app.state.pin = PinView::none();
 
-    // Toggle on (StartPin) with lowercase 'p'
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('p'), KeyModifiers::NONE));
     assert_eq!(
         cmd,
@@ -69,11 +69,11 @@ fn test_key_pin_toggle() {
         })
     );
 
-    // Simulate pinned state
+    
     app.state.engine_state = SyncState::Pinned;
     app.state.pin = PinView::active(vec!["file.txt".to_string()]);
 
-    // Toggle off (ReleasePin) with uppercase 'P'
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('P'), KeyModifiers::NONE));
     assert_eq!(cmd, Some(ClientCommand::ReleasePin));
 }
@@ -93,16 +93,16 @@ fn test_key_conflicts_modal_toggle_and_dismiss_esc() {
     let mut app = TuiApp::default();
     assert!(!app.state.show_conflicts_modal);
 
-    // Open modal with 'c'
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert_eq!(cmd, Some(ClientCommand::ListConflicts));
     assert!(app.state.show_conflicts_modal);
 
-    // Press Esc to dismiss
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
-    assert!(!app.should_quit()); // Esc inside modal should close modal, not quit app
+    assert!(!app.should_quit()); 
 }
 
 #[test]
@@ -111,13 +111,13 @@ fn test_key_conflicts_modal_dismiss_q() {
     app.handle_key(make_key_event(KeyCode::Char('C'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    // Press 'q' inside modal to dismiss without quitting app
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('q'), KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
     assert!(!app.should_quit());
 
-    // Reopen and test 'Q'
+    
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
     let cmd = app.handle_key(make_key_event(KeyCode::Char('Q'), KeyModifiers::NONE));
@@ -132,13 +132,13 @@ fn test_key_conflicts_modal_dismiss_c() {
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    // Press 'c' inside modal to dismiss without quitting app
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
     assert!(!app.should_quit());
 
-    // Reopen and test 'C'
+    
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
     let cmd = app.handle_key(make_key_event(KeyCode::Char('C'), KeyModifiers::NONE));
@@ -153,7 +153,7 @@ fn test_key_ctrl_c_inside_modal_quits() {
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    // Ctrl+C while modal is active must still quit immediately
+    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert_eq!(cmd, None);
     assert!(app.should_quit());

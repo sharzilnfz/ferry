@@ -1,26 +1,26 @@
-//! Device-level folder inventory: one deep module for everything about
-//! *which* directories this device syncs and *what* the filesystem looks
-//! like around them (ticket: deep Folder Inventory module).
-//!
-//! The module owns, and nothing else may touch:
-//!
-//! - **Persistence** at `$FERRY_HOME/folders.toml` — atomic temp-file
-//!   replacement plus a lock file so concurrent writers serialize.
-//! - **Invariants** — records sorted by `added_at`, duplicate/overlapping
-//!   paths rejected, folder ids are unique 64-char hex, loaded files are
-//!   fully validated (`corrupt-registry` on any drift).
-//! - **Path guards** — NFC unicode normalization, absolute-only paths,
-//!   `..` traversal rejection, `//` rejection.
-//! - **Directory inspection** — one-pass `read_dir` that classifies each
-//!   entry (dir/symlink/git repo) and computes `is_already_synced` against
-//!   the current registry plus the shared `is_initialized` verdict, with no
-//!   redundant registry re-reads by callers.
-//!
-//! Callers (CLI, daemon, frontends) see only the compact surface:
-//! [`FolderInventory::register`], [`unregister`](FolderInventory::unregister),
-//! [`list`](FolderInventory::list), [`inspect_dir`](FolderInventory::inspect_dir)
-//! and the wire-shaped data structs. All failures are coded
-//! [`FolderError`]s with the same stable codes frontends already render.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashSet;
 use std::io::Write as _;
@@ -32,21 +32,21 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{FolderError, FolderResult};
 
-/// Name of the registry file inside the device home.
+
 const REGISTRY_FILE: &str = "folders.toml";
-/// Sidecar lock file held while a read-modify-write cycle is in flight.
+
 const LOCK_FILE: &str = "folders.toml.lock";
-/// How long to wait for a competing writer before giving up.
+
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
-/// A lock file older than this was left behind by a crashed process and is
-/// safe to steal.
+
+
 const LOCK_STALE: Duration = Duration::from_secs(10);
 
-// ---------------------------------------------------------------------------
-// Data shapes (identical serde shapes to the historical wire structs)
-// ---------------------------------------------------------------------------
 
-/// One registered sync folder, as persisted and as returned over IPC.
+
+
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderRecord {
     pub folder_id: String,
@@ -54,7 +54,7 @@ pub struct FolderRecord {
     pub added_at: String,
 }
 
-/// One filesystem entry in an inspected directory.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryEntry {
     pub name: String,
@@ -63,12 +63,12 @@ pub struct DirectoryEntry {
     pub is_symlink: bool,
     pub is_git_repo: bool,
     pub is_already_synced: bool,
-    /// Verdict of the shared initialization inspection
-    /// ([`crate::folder::is_initialized`]) for this entry's path.
+    
+    
     pub is_initialized: bool,
 }
 
-/// Request for [`FolderInventory::inspect_dir`].
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ListDirectoryRequest {
     pub path: Option<PathBuf>,
@@ -81,7 +81,7 @@ impl ListDirectoryRequest {
     }
 }
 
-/// Result of [`FolderInventory::inspect_dir`].
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListDirectoryResponse {
     pub entries: Vec<DirectoryEntry>,
@@ -98,13 +98,13 @@ impl ListDirectoryResponse {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Path guards
-// ---------------------------------------------------------------------------
 
-/// Resolve the default listing root when `path` is `None`.
-///
-/// Precedence: `$FERRY_HOME` (if set and non-empty) → `current_dir()` → `$HOME`/`.ferry` → `/tmp`.
+
+
+
+
+
+
 #[must_use]
 pub fn default_listing_root() -> PathBuf {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
@@ -127,9 +127,9 @@ pub fn default_listing_root() -> PathBuf {
     PathBuf::from("/tmp")
 }
 
-/// Resolve the device home directory for the registry.
-///
-/// Precedence: `$FERRY_HOME` (if set and non-empty) → `$HOME`/`.ferry` → `/tmp/.ferry`.
+
+
+
 #[must_use]
 pub fn ferry_home() -> PathBuf {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
@@ -149,19 +149,19 @@ pub fn ferry_home() -> PathBuf {
     PathBuf::from("/tmp/.ferry")
 }
 
-/// NFC-normalize a path string.
+
 fn nfc_normalize_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy().to_string();
     let nfc: String = s.nfc().collect();
     PathBuf::from(nfc)
 }
 
-/// Validate and normalize a concrete `PathBuf`.
-///
-/// Checks, in order: NFC normalization, `//` rejection (`bad-path`),
-/// absolute-only (`bad-path`), any `..` component (`path-traversal` with
-/// hint `path escapes allowed root`). Returns the cleaned canonical form
-/// (`CurDir` components stripped).
+
+
+
+
+
+
 pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
     let nfc_path = nfc_normalize_path(&raw);
     let s = nfc_path.to_string_lossy().to_string();
@@ -202,7 +202,7 @@ pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
         ));
     }
 
-    // Strip CurDir (.) and rebuild to ensure canonical form without duplicate slashes
+    
     let mut cleaned = PathBuf::new();
     for comp in nfc_path.components() {
         match comp {
@@ -225,20 +225,20 @@ pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
     Ok(cleaned)
 }
 
-/// Validate an optional path, defaulting to [`default_listing_root`].
+
 pub fn validate_path(input: Option<PathBuf>) -> FolderResult<PathBuf> {
     let raw = input.unwrap_or_else(default_listing_root);
     validate_and_normalize(raw)
 }
 
-/// Sort entries stably: directories first, then name ascending.
+
 pub fn sort_entries(entries: &mut [DirectoryEntry]) {
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 }
 
-// ---------------------------------------------------------------------------
-// Registry file invariants
-// ---------------------------------------------------------------------------
+
+
+
 
 fn is_hex(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_hexdigit())
@@ -252,7 +252,7 @@ fn is_overlapping(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(b) || b.starts_with(a)
 }
 
-/// On-disk shape of `folders.toml`: a top-level `[[folders]]` table array.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 struct RegistryFile {
     #[serde(default)]
@@ -342,13 +342,13 @@ fn io_error(err: std::io::Error) -> FolderError {
     FolderError::new("io", err.to_string(), "check permissions and disk space")
 }
 
-// ---------------------------------------------------------------------------
-// Locking
-// ---------------------------------------------------------------------------
 
-/// Advisory lock held for the duration of one read-modify-write cycle.
-/// Acquired by creating `folders.toml.lock` exclusively; released (and
-/// stolen after `LOCK_STALE` from crashed writers) by deleting the file.
+
+
+
+
+
+
 struct RegistryLock {
     path: PathBuf,
 }
@@ -366,7 +366,7 @@ impl RegistryLock {
                 Ok(_) => return Ok(Self { path }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     if Self::is_stale(&path) {
-                        // Crashed writer: steal the lock and retry immediately.
+                        
                         let _ = std::fs::remove_file(&path);
                         continue;
                     }
@@ -386,7 +386,7 @@ impl RegistryLock {
 
     fn is_stale(path: &Path) -> bool {
         let Ok(meta) = std::fs::metadata(path) else {
-            // Vanished under us: treat as acquirable.
+            
             return true;
         };
         match meta.modified() {
@@ -402,22 +402,22 @@ impl Drop for RegistryLock {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The deep module
-// ---------------------------------------------------------------------------
 
-/// Single owner of the device folder registry and directory inspection.
-///
-/// Construct once per device home; every mutation flows through
-/// [`register`](Self::register) / [`unregister`](Self::unregister) so
-/// persistence, sorting and validation invariants cannot drift.
+
+
+
+
+
+
+
+
 pub struct FolderInventory {
     home: PathBuf,
 }
 
 impl FolderInventory {
-    /// Inventory rooted at an explicit device home directory
-    /// (contains `folders.toml`). See [`ferry_home`] for the default.
+    
+    
     #[must_use]
     pub fn new(home: &Path) -> Self {
         Self {
@@ -425,13 +425,13 @@ impl FolderInventory {
         }
     }
 
-    /// Inventory at the default device home ([`ferry_home`]).
+    
     #[must_use]
     pub fn open() -> Self {
         Self::new(&ferry_home())
     }
 
-    /// The device home this inventory persists to.
+    
     #[must_use]
     pub fn home(&self) -> &Path {
         &self.home
@@ -441,7 +441,7 @@ impl FolderInventory {
         self.home.join(REGISTRY_FILE)
     }
 
-    /// Load and fully validate the registry file. Missing file → empty.
+    
     fn load_strict(&self) -> FolderResult<Vec<FolderRecord>> {
         let path = self.registry_path();
         if !path.exists() {
@@ -459,17 +459,17 @@ impl FolderInventory {
         Ok(file.folders)
     }
 
-    /// Best-effort registry read for advisory decoration (`is_already_synced`).
-    /// Any failure (including corruption) yields an empty set, matching the
-    /// historical loader contract: inspection must never fail because the
-    /// registry is odd.
+    
+    
+    
+    
     fn load_best_effort(&self) -> Vec<FolderRecord> {
         self.load_strict().unwrap_or_default()
     }
 
-    /// Persist records atomically: serialize sorted, write a temp file in
-    /// the same directory, fsync, rename over `folders.toml`, fsync the
-    /// directory. Callers must already hold the registry lock.
+    
+    
+    
     fn persist(&self, records: &[FolderRecord]) -> FolderResult<()> {
         let mut sorted = records.to_vec();
         sort_by_added_at(&mut sorted);
@@ -491,14 +491,14 @@ impl FolderInventory {
         Ok(())
     }
 
-    /// Register a new sync folder.
-    ///
-    /// The path must be an absolute existing directory and must not overlap
-    /// (be an ancestor or descendant of) any registered folder — both checks
-    /// run before anything touches disk. On success the record is persisted
-    /// atomically and returned. The registry lock is held across the whole
-    /// load-modify-write cycle so concurrent registrations cannot lose
-    /// each other's records.
+    
+    
+    
+    
+    
+    
+    
+    
     pub fn register(&self, path: &Path) -> FolderResult<FolderRecord> {
         std::fs::create_dir_all(&self.home).map_err(io_error)?;
         let _lock = RegistryLock::acquire(&self.home)?;
@@ -560,7 +560,7 @@ impl FolderInventory {
         Ok(record)
     }
 
-    /// Remove a folder by id. Unknown ids are `not-found`.
+    
     pub fn unregister(&self, folder_id: &str) -> FolderResult<()> {
         std::fs::create_dir_all(&self.home).map_err(io_error)?;
         let _lock = RegistryLock::acquire(&self.home)?;
@@ -580,18 +580,18 @@ impl FolderInventory {
         Ok(())
     }
 
-    /// All registered folders, sorted by `added_at` then id. A damaged
-    /// registry file is a hard error (`corrupt-registry`), never silently
-    /// empty.
+    
+    
+    
     pub fn list(&self) -> FolderResult<Vec<FolderRecord>> {
         self.load_strict()
     }
 
-    /// List one directory with per-entry classification, in a single pass.
-    ///
-    /// `None` defaults to [`default_listing_root`]. The path goes through
-    /// [`validate_path`] first. Sync status is computed against the current
-    /// registry (best-effort read); the real directory is read exactly once.
+    
+    
+    
+    
+    
     pub fn inspect_dir(&self, path: Option<PathBuf>) -> FolderResult<ListDirectoryResponse> {
         let validated = validate_path(path)?;
         let registry = self.load_best_effort();

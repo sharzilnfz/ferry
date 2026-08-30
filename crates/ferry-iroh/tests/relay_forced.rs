@@ -1,22 +1,22 @@
-//! THE local acceptance proof for T-009 (the verbatim ticket acceptance —
-//! two machines behind separate home NATs — is MANUAL-UNRUN; this file is
-//! its local stand-in, docs/nat-validation.md is its runbook).
-//!
-//! What is proven here, honestly:
-//!
-//! 1. **Relay-forced convergence**: with `force_relay` (iroh's
-//!    `clear_ip_transports`) BOTH endpoints can reach each other ONLY via a
-//!    running ferry-relay, and the full ferry-sync engine still converges
-//!    end-to-end through it. This is the same shape as "two NATs": every
-//!    byte of the sync transits the relay.
-//! 2. **Plaintext absence at the relay**: every line the relay logs plus
-//!    its structured connection ledger are scanned for the transferred
-//!    plaintext markers and must contain NONE. The relay's metadata
-//!    surface (endpoint public keys, connects) IS expected — its absence
-//!    would mean the scan was vacuous.
-//! 3. **Direct upgrade in normal mode**: without forcing, iroh's own
-//!    negotiation moves the selected path from relay to direct; observed
-//!    via `PathObservation`, again with zero engine awareness.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::io::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -29,15 +29,15 @@ use ferry_sync::{EngineConfig, SyncEngine};
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 
-/// One shared capture buffer per test binary: tracing allows exactly one
-/// global subscriber, so all relay-side log lines land here.
+
+
 static CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
 
 fn relay_log_capture() -> &'static Arc<Mutex<Vec<u8>>> {
     CAPTURE.get_or_init(|| {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        // First-and-only global install; tracing permits one subscriber per
-        // process, and one test binary is one process.
+        
+        
         let _ = ferry_relay::install_capturing_subscriber(Arc::clone(&buffer));
         buffer
     })
@@ -152,10 +152,10 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
 
 const MARKER_NEEDLE: &str = "FERRY-PLAINTEXT-MARKER";
 
-/// Write distinctive plaintext into A's tree: file CONTENTS carrying the
-/// marker needle, plus filenames that also carry it. Everything here ends
-/// up on the wire in M0 (pass-through cipher) but must never appear at the
-/// relay, whose view is endpoint-to-endpoint QUIC ciphertext.
+
+
+
+
 fn plant_markers(tree_a: &std::path::Path) -> Vec<String> {
     let mut rels = Vec::new();
     for i in 0..12 {
@@ -192,10 +192,10 @@ fn wait_converged(pair: &PairFixture, budget: Duration) {
     }
 }
 
-/// Agreement ids can settle on an intermediate round while A is still
-/// scanning in freshly planted markers, and the materializer's rename
-/// lands on B's disk after agreement under loaded-runner scheduling.
-/// Poll until every marker exists instead of racing the applier.
+
+
+
+
 fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Duration) {
     let deadline = Instant::now() + budget;
     loop {
@@ -217,10 +217,10 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "127.0.0.1:0".parse().unwrap(),
     ))
     .expect("local relay spawns");
-    let _capture = relay_log_capture(); // ensure subscriber exists from the start
+    let _capture = relay_log_capture(); 
 
     let pair = start_pair(
-        true, /* FORCE */
+        true, 
         Some(relay.url().to_string()),
         "forced",
     );
@@ -232,13 +232,13 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
     wait_converged(&pair, Duration::from_secs(90));
     wait_markers_landed(&tree_b, &planted, Duration::from_secs(30));
 
-    // Give iroh's path sampler one last beat, then stop the engines so
-    // observations are final before asserting.
+    
+    
     std::thread::sleep(Duration::from_millis(300));
     pair.a.0.shutdown();
     pair.b.0.shutdown();
 
-    // --- Path evidence: traffic rode the relay and NEVER went direct. ---
+    
     let obs_b = pair
         .b
         .1
@@ -257,7 +257,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "an IP path was selected despite force_relay config"
     );
 
-    // --- Relay-side ledger: metadata present (non-vacuous), plaintext absent. ---
+    
     let entries = relay.ledger().entries();
     let ids: Vec<String> = entries
         .iter()
@@ -277,7 +277,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "relay never saw node B connect: {ids:?}"
     );
 
-    // The actual plaintext-absence assertion, over BOTH surfaces:
+    
     assert_eq!(
         scan_relay_side(MARKER_NEEDLE),
         0,
@@ -294,7 +294,7 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     ))
     .expect("local relay spawns");
 
-    // NOT forced: relays available, direct transports intact.
+    
     let pair = start_pair(false, Some(relay.url().to_string()), "normal");
 
     let tree_a = pair._dir.path().join("a/tree");
@@ -302,8 +302,8 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     std::fs::write(tree_a.join("hello.txt"), b"normal mode hello").unwrap();
 
     wait_converged(&pair, Duration::from_secs(90));
-    // Agreement ids settle before the materializer's rename lands on B's
-    // disk under loaded-runner scheduling; poll briefly rather than race.
+    
+    
     let landed_by = Instant::now() + Duration::from_secs(90);
     loop {
         match std::fs::read(tree_b.join("hello.txt")) {
@@ -322,8 +322,8 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
         }
     }
 
-    // Watch the negotiation settle on a direct path (same-host here; the
-    // mechanism — hole punch / local addresses — is iroh's job either way).
+    
+    
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let obs = pair

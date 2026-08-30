@@ -21,10 +21,10 @@ use serde_json::{json, Value};
 
 use super::UiState;
 
-// Backward-compatibility alias during wave transitions
+
 pub type DashboardBackend = dyn UiBackend;
 
-/// Format an `EngineSnapshot` into the standard `status` JSON document shape.
+
 #[must_use]
 pub fn snapshot_to_status_doc(snap: &EngineSnapshot) -> Value {
     let mut held_by_peer_val = serde_json::Map::new();
@@ -88,8 +88,8 @@ fn folder_err(e: ferry_folder::FolderError) -> OpError {
     OpError::new(e.code, e.message, e.hint)
 }
 
-/// The unified pairing ritual for `home` + `identity`, joined to the
-/// process-wide rendezvous.
+
+
 fn pairing_ritual(home: PathBuf, identity: DeviceIdentity) -> PairingRitual {
     PairingRitual::with_shared(home, identity, ferry_folder::pairing::shared_rendezvous())
 }
@@ -114,8 +114,8 @@ fn log_err(e: ferry_sync_engine::LogError) -> OpError {
     }
 }
 
-/// In-process adapter querying local folders using `ferry-folder`, `ferry-scan`,
-/// `ferry-pin`, and `ferry-sync-engine`. Deletes all duplicate disk fallback code.
+
+
 #[derive(Clone, Debug)]
 pub struct InProcessAdapter {
     folder: PathBuf,
@@ -505,7 +505,7 @@ impl SessionDomain for InProcessAdapter {
                     });
                 }
 
-                // The ritual's payload envelope carries the live short code.
+                
                 let bytes = std::fs::read(&offer_path)
                     .map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
                 let envelope =
@@ -597,9 +597,9 @@ impl SessionDomain for InProcessAdapter {
         let store = self.pairing_store.clone();
         Box::pin(async move {
             let ritual = PairingRitual::with_shared(home, identity, store);
-            // Ensure the folder_id maps to our current folder (InProcess is single-folder, but
-            // the ritual looks up via registry/override; registering our folder here makes
-            // create_offer_for_folder work without a pre-existing registry entry in tests).
+            
+            
+            
             ritual.register_folder_path(req.folder_id.clone(), folder);
             tokio::task::spawn_blocking(move || {
                 ritual
@@ -691,8 +691,8 @@ fn backend_inventory() -> ferry_folder::inventory::FolderInventory {
     ferry_folder::inventory::FolderInventory::new(&ferry_folder::inventory::ferry_home())
 }
 
-/// Composite automatic backend for ferry-daemon: talks to the daemon over IPC
-/// via `ferry_ipc::backend::AutoBackend` and falls back to `InProcessAdapter`.
+
+
 #[derive(Clone, Debug)]
 pub struct AutoBackend {
     inner: ferry_ipc::backend::AutoBackend,
@@ -826,7 +826,7 @@ impl SessionDomain for AutoBackend {
     }
 }
 
-/// Direct backend adapter wrapping cached in-memory daemon state (`Arc<UiState>`).
+
 pub struct DirectBackend {
     state: Arc<UiState>,
 }
@@ -1090,7 +1090,7 @@ impl SessionDomain for DirectBackend {
                 });
             }
 
-            // The ritual's payload envelope carries the live short code.
+            
             let bytes = std::fs::read(&offer_path)
                 .map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
             let envelope =
@@ -1240,5 +1240,5 @@ impl InventoryDomain for DirectBackend {
     }
 }
 
-// Backward compatibility alias for IpcBackend
+
 pub type IpcBackend = AutoBackend;

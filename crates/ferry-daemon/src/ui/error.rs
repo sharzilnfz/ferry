@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::Value;
 
-/// A handler failure shaped for the wire: `{"error": "...", "code": "...", "hint": "..."}`.
+
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
@@ -62,9 +62,9 @@ impl IntoResponse for ApiError {
 
 pub use ferry_ipc::backend::OpError;
 
-/// Spec status mapping: 400 validation/usage, 403 forbidden, 404 unknown path/resource,
-/// 409 preconditions (`secrets-found`, `pin-active`,
-/// `already-initialized`, ...), 500 internal, plus sentinel codes.
+
+
+
 #[must_use]
 pub fn status_for_code(code: &str) -> StatusCode {
     match code {

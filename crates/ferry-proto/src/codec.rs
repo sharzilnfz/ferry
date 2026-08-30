@@ -1,16 +1,16 @@
-//! The message inventory: exact payload layouts for every wire message.
-//!
-//! All integers little-endian (the store-format convention); all hashes raw
-//! 32-byte values. Payloads here are the bytes AFTER `type || version` in a
-//! frame body — see `docs/store-format.md`, "Wire protocol v1", for the full
-//! tables this module implements one-to-one.
-//!
-//! Serializations defined elsewhere are REUSED, never re-encoded:
-//! - [`IndexAdvert`] payloads ARE index-table serializations
-//!   ([`ferry_store::index::table_plain`]), rows sorted by `(kind, id)`.
-//! - Manifests and tree nodes travel inside [`ItemBatch`] exactly as stored.
-//! - Packs travel inside [`PackItem`] as whole ciphertext files under their
-//!   BLAKE3 names.
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use ferry_store::format::{put_bytes, put_u16, put_u32, put_u64, put_u8, BlobId, BlobKind, Reader};
 use ferry_store::index::IndexEntry;
@@ -19,7 +19,7 @@ use crate::error::{ByeReason, ProtoError};
 use crate::version::ProtocolVersion;
 use crate::WIRE_MAGIC;
 
-// Message type registry (normative values).
+
 pub const MSG_HELLO: u8 = 0x01;
 pub const MSG_HELLO_ACK: u8 = 0x02;
 pub const MSG_AUTH_INIT: u8 = 0x03;
@@ -32,18 +32,18 @@ pub const MSG_ITEM_BATCH: u8 = 0x09;
 pub const MSG_PACK_ITEM: u8 = 0x0A;
 pub const MSG_BYE: u8 = 0x0B;
 
-/// Feature flags advertised in Hello/HelloAck. v1 defines bit 0 only:
-/// "I implement the skip-if-flagged rule for unknown higher-version message
-/// types". Every conforming v1 engine sets it. Unknown received bits are
-/// ignored, never errors.
+
+
+
+
 pub const FLAG_EXTENSION_AWARE: u64 = 1 << 0;
 
-/// Per-frame item caps. Senders MUST split; receivers MUST reject beyond.
+
 pub const MAX_REQUEST_ITEMS: usize = 512;
 pub const MAX_REQUEST_PACKS: usize = 128;
 pub const MAX_BATCH_ITEMS: usize = 512;
 
-/// True for the four pre-auth handshake types; everything else is sealed.
+
 pub fn is_preauth_type(t: u8) -> bool {
     matches!(
         t,
@@ -51,7 +51,7 @@ pub fn is_preauth_type(t: u8) -> bool {
     )
 }
 
-/// Every message type this version understands, in registry order.
+
 pub const KNOWN_TYPES: &[u8] = &[
     MSG_HELLO,
     MSG_HELLO_ACK,
@@ -66,11 +66,11 @@ pub const KNOWN_TYPES: &[u8] = &[
     MSG_BYE,
 ];
 
-/// A frame body before sealing: `magic || type || version || payload`.
-///
-/// The magic rides INSIDE the body (not in the length prefix) so that even
-/// unsealed frames self-identify, matching the container-file habit of
-/// rejecting foreign bytes early.
+
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameBody {
     pub msg_type: u8,
@@ -116,8 +116,8 @@ fn bad(why: &'static str) -> ProtoError {
     ProtoError::ProtocolViolation(why)
 }
 
-/// ferry-store's Reader has no u16 (the store format never needed one); the
-/// wire version field is the first u16, so read it here.
+
+
 fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
     let b = r
         .take(2)
@@ -125,21 +125,21 @@ fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
-// --- Hello / HelloAck ------------------------------------------------------
 
-/// Handshake opener. The static public key doubles as the sender's
-/// `device_id`; the ephemeral key and nonce are fresh per connection and feed
-/// the transcript.
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hello {
-    /// Maximum protocol version the sender speaks.
+    
     pub version: ProtocolVersion,
     pub flags: u64,
-    /// Fresh X25519 public key for this connection only.
+    
     pub eph_pub: [u8; 32],
-    /// Sender's long-lived device key (its identity).
+    
     pub stat_pub: ferry_crypto::identity::DeviceId,
-    /// Fresh challenge material bound into the transcript.
+    
     pub nonce: [u8; 32],
 }
 
@@ -174,15 +174,15 @@ impl Hello {
     }
 }
 
-/// Responder's half of the hello exchange. Carries BOTH the responder's own
-/// maximum (`version`) and the CHOSEN session version (`agreed`) — the
-/// latter governs every subsequent frame, the former feeds the
-/// unknown-extension rule.
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HelloAck {
-    /// Responder's maximum protocol version.
+    
     pub version: ProtocolVersion,
-    /// Chosen session version: min of both maxima within the common major.
+    
     pub agreed: ProtocolVersion,
     pub flags: u64,
     pub eph_pub: [u8; 32],
@@ -224,18 +224,18 @@ impl HelloAck {
     }
 }
 
-// --- AUTH_INIT / AUTH_CONFIRM ----------------------------------------------
 
-/// One sealed auth message: ChaCha20-Poly1305 ciphertext (48 bytes) over the
-/// sender's `device_id`, keyed through the handshake secret, AAD = transcript
-/// hash. Producing a valid tag requires the sender's static secret term.
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthProof {
     pub ciphertext: Vec<u8>,
 }
 
 impl AuthProof {
-    pub const CT_LEN: usize = 48; // 32-byte plaintext + 16-byte tag
+    pub const CT_LEN: usize = 48; 
 
     pub fn new(ciphertext: Vec<u8>) -> Result<Self, ProtoError> {
         if ciphertext.len() != Self::CT_LEN {
@@ -253,15 +253,15 @@ impl AuthProof {
     }
 }
 
-// --- FOLDER_OFFER ------------------------------------------------------------
 
-/// Announcement of one folder's current root manifest. `manifest_id` zero
-/// means "I know nothing about this folder" (fresh device, or not shared).
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderOffer {
     pub folder_id: [u8; 16],
     pub manifest_id: BlobId,
-    /// Reserved zeros in v1; receivers MUST reject nonzero.
+    
     pub reserved: u32,
 }
 
@@ -291,13 +291,13 @@ impl FolderOffer {
     }
 }
 
-// --- INDEX_ADVERT ------------------------------------------------------------
 
-/// Advertisement of the sender's blob locations for one folder. Rows are
-/// EXACTLY index-table rows (`kind || id || pack || off || len`, sorted by
-/// `(kind, id)`) behind the table's u32 count; a trailing u8 continuation
-/// flag ends the advert sequence deterministically (1 = more adverts follow
-/// for this folder, 0 = last).
+
+
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexAdvert {
     pub entries: Vec<IndexEntry>,
@@ -305,7 +305,7 @@ pub struct IndexAdvert {
 }
 
 impl IndexAdvert {
-    /// Rows per advert frame; senders split larger tables.
+    
     pub const MAX_ROWS: usize = 2048;
 
     pub fn encode(&self) -> Vec<u8> {
@@ -335,13 +335,13 @@ impl IndexAdvert {
     }
 }
 
-// --- REQUEST_ITEMS / REQUEST_PACKS ------------------------------------------
 
-/// Ask the peer for specific blobs by kind + id within one folder. Served
-/// items arrive in `ITEM_BATCH` frames; unservable ids are silently omitted
-/// (the requester detects gaps after the terminator). An EMPTY items list
-/// is the end-of-pull-stage marker: the server replies with a bare empty
-/// `ITEM_BATCH` and returns to listening.
+
+
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestItems {
     pub folder_id: [u8; 16],
@@ -386,7 +386,7 @@ impl RequestItems {
     }
 }
 
-/// Ask the peer for whole packs by ciphertext name within one folder.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestPacks {
     pub folder_id: [u8; 16],
@@ -426,11 +426,11 @@ impl RequestPacks {
     }
 }
 
-// --- ITEM_BATCH / PACK_ITEM ---------------------------------------------------
 
-/// One served blob: verified by the receiver against its OWN requested id
-/// after decryption (`BLAKE3(plaintext) == id`) BEFORE anything touches the
-/// store. An empty batch terminates every response sequence.
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemBatch {
     pub items: Vec<(BlobKind, BlobId, Vec<u8>)>,
@@ -481,9 +481,9 @@ impl ItemBatch {
     }
 }
 
-/// One served pack: the ENTIRE ciphertext file under its BLAKE3 name.
-/// Receiver verifies `BLAKE3(ciphertext) == pack` BEFORE storing — no
-/// decryption, no disk write, on mismatch.
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackItem {
     pub pack: BlobId,
@@ -512,10 +512,10 @@ impl PackItem {
     }
 }
 
-// --- BYE ---------------------------------------------------------------------
 
-/// Graceful close with a reason code. Sent best-effort before disconnecting
-/// on errors; always sent on clean completion.
+
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bye {
     pub reason: ByeReason,
@@ -579,16 +579,16 @@ mod tests {
         };
         assert_eq!(h.encode().len(), Hello::PAYLOAD_LEN);
         assert_eq!(h.encode().len(), 106);
-        // Truncation at every prefix length fails loudly, never guesses.
+        
         let bytes = h.encode();
         for cut in 0..bytes.len() {
             assert!(Hello::parse(&bytes[..cut]).is_err(), "cut {cut}");
         }
-        // Trailing garbage rejected.
+        
         let mut long = bytes.clone();
         long.push(0);
         assert!(Hello::parse(&long).is_err());
-        // Full round trip last (consumes h).
+        
         roundtrip(h, super::Hello::encode, Hello::parse);
 
         let ack = HelloAck {
@@ -616,7 +616,7 @@ mod tests {
             reserved: 0,
         };
         let mut evil = offer.encode();
-        evil[48] = 1; // first reserved byte
+        evil[48] = 1; 
         assert!(matches!(
             FolderOffer::parse(&evil),
             Err(ProtoError::ProtocolViolation("offer reserved nonzero"))
@@ -642,7 +642,7 @@ mod tests {
             entries: entries.clone(),
             more: true,
         };
-        // Row region is byte-identical to the store's table serialization.
+        
         assert_eq!(
             &advert.encode()[..advert.encode().len() - 1],
             ferry_store::index::table_plain(&entries).as_slice()
@@ -661,7 +661,7 @@ mod tests {
             .unwrap()
             .more
         );
-        // Flag byte must be 0 or 1.
+        
         let mut evil = advert.encode();
         *evil.last_mut().unwrap() = 2;
         assert!(matches!(
@@ -677,7 +677,7 @@ mod tests {
             items: vec![(BlobKind::DataChunk, [0; 32]); MAX_REQUEST_ITEMS + 1],
         };
         assert!(big_req.encode().is_err());
-        // Hand-serialize an oversized count to attack the parser directly.
+        
         let mut evil = Vec::new();
         put_bytes(&mut evil, &[0; 16]);
         put_u32(&mut evil, (MAX_REQUEST_ITEMS + 1) as u32);
@@ -704,7 +704,7 @@ mod tests {
         put_u32(&mut evil_p, (MAX_REQUEST_PACKS + 1) as u32);
         assert!(RequestPacks::parse(&evil_p).is_err());
 
-        // Round trips including the empty done-marker.
+        
         let ok = RequestItems {
             folder_id: [7; 16],
             items: vec![(BlobKind::Manifest, [1; 32])],
@@ -728,7 +728,7 @@ mod tests {
         };
         roundtrip(batch, |b| b.encode().unwrap(), ItemBatch::parse);
 
-        // Empty blobs cannot exist; encoder refuses them outright.
+        
         let empty = ItemBatch {
             items: vec![(BlobKind::DataChunk, [4; 32], vec![])],
         };

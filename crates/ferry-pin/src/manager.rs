@@ -1,9 +1,9 @@
-//! Unified high-level manager for session pinning, held ledgers, and release.
-//!
-//! [`PinManager`] encapsulates [`PinStore`], [`HeldLedger`], [`PathMatcher`],
-//! and release planning behind a cohesive interface. Daemon status, CLI commands,
-//! and sync engines interact with pin state through `PinManager` rather than
-//! manually coordinating procedural primitives.
+
+
+
+
+
+
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,31 +18,31 @@ use crate::matcher::PathMatcher;
 use crate::pin::{PinRecord, PinStore, PIN_FORMAT_VERSION};
 use crate::release::ReleasePeerPlan;
 
-/// Unified summary of active pin status and per-peer held sets.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldSummary {
-    /// Active pin status: `"none"`, `"active"`, `"stale"`, or `"released"`.
+    
     pub state: String,
-    /// True while the pin is unreleased and its writer process is alive.
+    
     pub holding: bool,
-    /// Pinned path patterns (e.g. `["src/**"]` or `["*"]`).
+    
     pub paths: Vec<String>,
-    /// Device id (64 lowercase hex) of the pinning device, if recorded.
+    
     pub device_id: Option<String>,
-    /// Process id of the declared writer, if recorded.
+    
     pub pid: Option<u32>,
-    /// Start timestamp (unix seconds), if recorded.
+    
     pub started_sec: Option<i64>,
-    /// Start timestamp (unix nanoseconds), if recorded.
+    
     pub started_nsec: Option<u32>,
-    /// Total distinct held path count across all peers.
+    
     pub total_held_paths: usize,
-    /// Deduplicated held paths per peer hex (`peer_hex` -> sorted distinct paths).
+    
     pub held_by_peer: BTreeMap<String, Vec<String>>,
 }
 
 impl HeldSummary {
-    /// Create an empty summary representing no pin and no held changes.
+    
     pub fn none() -> Self {
         Self {
             state: "none".to_string(),
@@ -58,7 +58,7 @@ impl HeldSummary {
     }
 }
 
-/// Detailed outcome of releasing one peer's held entries.
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleasePeerResult {
     pub device_id: String,
@@ -70,7 +70,7 @@ pub struct ReleasePeerResult {
     pub conflicts_recorded: usize,
 }
 
-/// Outcome of a transactional release across all held peers.
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseSummary {
     pub peers: Vec<ReleasePeerResult>,
@@ -80,8 +80,8 @@ pub struct ReleaseSummary {
     pub pin_ended: bool,
 }
 
-/// Cohesive manager coordinating pin lifecycle, held-entry ledgers,
-/// glob path validation, and release reconciliation.
+
+
 #[derive(Clone, Debug)]
 pub struct PinManager {
     state_dir: PathBuf,
@@ -90,7 +90,7 @@ pub struct PinManager {
 }
 
 impl PinManager {
-    /// `state_dir` is the folder's `.ferry` directory.
+    
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
         let store = PinStore::new(&state_dir);
@@ -102,32 +102,32 @@ impl PinManager {
         }
     }
 
-    /// Path to the folder's `.ferry` state directory.
+    
     pub fn state_dir(&self) -> &Path {
         &self.state_dir
     }
 
-    /// Access the underlying [`PinStore`].
+    
     pub fn store(&self) -> &PinStore {
         &self.store
     }
 
-    /// Access the underlying [`HeldLedger`].
+    
     pub fn ledger(&self) -> &HeldLedger {
         &self.ledger
     }
 
-    /// Load the current [`PinRecord`], if any.
+    
     pub fn record(&self) -> Result<Option<PinRecord>, PinError> {
         self.store.load()
     }
 
-    /// True while a valid pin is active (unreleased and writer is alive).
+    
     pub fn is_holding(&self) -> Result<bool, PinError> {
         Ok(self.record()?.as_ref().is_some_and(PinRecord::holding))
     }
 
-    /// Compute a unified summary of active pin state and all peer held ledgers.
+    
     pub fn summary(&self) -> Result<HeldSummary, PinError> {
         let record = self.store.load()?;
         let (state, holding, paths, device_id, pid, started_sec, started_nsec) = match &record {
@@ -184,9 +184,9 @@ impl PinManager {
         })
     }
 
-    /// Start a session pin for the given writer and path patterns with optional duration in seconds.
-    ///
-    /// Validates path patterns before writing; empty paths default to `["*"]`.
+    
+    
+    
     pub fn start_session_with_duration(
         &self,
         paths: Vec<String>,
@@ -201,7 +201,7 @@ impl PinManager {
             paths
         };
 
-        // Validate glob patterns before writing state
+        
         PathMatcher::new(&scope)?;
 
         let (sec, nsec) = ferry_platform::now_unix();
@@ -223,9 +223,9 @@ impl PinManager {
         Ok(record)
     }
 
-    /// Start a session pin for the given writer and path patterns.
-    ///
-    /// Validates path patterns before writing; empty paths default to `["*"]`.
+    
+    
+    
     pub fn start_session(
         &self,
         paths: Vec<String>,
@@ -236,18 +236,18 @@ impl PinManager {
         self.start_session_with_duration(paths, pid, identity, base_agreements, None)
     }
 
-    /// End the active session pin by marking it released.
-    ///
-    /// Returns `true` if a pin record existed.
+    
+    
+    
     pub fn stop_session(&self) -> Result<bool, PinError> {
         self.store.mark_released()
     }
 
-    /// Release one peer's held set through the transactional convergence
-    /// engine, reconciling the peer's freshest held manifest against the
-    /// tree as it is now. The caller clears the peer's ledger
-    /// ([`PinManager::clear_peer`]) after `Ok` — a failed release leaves
-    /// everything retryable.
+    
+    
+    
+    
+    
     pub fn release_peer(
         &self,
         peer_hex: &str,
@@ -285,18 +285,18 @@ impl PinManager {
         )
     }
 
-    /// Clear one peer's held ledger after successful release.
+    
     pub fn clear_peer(&self, peer_hex: &str) -> Result<bool, PinError> {
         self.ledger.clear_peer(peer_hex)
     }
 
-    /// Transactionally release all held peer changes through the convergence engine.
-    ///
-    /// Reconciles held entries per peer, updates the tree, clears each peer's
-    /// ledger atomically upon successful convergence, and ends the active pin session.
-    ///
-    /// If convergence fails for any peer, the error is returned immediately and
-    /// remaining held entries remain intact on disk for retry.
+    
+    
+    
+    
+    
+    
+    
     pub fn release(
         &self,
         store: &Store,
@@ -347,7 +347,7 @@ impl PinManager {
         })
     }
 
-    /// Reconcile and clear one peer's held ledger atomically.
+    
     pub fn release_peer_transactional(
         &self,
         peer_hex: &str,
@@ -364,17 +364,17 @@ impl PinManager {
         Ok(plan)
     }
 
-    /// Append a batch of held entries for one peer.
+    
     pub fn append_held(&self, peer_hex: &str, entries: &[HeldEntry]) -> Result<(), PinError> {
         self.ledger.append(peer_hex, entries)
     }
 
-    /// Load held entries for one peer.
+    
     pub fn load_held_peer(&self, peer_hex: &str) -> Result<Vec<HeldEntry>, PinError> {
         self.ledger.load_peer(peer_hex)
     }
 
-    /// List all peers with held ledgers.
+    
     pub fn held_peers(&self) -> Result<Vec<String>, PinError> {
         self.ledger.peers()
     }

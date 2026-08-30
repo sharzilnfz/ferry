@@ -1,19 +1,4 @@
 #!/usr/bin/env bash
-# quickstart-e2e.sh — the five-minute acceptance, scripted (T-013):
-#
-#   "from zero to two synced machines using only --help, in under five
-#    minutes" — simulated honestly on ONE machine: two FERRY_HOMEs are two
-#    devices, two trees, two daemons exchanging over localhost TCP.
-#
-# Flow: device A init -> share (secret gate refuses a flagged .env, then
-# proceeds) -> payload files carry the pairing ritual to device B ->
-# both daemons run (A listens, B dials) -> file burst on A -> convergence
-# asserted byte-for-byte on B -> conflicts report empty -> total wall time
-# under 300 s -> everything torn down.
-#
-# Usage: scripts/quickstart-e2e.sh [TIMEOUT_SECONDS]   (default 120)
-# Exit: 0 converged + verified, non-zero otherwise. Portable across
-# macOS (bash 3.2) and GNU/Linux: POSIX tools plus seq/cksum/find.
 
 set -u
 
@@ -41,7 +26,6 @@ FAILED=0
 cleanup() {
     trap - EXIT INT TERM
     if [ -n "$PIDS" ]; then
-        # shellcheck disable=SC2086
         kill $PIDS >/dev/null 2>&1 || true
         wait $PIDS >/dev/null 2>&1 || true
     fi

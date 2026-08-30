@@ -1,35 +1,35 @@
-//! Last-agreed manifest pointers (ADR-0004): THE canonical codec and THE
-//! on-disk ledger, byte-exact per `docs/store-format.md`
-//! ("Last-agreed manifest pointer"):
-//!
-//! ```text
-//! 32B peer_device_id    # the peer's X25519 public key
-//! 32B manifest_id       # the manifest both sides agreed on
-//! i64 LE agreed_sec     # local wall clock when agreement was recorded
-//! u32 LE agreed_nsec
-//! u8  flags             # must be 0 in v1
-//! ```
-//!
-//! 77 bytes total, little-endian, no framing. This is the single
-//! parse/serialize pair for that record (arch-hardening T-10 consolidated
-//! three earlier implementations: ferry-sync `state.rs`, ferry-proto
-//! `agreement.rs`, ferry-sync-engine `agree.rs`). All three already emitted
-//! byte-identical records, so any record written by them parses unchanged
-//! here — compatibility needed no migration of bytes, only of location.
-//!
-//! Storage: one file per `(folder, peer)` under `<store_dir>/agreement/`,
-//! named `<lowercase-hex folder_id>-<lowercase-hex peer>.agree`; file
-//! contents are exactly one canonical record, nothing else. Records at the
-//! retired locations (`<store>/sync/<tag>/agreed.bin`,
-//! `<folder>/.ferry/peers/<peer>.agreed`) are superseded, never read; no
-//! silent misread is possible because readers only look inside `agreement/`.
-//!
-//! Semantics: an absent file means "never agreed" (initial sync). A present
-//! file that is not exactly 77 well-formed bytes with zero flags is CORRUPT
-//! and loads as a loud error, never as absence: this value anchors
-//! three-way reconciliation. Writes are atomic via temp + rename in the
-//! same directory. The record is local state, never transmitted; peers
-//! re-derive agreement by exchanging manifests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::PathBuf;
 
@@ -37,10 +37,10 @@ use thiserror::Error;
 
 use crate::format::{hex, unhex};
 
-/// The canonical serialization length: 32 + 32 + 8 + 4 + 1.
+
 pub const AGREED_RECORD_LEN: usize = 77;
 
-/// One recorded agreement point.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgreedRecord {
     pub peer_device_id: [u8; 32],
@@ -59,19 +59,19 @@ pub enum AgreementError {
     BadFlags,
 }
 
-/// Canonical bytes, byte-for-byte per the store-format section.
+
 pub fn encode_agreed_record(r: &AgreedRecord) -> [u8; AGREED_RECORD_LEN] {
     let mut out = [0u8; AGREED_RECORD_LEN];
     out[..32].copy_from_slice(&r.peer_device_id);
     out[32..64].copy_from_slice(&r.manifest_id);
     out[64..72].copy_from_slice(&r.agreed_sec.to_le_bytes());
     out[72..76].copy_from_slice(&r.agreed_nsec.to_le_bytes());
-    out[76] = 0; // flags
+    out[76] = 0; 
     out
 }
 
-/// Strict parse of a canonical record. Anything but exactly 77 well-formed
-/// bytes with zero flags is an error.
+
+
 pub fn parse_agreed_record(bytes: &[u8]) -> Result<AgreedRecord, AgreementError> {
     if bytes.len() != AGREED_RECORD_LEN {
         return Err(AgreementError::BadLength { len: bytes.len() });
@@ -87,30 +87,30 @@ pub fn parse_agreed_record(bytes: &[u8]) -> Result<AgreedRecord, AgreementError>
     })
 }
 
-/// Filesystem home of the last-agreed records for a set of folders sharing
-/// one store directory. Clone-free; cheap to construct per call site.
+
+
 #[derive(Clone, Debug)]
 pub struct AgreementLedger {
     dir: PathBuf,
 }
 
 impl AgreementLedger {
-    /// `store_dir` is the folder's `.ferry` directory (or a stand-in in
-    /// tests); records live under `<store_dir>/agreement/`.
+    
+    
     pub fn new(store_dir: impl Into<PathBuf>) -> Self {
         AgreementLedger {
             dir: store_dir.into().join("agreement"),
         }
     }
 
-    /// Where one record lives (also used by tests to corrupt files).
+    
     pub fn path_for(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> PathBuf {
         self.dir
             .join(format!("{}-{}.agree", hex(folder_id), hex(peer)))
     }
 
-    /// Record (or overwrite) the last-agreed pointer. Atomic via temp +
-    /// rename within the same directory, matching every other Ferry write.
+    
+    
     pub fn record(&self, folder_id: &[u8; 16], rec: &AgreedRecord) -> Result<(), AgreementError> {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self.dir.join(format!(
@@ -123,8 +123,8 @@ impl AgreementLedger {
         Ok(())
     }
 
-    /// Load the recorded pointer, if any. A corrupt or foreign record is an
-    /// ERROR, never silently ignored: this value anchors reconciliation.
+    
+    
     pub fn get(
         &self,
         folder_id: &[u8; 16],
@@ -137,8 +137,8 @@ impl AgreementLedger {
         }
     }
 
-    /// Forget a folder's agreement with a peer (e.g. after unpairing).
-    /// Returns whether a record existed.
+    
+    
     pub fn forget(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> Result<bool, AgreementError> {
         match std::fs::remove_file(self.path_for(folder_id, peer)) {
             Ok(()) => Ok(true),
@@ -147,9 +147,9 @@ impl AgreementLedger {
         }
     }
 
-    /// Every agreement recorded for `folder_id`, sorted by peer id for
-    /// deterministic listings. Temp files are skipped; anything else that
-    /// fails to parse is a loud error.
+    
+    
+    
     pub fn list_folder(
         &self,
         folder_id: &[u8; 16],
@@ -195,28 +195,28 @@ mod tests {
 
     #[test]
     fn golden_bytes_pin_the_documented_layout_byte_for_byte() {
-        // Hand-transcribed straight from docs/store-format.md §"Last-agreed
-        // manifest pointer": ids raw, sec/nsec little-endian, trailing zero
-        // flags byte. If this test breaks, the on-disk contract broke.
+        
+        
+        
         let rec = fixture();
         let bytes = encode_agreed_record(&rec);
         assert_eq!(bytes.len(), 77);
-        // peer = 00..1f, then manifest = i*3 mod 256 for i in 0..32.
+        
         let expect: [u8; 77] = [
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, //
-            0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, //
-            0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00, 0x03, 0x06, 0x09, //
-            0x0c, 0x0f, 0x12, 0x15, 0x18, 0x1b, 0x1e, 0x21, 0x24, 0x27, 0x2a, 0x2d, //
-            0x30, 0x33, 0x36, 0x39, 0x3c, 0x3f, 0x42, 0x45, 0x48, 0x4b, 0x4e, 0x51, //
-            0x54, 0x57, 0x5a, 0x5d, // end of the two 32-byte ids
-            0x7b, 0xf1, 0x53, 0x65, 0x00, 0x00, 0x00, 0x00, // i64 LE sec = 1700000123
-            0xff, 0xc9, 0x9a, 0x3b, // u32 LE nsec = 999999999
-            0x00, // flags
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 
+            0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 
+            0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x00, 0x03, 0x06, 0x09, 
+            0x0c, 0x0f, 0x12, 0x15, 0x18, 0x1b, 0x1e, 0x21, 0x24, 0x27, 0x2a, 0x2d, 
+            0x30, 0x33, 0x36, 0x39, 0x3c, 0x3f, 0x42, 0x45, 0x48, 0x4b, 0x4e, 0x51, 
+            0x54, 0x57, 0x5a, 0x5d, 
+            0x7b, 0xf1, 0x53, 0x65, 0x00, 0x00, 0x00, 0x00, 
+            0xff, 0xc9, 0x9a, 0x3b, 
+            0x00, 
         ];
         assert_eq!(bytes, expect);
         assert_eq!(parse_agreed_record(&bytes).unwrap(), rec);
 
-        // Negative seconds survive (pre-1970 convention).
+        
         let mut neg = fixture();
         neg.agreed_sec = -42;
         assert_eq!(
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn parse_rejects_wrong_length_and_nonzero_flags() {
         let bytes = encode_agreed_record(&fixture());
-        // Too-short at every cut, plus one too-long input.
+        
         let mut long = bytes.to_vec();
         long.push(0);
         for bad in [&bytes[..0], &bytes[..1], &bytes[..76], &long[..]] {
@@ -257,7 +257,7 @@ mod tests {
             Some(rec.clone())
         );
 
-        // Different folder / different peer → independent slots.
+        
         assert_eq!(ledger.get(&[8; 16], &rec.peer_device_id).unwrap(), None);
         let mut other = rec.clone();
         other.manifest_id = [1; 32];
@@ -271,7 +271,7 @@ mod tests {
             Some(rec.clone())
         );
 
-        // Re-record overwrites atomically.
+        
         let mut newer = rec.clone();
         newer.agreed_sec += 5;
         ledger.record(&[7; 16], &newer).unwrap();
@@ -280,25 +280,25 @@ mod tests {
             Some(newer.clone())
         );
 
-        // Cross-restart: a fresh handle over the same directory reads what
-        // the previous process wrote — real files, no in-memory state.
+        
+        
         let reopened = AgreementLedger::new(tmp.path());
         assert_eq!(
             reopened.get(&[7; 16], &newer.peer_device_id).unwrap(),
             Some(newer.clone())
         );
 
-        // Listing is complete, filtered by folder, and peer-sorted.
+        
         let listed = reopened.list_folder(&[7; 16]).unwrap();
         assert_eq!(listed, vec![(newer.peer_device_id, newer.clone())]);
         assert_eq!(reopened.list_folder(&[8; 16]).unwrap().len(), 1);
 
-        // Forgetting removes exactly one slot.
+        
         assert!(reopened.forget(&[8; 16], &rec.peer_device_id).unwrap());
         assert_eq!(reopened.list_folder(&[8; 16]).unwrap(), Vec::new());
         assert!(!reopened.forget(&[8; 16], &rec.peer_device_id).unwrap());
 
-        // No stray temp files left behind.
+        
         let leftovers: Vec<_> = std::fs::read_dir(&ledger.dir)
             .unwrap()
             .flatten()
@@ -306,7 +306,7 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty());
 
-        // Corrupt on-disk record is a loud error, through get AND list.
+        
         let path = ledger.path_for(&[7; 16], &newer.peer_device_id);
         std::fs::write(&path, vec![0u8; 10]).unwrap();
         assert!(matches!(

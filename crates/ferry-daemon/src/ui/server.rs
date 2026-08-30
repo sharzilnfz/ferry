@@ -23,7 +23,7 @@ pub const INDEX_HTML: &[u8] = include_bytes!("../../assets/index.html");
 pub const STYLE_CSS: &[u8] = include_bytes!("../../assets/style.css");
 pub const APP_JS: &[u8] = include_bytes!("../../assets/app.js");
 
-/// Unified Axum HTTP server for the Ferry web dashboard.
+
 #[derive(Clone)]
 pub struct DashboardServer {
     backend: Arc<dyn UiBackend>,
@@ -33,7 +33,7 @@ pub struct DashboardServer {
 }
 
 impl DashboardServer {
-    /// Create a new dashboard server backed by a `UiBackend`.
+    
     #[must_use]
     pub fn new(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -44,40 +44,40 @@ impl DashboardServer {
         }
     }
 
-    /// Configure a one-time bearer token required for all `/api/*` endpoints.
+    
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
     }
 
-    /// Configure automatic server shutdown after a duration of inactivity.
+    
     #[must_use]
     pub fn with_inactivity_timeout(mut self, timeout: Duration) -> Self {
         self.inactivity_timeout = Some(timeout);
         self
     }
 
-    /// Return the configured token, if any.
+    
     #[must_use]
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
 
-    /// Return the reference to the underlying backend.
+    
     #[must_use]
     pub fn backend(&self) -> &Arc<dyn UiBackend> {
         &self.backend
     }
 
-    /// Record activity timestamp (called automatically by middleware on every request).
+    
     pub fn record_activity(&self) {
         if let Ok(mut last) = self.last_activity.lock() {
             *last = Instant::now();
         }
     }
 
-    /// How long the server has been idle since the last request.
+    
     #[must_use]
     pub fn idle_duration(&self) -> Duration {
         self.last_activity
@@ -86,7 +86,7 @@ impl DashboardServer {
             .unwrap_or_default()
     }
 
-    /// Construct the complete Axum router.
+    
     pub fn router(&self) -> Router {
         Router::new()
             .route("/", get(serve_index))
@@ -115,7 +115,7 @@ impl DashboardServer {
             .with_state(self.clone())
     }
 
-    /// Bind and spawn the server on a dedicated thread with its own tokio runtime.
+    
     pub fn spawn(self, addr: SocketAddr) -> Result<(), String> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -135,7 +135,7 @@ impl DashboardServer {
         Ok(())
     }
 
-    /// Serve on a pre-bound `TcpListener` until inactivity timeout or external shutdown.
+    
     pub async fn serve(self, listener: tokio::net::TcpListener) -> Result<(), std::io::Error> {
         if let Some(timeout) = self.inactivity_timeout {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -165,7 +165,7 @@ impl DashboardServer {
         }
     }
 
-    /// Serve on a pre-bound `TcpListener` with a caller-supplied graceful shutdown signal.
+    
     pub async fn serve_with_graceful_shutdown<F>(
         self,
         listener: tokio::net::TcpListener,
@@ -181,11 +181,11 @@ impl DashboardServer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Token authentication & activity middleware
-// ---------------------------------------------------------------------------
 
-/// Generate a secure 32-character random hex token (16 random bytes).
+
+
+
+
 #[must_use]
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 16];
@@ -193,7 +193,7 @@ pub fn generate_token() -> String {
     ferry_store::format::hex(&bytes)
 }
 
-/// Constant-time token verification using `subtle::ConstantTimeEq`.
+
 #[must_use]
 pub fn is_token_valid(expected: &str, provided: Option<&str>) -> bool {
     let Some(prov) = provided else {
@@ -206,7 +206,7 @@ pub fn is_token_valid(expected: &str, provided: Option<&str>) -> bool {
     expected.as_bytes().ct_eq(prov.as_bytes()).into()
 }
 
-/// Extract authentication token from `Authorization: Bearer <token>` header or `?token=<token>` query param.
+
 #[must_use]
 pub fn extract_token(req: &axum::extract::Request) -> Option<String> {
     if let Some(auth_val) = req.headers().get(axum::http::header::AUTHORIZATION) {
@@ -260,9 +260,9 @@ async fn auth_and_activity_middleware(
     next.run(req).await
 }
 
-// ---------------------------------------------------------------------------
-// Static asset handlers
-// ---------------------------------------------------------------------------
+
+
+
 
 #[must_use]
 pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
@@ -303,9 +303,9 @@ async fn fallback(uri: Uri) -> Response {
     }
 }
 
-// ---------------------------------------------------------------------------
-// API route handlers
-// ---------------------------------------------------------------------------
+
+
+
 
 fn bad_body(rejection: JsonRejection) -> ApiError {
     ApiError::new(
@@ -408,8 +408,8 @@ async fn api_pair_accept(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(bad_body)?;
-    // The unified contract takes either form in one field; keep accepting
-    // the older `payload_path` key for existing dashboard clients.
+    
+    
     let code_or_payload = body
         .get("code_or_payload")
         .or_else(|| body.get("payload_path"))
@@ -529,8 +529,8 @@ struct RegisterFolderBody {
     force: bool,
 }
 
-/// Register a folder into sync. The shared initialization inspection runs
-/// first; an uninitialized path is rejected before the backend sees it.
+
+
 async fn api_registry_register(
     State(server): State<DashboardServer>,
     payload: Result<Json<RegisterFolderBody>, JsonRejection>,
@@ -722,7 +722,7 @@ async fn api_events(
     let (tx, rx) = tokio::sync::mpsc::channel(16);
 
     tokio::spawn(async move {
-        // 1. Send initial status snapshot on connection
+        
         if let Ok(snap) = server.backend.get_status().await {
             let doc = snapshot_to_status_doc(&snap);
             let s = serde_json::to_string(&doc).unwrap_or_default();
@@ -735,7 +735,7 @@ async fn api_events(
             }
         }
 
-        // 2. Stream events from backend push stream with zero polling (0.0% idle CPU)
+        
         if let Ok(mut stream) = server.backend.subscribe_events().await {
             while let Ok(event) = stream.recv().await {
                 if tx.is_closed() {
@@ -909,12 +909,12 @@ mod tests {
             server.serve(listener).await.unwrap();
         });
 
-        // 1. Missing token -> 403
+        
         let (status, body, _) = send_http(addr, "GET", "/api/status", &[], None).await;
         assert_eq!(status, 403);
         assert_eq!(body["code"], "forbidden");
 
-        // 2. Wrong token -> 403
+        
         let (status, body, _) = send_http(
             addr,
             "GET",
@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(status, 403);
         assert_eq!(body["code"], "forbidden");
 
-        // 3. Valid Bearer token header -> 200
+        
         let auth_hdr = format!("Bearer {token}");
         let (status, body, _) = send_http(
             addr,
@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body["command"], "status");
 
-        // 4. Valid query param token -> 200
+        
         let query_path = format!("/api/status?token={token}");
         let (status, body, _) = send_http(addr, "GET", &query_path, &[], None).await;
         assert_eq!(status, 200);

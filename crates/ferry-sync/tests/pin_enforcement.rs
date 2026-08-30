@@ -1,15 +1,15 @@
-//! T-06 acceptance: session pinning enforced ON THE ENGINE PATH (not the
-//! CLI exchange loop).
-//!
-//! Two real engines over loopback TCP; node A runs with
-//! `pin_state_dir` configured (what the daemon binary wires). While A's
-//! pin scopes `notes.txt`, B's edit to that path is withheld from A's
-//! tree at the shared execution boundary and surfaced in
-//! `.ferry/held/<peer>.jsonl`, while unpinned changes still land. After
-//! the pin ends, the ordinary engine flow carries new peer changes again,
-//! and the offline release path (`release_peer`, the exact
-//! machinery `ferry pin release` drives) recovers the held version from
-//! the bytes fetched during the hold — no peer required.
+
+
+
+
+
+
+
+
+
+
+
+
 
 mod common;
 
@@ -47,7 +47,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let b_dev = *engine::device_identity_for_tag(TAG_B).device_id();
     let read = |root: &std::path::Path, rel: &str| std::fs::read_to_string(root.join(rel));
 
-    // --- phase 1: converge both engines on baseline content --------------
+    
     std::fs::create_dir_all(fx.tree_a().join("docs")).unwrap();
     std::fs::write(fx.tree_a().join("notes.txt"), b"v1").unwrap();
     std::fs::write(fx.tree_a().join("docs/other.txt"), b"d1").unwrap();
@@ -68,7 +68,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let mut bases = std::collections::BTreeMap::new();
     bases.insert(b_hex.clone(), hex(&agreed.manifest_id));
 
-    // --- phase 2: A pins notes.txt ---------------------------------------
+    
     let (sec, nsec) = ferry_platform_time();
     PinStore::new(&a_ferry)
         .start(&PinRecord {
@@ -81,32 +81,32 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
             paths: vec!["notes.txt".to_string()],
             released: false,
             base_agreements: bases.clone(),
-            proc_start_token: None, // start() stamps this writer itself
+            proc_start_token: None, 
         })
         .expect("pin starts");
     let rec = PinStore::new(&a_ferry).load().unwrap().expect("record");
     assert!(rec.holding(), "the engine's own pin must count as active");
 
-    // --- phase 3: B changes the pinned AND an unpinned path ---------------
+    
     std::fs::write(fx.tree_b().join("notes.txt"), b"v2").unwrap();
     std::fs::write(fx.tree_b().join("docs/other.txt"), b"d2").unwrap();
 
-    // Unpinned change lands through the enforced boundary...
+    
     wait_until("unpinned doc flows while pinned", || {
         read(&fx.tree_a(), "docs/other.txt").is_ok_and(|v| v == "d2")
     });
-    // ...but the pinned path is HELD: A's tree keeps living its version.
+    
     assert_eq!(
         read(&fx.tree_a(), "notes.txt").unwrap(),
         "v1",
         "pinned peer edit must not touch the tree"
     );
 
-    // Surfaced: ledgered exactly where release looks, with the held
-    // version's chunk refs (bytes were fetched during the hold).
+    
+    
     let ledger = HeldLedger::new(&a_ferry);
-    // d2 can land in a poll round whose B-snapshot predates the v2 write,
-    // so the held line may trail the unpinned flow by a tick.
+    
+    
     wait_until("held decision surfaced for notes.txt", || {
         ledger
             .load_peer(&b_hex)
@@ -124,9 +124,9 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     assert!(!notes.chunks.is_empty(), "held bytes ride the fetch");
     assert_eq!(unhex::<32>(&notes.remote_manifest_id).map(|_| ()), Some(()));
 
-    // Storage-efficiency directive: long pins span many poll ticks, so
-    // identical rounds must append NOTHING. Whatever else happens under
-    // load, one held line per (path, remote manifest) is the contract.
+    
+    
+    
     let mut seen = std::collections::BTreeSet::new();
     for e in ledger.load_peer(&b_hex).unwrap() {
         assert!(
@@ -137,10 +137,10 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         );
     }
 
-    // --- phase 4: pin ends -------------------------------------------------
+    
     PinStore::new(&a_ferry).mark_released().unwrap();
 
-    // Ordinary flow resumes: fresh peer edits apply again without ceremony.
+    
     std::fs::write(fx.tree_b().join("docs/other.txt"), b"d4").unwrap();
     {
         let deadline = Instant::now() + timeout_from_env();
@@ -172,10 +172,10 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         }
     }
 
-    // And the HELD version recovers OFFLINE through the documented release
-    // path (`release_peer` — the exact machinery `ferry pin release`
-    // drives), reconciling against the last-agreed base frozen at pin
-    // start through the transactional convergence engine.
+    
+    
+    
+    
     let opened = ferry_folder::folder::open_folder(
         &fx._dir.path().join("a/store"),
         &engine::device_identity_for_tag(TAG_A),
@@ -232,7 +232,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     fx.a.shutdown();
 }
 
-/// Local wall clock for stamps (tests do not need timefmt formatting).
+
 fn ferry_platform_time() -> (i64, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let d = SystemTime::now()

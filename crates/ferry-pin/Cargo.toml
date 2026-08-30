@@ -6,34 +6,24 @@ license.workspace = true
 
 [dependencies]
 ferry-store = { path = "../ferry-store" }
-# T-06: pin liveness compares the recorded writer against the ACTUAL start
-# time of whatever process now owns the pid (anti pid-reuse).
 ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# Pin-path glob matching uses the same gitignore engine as ferry-ignore so
-# `--paths` behaves exactly like the rules users already know.
 ignore.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# pid liveness (kill(pid, 0)) and macOS process-start sysctl for stale-pin
-# detection.
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# pid liveness (OpenProcess + GetExitCodeProcess) for stale-pin detection;
-# windows-sys is the MIT/Apache-2.0 raw-binding crate used across the
-# windows rust ecosystem.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
 ] }
 
 [dev-dependencies]
-# Tests and examples use the test-util-gated fixture cipher.
 ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 rand.workspace = true

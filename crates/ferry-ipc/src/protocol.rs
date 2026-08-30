@@ -1,4 +1,4 @@
-//! Typed IPC messages and wire protocol data structures for Ferry.
+
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,14 +9,14 @@ use ferry_folder::inventory::{DirectoryEntry, FolderRecord};
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 
-/// Server push messages emitted by the sync daemon over IPC.
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonMessage {
-    /// Full snapshot of current daemon and folder state.
+    
     Snapshot(EngineSnapshot),
 
-    /// Engine state transition or update.
+    
     StateChanged {
         state: String,
         manifest_id: String,
@@ -28,7 +28,7 @@ pub enum DaemonMessage {
         stats: Option<ScanStatsView>,
     },
 
-    /// Progress report for active chunk or blob transfer.
+    
     TransferProgress {
         bytes_transferred: u64,
         total_bytes: u64,
@@ -43,7 +43,7 @@ pub enum DaemonMessage {
         direction: Option<TransferDirection>,
     },
 
-    /// Notification that a new file conflict has been detected and quarantined.
+    
     ConflictRecorded {
         path: String,
         conflict_path: String,
@@ -52,49 +52,49 @@ pub enum DaemonMessage {
         quarantined_as: Option<String>,
     },
 
-    /// General acknowledgement response for a client command.
+    
     Ack {
         command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
 
-    /// Heartbeat response.
+    
     Pong,
 
-    /// Error notification or command failure response.
+    
     Error { code: String, message: String },
 
-    /// Directory listing response.
+    
     DirectoryListing {
         entries: Vec<DirectoryEntry>,
         absolute_path: PathBuf,
     },
 
-    /// List of registered folders.
+    
     FolderList { folders: Vec<FolderRecord> },
 
-    /// A folder was registered.
+    
     FolderRegistered { folder: FolderRecord },
 
-    /// A folder was removed.
+    
     FolderRemoved { folder_id: String },
 
-    /// Pairing session created.
+    
     PairingCreated { response: CreatePairingResponse },
 
-    /// Pairing session joined.
+    
     PairingJoined { result: crate::backend::PairResult },
 }
 
-/// Commands sent from a client (CLI / TUI / Web proxy) to the sync daemon.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum ClientCommand {
-    /// Request an immediate `DaemonMessage::Snapshot`.
+    
     GetStatus,
 
-    /// Start a session pin on the specified paths (empty paths means entire folder).
+    
     StartPin {
         #[serde(default)]
         paths: Vec<String>,
@@ -102,41 +102,41 @@ pub enum ClientCommand {
         duration_hours: Option<u64>,
     },
 
-    /// Release any active session pin and reconcile held changes.
+    
     ReleasePin,
 
-    /// Trigger an immediate manual filesystem rescan.
+    
     TriggerScan,
 
-    /// List recorded conflicts.
+    
     ListConflicts,
 
-    /// Ping request to test connectivity and liveness.
+    
     Ping,
 
-    /// List directory entries at the given path (None = `FERRY_HOME`).
+    
     ListDirectory {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
 
-    /// List all registered sync folders.
+    
     ListFolders,
 
-    /// Register a new sync folder.
+    
     RegisterFolder { path: PathBuf },
 
-    /// Remove a registered sync folder by id.
+    
     RemoveFolder { folder_id: String },
 
-    /// Create a short-lived pairing session for a folder.
+    
     CreatePairingSession { req: CreatePairingRequest },
 
-    /// Join a pairing session using a code and target directory.
+    
     JoinPairingSession { req: JoinPairingRequest },
 }
 
-/// Snapshot of the complete engine state, matching the CLI `--json` schema.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineSnapshot {
     pub folder: String,
@@ -182,7 +182,7 @@ impl EngineSnapshot {
     }
 }
 
-/// Filesystem scan statistics.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ScanStatsView {
     pub files: u64,
@@ -203,7 +203,7 @@ impl ScanStatsView {
     }
 }
 
-/// Session pin view.
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PinView {
     pub state: String,
@@ -232,7 +232,7 @@ impl PinView {
     }
 }
 
-/// Connected/paired peer status.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerStatusView {
     pub device_id: String,
@@ -255,7 +255,7 @@ impl PeerStatusView {
     }
 }
 
-/// Direction of transfer.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
@@ -263,7 +263,7 @@ pub enum TransferDirection {
     Receiving,
 }
 
-/// One resolved conflict record matching `.ferry/conflicts.jsonl`.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
     pub ts: String,
@@ -276,7 +276,7 @@ pub struct ConflictEntry {
     pub quarantined_as: Option<String>,
 }
 
-/// Device timestamp stamp in conflict records.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceStamp {
     pub device: String,

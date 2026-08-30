@@ -1,14 +1,14 @@
-//! Integration tests for three-way reconciliation and unpinned conflict quarantine.
-//!
-//! Acceptance Criteria:
-//! 1. Core sync exchange invokes three-way reconciliation against last-agreed manifest base.
-//! 2. Concurrent edits to the same file between unpinned devices preserve the winner in place
-//!    and write the losing file to `<path>.ferry-conflict.<loser-device>-<timestamp>`.
-//! 3. Every quarantined conflict generates an immutable entry in persistent conflict report
-//!    ledger (`conflicts.jsonl`).
-//! 4. Simultaneous edit-versus-delete conflicts resurrect the edited file.
-//! 5. Identical content modifications differing only in timestamps or executable permissions
-//!    resolve deterministically without creating duplicate conflict files.
+
+
+
+
+
+
+
+
+
+
+
 
 mod common;
 
@@ -109,7 +109,7 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    // Phase 1: Converge baseline file notes.txt
+    
     write_with_mtime(
         &fx.tree_a().join("notes.txt"),
         b"initial baseline notes",
@@ -125,11 +125,11 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         },
     );
 
-    // Phase 2: Stop engines and perform concurrent unpinned modifications offline
+    
     fx.b.shutdown();
     fx.a.shutdown();
 
-    // Node A edits notes.txt with newer mtime (winner)
+    
     let winner_mtime = 1_800_000_200i64;
     write_with_mtime(
         &fx.tree_a().join("notes.txt"),
@@ -138,7 +138,7 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         0,
     );
 
-    // Node B edits notes.txt with older mtime (loser)
+    
     let loser_mtime = 1_800_000_100i64;
     write_with_mtime(
         &fx.tree_b().join("notes.txt"),
@@ -147,24 +147,24 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         0,
     );
 
-    // Phase 3: Restart engines to sync over loopback TCP
+    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    // Winner file must stay live at notes.txt on both nodes
+    
     wait_until("winner content is live on both trees", || {
         read_to_string(&fx.tree_a(), "notes.txt").as_deref() == Some("version A winning content\n")
             && read_to_string(&fx.tree_b(), "notes.txt").as_deref()
                 == Some("version A winning content\n")
     });
 
-    // Expected quarantine filename for loser (device B):
-    // <name>.ferry-conflict.<loser_short_hex>-<loser_mtime_compact>
+    
+    
     let loser_short_hex = &hex_b[..8];
     let loser_ts_compact = ferry_platform::time::fmt_compact(loser_mtime);
     let expected_conflict_name =
         format!("notes.txt.ferry-conflict.{loser_short_hex}-{loser_ts_compact}");
 
-    // Wait until quarantine file is present and contains loser content on both sides
+    
     wait_until("loser quarantine file is present on A", || {
         read_to_string(&fx.tree_a(), &expected_conflict_name).as_deref()
             == Some("version B losing content\n")
@@ -174,7 +174,7 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
             == Some("version B losing content\n")
     });
 
-    // Phase 4: Verify conflicts.jsonl on both nodes
+    
     wait_until("both_changed conflict is logged", || {
         let entries_a = read_conflict_log(&store_a);
         let entries_b = read_conflict_log(&store_b);
@@ -220,7 +220,7 @@ fn edit_versus_delete_resurrects_edited_file() {
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    // Phase 1: Baseline files keep.txt and file.txt
+    
     write_with_mtime(
         &fx.tree_a().join("keep.txt"),
         b"keep this file",
@@ -242,7 +242,7 @@ fn edit_versus_delete_resurrects_edited_file() {
         },
     );
 
-    // Phase 2: Offline - Node A edits file.txt, Node B deletes file.txt
+    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -255,10 +255,10 @@ fn edit_versus_delete_resurrects_edited_file() {
     );
     std::fs::remove_file(fx.tree_b().join("file.txt")).unwrap();
 
-    // Phase 3: Resume sync
+    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    // Edited file must resurrect and be present on both sides
+    
     wait_until("resurrected edit lands on both trees", || {
         read_to_string(&fx.tree_a(), "file.txt").as_deref()
             == Some("resurrected content edited on A\n")
@@ -266,7 +266,7 @@ fn edit_versus_delete_resurrects_edited_file() {
                 == Some("resurrected content edited on A\n")
     });
 
-    // No quarantine copy since deletion has no content to quarantine
+    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "no quarantine file should be generated for delete-vs-edit"
@@ -276,7 +276,7 @@ fn edit_versus_delete_resurrects_edited_file() {
         "no quarantine file should be generated for delete-vs-edit"
     );
 
-    // Check conflict log entries
+    
     wait_until("delete_vs_edit conflict is logged", || {
         let entries_a = read_conflict_log(&store_a);
         let entries_b = read_conflict_log(&store_b);
@@ -315,7 +315,7 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    // Phase 1: Baseline file doc.txt
+    
     write_with_mtime(
         &fx.tree_a().join("doc.txt"),
         b"initial baseline doc",
@@ -331,7 +331,7 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         },
     );
 
-    // Phase 2: Offline - Both nodes write identical content with different timestamps
+    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -349,10 +349,10 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         0,
     );
 
-    // Phase 3: Resume sync
+    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    // Both converge on identical bytes
+    
     wait_until("both trees hold identical modified content", || {
         read_to_string(&fx.tree_a(), "doc.txt").as_deref()
             == Some("exact same modified bytes on both nodes\n")
@@ -360,7 +360,7 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
                 == Some("exact same modified bytes on both nodes\n")
     });
 
-    // No conflict files must be created
+    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "identical content must not produce conflict quarantine file on A"
@@ -370,7 +370,7 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         "identical content must not produce conflict quarantine file on B"
     );
 
-    // Conflict log must not contain an entry for doc.txt
+    
     let entries_a = read_conflict_log(&store_a);
     let entries_b = read_conflict_log(&store_b);
     assert!(
@@ -399,7 +399,7 @@ fn identical_content_differing_permissions_resolves_silently() {
     let fx = EngineFixture::start(name, SEED + 3);
     let _store_a = fx._dir.path().join("a/store");
 
-    // Phase 1: Baseline file script.sh
+    
     let script_bytes = b"#!/bin/sh\necho hello\n";
     write_with_mtime(
         &fx.tree_a().join("script.sh"),
@@ -416,7 +416,7 @@ fn identical_content_differing_permissions_resolves_silently() {
         },
     );
 
-    // Phase 2: Offline - Node A sets executable bit, Node B does not (same content)
+    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -432,17 +432,17 @@ fn identical_content_differing_permissions_resolves_silently() {
     perm_b.set_mode(0o644);
     std::fs::set_permissions(&p_b, perm_b).unwrap();
 
-    // Phase 3: Resume sync
+    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    // Wait until both converge
+    
     wait_until("both trees hold identical script", || {
         read_to_string(&fx.tree_a(), "script.sh").as_deref() == Some("#!/bin/sh\necho hello\n")
             && read_to_string(&fx.tree_b(), "script.sh").as_deref()
                 == Some("#!/bin/sh\necho hello\n")
     });
 
-    // No conflict quarantine files
+    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "permission-only divergence must not create conflict files on A"

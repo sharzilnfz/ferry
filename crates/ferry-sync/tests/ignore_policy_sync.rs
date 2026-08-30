@@ -1,6 +1,6 @@
-//! Integration tests verifying that compiled `FerryIgnore` rules are bound
-//! authoritatively at the scan seam during sync, so that ignored files
-//! are excluded from generated manifests and never synchronized over the wire.
+
+
+
 
 mod common;
 
@@ -49,13 +49,13 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
     let timeout = common::timeout_from_env();
     let fx = EngineFixture::start("ignore-defaults", SEED);
 
-    // Populate A with allowed files and default-ignored files
+    
     let tree_a = fx.tree_a();
     fs::write(tree_a.join("allowed.txt"), b"allowed content\n").unwrap();
     fs::create_dir_all(tree_a.join("src")).unwrap();
     fs::write(tree_a.join("src/main.rs"), b"fn main() {}\n").unwrap();
 
-    // Default ignored files: .env, .env.*, node_modules/, .DS_Store, *.swp, *~
+    
     fs::write(tree_a.join(".env"), b"SECRET_KEY=12345\n").unwrap();
     fs::write(
         tree_a.join(".env.production"),
@@ -72,7 +72,7 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
     fs::write(tree_a.join("file.swp"), b"swap content\n").unwrap();
     fs::write(tree_a.join("backup~"), b"backup content\n").unwrap();
 
-    // Wait until allowed content converges on B
+    
     let tree_b = fx.tree_b();
     let deadline = std::time::Instant::now() + timeout;
     let agreed = loop {
@@ -93,7 +93,7 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
         std::thread::sleep(Duration::from_millis(50));
     };
 
-    // Assert files on B
+    
     assert_eq!(
         fs::read(tree_b.join("allowed.txt")).ok().as_deref(),
         Some(b"allowed content\n".as_slice())
@@ -103,7 +103,7 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
         Some(b"fn main() {}\n".as_slice())
     );
 
-    // Verify ignored files are absent on B
+    
     assert!(!tree_b.join(".env").exists(), ".env must not sync");
     assert!(
         !tree_b.join(".env.production").exists(),
@@ -120,7 +120,7 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
     assert!(!tree_b.join("file.swp").exists(), "*.swp must not sync");
     assert!(!tree_b.join("backup~").exists(), "*~ must not sync");
 
-    // Inspect manifest in store B and verify no ignored entries exist
+    
     let store_dir = fx._dir.path().join("b/store");
     let id_b = ferry_sync::engine::device_identity_for_tag("ignore-defaults-b");
     if let Ok(store) = ferry_folder::open_or_create_test_store(&store_dir, &id_b) {
@@ -215,12 +215,12 @@ fn settings_presets_and_overrides_are_respected() {
     fs::create_dir_all(tree_a.join("skills")).unwrap();
     fs::write(tree_a.join("skills/skill.md"), b"skill\n").unwrap();
 
-    // Preset 'claude' excludes telemetry/, statsig/, **/*.log
+    
     fs::create_dir_all(tree_a.join("telemetry")).unwrap();
     fs::write(tree_a.join("telemetry/events.json"), b"{}\n").unwrap();
     fs::write(tree_a.join("output.log"), b"log\n").unwrap();
 
-    // Overrides exclude custom_build/, *.cache
+    
     fs::create_dir_all(tree_a.join("custom_build")).unwrap();
     fs::write(tree_a.join("custom_build/out.bin"), b"\0\0").unwrap();
     fs::write(tree_a.join("temp.cache"), b"cached data\n").unwrap();

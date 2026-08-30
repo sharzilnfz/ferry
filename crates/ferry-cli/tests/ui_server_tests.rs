@@ -67,7 +67,7 @@ fn test_ui_test_flag_and_random_port() {
     let env = common::Env::new("ui_test_flag");
     let work = env.work();
 
-    // Initialize folder first
+    
     ferry_cli::commands::init::run(&work).expect("init");
 
     let out = ui::run(UiArgs {
@@ -114,7 +114,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
         axum::serve(listener, app).await.expect("serve");
     });
 
-    // 1. Static assets should be accessible without token
+    
     let (status, _, body) = send_http(addr, "GET", "/", &[], None).await;
     assert_eq!(status, 200);
     assert!(body.contains("<!doctype html>"));
@@ -127,7 +127,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 200);
     assert!(body.contains("loadStatus"));
 
-    // 2. API endpoints without token -> 403 Forbidden
+    
     let (status, json, _) = send_http(addr, "GET", "/api/status", &[], None).await;
     assert_eq!(status, 403);
     assert_eq!(json["code"], "forbidden");
@@ -136,7 +136,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 403);
     assert_eq!(json["code"], "forbidden");
 
-    // 3. API endpoints with wrong token -> 403 Forbidden
+    
     let (status, json, _) =
         send_http(addr, "GET", "/api/status?token=wrong_token", &[], None).await;
     assert_eq!(status, 403);
@@ -153,7 +153,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 403);
     assert_eq!(json["code"], "forbidden");
 
-    // 4. API endpoints with valid query param token -> 200 OK
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -176,7 +176,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 200);
     assert_eq!(json["command"], "conflicts");
 
-    // 5. API endpoints with valid Authorization header -> 200 OK
+    
     let auth_header = format!("Bearer {token}");
     let (status, json, _) = send_http(
         addr,
@@ -189,7 +189,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 200);
     assert_eq!(json["command"], "status");
 
-    // 6. Unknown API endpoint -> 404
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -201,7 +201,7 @@ async fn test_token_auth_enforcement_and_static_assets() {
     assert_eq!(status, 404);
     assert_eq!(json["code"], "not-found");
 
-    // 7. /api/events -> 200 text/event-stream with initial event: state
+    
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut sse_stream = tokio::net::TcpStream::connect(addr)
         .await
@@ -248,7 +248,7 @@ async fn test_endpoint_proxying_over_ipc() {
 
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&work);
 
-    // Mock IPC Server that broadcasts an initial snapshot and answers commands
+    
     #[cfg(unix)]
     let server = ferry_ipc::transport::unix::IpcServer::bind(&socket_path).expect("bind ipc");
     #[cfg(windows)]
@@ -268,14 +268,14 @@ async fn test_endpoint_proxying_over_ipc() {
                 snap.pin = PinView::active(vec!["src/**".to_string()]);
                 snap.conflicts = 3;
 
-                // Send initial snapshot
+                
                 let _ = conn.send_message(&DaemonMessage::Snapshot(snap)).await;
 
                 while let Ok(Some(cmd)) = conn.recv_command().await {
                     match cmd {
                         ferry_ipc::protocol::ClientCommand::GetStatus => {
-                            // Mirror the real daemon: GetStatus answers with a
-                            // FULL snapshot (same shape as the initial one).
+                            
+                            
                             let mut snap = EngineSnapshot::new(
                                 "/mock/folder",
                                 "0123456789abcdef0123456789abcdef",
@@ -339,7 +339,7 @@ async fn test_endpoint_proxying_over_ipc() {
         axum::serve(listener, app).await.expect("serve");
     });
 
-    // Query status over IPC:
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -355,7 +355,7 @@ async fn test_endpoint_proxying_over_ipc() {
     assert_eq!(json["scanned"]["files"], 42);
     assert_eq!(json["conflicts"], 3);
 
-    // Query conflicts over IPC:
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -370,7 +370,7 @@ async fn test_endpoint_proxying_over_ipc() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["path"], "src/conflict.rs");
 
-    // Pin start over IPC:
+    
     let (status, json, _) = send_http(
         addr,
         "POST",
@@ -383,7 +383,7 @@ async fn test_endpoint_proxying_over_ipc() {
     assert_eq!(json["command"], "pin");
     assert_eq!(json["action"], "start");
 
-    // Pin release over IPC:
+    
     let (status, json, _) = send_http(
         addr,
         "POST",
@@ -421,7 +421,7 @@ async fn test_endpoint_disk_fallback_when_daemon_offline() {
         axum::serve(listener, app).await.expect("serve");
     });
 
-    // 1. Status should succeed via disk fallback
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -434,7 +434,7 @@ async fn test_endpoint_disk_fallback_when_daemon_offline() {
     assert_eq!(json["command"], "status");
     assert_eq!(json["conflicts"], 0);
 
-    // 2. Conflicts should succeed via disk fallback (empty)
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -447,7 +447,7 @@ async fn test_endpoint_disk_fallback_when_daemon_offline() {
     assert_eq!(json["command"], "conflicts");
     assert_eq!(json["entries"], serde_json::json!([]));
 
-    // 3. Pin start on disk
+    
     let (status, json, _) = send_http(
         addr,
         "POST",
@@ -460,7 +460,7 @@ async fn test_endpoint_disk_fallback_when_daemon_offline() {
     assert_eq!(json["command"], "pin");
     assert_eq!(json["action"], "start");
 
-    // 4. Pin stop on disk
+    
     let (status, json, _) = send_http(
         addr,
         "POST",
@@ -535,7 +535,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     engine_b.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
     let handle_b = engine_b.start();
 
-    // Wait for nodes to synchronize
+    
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut synced = false;
     while std::time::Instant::now() < deadline {
@@ -549,7 +549,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     }
     assert!(synced, "nodes failed to synchronize within deadline");
 
-    // Spawn UI server for Node A
+    
     let token_a = "0123456789abcdef0123456789abcdef";
     let state_a = Arc::new(ferry_daemon::ui::UiState::new(
         handle_a.clone(),
@@ -566,7 +566,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         axum::serve(listener_a, server_a.router()).await.unwrap();
     });
 
-    // Spawn UI server for Node B
+    
     let token_b = "fedcba9876543210fedcba9876543210";
     let state_b = Arc::new(ferry_daemon::ui::UiState::new(
         handle_b.clone(),
@@ -583,7 +583,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         axum::serve(listener_b, server_b.router()).await.unwrap();
     });
 
-    // Query /api/status on Node A
+    
     let (status_code_a, json_a, _) = send_http(
         ui_addr_a,
         "GET",
@@ -594,7 +594,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     .await;
     assert_eq!(status_code_a, 200);
 
-    // Query /api/status on Node B
+    
     let (status_code_b, json_b, _) = send_http(
         ui_addr_b,
         "GET",
@@ -608,14 +608,14 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
     let manifest_a = json_a["manifest_id"].as_str().expect("manifest_id on A");
     let manifest_b = json_b["manifest_id"].as_str().expect("manifest_id on B");
 
-    // Both nodes report matching signed manifest identifiers
+    
     assert_eq!(
         manifest_a, manifest_b,
         "manifest_id should match across synchronized nodes"
     );
     assert!(!manifest_a.is_empty());
 
-    // Check Peer rows on Node A
+    
     let peers_a = json_a["peers"].as_array().expect("peers array on A");
     assert_eq!(peers_a.len(), 1);
     assert_eq!(peers_a[0]["device_id"], dev_b_hex);
@@ -627,7 +627,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         "peer last_agreed_manifest_id must match local manifest_id when agreed"
     );
 
-    // Check Peer rows on Node B
+    
     let peers_b = json_b["peers"].as_array().expect("peers array on B");
     assert_eq!(peers_b.len(), 1);
     assert_eq!(peers_b[0]["device_id"], dev_a_hex);
@@ -639,7 +639,7 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         "peer last_agreed_manifest_id must match local manifest_id when agreed"
     );
 
-    // Also verify via DaemonState snapshot
+    
     let (tx_a, _) = tokio::sync::broadcast::channel(16);
     let daemon_state_a = ferry_daemon::DaemonState::new(
         handle_a.clone(),
@@ -656,10 +656,10 @@ async fn test_api_status_peer_agreement_when_nodes_synchronize_and_diverge() {
         Some(manifest_a)
     );
 
-    // Now test divergence: shut down node B and introduce a local change on Node A
+    
     handle_b.shutdown();
     std::fs::write(tree_a.join("diverge.txt"), b"divergent content on node A").unwrap();
-    // Wait until Node A mints a new manifest
+    
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         if let Some(cur_m) = handle_a.current_manifest_id() {
@@ -721,7 +721,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
         axum::serve(listener, app).await.expect("serve");
     });
 
-    // 1. Secret detection without i_know returns 409 and does not write offer file
+    
     let creds_file = work.join("credentials.json");
     std::fs::write(&creds_file, b"{\"client_secret\": \"super_secret_value\"}")
         .expect("write creds");
@@ -744,10 +744,10 @@ async fn test_async_pairing_workflow_and_status_polling() {
         "offer file must not be written when secret scan blocks"
     );
 
-    // Remove the credentials file
+    
     let _ = std::fs::remove_file(&creds_file);
 
-    // 2. POST /api/share initiates pairing and returns in < 50ms with status: pending
+    
     let start = std::time::Instant::now();
     let (status, json, _) = send_http(
         addr,
@@ -773,7 +773,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
         "offer file must be written to disk"
     );
 
-    // 3. GET /api/share/status returns pending before response file exists
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -787,7 +787,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
     assert_eq!(json["status"], "pending");
     assert_eq!(json["short_code"], short_code);
 
-    // 4. Accept the pair from peer device (device B) to write pair-response
+    
     let (home_b, id_b) = {
         let dir = tempfile::tempdir().unwrap();
         let id = ferry_crypto::identity::load_or_create(&dir.path().join("id_b")).unwrap();
@@ -804,11 +804,11 @@ async fn test_async_pairing_workflow_and_status_polling() {
         .expect("accept_offer");
     assert_eq!(pending_b.expected_short_code, short_code);
 
-    // Response file should now exist at <work>/.ferry/pair-response.ferry-pair
+    
     let response_file_path = work.join(".ferry").join("pair-response.ferry-pair");
     assert!(response_file_path.exists());
 
-    // 5. GET /api/share/status transitions to completed once response exists
+    
     let (status, json, _) = send_http(
         addr,
         "GET",
@@ -823,7 +823,7 @@ async fn test_async_pairing_workflow_and_status_polling() {
     let peer_device_id = json["peer_device_id"].as_str().expect("peer_device_id");
     assert_eq!(peer_device_id, ferry_store::format::hex(id_b.public()));
 
-    // 6. Completing the accept side on device B with the written grant
+    
     let accepted = pending_b.complete(5).expect("accept complete");
     assert_eq!(accepted.folder, target_b.path());
 
@@ -836,7 +836,7 @@ fn test_ui_gui_and_tui_dispatch_modes() {
     let work = env.work();
     ferry_cli::commands::init::run(&work).expect("init");
 
-    // 1. Dispatch --gui in test mode
+    
     let out_gui = ui::run(UiArgs {
         folder: Some(&work),
         gui: true,
@@ -852,7 +852,7 @@ fn test_ui_gui_and_tui_dispatch_modes() {
     assert_eq!(out_gui.json["frontend"], "gui");
     assert_eq!(out_gui.json["status"], "ok");
 
-    // 2. Dispatch --tui in test mode
+    
     let out_tui = ui::run(UiArgs {
         folder: Some(&work),
         gui: false,
@@ -868,7 +868,7 @@ fn test_ui_gui_and_tui_dispatch_modes() {
     assert_eq!(out_tui.json["frontend"], "tui");
     assert_eq!(out_tui.json["status"], "ok");
 
-    // 3. Default frontend dispatch in test mode (preferred = gui)
+    
     let out_default = ui::run(UiArgs {
         folder: Some(&work),
         gui: false,

@@ -1,13 +1,11 @@
 "use strict";
 
-/* ==========================================================================
-   FERRY · FLUID GLASS ENGINE & REAL-TIME API CLIENT
-   ========================================================================== */
+
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// ---- State Variables ------------------------------------------------------
+
 let currentState = "synced";
 let lastStatus = null;
 let lastManifestId = null;
@@ -21,7 +19,7 @@ let sseReconnectTimer = null;
 let pollTimer = null;
 let sharePollTimer = null;
 
-// ---- HTML Escaping --------------------------------------------------------
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",

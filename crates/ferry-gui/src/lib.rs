@@ -1,7 +1,7 @@
-//! `ferry-gui`: Pure-Rust Desktop GUI application for Ferry built with `egui` and `eframe`.
-//!
-//! Provides the Obsidian Dark fluid-glass graphical interface for real-time folder sync
-//! monitoring, session pinning, conflict management, and device pairing.
+
+
+
+
 
 pub mod activity;
 pub mod app;
@@ -22,7 +22,7 @@ use eframe::NativeOptions;
 use ferry_ipc::backend::{connect_auto, UiBackend};
 pub use theme::{colors, Theme};
 
-/// Launch the Ferry native desktop GUI window.
+
 pub fn run_gui(
     backend: Arc<dyn UiBackend>,
     rt_handle: tokio::runtime::Handle,
@@ -50,7 +50,7 @@ pub fn run_gui(
     )
 }
 
-/// Launch the Ferry native desktop GUI window with an automated backend connection.
+
 pub fn run_gui_auto(
     socket_path: impl Into<PathBuf>,
     folder_path: impl Into<Option<PathBuf>>,

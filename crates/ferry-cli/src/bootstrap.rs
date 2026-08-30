@@ -163,7 +163,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
     }
     #[cfg(not(windows))]
     {
-        // Keep detached: do not tie to parent stdio
+        
     }
     let spawn_res = cmd.spawn();
     if spawn_res.is_err() {
@@ -185,7 +185,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
             return Ok(socket);
         }
         if socket.exists() {
-            // socket file appeared but not yet responding; keep waiting with backoff
+            
         }
         delay = std::cmp::min(delay * 2, Duration::from_millis(800));
     }

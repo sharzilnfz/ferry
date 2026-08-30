@@ -73,7 +73,7 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
         server.serve(listener).await.unwrap();
     });
 
-    // 1. Static assets work without token
+    
     let (status, _, body) = send_http(addr, "GET", "/", &[], None).await;
     assert_eq!(status, 200);
     assert!(body.to_ascii_lowercase().contains("<!doctype html>"));
@@ -85,12 +85,12 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     let (status, _, _body) = send_http(addr, "GET", "/app.js", &[], None).await;
     assert_eq!(status, 200);
 
-    // 2. Token auth: without token -> 403
+    
     let (status, json, _) = send_http(addr, "GET", "/api/status", &[], None).await;
     assert_eq!(status, 403);
     assert_eq!(json["code"], "forbidden");
 
-    // 3. Status with Bearer token
+    
     let auth_hdr = format!("Bearer {token}");
     let (status, json, _) = send_http(
         addr,
@@ -104,7 +104,7 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     assert_eq!(json["command"], "status");
     assert_eq!(json["folder"], "/test/folder");
 
-    // 4. Conflicts endpoint
+    
     fake.add_conflict(ConflictEntry {
         ts: "2026-08-28T00:00:00Z".to_string(),
         folder_id: "0123456789abcdef".to_string(),
@@ -138,7 +138,7 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["path"], "src/main.rs");
 
-    // 5. Pin operations
+    
     let (status, json, _) = send_http(
         addr,
         "POST",
@@ -175,7 +175,7 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     assert_eq!(json["command"], "pin");
     assert_eq!(json["action"], "release");
 
-    // 6. Share & Pair operations
+    
     let (status, json, _) = send_http(
         addr,
         "POST",

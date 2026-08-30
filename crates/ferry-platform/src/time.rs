@@ -1,15 +1,15 @@
-//! Unix-time conversions shared by scan/materialize.
-//!
-//! The manifest stores mtime as signed seconds plus normalized nanoseconds
-//! (`docs/store-format.md`). Host APIs hand us `SystemTime`, which cannot
-//! express pre-1970 instants through `duration_since` without the error
-//! branch; these helpers do the round trip exactly, including pre-1970
-//! values, and are pure enough to unit-test identically on every platform.
+
+
+
+
+
+
+
 
 use std::time::{Duration, SystemTime};
 
-/// `(sec, nsec)` with `0 <= nsec < 1_000_000_000`; negative seconds are
-/// timespec-style pre-1970 instants (negative sec, POSITIVE nsec).
+
+
 pub fn split_unix(t: SystemTime) -> (i64, u32) {
     match t.duration_since(SystemTime::UNIX_EPOCH) {
         Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
@@ -24,7 +24,7 @@ pub fn split_unix(t: SystemTime) -> (i64, u32) {
     }
 }
 
-/// Inverse of [`split_unix`].
+
 pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
     let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
     if total >= 0 {
@@ -34,7 +34,7 @@ pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
     }
 }
 
-/// Break unix seconds into (year, month, day, hour, minute, second), UTC.
+
 pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let days = secs.div_euclid(86_400);
     let sod = secs.rem_euclid(86_400) as u32;
@@ -66,31 +66,31 @@ pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// `YYYYMMDD-HHMMSS` form used inside conflict file names.
+
 pub fn fmt_compact(secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil_utc(secs);
     format!("{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}")
 }
 
-/// Format unix seconds into `HH:MM:SS` UTC.
+
 pub fn fmt_time_utc(secs: i64) -> String {
     let (_, _, _, h, mi, s) = civil_utc(secs);
     format!("{h:02}:{mi:02}:{s:02}")
 }
 
-/// Formats the current time as `HH:MM:SS`.
+
 pub fn current_time_str() -> String {
     let (secs, _) = now_unix();
     fmt_time_utc(secs)
 }
 
-/// RFC 3339 UTC with second precision.
+
 pub fn fmt_rfc3339(secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil_utc(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
-/// Parse standard RFC 3339 UTC timestamp into unix seconds.
+
 pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
     let ts = ts.trim();
     if ts.len() < 20 {
@@ -126,7 +126,7 @@ pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
     }
 }
 
-/// Current wall clock as (unix seconds, nanoseconds).
+
 pub fn now_unix() -> (i64, u32) {
     match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
         Ok(d) => (d.as_secs() as i64, d.subsec_nanos()),
@@ -141,9 +141,9 @@ pub fn now_unix() -> (i64, u32) {
 mod tests {
     use super::*;
 
-    // Windows SystemTime is FILETIME-backed (100ns units), so finer digits
-    // cannot survive a join→split round trip there. Quantize expectations to
-    // the platform's clock granularity; unix keeps full fidelity.
+    
+    
+    
     const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
     fn q(nsec: u32) -> u32 {
         nsec / NS_GRAN * NS_GRAN

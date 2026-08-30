@@ -1,19 +1,19 @@
-//! T-014 acceptance: ferry-sync speaks protocol v1 with encryption ON by
-//! default, byte-compatibly with the reference implementation.
-//!
-//! - [`ferry_sync_stack_interops_with_reference_engine`] runs THIS crate's
-//!   handshake + conversation against `ferry_proto::run_engine` over real
-//!   loopback TCP, encrypted — and checks the agreement LEDGERS landed on
-//!   both sides in THE canonical 77-byte serialization, and that the
-//!   working tree materialized byte-identically.
-//! - [`reference_initiator_ferry_sync_responder_interop`] flips the role
-//!   assignment (the reference initiates and pulls from us).
-//! - [`tampered_post_auth_byte_fails_authentication_cross_implementation`]
-//!   corrupts one sealed frame in flight between the two IMPLEMENTATIONS
-//!   and requires the reference receiver to reject it without recording
-//!   any agreement.
-//! - [`unknown_message_type_is_a_clean_protocol_violation`] exercises the
-//!   normative unknown-type rule (v1.0 peers never skip).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::fs;
 use std::io::{Read, Write};
@@ -39,7 +39,7 @@ fn poly() -> ferry_store::chunker::ValidatedPoly {
 }
 
 fn open_store(dir: &Path) -> Arc<Store> {
-    // Opened through ferry-folder: real FMK, real cipher, no fixture stubs.
+    
     let identity = DeviceIdentity::from_secret_bytes(&[0xA1u8; 32]);
     ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
 }
@@ -86,8 +86,8 @@ fn pair_stores(
     (Arc::new(store_a), Arc::new(store_b))
 }
 
-/// Deterministic identity per tag; only stability within this process
-/// matters here.
+
+
 fn ident(tag: &str) -> DeviceIdentity {
     let mut sk = [0u8; 32];
     for (i, b) in sk.iter_mut().enumerate() {
@@ -97,7 +97,7 @@ fn ident(tag: &str) -> DeviceIdentity {
     DeviceIdentity::from_secret_bytes(&sk)
 }
 
-/// Seed `tree` with files and snapshot it into `store`.
+
 fn snapshot_tree(store: &Store, tree: &Path, who: &DeviceIdentity, sec: i64) -> RootManifest {
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     fs::create_dir_all(tree).unwrap();
@@ -117,7 +117,7 @@ fn snapshot_tree(store: &Store, tree: &Path, who: &DeviceIdentity, sec: i64) -> 
         .manifest
 }
 
-/// Snapshot an EMPTY directory into `store` (fresh-device state).
+
 fn snapshot_empty(store: &Store, tree: &Path, who: &DeviceIdentity) -> RootManifest {
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     fs::create_dir_all(tree).unwrap();
@@ -125,7 +125,7 @@ fn snapshot_empty(store: &Store, tree: &Path, who: &DeviceIdentity) -> RootManif
         folder_id: DEFAULT_FOLDER_ID,
         device_id: *who.device_id(),
         parent_manifest_id: [0; 32],
-        created_sec: 1_700_000_001, // NEWER clock than the content fixture
+        created_sec: 1_700_000_001, 
         created_nsec: 0,
     };
     snapshot_dir(store, poly(), tree, &identity)
@@ -137,13 +137,13 @@ fn manifest_id_of(m: &RootManifest) -> [u8; 32] {
     *blake3::hash(&ferry_store::manifest::serialize_manifest(m)).as_bytes()
 }
 
-/// Minimal host driving our exchange under test.
+
 struct TestHost {
     tree_root: PathBuf,
     adopted: Mutex<Vec<[u8; 32]>>,
     agreed: Mutex<Option<[u8; 32]>>,
-    /// When set, agreement also lands as the canonical 77-byte ledger
-    /// record under this `.ferry` directory (what the engine really does).
+    
+    
     ledger_dot: Option<PathBuf>,
 }
 
@@ -233,9 +233,9 @@ fn ferry_sync_stack_interops_with_reference_engine() {
         &id_my,
     );
 
-    // Reference side holds content (older clock); our side is a fresh
-    // empty device with a NEWER clock — bootstrap adoption must ignore
-    // the clock, so this pairing also proves pick_donor's rule 1 on wire.
+    
+    
+    
     let ref_manifest = snapshot_tree(&store_ref, &ref_tree, &id_ref, 1_700_000_000);
     let ref_manifest_id = manifest_id_of(&ref_manifest);
     let my_empty = snapshot_empty(&store_my, &my_tree, &id_my);
@@ -296,7 +296,7 @@ fn ferry_sync_stack_interops_with_reference_engine() {
     )
     .expect("our v1 conversation completes against the reference engine");
 
-    // The reference side finished cleanly, encrypted, and agreed.
+    
     let report = server.join().unwrap().expect("reference engine ok");
     assert!(report.encrypted);
     assert_eq!(
@@ -305,17 +305,17 @@ fn ferry_sync_stack_interops_with_reference_engine() {
         "reference recorded agreement on its own manifest"
     );
 
-    // Our side adopted the reference manifest and agreed on the same id.
+    
     assert_eq!(*host.agreed.lock().unwrap(), Some(ref_manifest_id));
     assert_eq!(
         host.adopted.lock().unwrap().last(),
         Some(&ref_manifest.root_tree_id)
     );
 
-    // Materialized tree matches the reference tree byte for byte.
+    
     assert!(trees_identical(&ref_tree, &my_tree), "working trees match");
 
-    // Ledgers: canonical 77-byte records on BOTH sides, same ids.
+    
     let rb =
         fs::read(ledger_path(&ref_dot, *id_my.device_id())).expect("reference-side ledger exists");
     let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id())).expect("our-side ledger exists");
@@ -343,9 +343,9 @@ fn reference_initiator_ferry_sync_responder_interop() {
         &id_my,
     );
 
-    // Content lives on OUR side now. The reference starts as a FRESH
-    // device (current_manifest None): after pulling our manifest it
-    // adopts it per the reference adoption rule, making round-2 ids meet.
+    
+    
+    
     let my_manifest = snapshot_tree(&store_my, &my_tree, &id_my, 1_700_000_010);
     let my_manifest_id = manifest_id_of(&my_manifest);
 
@@ -383,7 +383,7 @@ fn reference_initiator_ferry_sync_responder_interop() {
     .expect("handshake");
 
     let host = TestHost {
-        tree_root: my_tree.clone(), // we serve only; nothing to materialize
+        tree_root: my_tree.clone(), 
         adopted: Mutex::new(Vec::new()),
         agreed: Mutex::new(None),
         ledger_dot: None,
@@ -405,18 +405,18 @@ fn reference_initiator_ferry_sync_responder_interop() {
 
     let report = server.join().unwrap().expect("reference engine ok");
     assert!(report.encrypted);
-    // The reference pulled our content, adopted our manifest pointer, and
-    // both sides agreed on OUR manifest id.
+    
+    
     assert_eq!(report.folders[0].agreement_recorded, Some(my_manifest_id));
     assert_eq!(report.folders[0].local_manifest_after, Some(my_manifest_id));
     assert_eq!(*host.agreed.lock().unwrap(), Some(my_manifest_id));
 
-    // The reference store can now serve every blob of our manifest back.
+    
     for kind in [
         ferry_store::BlobKind::Manifest,
         ferry_store::BlobKind::TreeNode,
     ] {
-        let _ = kind; // presence checks below via direct gets
+        let _ = kind; 
     }
     let man_bytes = store_ref
         .get(
@@ -430,10 +430,10 @@ fn reference_initiator_ferry_sync_responder_interop() {
     );
 }
 
-/// A Read+Write wrapper around `DuplexHalf` that corrupts the Nth outbound
-/// record: record 1 = HELLO, record 2 = `AUTH_INIT`, record 3 = first
-/// post-auth frame (sealed `FOLDER_OFFER`). Flipping a ciphertext byte there
-/// must break AEAD authentication on the REFERENCE receiver.
+
+
+
+
 struct TamperNthWrite {
     inner: DuplexHalf,
     n: usize,
@@ -492,7 +492,7 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
 
     let mut link = RawLink(TamperNthWrite {
         inner: la,
-        n: 3, // first post-auth frame from the initiator
+        n: 3, 
         seen: 0,
     });
     let mut est: Established = establish(
@@ -504,8 +504,8 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
     )
     .expect("handshake must succeed before tampering");
 
-    // An honest sealed offer leaves OUR stack; the wrapper flips a byte
-    // en route.
+    
+    
     let payload = ferry_proto::codec::FolderOffer {
         folder_id: DEFAULT_FOLDER_ID,
         manifest_id: [0; 32],
@@ -516,8 +516,8 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
         .send_frame(ferry_proto::codec::MSG_FOLDER_OFFER, payload)
         .unwrap();
 
-    // Give the reference side a moment to fail on the tag, then drop our
-    // end so the thread cannot block forever on later reads.
+    
+    
     std::thread::sleep(std::time::Duration::from_millis(200));
     drop(est);
     drop(link);
@@ -536,9 +536,9 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
     );
 }
 
-/// Normative unknown-message rule, v1.0 ↔ v1.0: unknown types are NEVER
-/// skipped (no higher minor advertised); the session dies cleanly with
-/// `UnknownMessage`.
+
+
+
 #[test]
 fn unknown_message_type_is_a_clean_protocol_violation() {
     let id_a = ident("unk-a");
@@ -557,7 +557,7 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
             Err(e) => Err(e),
             Ok(mut est) => match est.io.recv_frame() {
                 Err(e) => Err(e),
-                Ok(_) => Ok(()), // accepting an unknown type fails the test
+                Ok(_) => Ok(()), 
             },
         }
     });
@@ -572,8 +572,8 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
     )
     .unwrap();
 
-    // Sealed frame carrying an unregistered type: opens fine (tag valid),
-    // then hits the policy check.
+    
+    
     est.io.send_frame(0x7F, vec![1, 2, 3]).unwrap();
 
     let Err(got) = hb.join().unwrap() else {

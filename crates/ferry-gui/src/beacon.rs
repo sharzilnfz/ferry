@@ -1,13 +1,13 @@
-//! Pulsating status beacon widget for Ferry GUI.
-//!
-//! Renders a pulsating status dot with expanding aura waves rendered via egui's
-//! painter, supporting Synced, Syncing, Holding/Pinned, Conflict, and Offline states.
+
+
+
+
 
 use egui::{vec2, Color32, Painter, Pos2, Rounding, Stroke};
 
 use crate::theme::colors;
 
-/// Visual operational state for the status beacon.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BeaconState {
     Synced,
@@ -19,7 +19,7 @@ pub enum BeaconState {
 }
 
 impl BeaconState {
-    /// State primary color.
+    
     #[must_use]
     pub const fn color(&self) -> Color32 {
         match self {
@@ -32,7 +32,7 @@ impl BeaconState {
         }
     }
 
-    /// Label string for this status.
+    
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
@@ -45,25 +45,25 @@ impl BeaconState {
         }
     }
 
-    /// Pulse animation speed multiplier.
+    
     #[must_use]
     pub const fn pulse_speed(&self) -> f64 {
         match self {
-            Self::Synced => 0.8,   // Gentle breath
-            Self::Syncing => 2.0,  // Active energetic waves
-            Self::Holding => 1.0,  // Steady pulse
-            Self::Conflict => 3.0, // Rapid warning pulse
+            Self::Synced => 0.8,   
+            Self::Syncing => 2.0,  
+            Self::Holding => 1.0,  
+            Self::Conflict => 3.0, 
             Self::Idle | Self::Offline => 0.0,
         }
     }
 }
 
-/// Render the pulsating beacon dot with animated aura waves.
+
 pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconState, time: f64) {
     let speed = state.pulse_speed();
     let base_color = state.color();
 
-    // 1. Render expanding pulsating aura rings if active
+    
     if speed > 0.0 {
         let phase1 = ((time * speed) % 1.0) as f32;
         let phase2 = (((time * speed) + 0.5) % 1.0) as f32;
@@ -75,7 +75,7 @@ pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconSta
             _ => 8.0f32,
         };
 
-        // Ring 1
+        
         let r1 = 6.0f32 + phase1 * max_expansion;
         let factor1 = (1.0f32 - phase1).clamp(0.0, 1.0) * 0.45;
         let alpha1 = (factor1 * 255.0) as u8;
@@ -87,7 +87,7 @@ pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconSta
         );
         painter.circle_stroke(center, r1, Stroke::new(1.5f32, color1));
 
-        // Ring 2 (offset)
+        
         let r2 = 6.0f32 + phase2 * max_expansion;
         let factor2 = (1.0f32 - phase2).clamp(0.0, 1.0) * 0.30;
         let alpha2 = (factor2 * 255.0) as u8;
@@ -100,7 +100,7 @@ pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconSta
         painter.circle_stroke(center, r2, Stroke::new(1.0f32, color2));
     }
 
-    // 2. Render solid center core
+    
     let core_radius = 5.0f32;
     painter.circle_filled(center, core_radius, base_color);
     painter.circle_stroke(
@@ -110,14 +110,14 @@ pub fn render_pulsating_beacon(painter: &Painter, center: Pos2, state: BeaconSta
     );
 }
 
-/// Render the complete Status Beacon widget including beacon aura and status badge/text.
+
 pub fn status_beacon_ui(ui: &mut egui::Ui, state: BeaconState, time: f64) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::hover());
         let center = rect.center();
         render_pulsating_beacon(ui.painter(), center, state, time);
 
-        // Status badge pill
+        
         let bg = match state {
             BeaconState::Synced => colors::FERRY_GREEN,
             BeaconState::Syncing => colors::BLUE_SYNCING,

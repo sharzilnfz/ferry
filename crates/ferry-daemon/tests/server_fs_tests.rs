@@ -106,9 +106,9 @@ async fn registry_register_delegates_initialized_path_to_backend() {
     std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
     let body = serde_json::json!({ "path": dir.path().display().to_string() }).to_string();
 
-    // The guard passes the initialized path through; FakeBackend answers with
-    // its own stub error (`not-found` / "not-implemented"), proving the shared
-    // inspection did not block it.
+    
+    
+    
     let (status, doc, _) = send_http(
         addr,
         "POST",

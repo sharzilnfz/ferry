@@ -1,8 +1,8 @@
-//! Obsidian dark theme engine and fluid glass visual tokens for Ferry GUI.
+
 
 use egui::{epaint::Shadow, vec2, Color32, FontId, Margin, Rounding, Stroke, TextStyle, Visuals};
 
-/// Color palette constants for the Ferry Obsidian design system.
+
 pub mod colors {
     use egui::Color32;
 
@@ -28,11 +28,11 @@ pub mod colors {
     pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x71, 0x71, 0x7a);
 }
 
-/// Helper for building themed obsidian visuals and styles in `egui`.
+
 pub struct Theme;
 
 impl Theme {
-    /// Apply the Obsidian Dark design theme to an `egui::Context`.
+    
     pub fn apply(ctx: &egui::Context) {
         let mut visuals = Visuals::dark();
 
@@ -49,37 +49,37 @@ impl Theme {
         };
         visuals.window_rounding = Rounding::same(12.0f32);
 
-        // Non-interactive widgets
+        
         visuals.widgets.noninteractive.bg_fill = colors::PANEL_BG;
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0f32, colors::GLASS_BORDER);
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0f32, colors::TEXT_PRIMARY);
         visuals.widgets.noninteractive.rounding = Rounding::same(8.0f32);
 
-        // Inactive widgets (buttons, text inputs)
+        
         visuals.widgets.inactive.bg_fill = colors::CARD_BG;
         visuals.widgets.inactive.bg_stroke = Stroke::new(1.0f32, colors::GLASS_BORDER);
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0f32, colors::TEXT_PRIMARY);
         visuals.widgets.inactive.rounding = Rounding::same(8.0f32);
 
-        // Hovered widgets
+        
         visuals.widgets.hovered.bg_fill = colors::HOVER_BG;
         visuals.widgets.hovered.bg_stroke = Stroke::new(1.0f32, colors::FERRY_GREEN);
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.0f32, Color32::WHITE);
         visuals.widgets.hovered.rounding = Rounding::same(8.0f32);
 
-        // Active / pressed widgets
+        
         visuals.widgets.active.bg_fill = colors::ACTIVE_BG;
         visuals.widgets.active.bg_stroke = Stroke::new(1.5f32, colors::FERRY_GREEN);
         visuals.widgets.active.fg_stroke = Stroke::new(1.0f32, Color32::WHITE);
         visuals.widgets.active.rounding = Rounding::same(8.0f32);
 
-        // Selection
+        
         visuals.selection.bg_fill = Color32::from_rgba_premultiplied(46, 204, 113, 60);
         visuals.selection.stroke = Stroke::new(1.0f32, colors::FERRY_GREEN);
 
         ctx.set_visuals(visuals);
 
-        // Typography scale
+        
         let mut style = (*ctx.style()).clone();
         style
             .text_styles
@@ -101,7 +101,7 @@ impl Theme {
         ctx.set_style(style);
     }
 
-    /// Render a pill-shaped status badge with background and text color.
+    
     pub fn render_status_badge(
         ui: &mut egui::Ui,
         text: &str,

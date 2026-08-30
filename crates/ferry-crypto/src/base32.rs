@@ -1,16 +1,16 @@
-//! Canonical base32 for human-typed short codes.
-//!
-//! Alphabet: `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` — digits 2..9 plus letters
-//! minus `I` and `O`. This excludes all four visually ambiguous characters
-//! (`0/O`, `1/I`): `0` and `1` never occur, and `O`/`I` are rejected on input
-//! with a targeted error rather than silently guessed.
-//!
-//! Bit order is MSB-first like RFC 4648 base32, but there is no `=` padding:
-//! encoders here always feed whole-byte payloads whose bit counts make the
-//! final symbol's pad explicit (see the short-code layout in
-//! [`crate::pairing`]).
 
-/// The canonical 32-symbol alphabet, index = 5-bit value.
+
+
+
+
+
+
+
+
+
+
+
+
 pub const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -21,7 +21,7 @@ pub enum Base32Error {
     Empty,
 }
 
-/// Encode `data` MSB-first into canonical base32 symbols.
+
 pub fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len() * 8 / 5 + 2);
     let mut acc: u32 = 0;
@@ -40,10 +40,10 @@ pub fn encode(data: &[u8]) -> String {
     out
 }
 
-/// Decode base32 symbols back to bytes. Accepts mixed case; rejects any
-/// character outside the canonical alphabet (notably `0`, `1`, `I`, `O`)
-/// instead of guessing a substitution — a guessed substitution defeats the
-/// checksum by moving the typo somewhere the checksum no longer covers.
+
+
+
+
 pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
     if s.is_empty() {
         return Err(Base32Error::Empty);
@@ -55,7 +55,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
         let up = ch.to_ascii_uppercase();
         let v = match up {
             '2'..='9' => up as u32 - '2' as u32,
-            // The gaps at I and O shift every later letter down one slot.
+            
             'A'..='H' => 8 + up as u32 - 'A' as u32,
             'J' => 16,
             'K'..='N' => 17 + up as u32 - 'K' as u32,
@@ -69,7 +69,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
             out.push((acc >> bits) as u8);
         }
     }
-    // Fewer than 8 bits may remain: encoder pad. Nothing to validate.
+    
     Ok(out)
 }
 
@@ -81,8 +81,8 @@ mod tests {
     fn empty_round_trip_and_single_symbol_values() {
         assert_eq!(encode(b""), "");
         assert_eq!(decode(""), Err(Base32Error::Empty));
-        // Each single-symbol encoding decodes to its numeric value in the top
-        // 5 bits: guards against off-by-one in the letter offset.
+        
+        
         for (i, &sym) in ALPHABET.iter().enumerate() {
             let s = String::from_utf8(vec![sym, ALPHABET[0], ALPHABET[0], ALPHABET[0]]).unwrap();
             let decoded = decode(&s).unwrap();
@@ -101,14 +101,14 @@ mod tests {
 
     #[test]
     fn encoded_length_is_ceil_bits_over_five() {
-        assert_eq!(encode(&[0u8; 10]).len(), 16); // 80 bits / 5 exactly
-        assert_eq!(encode(&[0u8; 12]).len(), 20); // 96 bits / 5 = 19.2 -> 20
-        assert_eq!(encode(&[0u8; 2]).len(), 4); // 16 bits / 5 -> 4
+        assert_eq!(encode(&[0u8; 10]).len(), 16); 
+        assert_eq!(encode(&[0u8; 12]).len(), 20); 
+        assert_eq!(encode(&[0u8; 2]).len(), 4); 
     }
 
     #[test]
     fn output_never_contains_ambiguous_characters() {
-        // Exhaustively over the alphabet itself...
+        
         for &sym in ALPHABET {
             assert!(!matches!(sym, b'0' | b'1' | b'I' | b'O'));
         }
@@ -117,7 +117,7 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 32, "alphabet symbols must be distinct");
-        // ...and property-style over encoded output.
+        
         for len in [1usize, 5, 12] {
             let data: Vec<u8> = (0..len).map(|i| (i * 91 + 3) as u8).collect();
             for ch in encode(&data).chars() {
@@ -133,7 +133,7 @@ mod tests {
             decode(&upper.to_lowercase()).unwrap(),
             vec![0x12, 0x34, 0x56]
         );
-        // The four excluded lookalikes get a targeted error, not a guess.
+        
         for bad in ['0', '1', 'I', 'O'] {
             let mut tampered = upper.clone();
             tampered.replace_range(0..1, &bad.to_string());
@@ -144,9 +144,9 @@ mod tests {
 
     #[test]
     fn known_answer_rfc4648_bit_packing_remapped_to_canonical_alphabet() {
-        // RFC 4648 test vectors use alphabet A-Z2-7 with the same MSB-first
-        // packing; remap each RFC symbol through our ALPHABET to get the
-        // expected string for THIS crate.
+        
+        
+        
         let remap = |rfc: &str| -> String {
             let rfc_alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
             rfc.bytes()
@@ -163,8 +163,8 @@ mod tests {
         assert_eq!(encode(b"fo"), remap("MZXQ"));
         assert_eq!(encode(b"foo"), remap("MZXW6"));
         assert_eq!(encode(b"foobar"), remap("MZXW6YTBOI"));
-        // Note the RFC string itself contains I and O here only because those
-        // VALUES fall in its alphabet; ours substitutes different symbols.
+        
+        
         for ch in encode(b"foobar").chars() {
             assert!(!matches!(ch, '0' | '1' | 'I' | 'O'));
         }

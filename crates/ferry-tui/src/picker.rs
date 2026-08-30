@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use ferry_ipc::backend::{OpError, UiBackend};
 use ferry_ipc::DirectoryEntry;
 
-// ── headless helper ──────────────────────────────────────────────────────────
+
 
 #[must_use]
 pub fn is_headless_env(term: &str, is_tty: bool) -> bool {
@@ -41,7 +41,7 @@ pub fn is_headless() -> bool {
 
 #[cfg(test)]
 pub fn set_headless_override(_v: Option<bool>) {
-    // kept for backwards compat; no-op now that headless is per-app
+    
 }
 
 #[must_use]
@@ -49,7 +49,7 @@ pub fn headless_error() -> OpError {
     OpError::new("no-tty", "no tty available", "pass explicit path")
 }
 
-// ── PickerState ──────────────────────────────────────────────────────────────
+
 
 #[derive(Debug, Clone)]
 pub struct PickerState {
@@ -274,10 +274,10 @@ impl PickerState {
         self.visible_len() == 0
     }
 
-    // Selection logic respecting already-synced dimming and the shared
-    // initialization inspection carried on each entry.
-    // Returns Selected entry if eligible, Hint if already-synced or
-    // uninitialized, Nothing otherwise.
+    
+    
+    
+    
     #[must_use]
     pub fn try_select(&mut self) -> PickerSelectResult {
         let Some(entry) = self.selected_owned() else {
@@ -308,7 +308,7 @@ pub enum PickerSelectResult {
     Nothing,
 }
 
-/// Helper for path parent independent of state, used in app.
+
 #[must_use]
 pub fn parent_of(path: &Path) -> Option<PathBuf> {
     let parent = path.parent()?;

@@ -1,8 +1,8 @@
-//! `ferry ignore`: append pattern lines, apply agent-state presets, and
-//! show the effective rule layers with precedence annotations.
-//!
-//! Layer order (ferry-ignore crate docs, mirrored verbatim here):
-//! defaults < root ferry.ignore < applied presets < user overrides.
+
+
+
+
+
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -80,8 +80,8 @@ pub fn run(
     ))
 }
 
-/// Reject lines that can never compile as gitignore globs before they land
-/// in the file (the scanner also skips bad lines, but silently).
+
+
 fn validate_pattern(line: &str) -> CliResult<()> {
     if line.trim().is_empty() {
         return Err(CliError::new(
@@ -97,8 +97,8 @@ fn validate_pattern(line: &str) -> CliResult<()> {
             "edit ferry.ignore directly to manage comments",
         ));
     }
-    // `[z-a]`-style inverted ranges are the classic invalid glob; probe
-    // compile through the real engine on a throwaway set.
+    
+    
     let probe = ferry_ignore::FerryIgnore::new(
         Path::new("/"),
         &ferry_ignore::IgnoreConfig {
@@ -145,8 +145,8 @@ fn append_rule_line(root: &Path, line: &str) -> CliResult<()> {
 }
 
 fn show_layers(root: &Path, settings: &Settings) -> CliResult<Output> {
-    // Recompile layer by layer so each can be annotated. The engine takes a
-    // whole config; here we build per-layer line lists directly instead.
+    
+    
     let layers: Vec<(&str, Vec<String>)> = vec![
         (
             "defaults (built-in)",

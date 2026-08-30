@@ -1,4 +1,4 @@
-//! High-level `TuiApp` state machine and asynchronous event loop.
+
 
 use std::sync::Arc;
 
@@ -17,13 +17,13 @@ use crate::terminal::TerminalEvents;
 use crate::ui;
 use ferry_platform::time::current_time_str;
 
-/// Main TUI Application state machine managing incoming backend push events,
-/// keyboard input, and rendering to the active terminal.
+
+
 pub struct TuiApp {
     pub state: TuiState,
     pub backend: Option<Arc<dyn UiBackend>>,
     pub picker: Option<PickerState>,
-    /// Test-only headless override. When Some, forces headless detection without touching global env.
+    
     pub headless_override: Option<bool>,
 }
 
@@ -34,7 +34,7 @@ impl Default for TuiApp {
 }
 
 impl TuiApp {
-    /// Construct a new `TuiApp` wrapping an initial state.
+    
     #[must_use]
     pub fn new(state: TuiState) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl TuiApp {
         }
     }
 
-    /// Construct a new `TuiApp` initialized with a `UiBackend`.
+    
     #[must_use]
     pub fn new_with_backend(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -56,9 +56,9 @@ impl TuiApp {
         }
     }
 
-    /// Construct a new `TuiApp` using automated backend connection.
-    /// Thin `new_auto` adapter is intentional — keeps call sites `TuiApp::new_auto`
-    /// without exposing `ferry_ipc::backend::connect_auto` coupling.
+    
+    
+    
     #[must_use]
     pub fn new_auto(
         socket_path: impl Into<std::path::PathBuf>,
@@ -70,7 +70,7 @@ impl TuiApp {
         )))
     }
 
-    /// Attach a `UiBackend` to this application instance.
+    
     #[must_use]
     pub fn with_backend(mut self, backend: Arc<dyn UiBackend>) -> Self {
         self.backend = Some(backend);
@@ -93,7 +93,7 @@ impl TuiApp {
         self.picker = None;
     }
 
-    /// Attempt to open picker. Returns Err(no-tty) when headless.
+    
     pub async fn open_picker(
         &mut self,
         backend: &Arc<dyn UiBackend>,
@@ -122,13 +122,13 @@ impl TuiApp {
         }
     }
 
-    /// Check if the application has been requested to terminate.
+    
     #[must_use]
     pub fn should_quit(&self) -> bool {
         self.state.should_quit
     }
 
-    /// Render the current state onto the provided ratatui frame.
+    
     pub fn render(&self, frame: &mut Frame) {
         ui::render(&self.state, frame);
         if let Some(ref picker) = self.picker {
@@ -136,12 +136,12 @@ impl TuiApp {
         }
     }
 
-    /// Process an incoming server push message from the daemon (legacy wire protocol).
+    
     pub fn handle_message(&mut self, msg: DaemonMessage) {
         self.state.handle_daemon_message(msg);
     }
 
-    /// Process a typed `UiEvent` push event from the unified `UiBackend`.
+    
     pub fn handle_ui_event(&mut self, event: UiEvent) {
         match event {
             UiEvent::State(snapshot) => self.state.apply_snapshot(snapshot),
@@ -192,14 +192,14 @@ impl TuiApp {
         }
     }
 
-    /// Process a keyboard event, potentially returning a `ClientCommand` to send over IPC.
+    
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<ClientCommand> {
-        // Ignore key releases if terminal emits release events
+        
         if key.kind == KeyEventKind::Release {
             return None;
         }
 
-        // Ctrl+C terminates immediately
+        
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if let KeyCode::Char('c' | 'C') = key.code {
                 self.state.should_quit = true;
@@ -207,7 +207,7 @@ impl TuiApp {
             }
         }
 
-        // When picker is open, it captures most keys
+        
         if let Some(ref mut picker) = self.picker {
             match key.code {
                 KeyCode::Esc => {
@@ -286,7 +286,7 @@ impl TuiApp {
             }
         }
 
-        // When conflict modal is visible, Esc / q / c dismisses it
+        
         if self.state.show_conflicts_modal {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q' | 'Q' | 'c' | 'C') => {
@@ -335,7 +335,7 @@ impl TuiApp {
         }
     }
 
-    /// Process a keyboard event directly against the `UiBackend` trait.
+    
     pub async fn handle_key_action(&mut self, backend: &Arc<dyn UiBackend>, key: KeyEvent) {
         if key.kind == KeyEventKind::Release {
             return;
@@ -348,9 +348,9 @@ impl TuiApp {
             }
         }
 
-        // Picker modal captures keys before other modals / global hotkeys
+        
         if self.picker.is_some() {
-            // Clone to avoid borrow issues when we need to replace picker
+            
             let code = key.code;
             match code {
                 KeyCode::Esc => {
@@ -394,7 +394,7 @@ impl TuiApp {
                                     current_time_str(),
                                     format!("Picker load error: {e}"),
                                 );
-                                // keep old picker for retry
+                                
                             }
                         }
                     }
@@ -448,12 +448,12 @@ impl TuiApp {
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
                         && !key.modifiers.contains(KeyModifiers::ALT)
                     {
-                        // Treat typing as filter input when picker is open.
-                        // This includes 'q', 'p', etc. They should not quit.
+                        
+                        
                         if let Some(p) = self.picker.as_mut() {
-                            // Backtab/escape already handled; for normal chars, push filter
-                            // Special case: if char is ' ' we already handled above, so only non-space here
-                            // We already matched Space above; so this is other chars.
+                            
+                            
+                            
                             p.push_filter_char(c);
                         }
                         return;
@@ -481,7 +481,7 @@ impl TuiApp {
             }
             KeyCode::Char('a' | 'A' | 'o' | 'O') => {
                 if let Err(e) = self.open_picker(backend, None).await {
-                    // open_picker already logged; ensure hint for test visibility
+                    
                     let _ = e;
                 }
             }
@@ -547,7 +547,7 @@ impl TuiApp {
         }
     }
 
-    /// Handle picker go-parent explicitly (used by tests or Left key variant).
+    
     pub async fn picker_go_parent(&mut self, backend: &Arc<dyn UiBackend>) {
         let parent = self.picker.as_ref().and_then(PickerState::go_parent);
         if let Some(par) = parent {
@@ -559,16 +559,16 @@ impl TuiApp {
         }
     }
 
-    /// Run the primary asynchronous event loop against `Arc<dyn UiBackend>` and `UiEventStream`.
-    ///
-    /// Wakes reactively only on incoming backend events or terminal key inputs with zero polling overhead.
+    
+    
+    
     pub async fn run<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
         backend: Arc<dyn UiBackend>,
         mut events: TerminalEvents,
     ) -> Result<(), TuiError> {
-        // Request initial status snapshot
+        
         match backend.get_status().await {
             Ok(snap) => {
                 self.state.apply_snapshot(snap);
@@ -580,10 +580,10 @@ impl TuiApp {
             }
         }
 
-        // Subscribe to real-time push event stream
+        
         let mut stream = backend.subscribe_events().await.ok();
 
-        // Initial draw
+        
         terminal.draw(|f| self.render(f))?;
 
         while !self.state.should_quit {
@@ -639,7 +639,7 @@ impl TuiApp {
         Ok(())
     }
 
-    /// Run the primary asynchronous event loop over an IPC duplex connection and terminal event stream (legacy wrapper).
+    
     pub async fn run_with_connection<B: Backend, S: AsyncRead + AsyncWrite + Unpin>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -650,7 +650,7 @@ impl TuiApp {
         self.run_loop(terminal, receiver, sender, events).await
     }
 
-    /// Run the primary event loop with separate receiver and sender handles.
+    
     pub async fn run_loop<B: Backend, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         &mut self,
         terminal: &mut Terminal<B>,

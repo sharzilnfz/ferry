@@ -1,6 +1,6 @@
-//! Functional lifecycle tests for `ferry pin`: start/stop/release/status
-//! through the library surface, including JSON shapes, error codes, stale
-//! pins, and glob scoping. Isolated `FERRY_HOME` per test (see common/mod.rs).
+
+
+
 
 mod common;
 
@@ -22,8 +22,8 @@ fn setup() -> (Env, std::path::PathBuf, RunningDaemon) {
     (env, proj, daemon)
 }
 
-/// Put one real held entry on the ledger, backed by a manifest that IS in
-/// the store (release refuses fabricated references loudly).
+
+
 fn hold_one_real_change(proj: &std::path::Path, peer_hex: &str, path: &str) {
     let opened = ferry_cli::folder::open_folder(proj).unwrap();
     let scan = ferry_cli::commands::status::scan_now(&opened).unwrap();
@@ -56,7 +56,7 @@ fn hold_one_real_change(proj: &std::path::Path, peer_hex: &str, path: &str) {
 fn full_lifecycle_with_json_shapes() {
     let (_e, proj, _daemon) = setup();
 
-    // Nothing pinned yet.
+    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["command"], "pin");
     assert_eq!(st.json["action"], "status");
@@ -64,7 +64,7 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(st.json["holding"], false);
     assert_eq!(st.json["held_changes"], 0);
 
-    // Start scoped to src/**.
+    
     let out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(out.json["action"], "start");
     assert_eq!(out.json["paths"][0], "src/**");
@@ -72,16 +72,16 @@ fn full_lifecycle_with_json_shapes() {
     let device = out.json["device_id"].as_str().unwrap().to_string();
     assert_eq!(device.len(), 64);
 
-    // A second start is refused while the first holds.
+    
     let err = commands::pin::start(&proj, &[], 8).unwrap_err();
     assert_eq!(err.code, "pin-active");
 
-    // Status reflects an active, holding pin.
+    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
     assert_eq!(st.json["holding"], true);
 
-    // A peer's change arrives and is held; status surfaces the held set.
+    
     let peer = "b".repeat(32);
     hold_one_real_change(&proj, &peer, "src/a.rs");
     let st = commands::pin::status(&proj).unwrap();
@@ -91,14 +91,14 @@ fn full_lifecycle_with_json_shapes() {
         "src/a.rs"
     );
 
-    // Stop ends the session but keeps the ledger recoverable.
+    
     let stopped = commands::pin::stop(&proj).unwrap();
     assert_eq!(stopped.json["was_pinned"], true);
     assert_eq!(stopped.json["held_changes"], 1);
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "released");
 
-    // Release reconciles the ledger through the three-way engine.
+    
     let rel = commands::pin::release(&proj).unwrap();
     assert_eq!(rel.json["action"], "release");
     let peers = rel.json["peers"].as_array().unwrap();
@@ -107,14 +107,14 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(peers[0]["held_paths"][0], "src/a.rs");
     assert_eq!(rel.json["pin_ended"], true);
 
-    // Ledger cleared: second release is a documented no-op.
+    
     let again = commands::pin::release(&proj).unwrap();
     assert_eq!(again.json["peers"].as_array().unwrap().len(), 0);
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["held_changes"], 0);
 
-    // And a fresh session may begin.
-    commands::pin::start(&proj, &[], 8).unwrap(); // whole-folder default ("*")
+    
+    commands::pin::start(&proj, &[], 8).unwrap(); 
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
     assert_eq!(st.json["paths"][0], "*");
@@ -147,7 +147,7 @@ fn bad_glob_refused_before_any_state_is_written() {
 fn stale_pin_surfaces_then_a_new_start_replaces_it() {
     let (_e, proj, _daemon) = setup();
 
-    // Orphaned writer: kill a child, keep its pid.
+    
     let mut child = ferry_platform::spawn_sleeper(30).unwrap();
     let dead_pid = {
         child.kill().unwrap();
@@ -171,12 +171,12 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
         })
         .unwrap();
 
-    // Surfaced as stale — visible, holding nothing, never silently dropped.
+    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "stale");
     assert_eq!(st.json["holding"], false);
 
-    // Replacement is the recovery path and must not hit pin-active.
+    
     commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");

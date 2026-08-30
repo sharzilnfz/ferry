@@ -1,12 +1,12 @@
-//! The blob-location index: append-only encrypted containers mapping
-//! `(blob_kind, id) -> (pack_id, plain_off, plain_len)`
-//! (`docs/store-format.md`, "Index").
-//!
-//! Tables serialize sorted by `(blob_kind, id bytes)` so they are searchable
-//! and deterministic. Multiple index files coexist; their UNION is the
-//! index. Duplicate locations resolve by preferring any entry whose pack
-//! still exists. Everything here is derivable from the packs, which is what
-//! [`rebuild_entries`] does.
+
+
+
+
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn table_serialization_fixture_hand_computed() {
-        // One entry: DataChunk, id aa*32, pack cc*32, offset 5, length 7.
+        
         let e = IndexEntry {
             kind: BlobKind::DataChunk,
             id: [0xaa; 32],
@@ -43,10 +43,10 @@ mod tests {
             plain_len: 7,
         };
         let mut expect: Vec<u8> = Vec::new();
-        expect.extend_from_slice(&1u32.to_le_bytes()); // entry_count
-        expect.push(0x01); // kind DataChunk
-        expect.extend_from_slice(&[0xaa; 32]); // id
-        expect.extend_from_slice(&[0xcc; 32]); // pack_id
+        expect.extend_from_slice(&1u32.to_le_bytes()); 
+        expect.push(0x01); 
+        expect.extend_from_slice(&[0xaa; 32]); 
+        expect.extend_from_slice(&[0xcc; 32]); 
         expect.extend_from_slice(&5u64.to_le_bytes());
         expect.extend_from_slice(&7u64.to_le_bytes());
         assert_eq!(table_plain(&[e]), expect);
@@ -77,7 +77,7 @@ mod tests {
             ]
         );
 
-        // Determinism: same set in any order yields identical bytes.
+        
         let again = table_plain(&[manifest, data_low, tree, data_high]);
         assert_eq!(out, again);
     }
@@ -87,7 +87,7 @@ mod tests {
         let a = entry(BlobKind::DataChunk, 0x10, 9, 0, 0);
         let b = entry(BlobKind::DataChunk, 0x20, 9, 0, 0);
         let good = table_plain(&[a.clone(), b.clone()]);
-        // Hand-build the same table with rows out of order.
+        
         let mut bad = Vec::new();
         put_u32(&mut bad, 2);
         for e in [b, a] {
@@ -98,7 +98,7 @@ mod tests {
             put_u64(&mut bad, e.plain_len);
         }
         assert!(matches!(table_parse(&bad), Err(IndexError::Unsorted)));
-        // Truncation is caught too.
+        
         assert!(matches!(
             table_parse(&good[..good.len() - 3]),
             Err(IndexError::Corrupt(_))
@@ -114,7 +114,7 @@ mod tests {
         ];
         let file = seal_index_container(&fmk(), &salt(), &entries, &cipher).unwrap();
 
-        // Layout: header(INDEX), salt, ciphertext, u32 ct length.
+        
         assert_eq!(&file[..5], b"FERRY");
         assert_eq!(file[5], ContainerKind::Index.to_u8());
         assert_eq!(&file[6..10], &1u32.to_le_bytes());
@@ -141,22 +141,22 @@ mod tests {
         let err = open_index_container(&evil, &fmk(), &cipher).unwrap_err();
         assert!(matches!(err, IndexError::Format(FormatError::BadMagic)));
 
-        // A PACK header masquerading as an index is refused.
+        
         let mut not_index = file.clone();
         not_index[5] = ContainerKind::PackData.to_u8();
         let err = open_index_container(&not_index, &fmk(), &cipher).unwrap_err();
         assert!(matches!(err, IndexError::NotAnIndex));
     }
 
-    /// T-02 acceptance: a corrupt trailer whose table length exceeds
-    /// everything before it must yield a typed error, not an underflow panic
-    /// (debug) or a wrapped huge-slice index (release).
+    
+    
+    
     #[test]
     fn corrupt_trailer_length_is_a_typed_error_not_a_panic() {
         let cipher = PassthroughCipher;
         let file = seal_index_container(&fmk(), &salt(), &[], &cipher).unwrap();
 
-        // Lie large: tlen = u32::MAX is far more than the whole file.
+        
         let mut evil = file.clone();
         let n = evil.len();
         evil[n - 4..].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -165,9 +165,9 @@ mod tests {
             Err(IndexError::Corrupt("negative table extent"))
         ));
 
-        // Lie just past the salt: ct_start would land below
-        // HEADER_LEN + SALT_LEN — the explicit lower-bound guard that must
-        // keep working after the checked_sub reorder.
+        
+        
+        
         let mut small = file;
         let n = small.len();
         let tlen = (n - HEADER_LEN) as u32;
@@ -181,13 +181,13 @@ mod tests {
     #[test]
     fn union_of_indexes_resolves_duplicates_preferring_existing_packs() {
         let mut table = LocationTable::default();
-        let a = entry(BlobKind::DataChunk, 0x10, 0xAA, 0, 10); // pack AA...
-        let b = entry(BlobKind::DataChunk, 0x10, 0xBB, 20, 10); // same id, pack BB...
+        let a = entry(BlobKind::DataChunk, 0x10, 0xAA, 0, 10); 
+        let b = entry(BlobKind::DataChunk, 0x10, 0xBB, 20, 10); 
 
         table.merge(std::iter::once(a.clone()));
         table.merge(std::iter::once(b.clone()));
 
-        // Both candidates present; resolution picks whichever pack exists.
+        
         let exists_aa = |p: &PackId| p[0] == 0xAA;
         let exists_bb = |p: &PackId| p[0] == 0xBB;
         let exists_none = |_: &PackId| false;
@@ -200,20 +200,20 @@ mod tests {
             .resolve(BlobKind::DataChunk, &a.id, exists_bb)
             .unwrap();
         assert_eq!(got.pack, b.pack);
-        // No pack exists -> unresolved.
+        
         assert!(table
             .resolve(BlobKind::DataChunk, &a.id, exists_none)
             .is_none());
 
-        // Exact duplicates collapse; distinct locations do not.
+        
         let mut duped = LocationTable::default();
         duped.merge([a.clone(), a.clone(), b.clone()]);
         assert_eq!(duped.candidates(BlobKind::DataChunk, &a.id).len(), 2);
     }
 
-    /// `packs()` dedups and stays deterministic (sorted) regardless of merge
-    /// order — the O(n²) Vec-scan it replaced preserved insertion order, so
-    /// pin the new contract explicitly.
+    
+    
+    
     #[test]
     fn packs_dedup_and_sort_regardless_of_merge_order() {
         let mk = |pack_byte: u8| entry(BlobKind::DataChunk, pack_byte, pack_byte, 0, 0);
@@ -223,7 +223,7 @@ mod tests {
         t2.merge([mk(0x03)]);
         t1.merge(t2.entries.clone());
         assert_eq!(t1.packs(), vec![[0x01; 32], [0x02; 32], [0x03; 32]]);
-        // Exact duplicates collapse in merge too.
+        
         assert_eq!(t1.len(), 3);
     }
 
@@ -234,7 +234,7 @@ mod tests {
         let packs_dir = dir.path().join("packs");
         std::fs::create_dir(&packs_dir).unwrap();
 
-        // One data pack with two chunks, one meta pack with a tree node.
+        
         let mk_pack = |kind: ContainerKind, payloads: &[(BlobKind, u8, usize)]| {
             let mut body = Vec::new();
             let mut entries = Vec::new();
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(got, want);
         assert!(skipped.is_empty());
 
-        // A file whose name lies about its hash is reported and skipped.
+        
         let liar_path = packs_dir.join(format!("{}.pack", "0".repeat(64)));
         std::fs::write(&liar_path, b"not really a pack").unwrap();
         let (_, skipped) = rebuild_entries(&packs_dir, &fmk(), &cipher).unwrap();
@@ -334,7 +334,7 @@ pub enum IndexError {
     Io(#[from] std::io::Error),
 }
 
-/// One resolved location row.
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IndexEntry {
     pub kind: BlobKind,
@@ -348,13 +348,13 @@ fn entry_key(e: &IndexEntry) -> (u8, &[u8]) {
     (e.kind.to_u8(), &e.id[..])
 }
 
-/// Table plaintext: `u32 count` then entries SORTED ascending by
-/// (`blob_kind`, id bytes): `u8 kind, 32B id, 32B pack_id, u64 off, u64 len`.
-///
-/// Sorting happens here so callers cannot emit a non-conforming table. Rows
-/// are deduplicated by (kind, id): one blob, one location per table —
-/// conflicting locations belong in different index files, where the union
-/// resolution rules apply.
+
+
+
+
+
+
+
 pub fn table_plain(entries: &[IndexEntry]) -> Vec<u8> {
     let mut sorted = entries.to_vec();
     sorted.sort_by(|a, b| entry_key(a).cmp(&entry_key(b)));
@@ -371,8 +371,8 @@ pub fn table_plain(entries: &[IndexEntry]) -> Vec<u8> {
     out
 }
 
-/// Parse a table, enforcing sorted order (determinism is load-bearing:
-/// binary search and cross-implementation byte equality depend on it).
+
+
 pub fn table_parse(bytes: &[u8]) -> Result<Vec<IndexEntry>, IndexError> {
     let mut r = Reader::new(bytes);
     let count = r.u32().map_err(|_| IndexError::Corrupt("truncated"))?;
@@ -405,8 +405,8 @@ pub fn table_parse(bytes: &[u8]) -> Result<Vec<IndexEntry>, IndexError> {
     Ok(out)
 }
 
-/// Build a complete INDEX container image: header, fresh salt, sealed table,
-/// trailing clear `table_len`. Body region is always empty.
+
+
 pub fn seal_index_container(
     fmk: &[u8; KEY_LEN],
     salt: &[u8; SALT_LEN],
@@ -430,7 +430,7 @@ pub fn seal_index_container(
     Ok(file)
 }
 
-/// Parse and decrypt an INDEX container back into its entries.
+
 pub fn open_index_container(
     file_bytes: &[u8],
     fmk: &[u8; KEY_LEN],
@@ -448,10 +448,10 @@ pub fn open_index_container(
         .unwrap();
     let tlen_pos = file_bytes.len() - 4;
     let tlen = u32::from_le_bytes(file_bytes[tlen_pos..].try_into().unwrap()) as usize;
-    // checked_sub BEFORE the guard: on a corrupt trailer `tlen` can exceed
-    // everything before it, and the previous `tlen_pos - tlen` overflowed
-    // (panic in debug, wrapped huge index in release) before its own
-    // lower-bound check could run.
+    
+    
+    
+    
     let ct_start = tlen_pos
         .checked_sub(tlen)
         .ok_or(IndexError::Corrupt("negative table extent"))?;
@@ -469,28 +469,28 @@ pub fn open_index_container(
     table_parse(&pt)
 }
 
-/// The union of all loaded index files: every known location per
-/// `(kind, id)`, with resolution preferring locations whose pack exists.
+
+
 #[derive(Debug, Default)]
 pub struct LocationTable {
     entries: Vec<IndexEntry>,
-    /// Membership mirror of `entries` so `merge` stays O(1) per row instead
-    /// of O(n) `Vec::contains` scans over the whole union.
+    
+    
     seen: std::collections::HashSet<IndexEntry>,
-    /// `(kind, id)` -> row indices into `entries`, in insertion order.
-    /// Rows are append-only, so indices stay valid for the life of the
-    /// table; `candidates()` is a hash lookup + gather instead of a full
-    /// table scan per blob. Order matters: a pack body may legitimately
-    /// carry the same id more than once (double-staged before sealing),
-    /// and the normative read compares the index row against the FIRST
-    /// matching footer entry — so the earliest row must win.
+    
+    
+    
+    
+    
+    
+    
     by_blob: std::collections::HashMap<(BlobKind, BlobId), Vec<usize>>,
 }
 
 impl LocationTable {
-    /// Merge entries from one more index file. Exact duplicates collapse;
-    /// conflicting locations for the same blob are kept (spec: prefer any
-    /// whose pack still exists).
+    
+    
+    
     pub fn merge<I: IntoIterator<Item = IndexEntry>>(&mut self, incoming: I) {
         for e in incoming {
             if self.seen.insert(e.clone()) {
@@ -511,7 +511,7 @@ impl LocationTable {
         self.entries.len()
     }
 
-    /// All known locations for one blob.
+    
     pub fn candidates(&self, kind: BlobKind, id: &BlobId) -> Vec<IndexEntry> {
         match self.by_blob.get(&(kind, *id)) {
             Some(rows) => rows
@@ -523,9 +523,9 @@ impl LocationTable {
         }
     }
 
-    /// Resolve a blob to its best location: any entry whose pack file still
-    /// exists (first such wins); `None` when every location dangles or the
-    /// blob is unknown.
+    
+    
+    
     pub fn resolve(
         &self,
         kind: BlobKind,
@@ -537,15 +537,15 @@ impl LocationTable {
             .find(|e| pack_exists(&e.pack))
     }
 
-    /// Every distinct pack id mentioned anywhere in the table, sorted for
-    /// deterministic output (`BTreeSet`, not an O(n²) membership `Vec`).
+    
+    
     pub fn packs(&self) -> Vec<PackId> {
         let seen: std::collections::BTreeSet<PackId> =
             self.entries.iter().map(|e| e.pack).collect();
         seen.into_iter().collect()
     }
 
-    /// Sorted iteration over the whole union (serialization order).
+    
     pub fn iter_sorted(&self) -> Vec<IndexEntry> {
         let mut v = self.entries.clone();
         v.sort_by(|a, b| Ord::cmp(&entry_key(a), &entry_key(b)));
@@ -554,13 +554,13 @@ impl LocationTable {
     }
 }
 
-/// Recovery path: scan every `*.pack` in `packs_dir`, verify each against
-/// its own file name, decrypt footers, reconstruct entries. Returns the
-/// rebuilt rows plus the names of packs that failed verification (reported,
-/// never silently dropped).
-///
-/// Requires [`crate::crypto::PassthroughCipher`] today; works unchanged once
-/// the real AEAD lands because footers decrypt through [`PackCipher`].
+
+
+
+
+
+
+
 pub fn rebuild_entries(
     packs_dir: &std::path::Path,
     fmk: &[u8; KEY_LEN],
@@ -602,8 +602,8 @@ pub fn rebuild_entries(
     Ok((out, skipped))
 }
 
-/// Atomic temp-file-then-rename write used by both packs and index files.
-/// fsyncs the payload file and (unix) the destination directory.
+
+
 pub fn write_named_atomically(
     tmp_dir: &std::path::Path,
     final_dir: &std::path::Path,

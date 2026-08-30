@@ -1,23 +1,23 @@
-//! Release: turn a held set back into ordinary three-way convergence.
-//!
-//! Per peer with a ledger:
-//!
-//! 1. The LATEST held entry names the freshest remote manifest that arrived
-//!    during the pin (its bytes were fetched during the hold, so the peer
-//!    need not be online).
-//! 2. The three-way base is the agreement captured at PIN START
-//!    (`base_agreements` in the pin record) — exactly "last-agreed before
-//!    pin". A peer unknown at start reconciles against an empty ancestor.
-//! 3. [`ferry_sync_engine::ConvergenceEngine`] decides every path and
-//!    executes in one transactional step, so outcomes are exactly ADR-0004
-//!    outcomes: winner live, loser quarantined as
-//!    `path.ferry-conflict.<loser>-<ts>`, report entry, ledger commit on
-//!    full adoption. Nothing is merged, nothing is lost.
-//!
-//! Idempotence: after the release convergence succeeds and the ledgers
-//! clear, a second release finds no peers → nothing to do. Re-running
-//! before clearing (e.g. after an execution error) recomputes the same
-//! decisions; quarantine name collision counters make re-execution safe.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::Path;
 
@@ -29,24 +29,24 @@ use ferry_sync_engine::{ConvergenceEngine, ConvergenceError, ConvergenceResult};
 use crate::error::PinError;
 use crate::held::{distinct_paths, HeldLedger};
 
-/// One peer's executed release.
+
 #[derive(Debug)]
 pub struct ReleasePeerPlan {
-    /// Peer device id (64 lowercase hex) — also its ledger file stem.
+    
     pub device_id: String,
-    /// Manifest id (hex) whose changes were held; the release reconciles
-    /// against this as the remote side.
+    
+    
     pub remote_manifest_id: String,
-    /// Ledger lines seen for this peer.
+    
     pub held_entries: usize,
-    /// Distinct held paths, sorted.
+    
     pub held_paths: Vec<String>,
-    /// What the release convergence actually did.
+    
     pub result: ConvergenceResult,
 }
 
 impl ReleasePeerPlan {
-    /// Nothing was ledgered for this peer; the release is a no-op.
+    
     pub(crate) fn noop(device_id: String) -> Self {
         ReleasePeerPlan {
             device_id,
@@ -58,10 +58,10 @@ impl ReleasePeerPlan {
     }
 }
 
-/// Release one peer's held set through the transactional convergence
-/// engine. The caller clears the peer's ledger ([`HeldLedger::clear_peer`])
-/// AFTER this returns `Ok` — a failed convergence leaves everything
-/// retryable (re-running recomputes the same decisions).
+
+
+
+
 #[allow(clippy::too_many_arguments)]
 pub fn release_peer(
     store: &Store,
@@ -77,7 +77,7 @@ pub fn release_peer(
     if entries.is_empty() {
         return Ok(ReleasePeerPlan::noop(peer_hex.to_string()));
     }
-    // Latest arrival wins: later entries carry fresher peer manifests.
+    
     let manifest_hex = entries
         .last()
         .expect("non-empty checked above")
@@ -104,9 +104,9 @@ pub fn release_peer(
     })
 }
 
-/// Map an engine failure onto the release error surface. The message keeps
-/// the full engine vocabulary (reconcile, divergence, missing blobs); the
-/// hint is the caller's job.
+
+
+
 pub(crate) fn pin_convergence(e: ConvergenceError) -> PinError {
     PinError::Converge(e.to_string())
 }
@@ -140,7 +140,7 @@ mod tests {
         let rig = Rig::rig_one_file();
         let b_hex = ferry_store::format::hex(&rig.b_dev);
 
-        // The held manifest id does not exist in the store.
+        
         let err = load_manifest(&rig.a.store, &"cc".repeat(32), &b_hex, "held".into()).unwrap_err();
         assert!(matches!(err, PinError::ManifestMissing { .. }), "{err}");
     }
@@ -164,9 +164,9 @@ mod tests {
     }
 }
 
-/// Shared fixture for this file's unit tests: one tiny two-device rig.
-/// (The acceptance integration test in tests/ carries its own fuller
-/// harness because cfg(test) items are not visible across crate lines.)
+
+
+
 #[cfg(test)]
 pub(crate) mod ferry_pin_testutil {
     use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
@@ -182,7 +182,7 @@ pub(crate) mod ferry_pin_testutil {
     pub const B_DEV: [u8; 32] = [0xB2; 32];
 
     pub struct Rig {
-        /// Holds the temp root alive for every path/store in the rig.
+        
         #[allow(dead_code)]
         dir: tempfile::TempDir,
         pub a: DeviceParts,
@@ -205,8 +205,8 @@ pub(crate) mod ferry_pin_testutil {
     }
 
     impl Rig {
-        /// Two seeded devices with identical f.txt, both snapshotted; A's
-        /// manifest is the release-time local input.
+        
+        
         pub fn rig_one_file() -> Rig {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().to_path_buf();
@@ -214,8 +214,8 @@ pub(crate) mod ferry_pin_testutil {
                 let tree = root.join(format!("tree-{tag}"));
                 std::fs::create_dir_all(&tree).unwrap();
                 let store_root = root.join(format!("store-{tag}"));
-                // Store::create makes `<root>/.ferry` with create_dir, so
-                // the parent must exist first.
+                
+                
                 std::fs::create_dir_all(&store_root).unwrap();
                 let store = Store::create(&store_root, fmk(), Box::new(PassthroughCipher)).unwrap();
                 (tree, store)

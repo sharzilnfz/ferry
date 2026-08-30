@@ -1,6 +1,6 @@
-//! T-15 acceptance: steady-state sync must never run a full index rebuild.
-//! Delivered packs fold into the location table incrementally at ingest
-//! time; `rebuild_index` is a cold-start recovery path only.
+
+
+
 
 mod common;
 
@@ -20,7 +20,7 @@ fn steady_state_sync_never_triggers_full_index_rebuild() {
     let fx = EngineFixture::start("incr", 777);
 
     let mut tb = TreeBuilder::new(fx.tree_a(), 4242);
-    // Enough random content to span several packs and both pull stages.
+    
     let paths = tb.create_random_files(10);
 
     let deadline = std::time::Instant::now() + timeout_from_env();
@@ -37,14 +37,14 @@ fn steady_state_sync_never_triggers_full_index_rebuild() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Every pulled file's bytes are actually present in the puller's store
-    // (readable through the location table the incremental appends built).
+    
+    
     let b_root = fx.tree_b();
     for rel in &paths {
         assert!(b_root.join(rel).is_file(), "{rel} missing on B");
     }
 
-    // A second round of changes rides the same hot path.
+    
     for rel in &paths[0..3] {
         tb.write_random(rel, 4096);
     }

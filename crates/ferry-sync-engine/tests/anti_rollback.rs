@@ -1,8 +1,8 @@
-//! Anti-rollback acceptance tests (P0.4).
-//!
-//! Asserts that a peer restored from an older backup or rolled back to a
-//! previous manifest cannot cause a healthy peer to delete untouched files
-//! or overwrite newer content with stale versions.
+
+
+
+
+
 
 use std::fs;
 use std::path::PathBuf;
@@ -81,8 +81,8 @@ impl TestNode {
     }
 }
 
-/// Copy a snapshot's manifest, tree-node closure, and data chunks between
-/// stores, simulating the metadata-first transport.
+
+
 fn transfer_snapshot(from: &Store, to: &Store, out: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &out.manifest_id).is_err() {
         let bytes = from.get(BlobKind::Manifest, &out.manifest_id).unwrap();
@@ -118,17 +118,17 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    // 1. Initial shared state: file1.txt
+    
     a.write_file("file1.txt", b"initial content 1");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
     let m1_id = snap_m1.manifest_id;
 
-    // Both stores know M1
+    
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
     b.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    // 2. Device A evolves forward: adds file2.txt and file3.txt
+    
     a.write_file("file2.txt", b"important local data 2");
     a.write_file("file3.txt", b"important local data 3");
     let snap_m2 = a.snapshot(m1_id, 2_000_000);
@@ -136,9 +136,9 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
 
     a.store.put_meta(BlobKind::Manifest, &m2_bytes).unwrap();
 
-    // 3. Device B was restored from an older backup (holds M1 only, lacks file2 and file3).
-    // B connects to A offering M1.
-    // Device A runs convergence with local = M2, remote = M1, base = M2 (from agreement).
+    
+    
+    
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let res = engine
         .converge(
@@ -148,8 +148,8 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
         )
         .unwrap();
 
-    // Verification: Zero silent data loss!
-    // file2.txt and file3.txt MUST survive on Device A disk
+    
+    
     assert!(a.tree.join("file1.txt").is_file(), "file1.txt must exist");
     assert!(
         a.tree.join("file2.txt").is_file(),
@@ -168,7 +168,7 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
         b"important local data 3"
     );
 
-    // All local files must be on the send list to peer B to restore consistency
+    
     assert!(
         !res.send.is_empty(),
         "winner files must be sent to rolled-back peer"
@@ -179,20 +179,20 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
 fn test_peer_rollback_does_not_overwrite_newer_file_with_stale_content() {
     let a = TestNode::new(DEV_A);
 
-    // 1. Initial shared state: file1.txt version 1
+    
     a.write_file("file1.txt", b"v1 original");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
     let m1_id = snap_m1.manifest_id;
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    // 2. A edits file1.txt to version 2
+    
     a.write_file("file1.txt", b"v2 updated live");
     let snap_m2 = a.snapshot(m1_id, 2_000_000);
     let m2_bytes = serialize_manifest(&snap_m2.manifest);
     a.store.put_meta(BlobKind::Manifest, &m2_bytes).unwrap();
 
-    // 3. Remote peer offers stale M1 (created at 1_000_000)
+    
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let _res = engine
         .converge(
@@ -202,7 +202,7 @@ fn test_peer_rollback_does_not_overwrite_newer_file_with_stale_content() {
         )
         .unwrap();
 
-    // Verification: Live file must retain v2 content, not overwritten with stale v1
+    
     assert_eq!(
         fs::read(a.tree.join("file1.txt")).unwrap(),
         b"v2 updated live",
@@ -215,7 +215,7 @@ fn test_local_rollback_preserves_restored_local_files() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    // 1. Shared base M1: file1.txt v1, known to both devices.
+    
     a.write_file("file1.txt", b"base v1");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
@@ -223,16 +223,16 @@ fn test_local_rollback_preserves_restored_local_files() {
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
     b.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    // 2. Device B evolves forward: M2 (parent M1) edits file1 and adds file2.
+    
     b.write_file("file1.txt", b"remote v2");
     b.write_file("file2.txt", b"remote addition");
     let snap_m2 = b.snapshot(m1_id, 2_000_000);
     transfer_snapshot(&b.store, &a.store, &snap_m2);
 
-    // 3. Device A was restored from a backup and re-snapshotted WITHOUT
-    //    parent linkage: its parent chain never reaches M1, so the base is
-    //    provable for B but not for A. The restored file1 holds a local
-    //    edit that exists nowhere else.
+    
+    
+    
+    
     a.write_file("file1.txt", b"restored local edit");
     let snap_local = a.snapshot([0; 32], 3_000_000);
 
@@ -245,20 +245,20 @@ fn test_local_rollback_preserves_restored_local_files() {
         )
         .unwrap();
 
-    // The restored local edit survives verbatim: broken local lineage must
-    // never diff the local tree against the remote manifest.
+    
+    
     assert_eq!(
         fs::read(a.tree.join("file1.txt")).unwrap(),
         b"restored local edit",
         "locally restored file must survive its own broken lineage"
     );
-    // The remote addition still lands on disk.
+    
     assert_eq!(
         fs::read(a.tree.join("file2.txt")).unwrap(),
         b"remote addition"
     );
-    // Local files are preserved in the plan: the restored edit ships to the
-    // peer instead of being discarded.
+    
+    
     assert!(
         !res.send.is_empty(),
         "restored local content must be on the send list"
@@ -270,11 +270,11 @@ fn test_broken_lineage_on_both_sides_degrades_to_empty_base() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    // 1. A stale "agreed" base whose empty tree matches neither side.
+    
     let snap_base = a.snapshot([0; 32], 500_000);
 
-    // 2. Both devices restored from unrelated backups: neither manifest's
-    //    parent chain reaches the base.
+    
+    
     a.write_file("local-only.txt", b"a data");
     let snap_a = a.snapshot([0; 32], 1_000_000);
     b.write_file("remote-only.txt", b"b data");
@@ -290,8 +290,8 @@ fn test_broken_lineage_on_both_sides_degrades_to_empty_base() {
         )
         .unwrap();
 
-    // Empty-base degradation: every file on both sides survives as an
-    // addition; nothing is pruned.
+    
+    
     assert_eq!(fs::read(a.tree.join("local-only.txt")).unwrap(), b"a data");
     assert_eq!(fs::read(a.tree.join("remote-only.txt")).unwrap(), b"b data");
     assert!(

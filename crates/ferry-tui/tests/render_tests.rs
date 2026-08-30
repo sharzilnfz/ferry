@@ -1,4 +1,4 @@
-//! Headless rendering and character grid tests using Ratatui's `TestBackend`.
+
 
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, PeerStatusView, PinView, ScanStatsView, TransferDirection,
@@ -15,7 +15,7 @@ fn setup_test_state(state: SyncState) -> TuiState {
         "device_fedcba9876543210",
     );
     s.manifest_id = "manifest_0123456789abcdef".to_string();
-    s.scanned = ScanStatsView::new(42, 8, 2, 1024 * 1024 * 5 + 500 * 1024); // ~5.5 MB
+    s.scanned = ScanStatsView::new(42, 8, 2, 1024 * 1024 * 5 + 500 * 1024); 
     s.is_connected = true;
     s.engine_state = state;
     s.raw_state_str = state.badge_text().to_lowercase();

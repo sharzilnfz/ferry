@@ -1,21 +1,21 @@
-//! Structured conflict report: `.ferry/conflicts.jsonl`.
-//!
-//! One JSON object per line, machine-parseable and human-greppable:
-//!
-//! ```json
-//! {"ts":"2026-08-24T12:00:00Z","folder_id":"<32 hex>","path":"a/b.txt",
-//!  "kind":"both_changed","winner":{"device":"<64 hex>","mtime_sec":123,
-//!  "mtime_nsec":4},"loser":{"device":"<64 hex>","mtime_sec":null,
-//!  "mtime_nsec":null},"quarantined_as":"a/b.txt.ferry-conflict.ab12cd34-20260101-090000"}
-//! ```
-//!
-//! `kind` is one of `both_changed`, `delete_vs_edit`, `add_vs_add`.
-//! `mtime_*` are `null` for the deleting side of a delete-vs-edit (a
-//! deletion has no mtime). `quarantined_as` is the stored relative path of
-//! the loser copy, or `null` when nothing was quarantined (resurrections).
-//!
-//! The reader parses strictly and reports the line number on garbage: a
-//! corrupt report must be noticed, not silently truncated.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// One side of a conflict, as it appears in report lines.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceStamp {
     pub device: String,
@@ -32,9 +32,9 @@ pub struct DeviceStamp {
 }
 
 impl DeviceStamp {
-    /// Stamp one conflict side from its raw device id and optional
-    /// `(sec, nsec)` mtime — the single constructor the engine's reporting
-    /// and the report tests both build through.
+    
+    
+    
     pub(crate) fn new(device: [u8; 32], mtime: Option<(i64, u32)>) -> Self {
         DeviceStamp {
             device: ferry_store::format::hex(&device),
@@ -44,10 +44,10 @@ impl DeviceStamp {
     }
 }
 
-/// One resolved conflict.
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
-    /// RFC 3339 UTC wall clock at append time (second precision).
+    
     pub ts: String,
     pub folder_id: String,
     pub path: String,
@@ -84,18 +84,18 @@ pub fn log_path(state_dir: &Path) -> PathBuf {
     state_dir.join("conflicts.jsonl")
 }
 
-/// T-20 storage discipline: the report is append-only history, but it must
-/// not grow forever. Past [`COMPACT_MAX_LINES`] entries, the oldest lines
-/// are dropped down to [`COMPACT_KEEP_LINES`]. The quarantined FILES the
-/// report points at are never touched — only this human/machine report is
-/// capped. The rewrite is atomic (temp + rename in `.ferry/`), so readers
-/// see either the whole old file or the whole new one; line format and key
-/// set are unchanged, and tolerant readers need nothing new.
+
+
+
+
+
+
+
 pub const COMPACT_MAX_LINES: usize = 4096;
 pub const COMPACT_KEEP_LINES: usize = 1024;
 
-/// Append entries, one JSON object per line. Creates the file and its
-/// parent directory on first use. Compacts on threshold (see above).
+
+
 pub fn append_entries(state_dir: &Path, entries: &[ConflictEntry]) -> Result<(), LogError> {
     if entries.is_empty() {
         return Ok(());
@@ -141,16 +141,16 @@ fn compact_if_needed(path: &Path) -> Result<(), LogError> {
     let kept = &lines[lines.len() - COMPACT_KEEP_LINES..];
     let mut body = kept.join("\n");
     body.push('\n');
-    // Atomic replace within the same directory; the temp name carries the
-    // ".tmp" marker so a crash mid-compaction leaves sweepable residue.
+    
+    
     let tmp = path.with_file_name("conflicts.jsonl.tmp.compacting");
     std::fs::write(&tmp, body.as_bytes()).map_err(|e| io_at(&tmp, e))?;
     std::fs::rename(&tmp, path).map_err(|e| io_at(path, e))?;
     Ok(())
 }
 
-/// Read every recorded conflict, oldest first. Blank lines are skipped;
-/// anything unparseable is a loud error carrying the line number.
+
+
 pub fn list_conflicts(state_dir: &Path) -> Result<Vec<ConflictEntry>, LogError> {
     let path = log_path(state_dir);
     let bytes = match std::fs::read(&path) {
@@ -226,7 +226,7 @@ mod tests {
             ),
         ];
         append_entries(sd, &batch).unwrap();
-        // A second empty call appends nothing.
+        
         append_entries(sd, &[]).unwrap();
         assert_eq!(list_conflicts(sd).unwrap(), batch);
     }
@@ -256,7 +256,7 @@ mod tests {
     fn append_compacts_on_threshold_keeping_the_newest_entries() {
         let dir = tempfile::tempdir().unwrap();
         let sd = dir.path();
-        // Plant a log over the compaction threshold (raw lines, valid JSON).
+        
         let path = log_path(sd);
         let mut raw = String::new();
         for i in 0..COMPACT_MAX_LINES {
@@ -268,7 +268,7 @@ mod tests {
         std::fs::create_dir_all(sd).unwrap();
         std::fs::write(&path, &raw).unwrap();
 
-        // One more entry trips the threshold.
+        
         append_entries(sd, &[entry("newest.txt", "add_vs_add", None)]).unwrap();
 
         let listed = list_conflicts(sd).unwrap();
@@ -286,7 +286,7 @@ mod tests {
             "compaction temp is renamed away"
         );
 
-        // Under the threshold: no compaction, nothing lost.
+        
         append_entries(sd, &[entry("again.txt", "both_changed", None)]).unwrap();
         assert_eq!(list_conflicts(sd).unwrap().len(), COMPACT_KEEP_LINES + 1);
     }

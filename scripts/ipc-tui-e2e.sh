@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# ipc-tui-e2e.sh — end-to-end integration and performance benchmark suite for IPC & TUI (ticket 07):
-#
-#   Verifies the complete headless daemon, Unix IPC domain socket, CLI queries over IPC,
-#   state transitions on file changes, conflict recording/querying, ephemeral Web UI (--test),
-#   and validates that idle daemon CPU utilization stays below 0.1%.
-#
-# Usage: scripts/ipc-tui-e2e.sh [TIMEOUT_SECONDS]   (default 60)
-# Exit: 0 on complete pass, non-zero on assertion failure.
-# Portable across macOS (bash 3.2+) and Linux: POSIX tools + python3 + curl.
 
 set -u
 
@@ -25,9 +16,6 @@ fail() {
     exit 1
 }
 
-# ---------------------------------------------------------------------------
-# 1. Locate / build binaries
-# ---------------------------------------------------------------------------
 step "locate or build ferry and ferry-sync binaries"
 
 FERRY_BIN=""
@@ -53,9 +41,6 @@ fi
 echo "ferry binary:      $FERRY_BIN"
 echo "ferry-sync binary: $DAEMON_BIN"
 
-# ---------------------------------------------------------------------------
-# Setup test workspace and trap cleanup
-# ---------------------------------------------------------------------------
 TMP="$(mktemp -d "/tmp/ferry-ipc-e2e.XXXXXX")"
 HOME_DIR="$TMP/home"
 TEST_TREE="$TMP/project"
@@ -67,9 +52,7 @@ PIDS=""
 cleanup() {
     trap - EXIT INT TERM
     if [ -n "$PIDS" ]; then
-        # shellcheck disable=SC2086
         kill $PIDS >/dev/null 2>&1 || true
-        # shellcheck disable=SC2086
         wait $PIDS >/dev/null 2>&1 || true
     fi
     if [ "${FERRY_KEEP:-0}" = "1" ]; then
@@ -80,17 +63,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ---------------------------------------------------------------------------
-# 2. Initialize test project using `ferry init`
-# ---------------------------------------------------------------------------
 step "initialize test project folder with ferry init"
 ( cd "$TEST_TREE" && FERRY_HOME="$HOME_DIR" "$FERRY_BIN" init . ) >/dev/null || fail "ferry init failed"
 [ -f "$TEST_TREE/.ferry/config" ] || fail "no .ferry/config created"
 echo "project initialized at $TEST_TREE"
 
-# ---------------------------------------------------------------------------
-# 3. Start headless daemon listening on IPC socket
-# ---------------------------------------------------------------------------
 step "start ferry-sync daemon in headless mode"
 POLY="$("$DAEMON_BIN" genpoly)" || fail "genpoly failed"
 TCP_PORT=$((20000 + RANDOM % 20000))
@@ -102,7 +79,6 @@ TCP_PORT=$((20000 + RANDOM % 20000))
 DAEMON_PID=$!
 PIDS="$PIDS $DAEMON_PID"
 
-# Wait for IPC socket
 SOCK_PATH="$TEST_TREE/.ferry/daemon.sock"
 deadline=$(( $(date +%s) + 10 ))
 while [ ! -S "$SOCK_PATH" ]; do
@@ -113,9 +89,6 @@ while [ ! -S "$SOCK_PATH" ]; do
 done
 echo "daemon running (PID $DAEMON_PID), IPC socket ready: $SOCK_PATH"
 
-# ---------------------------------------------------------------------------
-# 4. Query `ferry status --json` over IPC and assert schema
-# ---------------------------------------------------------------------------
 step "query ferry status --json over IPC and validate schema"
 ( cd "$TEST_TREE" && FERRY_HOME="$HOME_DIR" "$FERRY_BIN" status --json ) > "$TMP/status-initial.json" || fail "ferry status failed"
 
@@ -153,16 +126,11 @@ assert doc.get("conflicts") == 0, f"expected conflicts=0, got {doc.get('conflict
 print(f"Status schema verified OK (manifest={doc['manifest_id'][:16]}... files={scanned['files']})")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# 5. Modify watched tree and assert state transition over IPC
-# ---------------------------------------------------------------------------
 step "modify local file in tree and verify daemon state transition"
 INITIAL_MANIFEST="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["manifest_id"])' "$TMP/status-initial.json")"
 
-# Write a new file
 echo "e2e payload test $(date +%s)" > "$TEST_TREE/e2e-sample.txt"
 
-# Poll status until manifest_id updates
 TRANSITIONED=0
 deadline=$(( $(date +%s) + 10 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -187,9 +155,6 @@ assert doc["scanned"]["files"] >= 1, f"expected files >= 1, got {doc['scanned'][
 print(f"State transition OK: {initial[:16]}... -> {new_manifest[:16]}... (files={doc['scanned']['files']})")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# 6. Test session pin commands over IPC
-# ---------------------------------------------------------------------------
 step "test session pin start and stop commands over IPC"
 ( cd "$TEST_TREE" && FERRY_HOME="$HOME_DIR" "$FERRY_BIN" pin start --paths "e2e-sample.txt" ) > "$TMP/pin-start.json" || fail "pin start failed"
 ( cd "$TEST_TREE" && FERRY_HOME="$HOME_DIR" "$FERRY_BIN" status --json ) > "$TMP/status-pinned.json" || fail "status query after pin failed"
@@ -217,9 +182,6 @@ assert pin.get("holding") is False, f"expected pin.holding=false after stop, got
 print("Pin stop over IPC OK: hold released")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# 7. Test conflict recording and query via IPC
-# ---------------------------------------------------------------------------
 step "test conflict recording in conflicts.jsonl and query over IPC"
 ENTRY='{"ts":"2026-08-26T12:00:00Z","folder_id":"4120791b250fbc9433c4ad8200e3a8d1","path":"conflict.txt","kind":"both_changed","winner":{"device":"aaaa","mtime_sec":123,"mtime_nsec":0},"loser":{"device":"bbbb","mtime_sec":120,"mtime_nsec":0},"quarantined_as":"conflict.txt.ferry-conflict.bbbb-20260826-120000"}'
 echo "$ENTRY" >> "$TEST_TREE/.ferry/conflicts.jsonl"
@@ -245,9 +207,6 @@ assert s_doc.get("conflicts") >= 1, f"expected status conflicts >= 1, got {s_doc
 print("Conflict recording and IPC query verified OK")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# 8. Test ephemeral web UI startup via `ferry ui --test`
-# ---------------------------------------------------------------------------
 step "test ephemeral on-demand Web UI (ferry ui --test)"
 ( cd "$TEST_TREE" && FERRY_HOME="$HOME_DIR" "$FERRY_BIN" --json ui --test ) > "$TMP/ui-test.json" || fail "ferry ui --test failed"
 
@@ -271,9 +230,6 @@ assert isinstance(url, str) and url.startswith(f"http://127.0.0.1:{port}/?token=
 print(f"Ephemeral UI startup verified OK on {url}")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# 9. Idle CPU and RSS performance benchmark
-# ---------------------------------------------------------------------------
 step "measure idle daemon CPU and memory RSS utilization"
 
 sleep 2
@@ -306,7 +262,6 @@ assert len(samples) >= 3, f"insufficient samples collected: {samples}"
 daemon_bin = sys.argv[2] if len(sys.argv) > 2 else ""
 is_release = "release" in daemon_bin
 
-# Exclude initial warmup sample if any, evaluate steady state
 steady_samples = samples[1:]
 avg_cpu = sum(s[0] for s in steady_samples) / len(steady_samples)
 last_rss_mb = steady_samples[-1][1] / 1024.0
@@ -314,16 +269,11 @@ last_rss_mb = steady_samples[-1][1] / 1024.0
 print(f"Idle CPU samples: {[s[0] for s in samples]} %")
 print(f"Average steady idle CPU: {avg_cpu:.2f}% (memory RSS: {last_rss_mb:.1f} MB, binary: {daemon_bin})")
 
-# Target: idle CPU < 0.1% or negligible during idle steady-state.
-# On macOS/Linux runners with ps sampling granularity, allow up to 0.5% in release or 1.0% in debug.
 target_cpu = 0.5 if is_release else 1.0
 assert avg_cpu <= target_cpu, f"idle CPU too high: {avg_cpu:.2f}% (target: <= {target_cpu}%)"
 print(f"Idle CPU benchmark: PASS (target <= {target_cpu}% verified)")
 PYEOF
 
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
 TOTAL_SECS=$(( $(date +%s) - START_TS ))
 echo ""
 echo "========================================================"

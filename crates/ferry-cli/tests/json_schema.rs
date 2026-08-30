@@ -1,8 +1,8 @@
-//! `--json` schema stability: every command's document is reduced to its
-//! KEY STRUCTURE (sorted path:type pairs, array shapes pinned by element)
-//! and compared against checked-in files under tests/expected/. Values are
-//! deliberately ignored — these snapshots pin NAMES and TYPES, which is the
-//! stability promise docs/cli-json.md makes.
+
+
+
+
+
 
 mod common;
 
@@ -10,7 +10,7 @@ use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
 
-/// Reduce a JSON value to a deterministic schema description.
+
 fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
     match v {
         Value::Object(map) => {
@@ -22,8 +22,8 @@ fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
         }
         Value::Array(items) => {
             out.push(format!("{path}[]"));
-            // Pin the shape of the FIRST element only (arrays are
-            // homogeneous by contract).
+            
+            
             if let Some(first) = items.first() {
                 schema(first, &format!("{path}[0]"), out);
             }
@@ -54,7 +54,7 @@ fn schema_of(v: &Value) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Compare-or-bless. Set `FERRY_UPDATE_EXPECTED=1` to rewrite the file.
+
 fn assert_matches_expected(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));
@@ -70,9 +70,9 @@ fn assert_matches_expected(name: &str, actual: &str) {
             file.display()
         )
     });
-    // Normalize checkout line endings: git may hand these fixtures back with
-    // CRLF on windows runners (autocrlf), while generated schemas always use
-    // LF. The schema bytes are what this test guards, not the newline style.
+    
+    
+    
     let expected = expected.replace("\r\n", "\n");
     assert_eq!(expected, actual, "JSON schema for {name} drifted");
 }
@@ -153,8 +153,8 @@ fn store_gc_document_schema_is_stable() {
     let proj = env.work().join("proj");
     commands::init::run(&proj).unwrap();
 
-    // Orphan content: blobs with no manifest referencing them must show up
-    // as garbage in the dry-run report (and pin the array element shape).
+    
+    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     opened
         .store
@@ -174,7 +174,7 @@ fn store_gc_document_schema_is_stable() {
     assert!(!dry.json["garbage_packs"].as_array().unwrap().is_empty());
     assert_matches_expected("store-gc-dry", &schema_of(&dry.json));
 
-    // The delete path behind the report shares the document skeleton.
+    
     let real = commands::store::run(commands::store::GcArgs {
         folder: &proj,
         dry_run: false,
@@ -197,12 +197,12 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     let started = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 
-    // While pinned with held changes absent, status still pins the shape.
+    
     let status = commands::pin::status(&proj).unwrap();
     assert_eq!(status.json["state"], "active");
 
-    // Simulate a held change arriving (the exchange loop writes these);
-    // its manifest must REALLY be in the store or release refuses loudly.
+    
+    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     let scan = ferry_cli::commands::status::scan_now(&opened).unwrap();
     let mid = opened
@@ -212,8 +212,8 @@ fn pin_documents_are_stable_across_the_lifecycle() {
             &scan.manifest_bytes,
         )
         .unwrap();
-    // Staged metadata is only readable after sealing (same rule the
-    // exchange loop follows before anything references it).
+    
+    
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
     let state_dir = ferry_cli::folder::state_dir(&proj);

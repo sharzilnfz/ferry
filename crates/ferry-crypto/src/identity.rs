@@ -1,17 +1,17 @@
-//! Long-lived device identity keys (X25519 static keypairs).
-//!
-//! A device's identity is one 32-byte Curve25519 secret scalar. Its
-//! **`device_id`** is the raw public key (`docs/store-format.md`, manifest
-//! schema: "creating device's X25519 public key"). Identities live in an
-//! injectable directory, defaulting to `~/.ferry/identity/device.key`,
-//! created with restrictive permissions (file 0600, directory 0700).
-//!
-//! Load-or-create semantics with a hard edge: a file that exists but does
-//! not parse, or whose stored public key disagrees with its own secret, is
-//! [`IdentityError::Corrupted`] — NEVER silently regenerated. Regenerating
-//! would mint new trust out of thin air while every folder still wraps keys
-//! to the old `device_id`: silent trust-forking data loss wearing a helpful
-//! face. The user gets the error and decides.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use rand::rngs::OsRng;
 use std::fmt;
@@ -20,13 +20,13 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-/// Raw X25519 public key == `device_id` everywhere in Ferry.
+
 pub type DeviceId = [u8; 32];
 
 const FILE_NAME: &str = "device.key";
 const MAGIC: [u8; 4] = *b"FRID";
 const FORMAT_VERSION: u8 = 1;
-/// magic(4) + version(1) + secret(32) + public(32).
+
 pub const FILE_LEN: usize = 69;
 
 #[derive(Debug, Error)]
@@ -44,15 +44,15 @@ pub enum IdentityError {
     DegeneratePeerKey,
 }
 
-/// One device's long-lived identity keypair.
-///
-/// The secret scalar is zeroized on drop (via `x25519-dalek`) and never
-/// shown by `Debug`.
+
+
+
+
 #[derive(Clone)]
 pub struct DeviceIdentity {
     sk: StaticSecret,
-    /// Cached raw public key; equals `sk.basepoint()` and doubles as the
-    /// `device_id`.
+    
+    
     pk: DeviceId,
 }
 
@@ -65,13 +65,13 @@ impl fmt::Debug for DeviceIdentity {
 }
 
 impl DeviceIdentity {
-    /// Fresh CSPRNG identity (OS randomness).
+    
     pub fn generate() -> Self {
         Self::from_static(StaticSecret::random_from_rng(OsRng))
     }
 
-    /// Rebuild an identity from raw secret bytes (recovery import, tests).
-    /// The input is consumed and zeroized by the caller's drop.
+    
+    
     pub fn from_secret_bytes(secret: &[u8; 32]) -> Self {
         Self::from_static(StaticSecret::from(*secret))
     }
@@ -82,18 +82,18 @@ impl DeviceIdentity {
         DeviceIdentity { sk, pk }
     }
 
-    /// The `device_id`: raw X25519 public key bytes.
+    
     pub fn device_id(&self) -> &DeviceId {
         &self.pk
     }
 
-    /// Convenience alias mirroring spec language ("device X25519 pub").
+    
     pub fn public(&self) -> &DeviceId {
         &self.pk
     }
 
-    /// X25519 Diffie-Hellman against a peer public key, rejecting the
-    /// degenerate all-small-order outputs that RFC 7748 tells us to refuse.
+    
+    
     pub fn diffie_hellman(
         &self,
         peer_public: &DeviceId,
@@ -107,7 +107,7 @@ impl DeviceIdentity {
         Ok(Zeroizing::new(out))
     }
 
-    /// Serialize the identity file image (magic || version || sk || pk).
+    
     pub fn to_file_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(FILE_LEN);
         out.extend_from_slice(&MAGIC);
@@ -143,9 +143,9 @@ impl DeviceIdentity {
     }
 }
 
-/// Default identity root: `~/.ferry/identity`. Falls back to an error when
-/// no home directory can be located. HOME first, then USERPROFILE (native
-/// Windows shells have no HOME).
+
+
+
 pub fn default_identity_root() -> Result<PathBuf, IdentityError> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -160,19 +160,19 @@ pub fn default_identity_root() -> Result<PathBuf, IdentityError> {
     Ok(home.join(".ferry").join("identity"))
 }
 
-/// Load the device identity under `root`, creating it on first use.
-///
-/// Creation writes `<root>/device.key`; the directory gets 0700 and the file
-/// 0600 where the OS supports permission bits. An existing-but-broken file
-/// is a loud [`IdentityError::Corrupted`], never a regeneration.
+
+
+
+
+
 pub fn load_or_create(root: &Path) -> Result<DeviceIdentity, IdentityError> {
     let file = root.join(FILE_NAME);
     match std::fs::read(&file) {
         Ok(bytes) => DeviceIdentity::from_file_bytes(&file, &bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             create_identity(root, &file)?;
-            // Read back through the same parse path so freshly written state
-            // meets the identical bar as loaded state.
+            
+            
             let bytes = std::fs::read(&file).expect("just written");
             DeviceIdentity::from_file_bytes(&file, &bytes)
         }
@@ -213,10 +213,10 @@ fn create_identity(root: &Path, file: &Path) -> Result<(), IdentityError> {
     write_identity_file(root, file, &DeviceIdentity::generate())
 }
 
-/// Install known secret bytes as the device identity under `root`
-/// (disaster-recovery import). Refuses when an identity file already exists:
-/// overwriting live trust roots silently would fork trust exactly like
-/// silent regeneration does.
+
+
+
+
 pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity, IdentityError> {
     let file = root.join(FILE_NAME);
     match std::fs::metadata(&file) {
@@ -230,7 +230,7 @@ pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let id = DeviceIdentity::from_secret_bytes(secret);
             write_identity_file(root, &file, &id)?;
-            // Read back through the standard parse path.
+            
             let bytes = std::fs::read(&file).expect("just written");
             DeviceIdentity::from_file_bytes(&file, &bytes)
         }
@@ -242,7 +242,7 @@ pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity,
 mod tests {
     use super::*;
 
-    // RFC 7748 section 6.1 Curve25519 Diffie-Hellman test vector.
+    
     const ALICE_SK: [u8; 32] = [
         0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66,
         0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9,
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(alice.device_id(), &ALICE_PK);
         let bob = DeviceIdentity::from_secret_bytes(&BOB_SK);
         assert_eq!(bob.device_id(), &BOB_PK);
-        // Both directions agree, matching the RFC's shared value exactly.
+        
         assert_eq!(*alice.diffie_hellman(&BOB_PK).unwrap(), SHARED);
         assert_eq!(*bob.diffie_hellman(&ALICE_PK).unwrap(), SHARED);
     }
@@ -287,7 +287,7 @@ mod tests {
         let parsed =
             DeviceIdentity::from_file_bytes(Path::new("<mem>"), &id.to_file_bytes()).unwrap();
         assert_eq!(parsed.device_id(), id.device_id());
-        // And the reloaded secret still does real DH against the original.
+        
         let probe = DeviceIdentity::generate();
         let a = parsed.diffie_hellman(probe.public()).unwrap();
         let b = probe.diffie_hellman(parsed.public()).unwrap();
@@ -300,15 +300,15 @@ mod tests {
         let first = load_or_create(tmp.path()).unwrap();
         let again = load_or_create(tmp.path()).unwrap();
         assert_eq!(first.device_id(), again.device_id());
-        // Same actual secret, not just same id.
+        
         assert_eq!(first.to_file_bytes(), again.to_file_bytes());
     }
 
     #[test]
     fn fresh_identity_gets_restrictive_permissions_on_unix() {
         let tmp = tempfile::tempdir().unwrap();
-        // The identity root itself is created by us (like ~/.ferry/identity
-        // would be), not inherited from the tempdir's 0755.
+        
+        
         let root = tmp.path().join("identity");
         load_or_create(&root).unwrap();
         #[cfg(unix)]
@@ -324,7 +324,7 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            // Nothing extra to assert off-unix; keep the test honest.
+            
             assert!(root.join(FILE_NAME).exists());
         }
     }
@@ -341,7 +341,7 @@ mod tests {
             assert!(matches!(e, IdentityError::Corrupted { .. }), "{e}");
         };
 
-        // (a) garbage overwrite
+        
         let garbage = vec![0xEE; 40];
         std::fs::write(&file, &garbage).unwrap();
         expect_corrupt(&file);
@@ -351,14 +351,14 @@ mod tests {
             "must not regenerate"
         );
 
-        // (b) truncated
+        
         let trunc = good[..good.len() - 1].to_vec();
         std::fs::write(&file, &trunc).unwrap();
         expect_corrupt(&file);
         assert_eq!(std::fs::read(&file).unwrap(), trunc, "must not regenerate");
 
-        // (c) right shape, tampered public key half: the mismatch between the
-        // two halves must be detected, not trusted.
+        
+        
         let mut evil_pk = good.clone();
         evil_pk[40] ^= 0x01;
         std::fs::write(&file, &evil_pk).unwrap();
@@ -369,7 +369,7 @@ mod tests {
             "must not regenerate"
         );
 
-        // (d) unknown version byte
+        
         let mut evil_ver = good.clone();
         evil_ver[4] = 99;
         std::fs::write(&file, &evil_ver).unwrap();
@@ -380,8 +380,8 @@ mod tests {
             "must not regenerate"
         );
 
-        // Repairing the file deliberately restores the ORIGINAL identity:
-        // proof the failures above never minted replacement keys.
+        
+        
         std::fs::write(&file, &good).unwrap();
         let repaired = load_or_create(tmp.path()).unwrap();
         assert_eq!(repaired.device_id(), original.device_id());
@@ -397,15 +397,15 @@ mod tests {
 
     #[test]
     fn debug_output_never_contains_secret_material() {
-        // A distinctive secret; its byte pattern must not appear anywhere in
-        // the Debug rendering.
+        
+        
         let secret = [0xA5u8; 32];
         let id = DeviceIdentity::from_secret_bytes(&secret);
         let rendered = format!("{id:?}");
         assert!(!rendered.contains("secret"));
         assert!(!rendered.to_lowercase().contains("a5a5a5"));
-        // The file image DOES contain it (it must), so prove we are looking
-        // at the right thing by round-tripping through the parser.
+        
+        
         assert_eq!(
             DeviceIdentity::from_file_bytes(Path::new("<m>"), &id.to_file_bytes())
                 .unwrap()
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn degenerate_peer_key_is_rejected() {
         let id = DeviceIdentity::generate();
-        // All-zero peer public key is the classic small-order point.
+        
         let zero = [0u8; 32];
         assert!(matches!(
             id.diffie_hellman(&zero),

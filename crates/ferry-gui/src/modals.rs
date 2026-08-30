@@ -1,10 +1,10 @@
-//! Modal dialogs and inspection drawers for Ferry GUI.
-//!
-//! Includes:
-//! - Quarantined Conflicts Inspection Drawer
-//! - Share Folder Pairing Workflow (Offer Generation, Secret Warning & QR Code)
-//! - Pair Device Acceptance Workflow
-//! - Session Pinning Modal
+
+
+
+
+
+
+
 
 use egui::{
     epaint::Shadow, vec2, Align, Align2, Area, Color32, Frame, Layout, Margin, Order, RichText,
@@ -17,7 +17,7 @@ use qrcode::QrCode;
 use crate::telemetry::format_short_hex;
 use crate::theme::colors;
 
-/// Render ASCII QR representation from a payload token.
+
 #[must_use]
 pub fn generate_ascii_qr(payload: &str) -> String {
     if let Ok(code) = QrCode::new(payload.as_bytes()) {
@@ -30,7 +30,7 @@ pub fn generate_ascii_qr(payload: &str) -> String {
     }
 }
 
-/// Generic modal container with fluid-glass dark styling.
+
 pub fn render_modal_frame(
     ctx: &egui::Context,
     title: &str,
@@ -75,7 +75,7 @@ pub fn render_modal_frame(
     *is_open = open;
 }
 
-/// Quarantined Conflicts Inspection Drawer / Modal.
+
 pub fn render_conflicts_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
@@ -212,7 +212,7 @@ pub fn render_conflicts_modal(
     );
 }
 
-/// Share Folder / Pairing Offer Modal Workflow.
+
 pub fn render_share_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
@@ -228,11 +228,11 @@ pub fn render_share_modal(
         520.0,
         |ui, open| {
             if let Some(offer) = active_offer {
-                // Success: Offer generated
+                
                 ui.label(RichText::new("Pairing offer is active! Scan QR code or copy the pairing token to the recipient device:").color(colors::TEXT_SECONDARY).size(12.5));
                 ui.add_space(8.0);
 
-                // Token display box
+                
                 Frame::none()
                     .fill(colors::PANEL_BG)
                     .stroke(Stroke::new(1.0f32, colors::FERRY_GREEN))
@@ -281,7 +281,7 @@ pub fn render_share_modal(
 
                 ui.add_space(8.0);
 
-                // QR Code representation
+                
                 let qr_string = generate_ascii_qr(&offer.token);
                 Frame::none()
                     .fill(colors::OBSIDIAN_BG)
@@ -314,11 +314,11 @@ pub fn render_share_modal(
                     }
                 });
             } else {
-                // Initial Offer Generation Form
+                
                 ui.label(RichText::new("Generate an encrypted pairing offer to connect another device to this folder.").color(colors::TEXT_SECONDARY).size(12.5));
                 ui.add_space(8.0);
 
-                // Secret Scanning Warning Banner
+                
                 if !secret_warnings.is_empty() {
                     Frame::none()
                     .fill(Color32::from_rgba_premultiplied(243, 156, 18, 30))
@@ -383,7 +383,7 @@ pub fn render_share_modal(
     );
 }
 
-/// Pair Device Acceptance Modal Workflow.
+
 pub fn render_pair_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
@@ -445,7 +445,7 @@ pub fn render_pair_modal(
     );
 }
 
-/// Session Pinning Modal.
+
 pub fn render_pin_modal(
     ctx: &egui::Context,
     is_open: &mut bool,

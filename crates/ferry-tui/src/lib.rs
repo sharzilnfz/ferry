@@ -1,7 +1,7 @@
-//! `ferry-tui`: High-performance terminal dashboard and event-driven monitoring UI for Ferry.
-//!
-//! Renders real-time synchronization state, storage metrics, peer connectivity, and activity logs
-//! over local IPC with zero CPU overhead at idle.
+
+
+
+
 
 pub mod activity_log;
 pub mod app;

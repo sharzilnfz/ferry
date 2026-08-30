@@ -4,11 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Lives apart from ferry-sync because it wires BOTH transports together:
-# ferry-iroh depends on ferry-sync for the Transport trait, so a single
-# crate containing the lib, the iroh impl, AND the binary would be a
-# normal-dependency cycle (illegal). The shipped artifact keeps the
-# historical name `ferry-sync`.
 [dependencies]
 ferry-sync = { path = "../ferry-sync" }
 ferry-iroh = { path = "../ferry-iroh" }
@@ -16,8 +11,6 @@ ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
 ferry-folder = { workspace = true }
 ferry-ignore = { path = "../ferry-ignore" }
-# Dashboard state reads go through the typed owners instead of hand-parsing
-# .ferry/pin-state.json, held/*.jsonl and conflicts.jsonl.
 ferry-pin = { path = "../ferry-pin" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-ipc = { path = "../ferry-ipc" }
@@ -50,7 +43,6 @@ path = "src/main.rs"
 [dev-dependencies]
 tempfile.workspace = true
 axum = { workspace = true }
-# Test rigs open stores through ferry-folder's test-util helper.
 ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 

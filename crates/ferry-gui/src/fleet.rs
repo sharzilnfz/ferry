@@ -1,7 +1,7 @@
-//! Connected device fleet table widget for Ferry GUI.
-//!
-//! Displays paired peer device rows with device IDs, agreement timestamps,
-//! and connectivity status pills (Online, Dialing, Offline).
+
+
+
+
 
 use egui::{vec2, Align, Color32, Frame, Layout, Margin, RichText, Rounding, Stroke};
 use ferry_ipc::protocol::PeerStatusView;
@@ -9,7 +9,7 @@ use ferry_ipc::protocol::PeerStatusView;
 use crate::telemetry::format_short_hex;
 use crate::theme::colors;
 
-/// Render the Connected Device Fleet table.
+
 pub fn render_fleet_table(
     ui: &mut egui::Ui,
     peers: &[PeerStatusView],
@@ -82,7 +82,7 @@ fn render_peer_row(ui: &mut egui::Ui, peer: &PeerStatusView, _idx: usize) {
         .inner_margin(Margin::symmetric(12.0f32, 8.0f32))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // Connectivity status pill
+                
                 let conn_lower = peer.connectivity.to_lowercase();
                 let (status_text, bg, fg) =
                     if conn_lower.contains("online") || conn_lower.contains("connected") {
@@ -106,7 +106,7 @@ fn render_peer_row(ui: &mut egui::Ui, peer: &PeerStatusView, _idx: usize) {
 
                 ui.add_space(8.0);
 
-                // Device ID
+                
                 let short_id = format_short_hex(Some(&peer.device_id));
                 let dev_label = ui.monospace(
                     RichText::new(&short_id)
@@ -125,7 +125,7 @@ fn render_peer_row(ui: &mut egui::Ui, peer: &PeerStatusView, _idx: usize) {
                         .output_mut(|o| o.copied_text.clone_from(&peer.device_id));
                 }
 
-                // Agreed Manifest / Timestamp
+                
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(ref agreed_at) = peer.agreed_at {
                         ui.label(

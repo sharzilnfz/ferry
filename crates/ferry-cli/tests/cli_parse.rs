@@ -1,5 +1,5 @@
-//! Parsing table tests: the CLI contract, pinned. Anything here breaking is
-//! a user-facing command-surface change.
+
+
 
 use std::path::PathBuf;
 
@@ -54,7 +54,7 @@ fn add_is_rejected() {
 
 #[test]
 fn pair_has_initiate_and_accept_forms() {
-    // Bare `pair` = initiate with defaults.
+    
     match parse(&["pair"]).command.unwrap() {
         Command::Pair {
             accept,
@@ -67,7 +67,7 @@ fn pair_has_initiate_and_accept_forms() {
         }
         other => panic!("{other:?}"),
     }
-    // Accept form.
+    
     match parse(&["pair", "--accept", "/tmp/offer.ferry-pair", "dest"])
         .command
         .unwrap()
@@ -78,7 +78,7 @@ fn pair_has_initiate_and_accept_forms() {
         }
         other => panic!("{other:?}"),
     }
-    // Timeout override.
+    
     match parse(&["pair", "--timeout-secs", "5"]).command.unwrap() {
         Command::Pair { timeout_secs, .. } => assert_eq!(timeout_secs, 5),
         other => panic!("{other:?}"),
@@ -199,7 +199,7 @@ fn daemon_folders_listen_peer_transport_interval() {
         }
         other => panic!("{other:?}"),
     }
-    // --peer-url per ticket naming; --peer alias for humans.
+    
     let cli = parse(&["daemon", "--peer-url", "127.0.0.1:1"]);
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
@@ -208,7 +208,7 @@ fn daemon_folders_listen_peer_transport_interval() {
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
     );
-    // Unknown transport values still PARSE (runtime rejects them cleanly).
+    
     let cli = parse(&["daemon", "--transport", "iroh"]);
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { transport, .. } if transport == "iroh")
@@ -249,7 +249,7 @@ fn version_flag_is_wired() {
 
 #[test]
 fn pin_has_four_actions_and_repeatable_paths() {
-    // Bare start: no globs = whole folder, default hours = 8.
+    
     match parse(&["pin", "start"]).command.unwrap() {
         Command::Pin {
             action:
@@ -264,14 +264,14 @@ fn pin_has_four_actions_and_repeatable_paths() {
         }
         other => panic!("{other:?}"),
     }
-    // Custom --hours flag.
+    
     match parse(&["pin", "start", "--hours", "24"]).command.unwrap() {
         Command::Pin {
             action: ferry_cli::cli::PinAction::Start { hours, .. },
         } => assert_eq!(hours, 24),
         other => panic!("{other:?}"),
     }
-    // Repeatable --paths plus positional folder.
+    
     match parse(&[
         "pin", "start", "--paths", "src/**", "--paths", "docs/*", "sub",
     ])
@@ -292,7 +292,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
         }
         other => panic!("{other:?}"),
     }
-    // The other three actions exist and take a folder.
+    
     for args in [
         vec!["pin", "stop"],
         vec!["pin", "release"],
@@ -304,7 +304,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
             "{args:?}"
         );
     }
-    // Unknown action refused.
+    
     assert!(Cli::try_parse_from(["ferry", "pin", "rebase"]).is_err());
 }
 

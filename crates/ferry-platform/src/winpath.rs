@@ -1,36 +1,36 @@
-//! Windows long-path handling via `\\?\` extended-length prefixes.
-//!
-//! Background (research/landscape.md, Microsoft docs): classic Win32 paths
-//! cap at `MAX_PATH` = 260 chars. The registry `LongPathsEnabled` value and a
-//! `longPathAware` application manifest lift the cap, but a sync tool can
-//! control neither on an arbitrary host — trees routinely exceed 260 chars
-//! under nested project directories. The mechanical fix that works
-//! regardless of host opt-in is the extended-length prefix: pass
-//! `\\?\C:\very\long\path` (or `\\?\UNC\server\share\...` for UNC paths) to
-//! skip normalization and the length check entirely.
-//!
-//! Rules implemented here (all pure, unit-tested on every platform):
-//!
-//! - Only Windows-shaped ABSOLUTE paths are touched: drive paths (`C:\...`)
-//!   and UNC paths (`\\server\share\...`). Relative paths and POSIX paths
-//!   are returned unchanged, so callers can apply this unconditionally.
-//! - Already-prefixed paths are returned unchanged (idempotent).
-//! - Forward slashes are normalized to backslashes inside prefixed paths:
-//!   the `\\?\` form disables Win32's separator normalization.
-//! - Per-component limits (~255 UTF-16 units) are NOT lifted by the prefix;
-//!   NTFS simply cannot store longer names. Those failures surface as loud
-//!   IO errors carrying the path.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::Path;
 
-/// Classic Win32 path limit. A path at or beyond this length needs the
-/// prefix unless the host opted in — which we cannot assume.
+
+
 pub const MAX_PATH: usize = 260;
 
 const EXTENDED_PREFIX: &str = "\\\\?\\";
 const EXTENDED_UNC_PREFIX: &str = "\\\\?\\UNC\\";
 
-/// Is this path already in `\\?\` / `\\?\UNC\` form?
+
 pub fn is_extended_length(p: &Path) -> bool {
     let Some(s) = p.to_str() else {
         return false;
@@ -38,10 +38,10 @@ pub fn is_extended_length(p: &Path) -> bool {
     s.starts_with(EXTENDED_PREFIX)
 }
 
-/// Does this path need the extended-length prefix? True exactly when it is
-/// a Windows-shaped absolute path, not yet prefixed, and its length meets or
-/// exceeds [`MAX_PATH`] ("deep nesting" included: many short components sum
-///ming past the cap is the common case).
+
+
+
+
 pub fn needs_extended_length(p: &Path) -> bool {
     match windows_shape(p) {
         Some(_) => p.to_str().is_some_and(|s| s.chars().count() >= MAX_PATH),
@@ -49,33 +49,33 @@ pub fn needs_extended_length(p: &Path) -> bool {
     }
 }
 
-/// Which extended-length shape does `p` have?
-/// `Some(false)` = plain drive absolute; `Some(true)` = UNC.
+
+
 fn windows_shape(p: &Path) -> Option<bool> {
     let s = p.to_str()?;
     if s.starts_with(EXTENDED_PREFIX) {
-        return None; // already extended: never needs another prefix
+        return None; 
     }
     let bytes = s.as_bytes();
     if bytes.len() >= 2 && bytes[0] == b'\\' && bytes[1] == b'\\' {
-        return Some(true); // UNC \\server\share\...
+        return Some(true); 
     }
     if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        // Drive paths must be absolute (C:\...) to take the prefix; "C:x"
-        // is drive-relative and must not be mangled.
+        
+        
         let absolute = bytes.len() >= 3 && (bytes[2] == b'\\' || bytes[2] == b'/');
         return if absolute { Some(false) } else { None };
     }
     None
 }
 
-/// Apply the `\\?\` prefix when the path is a long-enough Windows-shaped
-/// absolute path; otherwise return the input unchanged. Idempotent.
-///
-/// On POSIX hosts this is always the identity function (POSIX absolute paths
-/// start with `/`, which is not a Windows shape).
+
+
+
+
+
 pub fn extend_path(p: &Path) -> std::path::PathBuf {
-    // Non-UTF-8: leave for IO error reporting.
+    
     let Some(s) = p.to_str() else {
         return p.to_path_buf();
     };
@@ -86,7 +86,7 @@ pub fn extend_path(p: &Path) -> std::path::PathBuf {
         return p.to_path_buf();
     }
     if unc {
-        // \\server\share\x -> \\?\UNC\server\share\x
+        
         let body = s.trim_start_matches('\\').replace('/', "\\");
         format!("{EXTENDED_UNC_PREFIX}{body}").into()
     } else {
@@ -101,7 +101,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn win(components: &[&str]) -> PathBuf {
-        // Build a windows-shaped path portably from literal components.
+        
         let joined = components.join("\\");
         PathBuf::from(joined)
     }
@@ -122,19 +122,19 @@ mod tests {
 
     #[test]
     fn boundary_at_260_chars_gets_prefix_259_does_not() {
-        // "C:\" + 256 chars = 259 total: under the cap, untouched.
+        
         let stem = "d".repeat(256);
         let short = format!(r"C:\{stem}");
         assert_eq!(short.chars().count(), 259);
         assert_eq!(extend_path(Path::new(&short)), Path::new(&short));
 
-        // One more char = 260 total: prefixed.
+        
         let long = format!(r"C:\{stem}x");
         assert_eq!(long.chars().count(), 260);
         let got = extend_path(Path::new(&long));
         assert_eq!(got, PathBuf::from(format!(r"\\?\C:\{stem}x")));
         assert!(needs_extended_length(Path::new(&long)));
-        // Idempotent: extending an extended path changes nothing.
+        
         assert_eq!(extend_path(&got), got);
         assert!(!needs_extended_length(&got));
     }
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(extend_path(Path::new(&posix_long)), Path::new(&posix_long));
         assert!(!needs_extended_length(Path::new(&posix_long)));
 
-        // Drive-relative C:x is not absolute; prefixing it would corrupt it.
+        
         let drive_rel = format!("C:{}", "d".repeat(400));
         assert_eq!(extend_path(Path::new(&drive_rel)), Path::new(&drive_rel));
     }

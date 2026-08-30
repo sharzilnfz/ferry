@@ -1,29 +1,29 @@
-//! `ferry-sync` CLI: run one M0 daemon over iroh (default) or loopback TCP,
-//! or generate a folder polynomial.
-//!
-//! Daemon pairs (iroh mode, the ADR-0003 path):
-//!
-//! ```text
-//! # Node A (listener): announces its public endpoint id
-//! ferry-sync daemon --role listen \
-//!     --store /tmp/node-a/store --tree /tmp/node-a/tree --tag node-a --poly <hex16> \
-//!     [--relay http://relay.example:3340] [--discovery mdns]
-//! # -> prints `ENDPOINT <hex64>` once the QUIC endpoint is up
-//!
-//! # Node B (connector): dials A BY PUBLIC KEY
-//! ferry-sync daemon --role connect --peer <A's hex64> \
-//!     --store /tmp/node-b/store --tree /tmp/node-b/tree --tag node-b --poly <hex16> \
-//!     [--relay http://relay.example:3340] ...
-//! ```
-//!
-//! TCP mode (`--transport tcp`) keeps the M0 localhost shape: `--addr`
-//! HOST:PORT means an actual socket again.
-//!
-//! Both print machine-greppable `STATE root=<hex> agreed=<hex|none>` lines;
-//! the connector drives sessions, the listener serves them and relies on
-//! the peer's opportunistic dials to discover its changes.
-//!
-//! Status lines go to stdout; errors to stderr.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::process::ExitCode;
 use std::str::FromStr as _;
@@ -39,7 +39,7 @@ use ferry_daemon::ui;
 use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
 
-/// Port 0 makes the transport mint a unique alias.
+
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
 
 const USAGE: &str = "\
@@ -155,8 +155,8 @@ fn ferry_home() -> std::path::PathBuf {
 }
 
 fn cmd_daemon(args: &[String]) -> ExitCode {
-    // Central supervisor mode: `ferry daemon` without legacy flags runs Supervisor.
-    // Preserve `--listen` single-folder deprecated wrapper by routing to legacy when --store/--role present.
+    
+    
     let is_legacy = has_flag(args, "--store")
         || has_flag(args, "--tree")
         || has_flag(args, "--role")
@@ -170,12 +170,12 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
             }
         }
     }
-    // Legacy single-folder path (also used for `ferry daemon --listen` deprecated wrapper)
+    
     if has_flag(args, "--listen") {
         eprintln!(
             "warning: --listen is deprecated; use `ferry daemon` without args for device daemon"
         );
-        // If --listen is given with a path arg, register it before falling through to legacy
+        
         if let Some(p) = flag(args, "--listen") {
             let home = ferry_home();
             let _ = std::fs::create_dir_all(&home);
@@ -206,7 +206,7 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
         .filter(|a| !a.starts_with('-') && a.as_str() != "daemon")
         .map(std::path::PathBuf::from)
         .collect();
-    // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
+    
     let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
         .or_else(|_| {
             ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
@@ -239,8 +239,8 @@ struct DaemonArgs {
     socket_path: Option<std::path::PathBuf>,
 }
 
-/// `--ui [ADDR]`: bare flag means the documented default; any non-loopback
-/// address is refused at startup (v0 auth stance: localhost only).
+
+
 fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String> {
     if !has_flag(args, "--ui") {
         return Ok(None);
@@ -270,7 +270,7 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
     let parsed = DaemonArgs {
         kind,
         role: require(args, "--role")?,
-        // TCP mode demands --addr; iroh mode ignores it (fixed labels below).
+        
         addr: match flag(args, "--addr") {
             Some(a) => {
                 Some(std::net::SocketAddr::from_str(&a).map_err(|e| format!("--addr: {e}"))?)
@@ -326,8 +326,8 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         tag: d.tag.clone(),
         store_dir: d.store_dir.clone(),
         tree_dir: d.tree_dir.clone(),
-        // T-02: validate the user-supplied --poly HERE, at config load. A
-        // typo used to surface as a chunker .expect() panic mid-scan.
+        
+        
         poly: ferry_store::chunker::ValidatedPoly::new(d.poly)
             .map_err(|e| format!("--poly: {e}"))?,
         folder_id: d.folder_id,
@@ -335,22 +335,22 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         opportunistic_every: d.opportunistic_every,
         bind_addr: None,
         connect_to: None,
-        // Trust-on-first-use stays opt-in (ADR-0007); paired folders seed
-        // their allow-list from `CONFIG_HEAD`.
+        
+        
         allow_trust_on_first_use: false,
-        // T-06: production daemons enforce session pins at the engine's
-        // execution boundary. The --store dir IS the folder root whose
-        // `.ferry/` holds pin-state.json and the held ledgers.
+        
+        
+        
         pin_state_dir: Some(d.store_dir.join(".ferry")),
         quiet: false,
     };
 
-    // ONE device-identity source for every transport (ticket 12): a real
-    // keypair persisted under `<store>/.device-identity`, loaded or created
-    // exactly once. Tag-derived ids are test-only and unreachable here.
-    // NOTE: the file lives in a SIBLING of the store's `.ferry/` — that
-    // directory belongs to the store layout, and creating it early would
-    // flip Store::create into Store::open on first run.
+    
+    
+    
+    
+    
+    
     let device = crypto_identity::load_or_create(&d.store_dir.join(".device-identity"))
         .map_err(|e| format!("device identity: {e}"))?;
 
@@ -365,8 +365,8 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
             Arc::new(ferry_sync::TcpTransport)
         }
         TransportKind::Iroh => {
-            // Stable endpoint identity derived from THIS store's device
-            // identity (ferry-crypto): restart-safe public addressing.
+            
+            
             let mut builder = ferry_iroh::IrohConfig::builder().device_identity(&device);
             if !d.relays.is_empty() {
                 builder = builder.relays(ferry_iroh::RelaySetting::Custom(d.relays.clone()));
@@ -399,18 +399,18 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
                 }
                 _ => unreachable!("validated above"),
             }
-            // Announce AFTER wiring config so the listener's alias exists
-            // before any STATE line; ordering with LISTENING is preserved.
+            
+            
             println!("ENDPOINT {endpoint_hex}");
             Arc::new(t)
         }
     };
 
-    // Store opening goes through ferry-folder, the one module that owns key
-    // unwrap and cipher choice. First run on an uninitialized directory
-    // initializes a real folder (fresh FMK wrapped to this device's
-    // identity); an existing folder must unwrap its key or we fail loud —
-    // there is no plaintext or zero-key reopen.
+    
+    
+    
+    
+    
     let store: Arc<ferry_store::store::Store> =
         if ferry_folder::folder::dot_dir(&d.store_dir).is_dir() {
             ferry_folder::folder::open_folder(&d.store_dir, &device)
@@ -420,8 +420,8 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
             let (store, _fmk) =
                 ferry_folder::folder::create_folder(&d.store_dir, &device, d.folder_id, d.poly)
                     .map_err(|e| format!("startup failed: {e}"))?;
-            // Same ritual as `ferry init`: flush so the polynomial record
-            // leaves staging and a restart can reopen through `open_folder`.
+            
+            
             store
                 .flush()
                 .map_err(|e| format!("startup failed: flush: {e}"))?;
@@ -437,7 +437,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");
     }
-    // Run until killed; EngineHandle shutdown happens on drop.
+    
     let handle = engine.start();
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);

@@ -14,18 +14,12 @@ unicode-normalization.workspace = true
 ferry-platform.workspace = true
 
 [features]
-# Compile-gates the `PassthroughCipher` fixture stub; never enabled for
-# production builds.
 test-util = []
 
 [dev-dependencies]
-# Self dev-dependency so this crate's own tests AND examples (which compile
-# against the lib without `cfg(test)`) can use the fixture cipher.
 ferry-store = { path = ".", features = ["test-util"] }
 tempfile.workspace = true
 
-# windows (non-unix) test helper only: set_dir_mtime needs SetFileTime on a
-# directory handle, which std cannot open there (no FILE_FLAG_BACKUP_SEMANTICS).
 [target.'cfg(not(unix))'.dev-dependencies]
 filetime.workspace = true
 

@@ -1,28 +1,28 @@
-//! Manifest diffing (T-003): change sets computed from metadata alone.
-//!
-//! `docs/store-format.md` and ADR-0001 make delta detection a manifest
-//! comparison: two trees are compared by their chunk-id sequences and entry
-//! metadata, and no data blob is ever read. This module is the contract for
-//! that comparison.
-//!
-//! Classification rules (documented decisions for T-003):
-//!
-//! - Files: a different chunk-id sequence is `content_modified`; identical
-//!   chunks with a changed exec bit or mtime are `metadata_modified`.
-//! - Symlinks: the target IS the content, so retargeting is
-//!   `content_modified`; an mtime-only bump is `metadata_modified`.
-//! - Directories are compared by subtree identity (child tree id). A
-//!   directory's own mtime changing while its listing stays identical is NOT
-//!   reported: dir mtimes churn with any nested edit, and materializers set
-//!   directory times last anyway.
-//! - Type changes (file→dir etc.) surface once, in `type_changed`, carrying
-//!   both the before and after states — not as remove+add.
-//! - Added/removed subtrees are flattened per path, parents before children.
-//! - Every bucket is sorted ascending by NFC component vector, so output is
-//!   deterministic regardless of traversal order.
-//!
-//! Equal root ids short-circuit to an empty change set, and equal child ids
-//! prune whole subtrees, so comparing near-identical manifests is cheap.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::cmp::Ordering;
 
@@ -42,7 +42,7 @@ pub enum DiffError {
     Encoding(&'static str),
 }
 
-/// What kind of filesystem object an entry describes.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntryKind {
     File,
@@ -77,18 +77,18 @@ impl EntryKind {
     }
 }
 
-/// Everything a materializer needs to act on one changed path: what it is,
-/// its mode/exec bit, its mtime, its ordered chunk list (files), and its
-/// target (symlinks).
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryState {
     pub kind: EntryKind,
     pub exec: bool,
     pub mtime_sec: i64,
     pub mtime_nsec: u32,
-    /// Ordered `(chunk_id, chunk_len)` pairs; files only, empty otherwise.
+    
     pub chunks: Vec<(BlobId, u64)>,
-    /// Symlink target; symlinks only.
+    
     pub target: Option<String>,
 }
 
@@ -111,11 +111,11 @@ impl EntryState {
     }
 }
 
-/// A path as NFC `/`-separated components (never a joined string on the
-/// wire; use [`join_path`] for display).
+
+
 pub type CompPath = Vec<String>;
 
-/// Join components for display/logging only.
+
 pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
 }
@@ -132,7 +132,7 @@ pub struct Removed {
     pub state: EntryState,
 }
 
-/// One path whose content or type differs between two states.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Modified {
     pub path: CompPath,
@@ -140,10 +140,10 @@ pub struct Modified {
     pub after: EntryState,
 }
 
-/// The complete difference between two manifests or tree nodes.
-///
-/// Bucket order within each vector is deterministic: ascending by component
-/// vector, parents before children.
+
+
+
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSet {
     pub added: Vec<Added>,
@@ -171,9 +171,9 @@ impl ChangeSet {
     }
 }
 
-/// Diff two root manifests through the store. Identical roots return an
-/// empty set immediately; neither file bytes nor the source tree are ever
-/// touched — only tree nodes and manifests (metadata blobs) are read.
+
+
+
 pub fn diff_manifests(
     store: &Store,
     older: &RootManifest,
@@ -185,7 +185,7 @@ pub fn diff_manifests(
     diff_roots(store, &older.root_tree_id, &newer.root_tree_id)
 }
 
-/// Diff starting from two arbitrary tree-node addresses.
+
 pub fn diff_roots(
     store: &Store,
     older_root: &BlobId,
@@ -221,8 +221,8 @@ fn diff_tree_ids(
     prefix: CompPath,
     out: &mut ChangeSet,
 ) -> Result<(), DiffError> {
-    // Equal subtrees prune: the whole branch below an unchanged id is
-    // skipped without loading anything.
+    
+    
     match (older, newer) {
         (Some(a), Some(b)) if a == b => return Ok(()),
         (None, None) => return Ok(()),
@@ -246,8 +246,8 @@ fn diff_nodes(
     prefix: &[String],
     out: &mut ChangeSet,
 ) -> Result<(), DiffError> {
-    // Entries are sorted by name bytes, so a merge walk pairs them in one
-    // pass with no allocations.
+    
+    
     let a: &[TreeEntry] = older.map_or(&[], |n| n.entries.as_slice());
     let b: &[TreeEntry] = newer.map_or(&[], |n| n.entries.as_slice());
     let (mut i, mut j) = (0usize, 0usize);
@@ -321,12 +321,12 @@ fn compare_entry(
     match (&ea.payload, &eb.payload) {
         (EntryPayload::Dir { child_tree_id: a }, EntryPayload::Dir { child_tree_id: b }) => {
             if a != b {
-                // The listing changed somewhere below; recurse. Equal ids
-                // never get here.
+                
+                
                 diff_tree_ids(store, Some(a), Some(b), path, out)?;
             }
-            // A directory's own mtime changing while its subtree identity
-            // stays equal is deliberately not reported (see module docs).
+            
+            
         }
         (EntryPayload::File { chunks: ca, .. }, EntryPayload::File { chunks: cb, .. }) => {
             if ca != cb {
@@ -348,7 +348,7 @@ fn compare_entry(
         }
         (EntryPayload::Symlink { target: a }, EntryPayload::Symlink { target: b }) => {
             if a != b {
-                // The target IS the content of a symlink.
+                
                 out.content_modified.push(Modified {
                     path,
                     before: EntryState::of(ea),
@@ -363,8 +363,8 @@ fn compare_entry(
             }
         }
         _ => {
-            // file<->dir, file<->symlink, dir<->symlink: one explicit entry
-            // carrying both sides, not a remove+add pair.
+            
+            
             out.type_changed.push(Modified {
                 path,
                 before: EntryState::of(ea),
@@ -375,12 +375,12 @@ fn compare_entry(
     Ok(())
 }
 
-// --- internal change-set codec -------------------------------------------
-//
-// A small deterministic binary encoding of [`ChangeSet`] for tests, logs,
-// and passing change sets between processes during development. This is an
-// INTERNAL convenience: it is deliberately NOT part of the compatibility
-// contract in docs/store-format.md and may change without a version bump.
+
+
+
+
+
+
 
 const CHANGESET_MAGIC: [u8; 4] = *b"FCS1";
 
@@ -459,7 +459,7 @@ fn parse_path(r: &mut Reader<'_>) -> Result<CompPath, DiffError> {
     Ok(out)
 }
 
-/// Serialize a change set deterministically (buckets sorted by path first).
+
 pub fn serialize_change_set(cs: &ChangeSet) -> Vec<u8> {
     let mut sorted = cs.clone();
     sorted.sort_all();
@@ -493,7 +493,7 @@ pub fn serialize_change_set(cs: &ChangeSet) -> Vec<u8> {
     out
 }
 
-/// Parse a change set produced by [`serialize_change_set`].
+
 pub fn parse_change_set(bytes: &[u8]) -> Result<ChangeSet, DiffError> {
     let bad = || DiffError::Encoding("framing");
     let mut r = Reader::new(bytes);
@@ -575,7 +575,7 @@ mod tests {
             .unwrap()
     }
 
-    /// A component vector becomes a real path under the fixture tree.
+    
     fn disk_path(tree: &std::path::Path, parts: &[String]) -> std::path::PathBuf {
         let mut pb = tree.to_path_buf();
         for c in parts {
@@ -648,7 +648,7 @@ mod tests {
         let cs = diff_roots(&store, &older_id, &newer_id).unwrap();
 
         assert!(cs.added.is_empty() && cs.removed.is_empty());
-        // Equal child ids prune: dir_same appears nowhere.
+        
         assert_eq!(
             paths_of(&cs.content_modified, |m| &m.path),
             [
@@ -669,7 +669,7 @@ mod tests {
             [["tf".to_string()].as_slice(), ["ts".to_string()].as_slice(),]
         );
 
-        // Exec flip carries identical chunk lists on both sides.
+        
         let ex = cs
             .metadata_modified
             .iter()
@@ -678,7 +678,7 @@ mod tests {
         assert_eq!(ex.before.chunks, ex.after.chunks);
         assert!(!ex.before.exec && ex.after.exec);
 
-        // Symlink retarget is content (the target IS the content).
+        
         let sy = cs
             .content_modified
             .iter()
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(sy.before.target.as_deref(), Some("t1"));
         assert_eq!(sy.after.target.as_deref(), Some("t2"));
 
-        // Type change carries both full states.
+        
         let tf = cs.type_changed.iter().find(|m| m.path == ["tf"]).unwrap();
         assert_eq!(tf.before.kind, EntryKind::File);
         assert_eq!(tf.after.kind, EntryKind::Dir);
@@ -712,14 +712,14 @@ mod tests {
         };
         assert!(diff_manifests(&store, &base, &base).unwrap().is_empty());
 
-        // Different lineage and timestamps but SAME tree: still empty, via
-        // the equal-root early exit.
+        
+        
         let mut other = base.clone();
         other.created_sec = 999;
         other.parent_manifest_id = [7; 32];
         assert!(diff_manifests(&store, &base, &other).unwrap().is_empty());
 
-        // A different tree under the same lineage does produce changes.
+        
         let mut changed_tree = TreeNode {
             entries: vec![one_file("x", false, 1, 2, 3, 4)],
         };
@@ -733,16 +733,16 @@ mod tests {
         );
     }
 
-    /// The ticket's headline acceptance path: snapshot a real directory,
-    /// apply a scripted set of mutations, resnapshot, and require the diff
-    /// to contain EXACTLY those mutations — untouched sibling subtrees must
-    /// appear nowhere.
+    
+    
+    
+    
     #[test]
     #[cfg(unix)]
     fn snapshot_mutate_resnapshot_diff_shows_exactly_the_mutations() {
-        // Symlink swap and exec-bit flip are load-bearing mutations whose
-        // expected buckets are asserted verbatim below; Windows runners lack
-        // symlink privilege, so this exercises unix hosts only.
+        
+        
+        
         use crate::chunker::MIN_SIZE;
 
         let (dir, store) = fresh_store();
@@ -770,16 +770,16 @@ mod tests {
         let idn = identity((10, 20));
         let s1 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
 
-        // ---- scripted mutations ----
-        std::fs::remove_file(tree.join("gone.txt")).unwrap(); // delete file
-        std::fs::remove_dir(tree.join("olddir")).unwrap(); // remove empty dir
+        
+        std::fs::remove_file(tree.join("gone.txt")).unwrap(); 
+        std::fs::remove_dir(tree.join("olddir")).unwrap(); 
         write_file(
             &tree.join("edit.txt"),
             b"version two!!",
             false,
             (mt.0 + 1, mt.1),
         );
-        // append to the big multi-chunk file (log-style tail append)
+        
         let extra_len = 300_000usize;
         {
             use std::io::Write;
@@ -789,24 +789,24 @@ mod tests {
                 .unwrap();
             f.write_all(&prng(10, extra_len)).unwrap();
         }
-        // flip exec bit, bytes untouched
+        
         let mut perm = std::fs::metadata(tree.join("script.sh"))
             .unwrap()
             .permissions();
         use std::os::unix::fs::PermissionsExt;
         perm.set_mode(0o755);
         std::fs::set_permissions(tree.join("script.sh"), perm).unwrap();
-        // swap symlink target
+        
         std::fs::remove_file(tree.join("link")).unwrap();
         std::os::unix::fs::symlink("elsewhere/b.txt", tree.join("link")).unwrap();
-        // rewrite with byte-identical content, bump only mtime
+        
         write_file(
             &tree.join("touch.txt"),
             b"same bytes",
             false,
             (mt.0 + 9, 222),
         );
-        // additions: a bare file and a new dir holding a file
+        
         write_file(&tree.join("added.txt"), b"new kid", false, (mt.0 + 2, 5));
         write_file(
             &tree.join("newdir/inside.txt"),
@@ -851,7 +851,7 @@ mod tests {
         );
         assert!(cs.type_changed.is_empty());
 
-        // Untouched sibling subtrees appear NOWHERE in any bucket.
+        
         let every: Vec<&CompPath> = cs
             .added
             .iter()
@@ -869,7 +869,7 @@ mod tests {
             );
         }
 
-        // Exec flip: content identical, flag flipped.
+        
         let sh = cs
             .metadata_modified
             .iter()
@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(sh.before.chunks, sh.after.chunks);
         assert!(!sh.before.exec && sh.after.exec);
 
-        // Touch-only: chunks identical, mtime moved.
+        
         let tc = cs
             .metadata_modified
             .iter()
@@ -890,9 +890,9 @@ mod tests {
             (tc.after.mtime_sec, tc.after.mtime_nsec)
         );
 
-        // CDC stability end-to-end: appending at the tail preserves every
-        // earlier boundary, so all but the final old chunk are shared, in
-        // order, as a prefix of the new list.
+        
+        
+        
         let big = cs
             .content_modified
             .iter()
@@ -912,8 +912,8 @@ mod tests {
         let after_bytes: u64 = after_chunks.iter().map(|c| c.1).sum();
         assert_eq!(after_bytes - before_bytes, extra_len as u64);
 
-        // The change set alone tells a materializer what to fetch: the edit
-        // entry exposes the NEW chunk ids and mode/exec flag.
+        
+        
         let ed = cs
             .content_modified
             .iter()
@@ -927,9 +927,9 @@ mod tests {
         assert_eq!(stored, b"version two!!");
     }
 
-    /// Proof that diff never touches file bytes: drop the source directory
-    /// AND delete every pack containing data chunks, then diff from a freshly
-    /// opened store that can only reach metadata blobs.
+    
+    
+    
     #[test]
     fn diff_reads_no_file_bytes_survives_deleted_sources_and_data_packs() {
         let (dir, store) = fresh_store();
@@ -948,7 +948,7 @@ mod tests {
         );
         let s2 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
 
-        // Every pack holding data chunks is doomed; metadata packs survive.
+        
         let packs_dir = store.packs_dir();
         let mut doomed = Vec::new();
         for e in std::fs::read_dir(&packs_dir).unwrap().flatten() {
@@ -964,13 +964,13 @@ mod tests {
 
         let m1 = parse_manifest(&store.get(BlobKind::Manifest, &s1.manifest_id).unwrap()).unwrap();
         let m2 = parse_manifest(&store.get(BlobKind::Manifest, &s2.manifest_id).unwrap()).unwrap();
-        // Persist the index so the reopened store can find metadata blobs.
+        
         store.write_index_snapshot().unwrap();
         drop(store);
         for name in &doomed {
             std::fs::remove_file(packs_dir.join(name)).unwrap();
         }
-        // The source tree ceases to exist entirely.
+        
         std::fs::remove_dir_all(&tree).unwrap();
 
         let fresh = Store::open(dir.path(), [0u8; 32], Box::new(PassthroughCipher)).unwrap();
@@ -1029,18 +1029,18 @@ mod tests {
         let back = parse_change_set(&bytes).unwrap();
         assert_eq!(back, cs);
 
-        // Deterministic encoding independent of insertion order.
+        
         cs.added.reverse();
         assert_eq!(serialize_change_set(&cs), bytes);
 
-        // Truncation is refused, not guessed at.
+        
         assert!(parse_change_set(&bytes[..bytes.len() - 3]).is_err());
         assert!(parse_change_set(b"XXXXrest").is_err());
     }
 
-    // --- seeded fuzz-lite -------------------------------------------------
+    
 
-    /// (bytes, exec, mtime) for one modeled file.
+    
     type FileSpec = (Vec<u8>, bool, (i64, u32));
     type BucketSet = HashSet<Vec<String>>;
 
@@ -1062,7 +1062,7 @@ mod tests {
             }
         }
 
-        /// Register every strict ancestor so added dirs appear in the model.
+        
         fn register_dirs(&mut self, path: &[String]) {
             for k in 1..path.len() {
                 self.dirs.insert(path[..k].to_vec());
@@ -1108,7 +1108,7 @@ mod tests {
             let path = self.files.keys().nth(i).unwrap().clone();
             match rng.gen::<u8>() % 4 {
                 0 => {
-                    // New content (and a new mtime): ContentModified.
+                    
                     let bytes: Vec<u8> =
                         (0..rng.gen::<usize>() % 4000).map(|_| rng.gen()).collect();
                     let mt = (
@@ -1122,15 +1122,15 @@ mod tests {
                     slot.2 = mt;
                 }
                 1 => {
-                    // Flip exec, keep bytes and mtime: MetadataModified.
+                    
                     let (b, e, m) = self.files[&path].clone();
                     write_file(&disk_path(tree, &path), &b, !e, m);
                     self.files.get_mut(&path).unwrap().1 = !e;
                 }
                 2 => {
-                    // Bump mtime only: MetadataModified. The bump stays a
-                    // multiple of NS_GRAN so it survives windows' 100ns
-                    // FILETIME truncation and still reads back as changed.
+                    
+                    
+                    
                     let (b, e, m) = self.files[&path].clone();
                     let mt = (m.0 + 5, (m.1 + 300) % 1_000_000_000);
                     write_file(&disk_path(tree, &path), &b, e, mt);

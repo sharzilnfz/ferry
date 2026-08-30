@@ -1,10 +1,10 @@
-//! `ferry status`: one folder's state of the world.
-//!
-//! Honest v0 notes baked into the output:
-//! - The reported manifest comes from a FRESH policy-aware scan (`ferry
-//!   status` re-snapshots so ids are current; big trees cost a scan).
-//! - Connectivity is best-effort TCP reachability of the last known peer
-//!   address; without a recorded address it is "unknown".
+
+
+
+
+
+
+
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -21,7 +21,7 @@ use crate::error::CliResult;
 use crate::folder::{self, OpenFolder};
 use crate::out::Output;
 
-/// One peer line as it appears in both renderings.
+
 struct PeerRow {
     device_id: String,
     last_agreed_manifest_id: Option<String>,
@@ -112,7 +112,7 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
     }?;
     let device_id = hex(identity.public());
 
-    // Fresh policy-aware scan: manifest id reflects the tree RIGHT NOW.
+    
     let scan = crate::scan::one_shot(&opened, *identity.public())?;
     let manifest = &scan.manifest;
     let manifest_id = hex(&scan.manifest_id);
@@ -126,8 +126,8 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
         )
     })?;
 
-    // Pending changes: diff against the most recent agreement (any peer).
-    // Negative means "unknown"; JSON null means no agreement exists yet.
+    
+    
     let pending: Option<i64> = match most_recent_base(&opened)? {
         BaseLookup::NoAgreement => None,
         BaseLookup::Unreadable => Some(-1),
@@ -145,8 +145,8 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
         ),
     };
 
-    // Session pinning (T-015): surface the pin state and the full held set
-    // so held changes are visible, never silently parked.
+    
+    
     let pin_summary = PinManager::new(opened.state_dir()).summary().map_err(|e| {
         crate::error::CliError::new(
             "pin-state-corrupt",
@@ -283,7 +283,7 @@ fn render_human(
     human
 }
 
-/// A fresh policy-aware scan into the folder's store.
+
 pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
     let identity = {
         let home = crate::home::ferry_home()?;
@@ -298,8 +298,8 @@ pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
     crate::scan::one_shot(opened, *identity.public())
 }
 
-/// Every peer this folder has agreement state for, plus best-effort
-/// connectivity.
+
+
 fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
     let ledger = AgreementLedger::new(opened.state_dir());
     let mut rows = Vec::new();
@@ -331,8 +331,8 @@ fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
             "check .ferry/agreement permissions",
         )
     })?;
-    // Most recent by (sec, nsec); the list is peer-sorted so ties resolve
-    // deterministically to the last peer id.
+    
+    
     let best = records
         .into_iter()
         .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec));
@@ -351,24 +351,24 @@ fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
                 "the agreed manifest blob is damaged",
             )),
         },
-        // Record exists but its manifest object is gone: "unknown", never a
-        // fake "no agreement".
+        
+        
         Err(_) => Ok(BaseLookup::Unreadable),
     }
 }
 
-/// Outcome of looking up the most recent agreement's base manifest.
+
 enum BaseLookup {
-    /// No peer agreement recorded yet.
+    
     NoAgreement,
-    /// Agreement exists but its manifest object is unreadable.
+    
     Unreadable,
-    /// The agreed manifest to diff against.
+    
     Base(ferry_store::manifest::RootManifest),
 }
 
-/// Best-effort TCP reachability against the address a previous daemon/sync
-/// run recorded for this peer. No address on file => "unknown".
+
+
 fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
     let addr_path = opened
         .state_dir()
@@ -386,7 +386,7 @@ fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
     }
 }
 
-/// Fixed UTC rendering of an agreement timestamp (no local timezone drift).
+
 pub fn format_agreed_time(rec: &ferry_store::agreement::AgreedRecord) -> String {
     fmt_rfc3339(rec.agreed_sec)
 }

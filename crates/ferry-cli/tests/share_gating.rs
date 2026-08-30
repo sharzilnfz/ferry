@@ -1,5 +1,5 @@
-//! The share-time secret gate: LOUD by default, redacted always,
-//! `--i-know` required to proceed.
+
+
 
 mod common;
 
@@ -41,15 +41,15 @@ fn share_refuses_and_redacts_until_i_know() {
 
     assert!(!proj.join(".ferry/pair-offer.ferry-pair").exists());
 
-    // With --i-know: proceeds past the gate. New path (08) returns a pairing code
-    // without writing an offer file; legacy path writes offer and waits.
-    // Accept either so the test remains resilient across waves.
+    
+    
+    
     match commands::share::run(&proj, true, 1) {
         Ok(out) => {
             assert_eq!(out.json["command"], "share");
             assert!(out.json["code"].is_string(), "share code present");
             assert!(out.json["folder_id"].is_string());
-            // New path does not write legacy offer file
+            
             assert!(
                 !proj.join(".ferry/pair-offer.ferry-pair").exists()
                     || proj.join(".ferry/pair-offer.ferry-pair").exists()
@@ -73,8 +73,8 @@ fn share_clean_folder_emits_payload_without_gate() {
     commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("README.md"), b"clean").unwrap();
 
-    // New path: share returns immediately with a code (no blocking).
-    // Legacy path: share blocks waiting for acceptor (offer file).
+    
+    
     let res = commands::share::run(&proj, false, 1);
     match res {
         Ok(out) => {
@@ -83,11 +83,11 @@ fn share_clean_folder_emits_payload_without_gate() {
             assert!(out.json["code"].is_string());
             assert!(out.json["expires_at"].is_string());
             assert_eq!(out.json["folder_id"].as_str().unwrap().len(), 32);
-            // No legacy offer file should be present in new path
-            // If it exists, that's legacy fallback but still okay
+            
+            
         }
         Err(e) => {
-            // Legacy fallback path expects pair-timeout after offer write
+            
             assert_eq!(e.code, "pair-timeout");
         }
     }

@@ -17,7 +17,6 @@ zeroize.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-# Tests and examples use the test-util-gated fixture cipher.
 ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 unicode-normalization.workspace = true

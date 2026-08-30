@@ -1,18 +1,18 @@
-//! Coded errors for folder bootstrap and the pairing ritual. Same shape and
-//! codes as the CLI's error discipline (stable machine `code`, human
-//! message, actionable hint) without any CLI coupling: frontends render
-//! these however they like.
+
+
+
+
 
 use std::path::Path;
 
-/// One actionable failure. `code` values are v0-frozen (see docs/cli-json.md).
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderError {
-    /// Stable machine identifier. Never renamed.
+    
     pub code: &'static str,
-    /// What happened.
+    
     pub message: String,
-    /// What to try next.
+    
     pub hint: String,
 }
 
@@ -29,7 +29,7 @@ impl FolderError {
         }
     }
 
-    /// Construct a canonical error for an uninitialized Ferry folder.
+    
     pub fn not_initialized(path: impl AsRef<Path>) -> Self {
         FolderError::new(
             Self::NOT_INITIALIZED_CODE,
@@ -56,7 +56,7 @@ impl std::error::Error for FolderError {}
 
 pub type FolderResult<T> = Result<T, FolderError>;
 
-/// Shorthand for mapping foreign errors into coded ones at the boundary.
+
 pub trait CodeInto<T> {
     fn code(self, code: &'static str, hint: impl Into<String>) -> FolderResult<T>;
 }

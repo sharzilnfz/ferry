@@ -10,7 +10,6 @@ ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-folder = { path = "../ferry-folder" }
 ferry-ignore = { path = "../ferry-ignore" }
-# Session-pin types for sync engine tests and release planning.
 ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true
 rand.workspace = true
@@ -29,7 +28,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
-# Test harnesses open stores through ferry-folder's test-util helper.
 ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 rand.workspace = true
 tempfile.workspace = true

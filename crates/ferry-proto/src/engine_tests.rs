@@ -1,8 +1,8 @@
-//! In-crate protocol-adversary tests: version negotiation on the wire,
-//! unknown-message policy, identity failures, and replay behavior. These
-//! need crate internals (handshake io helpers, `Session` construction), so
-//! they live inside the crate; the public-API loopback suite is in
-//! `tests/acceptance.rs`.
+
+
+
+
+
 
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -60,8 +60,8 @@ fn major_version_mismatch_is_a_clean_bye_disconnect() {
         )
     });
 
-    // A conforming-looking initiator advertising major 2.0: correct static
-    // id, fresh ephemeral. Only the version differs.
+    
+    
     let hello = Hello {
         version: ProtocolVersion::new(2, 0),
         flags: FLAG_EXTENSION_AWARE,
@@ -90,9 +90,9 @@ fn major_version_mismatch_is_a_clean_bye_disconnect() {
 
 #[test]
 fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
-    // The dialer is NOT who the responder expects. The responder must
-    // refuse at the Hello (public) layer — nothing encrypted is even
-    // attempted — with BYE(AuthFailed).
+    
+    
+    
     let responder = test_identity(2);
     let real_owner = test_identity(3);
     let stranger = test_identity(4);
@@ -117,7 +117,7 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
         version: ProtocolVersion::V1_0,
         flags: FLAG_EXTENSION_AWARE,
         eph_pub: fresh_ephemeral(),
-        stat_pub: *stranger.device_id(), // wrong device
+        stat_pub: *stranger.device_id(), 
         nonce: [9; 32],
     };
     write_frame(
@@ -136,7 +136,7 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
     assert!(
         matches!(
             err,
-            ProtoError::IdentityMismatch { .. } | ProtoError::Io(_) // peer vanished after BYE
+            ProtoError::IdentityMismatch { .. } | ProtoError::Io(_) 
         ),
         "{err}"
     );
@@ -144,12 +144,12 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
 
 #[test]
 fn replayed_hello_cannot_complete_authentication() {
-    // A captured Hello replays fine at the FRAMING layer — the responder
-    // answers ACK — but the connection dies at auth unless the replaying
-    // party holds the static secret AND can produce a fresh valid proof for
-    // THIS connection's transcript (fresh responder ephemeral + nonce).
-    // Here no proof arrives; closing yields a clean typed EOF and zero
-    // folder side effects.
+    
+    
+    
+    
+    
+    
     let responder = test_identity(5);
     let peer = test_identity(6);
     let peer_id = *peer.device_id();
@@ -186,22 +186,22 @@ fn replayed_hello_cannot_complete_authentication() {
     let ack = HelloAck::parse(&ack_fb.payload).unwrap();
     assert_eq!(ack.agreed, ProtocolVersion::V1_0);
 
-    // No AUTH_INIT will ever come.
+    
     dial.close();
     let err = server.join().unwrap().unwrap_err();
     assert!(matches!(err, ProtoError::Io(_)), "{err}");
 }
 
-// --- Session.recv_frame unknown-type policy ----------------------------------
 
-/// Build a live post-auth `Session` over a duplex half using the REAL key
-/// schedule (fabricated DH terms), so sealed frames authenticate normally.
+
+
+
 fn policy_session(
     io: DuplexHalf,
     peer_max: ProtocolVersion,
     peer_flags: u64,
 ) -> SecureSession<DuplexHalf> {
-    // tx/rx None = plaintext frames: isolates the TYPE policy from sealing.
+    
     SecureSession::from_parts(
         io,
         ProtocolVersion::V1_0,
@@ -231,10 +231,10 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
     let mut sess = policy_session(
         inbox,
         ProtocolVersion::new(1, 5),
-        FLAG_EXTENSION_AWARE | (1 << 6), // flag we do not know
+        FLAG_EXTENSION_AWARE | (1 << 6), 
     );
-    // Unknown flagged type is consumed INSIDE the next recv_frame call;
-    // the following real message is what that call returns.
+    
+    
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::new(1, 5), vec![]),
@@ -260,8 +260,8 @@ fn unknown_type_higher_minor_without_new_flags_still_violates() {
 
 #[test]
 fn skipped_unknown_types_must_be_sealed_correctly_too() {
-    // A "skippable" frame still has to authenticate under the session keys:
-    // garbage wrapped in an unknown type is an auth failure, not a skip.
+    
+    
     let (mut inject, inbox) = duplex_pair();
     let (_, _, prk) = kdf_handshake(&[0; 32], &[1; 32], &[2; 32], &[3; 32]);
     let th_final = transcript_hash(&[]);
@@ -275,27 +275,27 @@ fn skipped_unknown_types_must_be_sealed_correctly_too() {
         Some(kb.cipher()),
         Some(ka.cipher()),
     );
-    // Write the frame UNSEALED while the session expects sealing. Payload
-    // is large enough that the failure is the TAG check, not a length guard.
+    
+    
     let body = FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![1u8; 64]).encode();
     write_body(&mut inject, &body).unwrap();
     let err = sess.recv_frame().unwrap_err();
     assert!(matches!(err, ProtoError::Auth(_)), "{err}");
 }
 
-// --- T-016: session-wide receive budgets + crash-safe pack ingest -------------
+
 
 #[test]
 fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
-    // A hostile peer streams MAX_ROWS-row advert frames with more=1 forever.
-    // recv_advert_map must stop at the session-wide row budget with a typed
-    // ResourceLimit (→ BYE(ResourceLimit) on the wire), never OOM.
+    
+    
+    
     let (mut inject, inbox) = duplex_pair();
     let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
 
-    // Distinct ids per row: the index-table encoder sorts AND dedups
-    // (kind,id) pairs, so repeated rows would collapse to one and never
-    // trip any budget.
+    
+    
+    
     let entries_for = |frame: usize| -> Vec<ferry_store::index::IndexEntry> {
         (0..IndexAdvert::MAX_ROWS)
             .map(|j| {
@@ -312,7 +312,7 @@ fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
             })
             .collect()
     };
-    // One frame PAST the budget: 129 full frames = 264_192 rows > 262_144.
+    
     let frames = MAX_ADVERT_ROWS_TOTAL / IndexAdvert::MAX_ROWS + 1;
     for f in 0..frames {
         write_frame(
@@ -350,8 +350,8 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
         .unwrap(),
     );
 
-    // A real sealed pack (T-15: ingest verifies the BLAKE3 name AND parses
-    // the footer before anything touches disk, so raw bytes are rejected).
+    
+    
     let body: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
     let chunk_id = *blake3::hash(&body).as_bytes();
     let entries = vec![ferry_store::pack::FooterEntry {
@@ -371,9 +371,9 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
     )
     .unwrap();
 
-    // Two "processes" racing on the same store dir. The unique entropy temp
-    // names mean neither writer's bytes can interleave into the other's
-    // file; both must succeed and the final pack must match its name.
+    
+    
+    
     let s2 = Arc::clone(&store);
     let b2 = bytes.clone();
     let racer = std::thread::spawn(move || ingest_pack(&s2, &b2));
@@ -387,8 +387,8 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
     assert_eq!(*blake3::hash(&on_disk).as_bytes(), here);
     assert_eq!(on_disk, bytes);
 
-    // Concurrent adoption left exactly one valid location behind: the chunk
-    // is readable through the merged table.
+    
+    
     assert_eq!(
         store
             .get(ferry_store::format::BlobKind::DataChunk, &chunk_id)
@@ -396,9 +396,9 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
         body
     );
 
-    // No orphaned temps survive a successful ingest — and the error path
-    // removes its temp too (best-effort cleanup in ingest_pack); crash
-    // residue is ticket 20's sweeper.
+    
+    
+    
     let residue: Vec<_> = std::fs::read_dir(store_dir.join("tmp"))
         .unwrap()
         .flatten()

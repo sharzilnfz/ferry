@@ -1,4 +1,4 @@
-//! Compiled pin-path globs.
+
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
@@ -6,7 +6,7 @@ use crate::pin_error::PinError;
 
 #[derive(Clone, Debug)]
 pub struct PathMatcher {
-    /// Compiled matcher; `None` only for the `["*"]` match-all shortcut.
+    
     gi: Option<Gitignore>,
     patterns: Vec<String>,
     match_all: bool,
@@ -41,7 +41,7 @@ impl PathMatcher {
         })
     }
 
-    /// Does this stored-path scope cover `rel` ('/'-joined components)?
+    
     pub fn matches(&self, rel: &[String]) -> bool {
         if self.match_all {
             return true;

@@ -1,26 +1,26 @@
-//! Folder master keys (FMK) and the normative X25519 wrap envelope.
-//!
-//! Envelope, verbatim contract from `docs/store-format.md` ("Key envelope
-//! sketch", normative shape):
-//!
-//! ```text
-//! ephemeral_secret = X25519 scalar, fresh per wrap
-//! shared           = X25519(ephemeral_secret, device_x25519_pub)
-//! wrap_key         = HKDF-SHA-256(ikm   = shared,
-//!                                salt  = ephemeral_pub || device_pub,
-//!                                info  = "ferry/v1/keywrap",
-//!                                L     = 32)
-//! wrapped          = ephemeral_pub (32B)
-//!                    || ChaCha20-Poly1305_seal(wrap_key,
-//!                                              nonce = 12 zero bytes,
-//!                                              aad   = folder_id,
-//!                                              plaintext = FMK)
-//! # 32 + 48 == 80 bytes; wrapped_len MUST be 80 in v1
-//! ```
-//!
-//! The FMK itself is 32 CSPRNG bytes generated at folder creation. Whoever
-//! holds the device secret can unwrap; everyone else hits an authentication
-//! failure — AEAD means never "decrypted garbage that happens to parse".
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use crate::identity::{DeviceId, DeviceIdentity};
 use chacha20poly1305::{
@@ -33,11 +33,11 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// Domain-separation label for the key-wrap KDF (spec-pinned).
+
 pub const KEYWRAP_INFO: &[u8] = b"ferry/v1/keywrap";
-/// Total length of one wrapped-key record: ephemeral pub + sealed FMK.
+
 pub const WRAPPED_LEN: usize = 80;
-/// Folder master key: 32 random bytes born at `ferry init`.
+
 pub type Fmk = [u8; 32];
 
 #[derive(Debug, Error)]
@@ -50,7 +50,7 @@ pub enum FolderKeyError {
     DegeneratePeerKey,
 }
 
-/// Generate a fresh folder master key from OS randomness.
+
 pub fn generate_fmk() -> Fmk {
     let mut fmk: Fmk = [0u8; 32];
     use rand::RngCore;
@@ -66,9 +66,9 @@ fn hkdf_wrap_key(shared: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
     okm
 }
 
-/// Derive the wrap key exactly as the spec fixes it:
-/// `HKDF-SHA-256(ikm = shared, salt = ephemeral_pub || device_pub,
-/// info = "ferry/v1/keywrap")`.
+
+
+
 pub fn derive_wrap_key(
     shared: &[u8; 32],
     ephemeral_pub: &DeviceId,
@@ -117,9 +117,9 @@ fn open_fmk(
     Ok(Zeroizing::new(fmk))
 }
 
-/// Wrap the FMK to one recipient device public key, drawing the ephemeral
-/// scalar from `rng` (production callers pass `OsRng`; tests inject
-/// determinism to pin vectors).
+
+
+
 pub fn wrap_folder_key_with_rng(
     fmk: &Fmk,
     folder_id: &[u8; 16],
@@ -146,7 +146,7 @@ pub fn wrap_folder_key_with_rng(
     Ok(out)
 }
 
-/// Wrap to a recipient using OS randomness.
+
 pub fn wrap_folder_key(
     fmk: &Fmk,
     folder_id: &[u8; 16],
@@ -155,9 +155,9 @@ pub fn wrap_folder_key(
     wrap_folder_key_with_rng(fmk, folder_id, device_pub, rand::rngs::OsRng)
 }
 
-/// Unwrap with this device's identity secret. Any tampering, wrong key, or
-/// wrong `folder_id` surfaces as [`FolderKeyError::Auth`] — authentication
-/// failure, never silent garbage.
+
+
+
 pub fn unwrap_folder_key(
     wrapped: &[u8; WRAPPED_LEN],
     folder_id: &[u8; 16],
@@ -193,11 +193,11 @@ mod tests {
 
     #[test]
     fn wrap_key_schedule_matches_independent_hkdf_reference() {
-        // Expected value computed OUTSIDE Rust with Python's hmac/hashlib
-        // implementing RFC 5869 directly, over the RFC 7748 6.1 DH vector:
-        //   shared = X25519(bob_sk, alice_pk)
-        //   salt   = bob_pk || alice_pk
-        //   info   = "ferry/v1/keywrap"
+        
+        
+        
+        
+        
         let shared: [u8; 32] = unhex(RFC_SHARED_HEX).unwrap();
         let eph_pub: DeviceId = unhex(BOB_PK_HEX).unwrap();
         let dev_pub: DeviceId = unhex(ALICE_PK_HEX).unwrap();
@@ -206,7 +206,7 @@ mod tests {
             ferry_store::format::hex(wk.as_ref()),
             "e3c1787d10dcaadf06c5d907bd5796b2a260d057f471cea8a54ad30a4dfe71b4"
         );
-        // Salt order matters: swapping the two pubs must change the key.
+        
         let swapped = derive_wrap_key(&shared, &dev_pub, &eph_pub);
         assert_ne!(wk, swapped);
     }
@@ -220,8 +220,8 @@ mod tests {
         let wrapped = wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), rng).unwrap();
         assert_eq!(wrapped.len(), WRAPPED_LEN);
         assert_eq!(wrapped.len(), 80, "spec: wrapped_len MUST be 80");
-        // First 32 bytes are the EPHEMERAL pub (= bob_pk under this rng),
-        // not the recipient's key.
+        
+        
         assert_eq!(&wrapped[..32], &unhex::<32>(BOB_PK_HEX).unwrap());
     }
 
@@ -255,8 +255,8 @@ mod tests {
         let folder_id = [2u8; 16];
         let good = wrap_folder_key(&fmk, &folder_id, alice.public()).unwrap();
 
-        // One flipped byte in each structural region: ephemeral pub,
-        // ciphertext body, Poly1305 tag.
+        
+        
         for idx in [0usize, 40, 79] {
             let mut evil = good;
             evil[idx] ^= 0x01;
@@ -283,10 +283,10 @@ mod tests {
 
     #[test]
     fn deterministic_rng_pins_full_envelope_bytes() {
-        // Regression pin for the whole glued construction: RFC 7748 keys +
-        // fixed ephemeral scalar (bob sk) + FMK 01..20 + folder_id 0011..,
-        // nonce 12 zero bytes, aad = folder_id. Individual ingredients are
-        // independently verified elsewhere; this pins their assembly.
+        
+        
+        
+        
         let alice = DeviceIdentity::from_secret_bytes(&unhex(ALICE_SK_HEX).unwrap());
         let fmk: Fmk = core::array::from_fn(|i| i as u8 + 1);
         let folder_id: [u8; 16] = core::array::from_fn(|i| i as u8);
@@ -295,9 +295,9 @@ mod tests {
             wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), FixedRng::new(BOB_SK_HEX))
                 .unwrap();
         assert_eq!(wrapped.len(), 80);
-        // Independently computed: a pure-Python RFC 8439 + RFC 5869
-        // reference implementation (validated against the RFC's own 2.8.2
-        // test vector) produces these exact bytes for this input set.
+        
+        
+        
         assert_eq!(
             ferry_store::format::hex(&wrapped),
             "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f\
@@ -305,7 +305,7 @@ mod tests {
              e835e64c6ec363b6ff0f670500b7cb59be",
             "envelope bytes drifted from the pinned vector"
         );
-        // And it still opens.
+        
         assert_eq!(
             *unwrap_folder_key(&wrapped, &folder_id, &alice).unwrap(),
             fmk

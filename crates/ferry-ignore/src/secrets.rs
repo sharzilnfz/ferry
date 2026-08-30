@@ -1,14 +1,14 @@
-//! Share-time secret-scan heuristic (SPEC M4; research archetype 9).
-//!
-//! Runs when a folder is about to be shared: any HIGH-RISK path that the
-//! effective rules would INCLUDE (i.e. sync to peers) is flagged, and its
-//! content is scanned for likely credentials. Warnings carry file, line
-//! number, rule class, and a REDACTED preview — never the secret itself.
-//!
-//! Scope is deliberately narrow: content scanning applies only to high-risk
-//! files (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials.json`,
-//! `.npmrc`). A stray key-shaped string in ordinary source produces no
-//! warning; test fixtures and generated code are too noisy otherwise.
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -18,29 +18,29 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::policy::FerryIgnore;
 
-/// What kind of risk a warning describes: either the PATH itself is
-/// high-risk (would sync), or the CONTENT matched a credential pattern.
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarningClass {
-    /// `.env`-family file included for sync.
+    
     EnvFile,
-    /// Private-key material by name (`*.pem`, `*.key`, `id_rsa*`).
+    
     PrivateKeyFile,
-    /// Cloud/service credentials JSON (`credentials.json`).
+    
     CredentialsJson,
-    /// npm auth config (may contain `_authToken`).
+    
     Npmrc,
-    /// AWS access key id (`AKIA…`).
+    
     AwsKey,
-    /// OpenAI-style API key (`sk-…`).
+    
     OpenAiKey,
-    /// GitHub personal access token (`ghp_…`).
+    
     GitHubToken,
-    /// Slack token (`xox[baprs]-…`).
+    
     SlackToken,
-    /// PEM private-key header.
+    
     PrivateKeyHeader,
-    /// Generic `api_key/secret/token/password = value` assignment.
+    
     GenericAssignment,
 }
 
@@ -61,8 +61,8 @@ impl WarningClass {
     }
 }
 
-/// One share-time warning. `line` is 1-based (`None` for path-level
-/// warnings). `preview` is redacted: first 4 characters plus length.
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
     pub path: Vec<String>,
@@ -72,7 +72,7 @@ pub struct Warning {
 }
 
 impl Warning {
-    /// Loud, human-readable rendering (the CLI will print this at share time).
+    
     pub fn message(&self) -> String {
         let loc = match self.line {
             Some(n) => format!(":{n} "),
@@ -88,14 +88,14 @@ impl Warning {
     }
 }
 
-/// Classify a basename into a path-level high-risk class, if it is one.
+
 pub fn classify_path(basename: &str) -> Option<WarningClass> {
     let name = basename.rsplit('/').next().unwrap_or(basename);
     if name == ".env" || (name.starts_with(".env.") && name.len() > ".env.".len()) {
         return Some(WarningClass::EnvFile);
     }
-    // Extension match stays case-sensitive on purpose: real key files are
-    // lowercase, and flagging "KEY" variants would change existing behavior.
+    
+    
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if name.ends_with(".pem") || name.ends_with(".key") || name.starts_with("id_rsa") {
         return Some(WarningClass::PrivateKeyFile);
@@ -109,10 +109,10 @@ pub fn classify_path(basename: &str) -> Option<WarningClass> {
     None
 }
 
-/// Content patterns; ticket-specified classes, applied ONLY inside high-risk
-/// files (see module docs). Slack tokens require ≥10 chars after the prefix —
-/// the one deliberate tightening over the bare `xox[baprs]-` heuristic — to
-/// keep prose like "xoxo-" from warning.
+
+
+
+
 fn content_patterns() -> &'static [(WarningClass, Regex)] {
     static PATTERNS: LazyLock<Vec<(WarningClass, Regex)>> = LazyLock::new(|| {
         vec![
@@ -148,21 +148,21 @@ fn content_patterns() -> &'static [(WarningClass, Regex)] {
     &PATTERNS
 }
 
-/// Cap per-file content warnings so one pathological file cannot flood a
-/// report; the path-level warning still names the file.
+
+
 const MAX_CONTENT_WARNINGS_PER_FILE: usize = 32;
 
-/// Files larger than this are scanned only in their first
-/// [`SCAN_BYTE_CAP`] bytes (env/key files are small; huge ones are usually
-/// data with an unlucky extension).
+
+
+
 const SCAN_BYTE_CAP: u64 = 8 * 1024 * 1024;
 
-/// Scan `root` for likely credentials in paths the effective `rules` would
-/// SYNC (included paths only — excluded files never leave the machine, so
-/// they are silent here by design). Deterministic order: sorted walk.
-///
-/// This is the loud half of the `.env` story: opting `.env` back into sync
-/// is allowed, but share time says exactly what is about to travel.
+
+
+
+
+
+
 pub fn scan_for_secrets(rules: &FerryIgnore, root: &Path) -> Vec<Warning> {
     let mut out = Vec::new();
     walk(rules, root, &mut Vec::new(), &mut out);
@@ -170,7 +170,7 @@ pub fn scan_for_secrets(rules: &FerryIgnore, root: &Path) -> Vec<Warning> {
 }
 
 fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Warning>) {
-    // Unreadable subtree: nothing to warn about here.
+    
     let Ok(entries) = std::fs::read_dir(abs) else {
         return;
     };
@@ -184,23 +184,23 @@ fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Wa
         let component: String = name.nfc().collect();
         let mut child_abs = abs.to_path_buf();
         child_abs.push(&name);
-        // Vanished mid-walk.
+        
         let Ok(meta) = std::fs::symlink_metadata(&child_abs) else {
             continue;
         };
         rel.push(component.clone());
         if meta.is_dir() {
-            // Prune exactly like the scanner: ignored dirs are never synced,
-            // so their contents can never leak at share time either. The
-            // kind is already known from the stat above, so this consults
-            // `decided` directly (T-12: no re-resolution at the seam).
+            
+            
+            
+            
             if !rules.decided(rel, true) {
                 walk(rules, &child_abs, rel, out);
             }
         } else if meta.is_file() {
             scan_file_if_risky(rules, rel, &child_abs, &meta, out);
         }
-        // Symlinks: not followed, not scanned (walker stores them as links).
+        
         rel.pop();
     }
 }
@@ -213,13 +213,13 @@ fn scan_file_if_risky(
     out: &mut Vec<Warning>,
 ) {
     if rules.decided(rel, false) {
-        return; // would NOT sync → nothing leaves → no warning
+        return; 
     }
     let Some(path_class) = rel.last().and_then(|n| classify_path(n)) else {
         return;
     };
 
-    // Path-level warning: this high-risk file WILL travel.
+    
     out.push(Warning {
         path: rel.to_vec(),
         line: None,
@@ -231,7 +231,7 @@ fn scan_file_if_risky(
         ),
     });
 
-    // Content-level warnings: likely credentials inside.
+    
     let Ok(mut bytes) = std::fs::read(abs) else {
         return;
     };
@@ -256,7 +256,7 @@ fn scan_file_if_risky(
     }
 }
 
-/// REDACTED preview: first 4 chars + length. Never the full secret.
+
 fn redact(matched: &str) -> String {
     let total = matched.chars().count();
     let head: String = matched.chars().take(4).collect();
@@ -268,7 +268,7 @@ mod tests {
     use super::*;
     use crate::config::IgnoreConfig;
 
-    const AWS: &str = "AKIAIOSFODNN7EXAMPLE"; // canonical 20-char example key
+    const AWS: &str = "AKIAIOSFODNN7EXAMPLE"; 
     const OPENAI: &str = "sk-proj0123456789abcdefghij0123";
     const GH: &str = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234";
     const SLACK: &str = "xoxb-123456789012-ABCDEFabcdef";
@@ -306,7 +306,7 @@ mod tests {
         assert!(classes(&ws).contains(&WarningClass::EnvFile), "{ws:?}");
         assert!(classes(&ws).contains(&WarningClass::AwsKey), "{ws:?}");
         assert!(classes(&ws).contains(&WarningClass::OpenAiKey), "{ws:?}");
-        // Line numbers are 1-based and correct.
+        
         let aws = ws.iter().find(|w| w.class == WarningClass::AwsKey).unwrap();
         assert_eq!(aws.line, Some(1));
         assert_eq!(aws.path, vec![".env".to_string()]);

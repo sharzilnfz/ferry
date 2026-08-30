@@ -1,4 +1,4 @@
-//! Ratatui UI layout and widget rendering for the Ferry TUI dashboard.
+
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -12,11 +12,11 @@ use crate::activity_log::LogLevel;
 use crate::picker::PickerState;
 use crate::state::{SyncState, TuiState};
 
-/// Main entry point for drawing the complete Ferry TUI dashboard onto a frame.
+
 pub fn render(state: &TuiState, frame: &mut Frame) {
     let area = frame.area();
 
-    // Guard against excessively tiny terminals
+    
     if area.width < 40 || area.height < 12 {
         let warning = Paragraph::new("Terminal too small for Ferry TUI\n(Minimum size: 40x12)")
             .alignment(Alignment::Center)
@@ -25,11 +25,11 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
         return;
     }
 
-    // Top-level 4-part vertical layout:
-    // [0] Header (4 lines)
-    // [1] Main body: Left Storage/Gauge + Right Peers Table (Min 8 lines)
-    // [2] Bottom: Recent Activity Log (7 lines)
-    // [3] Footer: Keybindings (1 line)
+    
+    
+    
+    
+    
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -50,7 +50,7 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
     }
 }
 
-/// Render the header with folder path, folder ID, device ID, manifest, and engine state badge.
+
 fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
         " Ferry Sync Engine ",
@@ -97,7 +97,7 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     let badge_span = Span::styled(format!(" {badge_text} "), badge_style);
 
-    // Line 1: Folder details + state badge right-aligned
+    
     let folder_left = vec![
         Span::styled(" Folder: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(&state.folder, Style::default().fg(Color::White)),
@@ -106,9 +106,9 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
         Span::styled(")", Style::default().fg(Color::DarkGray)),
     ];
 
-    // Compute padding for badge right-alignment
+    
     let left_len: usize = folder_left.iter().map(|s| s.content.len()).sum();
-    let badge_len = badge_text.len() + 2; // with spaces
+    let badge_len = badge_text.len() + 2; 
     let total_w = inner_area.width as usize;
     let pad_len = total_w.saturating_sub(left_len + badge_len);
 
@@ -118,7 +118,7 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     }
     line1_spans.push(badge_span);
 
-    // Line 2: Device ID and Manifest Hash
+    
     let short_device = truncate_str(&state.device_id, 32);
     let short_manifest = truncate_str(&state.cached_manifest_line, 32);
     let line2_spans = vec![
@@ -136,13 +136,13 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, inner_area);
 }
 
-/// Render the split main body (Left: Local Storage & Progress Gauge; Right: Peers Table).
+
 fn render_main_body(state: &TuiState, frame: &mut Frame, area: Rect) {
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(55), // Storage metrics & transfer gauge
-            Constraint::Percentage(45), // Peer connectivity table
+            Constraint::Percentage(55), 
+            Constraint::Percentage(45), 
         ])
         .split(area);
 
@@ -150,17 +150,17 @@ fn render_main_body(state: &TuiState, frame: &mut Frame, area: Rect) {
     render_peers_table(state, frame, main_chunks[1]);
 }
 
-/// Render the left pane containing storage metrics and the chunk transfer progress gauge.
+
 fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) {
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),    // Storage & State metrics
-            Constraint::Length(3), // Transfer Progress Gauge
+            Constraint::Min(5),    
+            Constraint::Length(3), 
         ])
         .split(area);
 
-    // Storage block
+    
     let storage_block = Block::default().borders(Borders::ALL).title(Span::styled(
         " Storage & Sync State ",
         Style::default().add_modifier(Modifier::BOLD),
@@ -230,7 +230,7 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
     let storage_paragraph = Paragraph::new(metrics_lines);
     frame.render_widget(storage_paragraph, inner_storage);
 
-    // Progress Gauge widget (zero string allocation per frame)
+    
     let gauge_style = if state.active_transfer.is_some() {
         Style::default().fg(Color::Cyan).bg(Color::DarkGray)
     } else {
@@ -250,7 +250,7 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
     frame.render_widget(gauge, left_chunks[1]);
 }
 
-/// Render the right pane containing the peer connectivity table.
+
 fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     let title = format!(" Connected Peers ({}) ", state.peers.len());
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
@@ -311,7 +311,7 @@ fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(table, area);
 }
 
-/// Render the bottom pane displaying recent activity log entries from the circular buffer.
+
 fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
         " Recent Activity ",
@@ -355,7 +355,7 @@ fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(list, inner_area);
 }
 
-/// Render the single-line footer containing hotkey shortcuts.
+
 fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
     let hotkey_style = Style::default()
         .fg(Color::Yellow)
@@ -377,7 +377,7 @@ fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(footer, area);
 }
 
-/// Render the quarantined conflict inspector modal.
+
 fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     let modal_area = centered_rect(75, 70, area);
     frame.render_widget(Clear, modal_area);
@@ -446,7 +446,7 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(list, inner_area);
 }
 
-/// Helper function to center a rectangular area within another.
+
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -467,7 +467,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-/// Helper to truncate strings safely without panicking.
+
 #[must_use]
 pub fn truncate_str(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
@@ -477,7 +477,7 @@ pub fn truncate_str(s: &str, max_len: usize) -> &str {
     }
 }
 
-/// Render the filesystem picker modal as a centered overlay.
+
 pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let modal_area = centered_rect(75, 70, area);
     frame.render_widget(Clear, modal_area);
@@ -524,14 +524,14 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // breadcrumb
-            Constraint::Length(1), // filter
-            Constraint::Min(3),    // list
-            Constraint::Length(1), // hint
+            Constraint::Length(1), 
+            Constraint::Length(1), 
+            Constraint::Min(3),    
+            Constraint::Length(1), 
         ])
         .split(inner);
 
-    // Breadcrumb bar
+    
     let breadcrumb = Paragraph::new(Line::from(vec![
         Span::styled(" Path: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(picker.breadcrumbs(), Style::default().fg(Color::White)),
@@ -539,7 +539,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(breadcrumb, chunks[0]);
 
-    // Filter line
+    
     let filter_text = if picker.filter.is_empty() {
         Span::styled(
             " Filter: (type to filter)",
@@ -554,10 +554,10 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let filter_para = Paragraph::new(Line::from(vec![filter_text]));
     frame.render_widget(filter_para, chunks[1]);
 
-    // Build list items: .. parent row + visible entries
+    
     let mut items: Vec<ListItem> = Vec::new();
 
-    // .. parent row (always visible when not filtered, dimmed if at root)
+    
     let show_parent = picker.filter.is_empty();
     if show_parent {
         let parent_label = if picker.current_path.parent().is_some() {
@@ -574,7 +574,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
 
     let visible = picker.visible_entries();
     for (idx, entry) in visible.iter().enumerate() {
-        // Adjust index for cursor offset when parent row is shown
+        
         let _ = idx;
         let icon = if entry.is_symlink {
             "🔗"
@@ -604,7 +604,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::DIM),
             );
         }
-        // Highlight cursor: need to compute effective cursor index matching this row's position
+        
         let effective_cursor = picker.cursor;
         let row_idx = if show_parent { idx + 1 } else { idx };
         let is_selected = row_idx == effective_cursor;
@@ -643,7 +643,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
         frame.render_widget(list, chunks[2]);
     }
 
-    // Hint / is_git_repo badge line
+    
     let hint_line = if let Some(ref h) = picker.hint {
         Paragraph::new(Line::from(vec![Span::styled(
             h.clone(),

@@ -1,10 +1,10 @@
-//! Single-instance daemon advisory locking and PID file ownership.
-//!
-//! This module is the only place that knows how the daemon PID file is
-//! spelled, written, parsed, and judged live. Liveness is start-token
-//! based (see [`crate::procs`]): a pid file whose process died and whose
-//! pid was later handed to an unrelated process reads as NOT running,
-//! because the current owner of the pid carries a different birth token.
+
+
+
+
+
+
+
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -12,21 +12,21 @@ use std::time::{Duration, Instant};
 
 use crate::procs::process_start_token;
 
-/// The daemon PID filename, spelled here and nowhere else.
+
 pub const PID_FILENAME: &str = "daemon.pid";
 const LOCK_FILENAME: &str = "daemon.lock";
 
-/// `stop`'s default budget: poll with backoff up to five seconds before
-/// giving up and leaving the PID file in place.
+
+
 pub const TERMINATE_DEADLINE: Duration = Duration::from_secs(5);
 
-/// What a PID file records: the daemon's pid and, when the platform could
-/// inspect it, that process instance's start token.
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PidRecord {
     pub pid: u32,
-    /// Birth token of the recorded process instance. `None` degrades
-    /// liveness to an existence probe (see [`crate::procs`]).
+    
+    
     pub start_token: Option<u64>,
 }
 
@@ -38,15 +38,15 @@ pub enum DaemonLockError {
     Io(#[from] std::io::Error),
 }
 
-/// What a terminate did. `Timeout` means the daemon outlived the deadline
-/// and the PID file was deliberately preserved.
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminateOutcome {
-    /// The recorded process is OS-confirmed dead and the PID file is gone.
+    
     Stopped { pid: u32 },
-    /// Nothing was running (no parseable PID file); any stale PID file is gone.
+    
     NotRunning,
-    /// The daemon ignored termination past the deadline; the PID file stays.
+    
     Timeout { pid: u32 },
 }
 
@@ -54,9 +54,9 @@ fn pid_path(dir: &Path) -> PathBuf {
     dir.join(PID_FILENAME)
 }
 
-/// Read and parse the daemon PID record for `dir`, if one is present and
-/// well-formed. Absent, corrupt, and legacy pid-only files all read as
-/// what they are: no trustworthy record.
+
+
+
 pub fn read_pid(dir: &Path) -> Option<PidRecord> {
     let text = std::fs::read_to_string(pid_path(dir)).ok()?;
     let mut fields = text.split_whitespace();
@@ -65,27 +65,27 @@ pub fn read_pid(dir: &Path) -> Option<PidRecord> {
     Some(PidRecord { pid, start_token })
 }
 
-/// The pid of the daemon recorded for `dir` if the OS currently runs that
-/// exact process instance, else `None`.
+
+
 pub fn running_pid(dir: &Path) -> Option<u32> {
     let record = read_pid(dir)?;
     instance_alive(&record).then_some(record.pid)
 }
 
-/// Whether the daemon recorded for `dir` is alive.
+
 pub fn is_running(dir: &Path) -> bool {
     running_pid(dir).is_some()
 }
 
-/// Terminate the daemon recorded for `dir`: send SIGTERM
-/// (`TerminateProcess` on Windows), poll with backoff until `deadline`, and unlink the PID file
-/// only once the OS confirms the recorded process instance is gone. On
-/// timeout the error carries the pid and the PID file is preserved, so a
-/// following status still reports the live daemon.
+
+
+
+
+
 pub fn terminate(dir: &Path, deadline: Duration) -> Result<TerminateOutcome, DaemonLockError> {
     let path = pid_path(dir);
     let Some(record) = read_pid(dir) else {
-        // No parseable record: no process identity to preserve or confirm.
+        
         let _ = std::fs::remove_file(&path);
         return Ok(TerminateOutcome::NotRunning);
     };
@@ -108,8 +108,8 @@ pub fn terminate(dir: &Path, deadline: Duration) -> Result<TerminateOutcome, Dae
     }
 }
 
-/// Liveness of the recorded instance: the pid must currently belong to a
-/// process born with the recorded start token.
+
+
 fn instance_alive(record: &PidRecord) -> bool {
     match record.start_token {
         Some(recorded) => process_start_token(record.pid) == Some(recorded),
@@ -117,16 +117,16 @@ fn instance_alive(record: &PidRecord) -> bool {
     }
 }
 
-/// Unix: when the recorded pid is OUR child, `waitpid(WNOHANG)` is
-/// authoritative AND reaps the zombie that a token probe would still see
-/// as alive. `None` means the pid is not our child and the caller must
-/// fall back to the token probe.
+
+
+
+
 #[cfg(unix)]
 fn still_alive(record: &PidRecord) -> bool {
     let Ok(pid) = i32::try_from(record.pid) else {
         return instance_alive(record);
     };
-    // Safety: plain waitpid probe; libc touches no caller memory here.
+    
     let rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
     match rc {
         0 => true,
@@ -143,12 +143,12 @@ fn still_alive(record: &PidRecord) -> bool {
 fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
     #[cfg(unix)]
     {
-        // Safety: plain signal send; libc::kill touches no memory.
+        
         let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            // Vanished between the read and the signal: the poll below
-            // still verifies and cleans up.
+            
+            
             if err.raw_os_error() != Some(libc::ESRCH) {
                 return Err(err.into());
             }
@@ -162,14 +162,14 @@ fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
             OpenProcess, TerminateProcess, PROCESS_TERMINATE,
         };
 
-        // Safety: terminate-capable handle, closed on every path below.
+        
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
         if handle.is_null() {
-            // Already gone (or inaccessible): the poll below decides.
+            
             return Ok(());
         }
         let ok = unsafe { TerminateProcess(handle, 1) };
-        // Safety: handle owned above and not yet closed.
+        
         unsafe { CloseHandle(handle) };
         if ok == 0 {
             return Err(std::io::Error::last_os_error().into());
@@ -178,8 +178,8 @@ fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
     }
 }
 
-/// One exclusive daemon lock. Held for the daemon's lifetime; dropping it
-/// removes the PID file and releases the advisory lock.
+
+
 #[derive(Debug)]
 pub struct DaemonLock {
     _file: File,
@@ -188,8 +188,8 @@ pub struct DaemonLock {
 }
 
 impl DaemonLock {
-    /// Acquire an exclusive non-blocking advisory lock on `dir/daemon.lock`
-    /// and stamp `dir/daemon.pid` with this process's pid and start token.
+    
+    
     pub fn acquire(dir: &Path) -> Result<Self, DaemonLockError> {
         std::fs::create_dir_all(dir)?;
         let lock_path = dir.join(LOCK_FILENAME);
@@ -206,7 +206,7 @@ impl DaemonLock {
         {
             use std::os::unix::io::AsRawFd;
             let fd = file.as_raw_fd();
-            // Safety: flock on a file we own; libc touches no caller memory.
+            
             let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
             if ret != 0 {
                 let err = std::io::Error::last_os_error();
@@ -242,7 +242,7 @@ impl Drop for DaemonLock {
         {
             use std::os::unix::io::AsRawFd;
             let fd = self._file.as_raw_fd();
-            // Safety: flock unlock on a file we own.
+            
             unsafe { libc::flock(fd, libc::LOCK_UN) };
         }
         let _ = std::fs::remove_file(&self.lock_path);
@@ -261,8 +261,8 @@ mod tests {
         }
     }
 
-    /// A live sleeper whose recorded pid + real token reads as running.
-    /// Returns the child (still running) and its record.
+    
+    
     fn live_record(dir: &Path) -> (std::process::Child, PidRecord) {
         let child = spawn_sleeper(30).expect("spawn sleeper");
         let token = process_start_token(child.id());
@@ -336,8 +336,8 @@ mod tests {
     fn is_running_rejects_pid_reuse_with_foreign_token() {
         let dir = tempfile::tempdir().unwrap();
         let (mut child, record) = live_record(dir.path());
-        // The pid is alive RIGHT NOW, but its recorded birth token belongs
-        // to a different instance: exactly the pid-reuse case.
+        
+        
         let forged = PidRecord {
             start_token: record.start_token.map(|t| t.wrapping_add(1)),
             ..record
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn terminate_timeout_preserves_pid_file_and_liveness() {
         let dir = tempfile::tempdir().unwrap();
-        // A process that ignores SIGTERM: the stop must time out.
+        
         let mut child = std::process::Command::new("sh")
             .args(["-c", "trap \"\" TERM; sleep 30"])
             .spawn()

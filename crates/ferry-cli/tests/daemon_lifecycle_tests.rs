@@ -1,7 +1,7 @@
-//! Daemon stop/status lifecycle, asserted as observable CLI behavior:
-//! exit codes, JSON payloads, and file side effects against a temp
-//! Ferry home. No real daemon binary, no fixed daemons — the "daemon"
-//! under test is a spawned sleeper recorded in the PID file.
+
+
+
+
 
 use ferry_cli::commands::daemon::{status_in, stop_in};
 
@@ -60,8 +60,8 @@ fn status_reports_stopped_when_pid_file_points_at_a_dead_process() {
 #[test]
 fn status_refuses_a_reused_pid_whose_token_belongs_to_another_instance() {
     let home = temp_home();
-    // The pid is alive right now, but the recorded token belongs to a
-    // different process instance: exactly what pid reuse looks like.
+    
+    
     let mut child = ferry_platform::spawn_sleeper(30).unwrap();
     let token = ferry_platform::process_start_token(child.id()).map(|t| t.wrapping_add(1));
     std::fs::write(home.path().join("daemon.pid"), stamp(child.id(), token)).unwrap();

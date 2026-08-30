@@ -1,11 +1,11 @@
-//! [`IrohTransport`]: the M0 `Transport` seam over iroh QUIC endpoints.
-//!
-//! Sync trait, async library: the transport owns a private tokio runtime on
-//! which the iroh endpoint lives; every blocking call bridges through
-//! `block_on`. Frames keep the exact TCP wire shape (u32 LE length prefix),
-//! so the protocol layer cannot tell transports apart.
-//!
-//! iroh types stop here. Nothing in this file's public surface names one.
+
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 use std::io;
@@ -28,38 +28,38 @@ use crate::config::{IrohConfig, RelaySetting};
 use crate::directory::{Route, RouteTable};
 use crate::FERRY_ALPN;
 
-/// Where accepted/dialed connections' path choices get recorded, per peer.
-///
-/// Sampled from a background task while each connection lives. This is how
-/// tests assert "went through relay" / "upgraded to direct" without any
-/// engine awareness — ADR-0003's negotiation, observed at the seam.
+
+
+
+
+
 #[derive(Debug, Default)]
 pub struct PathObservation {
-    /// A relay-borne path was the selected transmission path at least once.
+    
     pub selected_relay_seen: AtomicBool,
-    /// A direct IP path was the selected transmission path at least once.
+    
     pub selected_ip_seen: AtomicBool,
 }
 
 impl PathObservation {
-    /// True when traffic has been observed riding only relays so far.
+    
     pub fn relay_only_so_far(&self) -> bool {
         self.selected_relay_seen.load(Ordering::SeqCst)
             && !self.selected_ip_seen.load(Ordering::SeqCst)
     }
 }
 
-/// Typed dial failures. They map onto `io::ErrorKind`s for the trait
-/// boundary but stay distinguishable for tests and logs.
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialFailure {
-    /// No route registered for this alias.
+    
     NoRoute(SocketAddr),
-    /// Refusing to connect to ourselves.
+    
     SelfDial,
-    /// The route resolved, but no usable path appeared in time.
+    
     Timeout,
-    /// iroh refused/failed the connection attempt.
+    
     Connect(String),
 }
 
@@ -89,9 +89,9 @@ struct Inner {
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
-    /// Relay URLs from config. Attached to dialed `EndpointAddrs` so
-    /// key-only dialing can resolve through OUR relay (deployment rule:
-    /// peers we sync with are clients of the same self-hosted relay).
+    
+    
+    
     relay_urls: Vec<iroh::RelayUrl>,
     routes: RouteTable,
 }
@@ -152,8 +152,8 @@ impl Drop for Inner {
     }
 }
 
-/// The T-009 transport: iroh QUIC endpoints addressed by derived device
-/// public keys, behind [`ferry_sync::Transport`].
+
+
 #[derive(Clone)]
 pub struct IrohTransport {
     inner: Arc<Inner>,
@@ -171,7 +171,7 @@ impl std::fmt::Debug for IrohTransport {
 }
 
 impl IrohTransport {
-    /// Build with [`IrohConfig`].
+    
     pub fn new(cfg: IrohConfig) -> io::Result<Self> {
         let seed = cfg.resolve_secret().ok_or_else(|| {
             io::Error::new(
@@ -217,18 +217,18 @@ impl IrohTransport {
         })
     }
 
-    /// Access this transport's route table.
+    
     pub fn routes(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    /// Access this transport's route table.
+    
     pub fn route_table(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    /// Register an explicit route for this transport instance:
-    /// route-key → peer endpoint id.
+    
+    
     pub fn with_route(&self, key: SocketAddr, endpoint_id: [u8; 32]) -> &Self {
         let route = Route {
             endpoint_id,
@@ -241,8 +241,8 @@ impl IrohTransport {
         self
     }
 
-    /// Register a peer identity explicitly into this transport's route table,
-    /// returning a fresh synthesized route key.
+    
+    
     pub fn register_peer(&self, endpoint_id: [u8; 32]) -> SocketAddr {
         let key = self.inner.routes.register_peer(endpoint_id, Vec::new());
         crate::directory::register_explicit_route(
@@ -255,12 +255,12 @@ impl IrohTransport {
         key
     }
 
-    /// This endpoint's public id — print it; peers dial by it.
+    
     pub fn endpoint_id(&self) -> [u8; 32] {
         *self.inner.my_id.as_bytes()
     }
 
-    /// Dial a peer directly by 32-byte public key identity.
+    
     pub fn dial_peer(&self, endpoint_id: &[u8; 32]) -> Result<Box<dyn DynConnection>, DialFailure> {
         let hints = self
             .inner
@@ -271,9 +271,9 @@ impl IrohTransport {
         self.dial_endpoint(*endpoint_id, hints)
     }
 
-    /// Dial straight by public key — the ADR-0003 primitive that alias
-    /// dialing resolves into. `hints` are optional direct addresses; with
-    /// relays or discovery configured, an empty hint list still connects.
+    
+    
+    
     pub fn dial_endpoint(
         &self,
         endpoint_id: [u8; 32],
@@ -291,15 +291,15 @@ impl IrohTransport {
         for h in hints {
             addr.addrs.insert(TransportAddr::Ip(h));
         }
-        // Our relays are legitimate addressing information for peers we
-        // sync with (same self-hosted relay, ADR-0003). With IP transports
-        // stripped (force_relay) this is REQUIRED: without it iroh refuses
-        // with "no addressing information available".
+        
+        
+        
+        
         for url in &self.inner.relay_urls {
             addr.addrs.insert(TransportAddr::Relay(url.clone()));
         }
-        // Connect AND open our bi-stream in one async step: the dialer gets
-        // back a ready pipe, and accept_bi on the peer resolves immediately.
+        
+        
         let ep = self.inner.ep.clone();
         let budget = self.inner.dial_timeout;
         let opened = block_on(self.inner.rt_handle(), async move {
@@ -338,8 +338,8 @@ impl IrohTransport {
         }))
     }
 
-    /// Path observations recorded so far for a peer id, if we ever
-    /// connected to or accepted from it.
+    
+    
     pub fn path_observation(&self, endpoint_id: &[u8; 32]) -> Option<Arc<PathObservation>> {
         self.inner
             .observations
@@ -349,7 +349,7 @@ impl IrohTransport {
             .cloned()
     }
 
-    /// Best-effort graceful close; also runs on Drop.
+    
     pub fn shutdown(&self) {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return;
@@ -361,7 +361,7 @@ impl IrohTransport {
     }
 }
 
-/// Direct-address hints for a freshly bound endpoint.
+
 fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for bound in ep.bound_sockets() {
@@ -382,7 +382,7 @@ fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
 
 impl Drop for IrohTransport {
     fn drop(&mut self) {
-        // Only when the last clone goes; Arc gives us that for free.
+        
         if Arc::strong_count(&self.inner) == 1 && !self.inner.closed.load(Ordering::SeqCst) {
             self.shutdown();
         }
@@ -415,8 +415,8 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
     }
 
     if cfg.force_relay {
-        // "direct disabled by config": strip every IP transport so all bytes
-        // must transit a relay, even between same-host peers.
+        
+        
         builder = builder.clear_ip_transports();
     }
 
@@ -429,9 +429,9 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
 fn spawn_path_sampler(handle: &Handle, conn: &IrohConn, obs: Arc<PathObservation>) {
     let conn = conn.clone();
     handle.spawn(async move {
-        // Observations are monotone latches: one sample at open, one final
-        // sample once the connection closes (post-upgrade state included),
-        // no polling in between.
+        
+        
+        
         latch_selected_paths(&conn, &obs);
         let _ = conn.closed().await;
         latch_selected_paths(&conn, &obs);
@@ -451,9 +451,9 @@ fn latch_selected_paths(conn: &IrohConn, obs: &PathObservation) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Transport impl: alias dialing over explicit routes + the route table.
-// ---------------------------------------------------------------------------
+
+
+
 
 impl Transport for IrohTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn DynConnection>> {
@@ -485,7 +485,7 @@ impl Transport for IrohTransport {
         } else {
             addr
         };
-        // Publish ourselves so dialers resolve this key to our public key + real bound sockets.
+        
         let route = Route {
             endpoint_id: *self.inner.my_id.as_bytes(),
             ip_hints: direct_hints(&self.inner.ep),
@@ -570,9 +570,9 @@ impl DynListener for IrohListener {
     }
 }
 
-// ---------------------------------------------------------------------------
-// One framed connection type; wire shape identical to TcpTransport's frames.
-// ---------------------------------------------------------------------------
+
+
+
 
 struct FramedConnection {
     inner: Arc<Inner>,
@@ -629,7 +629,7 @@ impl DynConnection for FramedConnection {
             let mut len_buf = [0u8; 4];
             match recv.read_exact(&mut len_buf).await {
                 Ok(()) => {}
-                // FinishedEarly(0): peer closed cleanly at a frame boundary.
+                
                 Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => {
                     return Err(io_error(
                         io::ErrorKind::UnexpectedEof,
@@ -740,7 +740,7 @@ mod tests {
 
         let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = lst.local_addr().unwrap();
-        drop(a); // Drop listener's original transport handle
+        drop(a); 
 
         let server = std::thread::spawn(move || {
             let mut c = lst.accept().unwrap();
@@ -751,7 +751,7 @@ mod tests {
         });
 
         let mut cli = b.dial(addr).unwrap();
-        drop(b); // Drop dialer's original transport handle
+        drop(b); 
 
         cli.send_frame(b"survived-transport-drop").unwrap();
         let reply = cli.recv_frame().unwrap();

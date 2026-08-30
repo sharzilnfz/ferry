@@ -1,8 +1,6 @@
 "use strict";
 
-/* ==========================================================================
-   FERRY · MINIMAL FLUID GLASS ENGINE
-   ========================================================================== */
+
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -12,7 +10,7 @@ let isHolding = false;
 let soundEnabled = true;
 let audioCtx = null;
 
-/* Micro-Haptic Synthesizer */
+
 function playHapticFeedback(type = "tick") {
   if (!soundEnabled) return;
   try {
@@ -52,11 +50,11 @@ function playHapticFeedback(type = "tick") {
       osc.stop(now + 0.04);
     }
   } catch {
-    // Graceful fallback
+    
   }
 }
 
-/* Activity Feed */
+
 function addActivity(title, timeStr = null) {
   const feed = $("activity-feed");
   if (!feed) return;
@@ -80,7 +78,7 @@ function addActivity(title, timeStr = null) {
   }
 }
 
-/* State Morphing */
+
 function applyState(mode, triggerSound = true) {
   if (triggerSound) playHapticFeedback("snap");
   currentState = mode;
@@ -102,7 +100,7 @@ function applyState(mode, triggerSound = true) {
   const connBeacon = $("conn-beacon");
   const connText = $("conn-text");
 
-  // Emil Kowalski Subtle Blur Morphing
+  
   if (mainCard) {
     mainCard.classList.add("is-blur-transitioning");
     setTimeout(() => mainCard.classList.remove("is-blur-transitioning"), 180);
@@ -206,7 +204,7 @@ function applyState(mode, triggerSound = true) {
   });
 }
 
-/* Theme Controller */
+
 function initTheme() {
   const savedTheme = localStorage.getItem("ferry_fluid_theme") || "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
@@ -257,7 +255,7 @@ function toggleSound() {
   if (soundEnabled) playHapticFeedback("success");
 }
 
-/* Modal Controller */
+
 function openModal() {
   playHapticFeedback("tick");
   const modal = $("pair-modal");
@@ -272,7 +270,7 @@ function closeModal() {
   modal.setAttribute("aria-hidden", "true");
 }
 
-/* Event Setup */
+
 function init() {
   initTheme();
 
@@ -298,7 +296,7 @@ function init() {
     addActivity("Held Modifications Merged");
   });
 
-  // Modal
+  
   $("btn-pair").addEventListener("click", openModal);
   $("btn-close-modal").addEventListener("click", closeModal);
   $("pair-modal").addEventListener("click", (e) => {
@@ -316,7 +314,7 @@ function init() {
     try {
       await navigator.clipboard.writeText(tokenVal);
     } catch {
-      // ignore
+      
     }
     $("btn-copy-token").textContent = "Copied!";
     playHapticFeedback("success");
@@ -346,7 +344,7 @@ function init() {
     });
   });
 
-  // Keyboard Navigation
+  
   window.addEventListener("keydown", (e) => {
     if (["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) {
       if (e.key === "Escape") {
@@ -374,7 +372,7 @@ function init() {
     }
   });
 
-  // Initial Seed
+  
   addActivity("Continuous Sync Verified");
   addActivity("MacBook Pro Connected");
   addActivity("Session Authenticated");

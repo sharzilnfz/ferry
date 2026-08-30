@@ -1,8 +1,8 @@
-//! `ferry sync`: single-shot exchange rounds until both sides agree.
-//!
-//! Exit contract (per ticket): 0 when converged, 1 when the timeout hit
-//! first ("best-effort"). Runs the unified `SyncEngine` against the configured
-//! peer until agreement is settled.
+
+
+
+
+
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -92,10 +92,10 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
                 "check folder permissions and network configuration",
             )
         })?;
-    // Sessions must speak with the REAL device identity (T-14/T-18): peers
-    // seed their allow-lists from CONFIG_HEAD `device_pub` entries, so the
-    // handshake id has to be that same key — the tag-derived skeleton
-    // identity would be denied as unknown.
+    
+    
+    
+    
     if let Ok(identity) = crate::home::load_device_identity() {
         engine.set_identity(identity);
     }

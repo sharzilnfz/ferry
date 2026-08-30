@@ -6,10 +6,6 @@ license.workspace = true
 
 [dependencies]
 ferry-scan = { path = "../ferry-scan" }
-# BurntSushi's `ignore` crate: dual MIT/Apache-2.0, compatible with this
-# workspace (MIT). We use ONLY `gitignore::Gitignore` (pattern compilation +
-# single-file matching); its directory walker is deliberately NOT used —
-# ferry-scan owns walking. Rationale recorded in lib.rs and the ticket.
 ignore.workspace = true
 regex = "1"
 serde.workspace = true
@@ -18,7 +14,6 @@ thiserror.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
-# Tests and examples use the test-util-gated fixture cipher.
 ferry-store = { path = "../ferry-store", features = ["test-util"] }
 rand.workspace = true
 tempfile.workspace = true

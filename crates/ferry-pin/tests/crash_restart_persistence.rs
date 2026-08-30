@@ -1,5 +1,5 @@
-//! Integration tests verifying `HeldLedger` persistence and recovery across
-//! simulated process crashes, daemon restarts, and transactional releases.
+
+
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -116,7 +116,7 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     let a_store = Store::create(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
     let b_store = Store::create(&b_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
 
-    // 1. Initial shared baseline
+    
     write_file(&a_tree.join("src/lib.rs"), b"v0-lib", (1000, 0));
     write_file(&a_tree.join("src/main.rs"), b"v0-main", (1000, 0));
     write_file(&a_tree.join("docs/readme.md"), b"v0-doc", (1000, 0));
@@ -142,7 +142,7 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         )
         .unwrap();
 
-    // 2. Start session pin on Device A for src/**
+    
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), hex(&sa_base.manifest_id));
 
@@ -157,7 +157,7 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         .unwrap();
     assert!(pin_rec.holding());
 
-    // 3. Mutate concurrently
+    
     write_file(&a_tree.join("src/lib.rs"), b"v1-a-lib", (3000, 0));
     write_file(&a_tree.join("src/main.rs"), b"v1-a-main", (2500, 0));
 
@@ -176,7 +176,7 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     )
     .unwrap();
 
-    // 4. Convergence with active pin: auto-gates src/** and writes HeldLedger
+    
     let mut fetch = PeerFetch {
         from: &b_store,
         to: &a_store,
@@ -202,14 +202,14 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         b"v1-a-lib"
     );
 
-    // 5. SIMULATE DAEMON CRASH (flush store to disk and drop everything in memory)
+    
     a_store.flush().unwrap();
     b_store.flush().unwrap();
     drop(a_store);
     drop(b_store);
     drop(pin_mgr);
 
-    // 6. SIMULATE DAEMON RESTART: initialize fresh PinManager and Store from disk
+    
     let pin_mgr_restarted = PinManager::new(&a_state);
     let summary = pin_mgr_restarted.summary().unwrap();
     assert_eq!(summary.state, "active");
@@ -231,7 +231,7 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         assert_eq!(e.remote_manifest_id, hex(&sb_edit.manifest_id));
     }
 
-    // 7. SIMULATE ANOTHER CRASH AND RESTART, THEN TRANSACTIONAL RELEASE
+    
     drop(pin_mgr_restarted);
 
     let a_store_restarted = Store::open(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
@@ -257,9 +257,9 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     assert_eq!(release_summary.total_conflicts, 2);
     assert!(release_summary.pin_ended);
 
-    // Winners are live:
-    // lib.rs: A (3000) > B (2900) -> A wins
-    // main.rs: B (3000) > A (2500) -> B wins
+    
+    
+    
     assert_eq!(
         std::fs::read(a_tree.join("src/lib.rs")).unwrap(),
         b"v1-a-lib"
@@ -269,15 +269,15 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         b"v1-b-main"
     );
 
-    // Losers quarantined:
+    
     let conflicts = list_conflicts(&a_state).unwrap();
     assert_eq!(conflicts.len(), 3);
 
-    // Ledger file is cleared on disk:
+    
     assert!(pin_mgr_final.held_peers().unwrap().is_empty());
     assert!(!pin_mgr_final.is_holding().unwrap());
 
-    // 8. SIMULATE POST-RELEASE RESTART: second release is a no-op
+    
     drop(pin_mgr_final);
     drop(a_store_restarted);
 
@@ -308,11 +308,11 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
 
     let a_store = Store::create(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
 
-    // Setup initial file & snapshot
+    
     write_file(&a_tree.join("src/lib.rs"), b"a-initial", (1000, 0));
     let sa = snap(&a_store, &a_tree, DEV_A, [0; 32], 1000);
 
-    // Setup active pin and simulate held ledger entry with a nonexistent remote manifest ID
+    
     let pin_mgr = PinManager::new(&a_state);
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), hex(&sa.manifest_id));
@@ -338,13 +338,13 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
     };
     pin_mgr.append_held(&hex(&DEV_B), &[held_entry]).unwrap();
 
-    // Release fails because the remote manifest blob is missing from store
+    
     let err = pin_mgr
         .release(&a_store, &a_tree, &sa.manifest, NOW)
         .unwrap_err();
     assert!(matches!(err, ferry_pin::PinError::ManifestMissing { .. }));
 
-    // Verify ledger is NOT cleared:
+    
     let peers = pin_mgr.held_peers().unwrap();
     assert_eq!(peers, vec![hex(&DEV_B)]);
     let held = pin_mgr.load_held_peer(&hex(&DEV_B)).unwrap();
@@ -352,7 +352,7 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
     assert_eq!(held[0].path, "src/lib.rs");
     assert_eq!(held[0].remote_manifest_id, fake_remote_manifest);
 
-    // SIMULATE CRASH & RESTART:
+    
     drop(pin_mgr);
     drop(a_store);
 

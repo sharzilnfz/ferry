@@ -1,5 +1,5 @@
-//! Folder bootstrap exercised directly through `ferry-folder` (ported from
-//! the coverage that used to live only behind the CLI's library surface).
+
+
 
 use std::path::Path;
 
@@ -14,8 +14,8 @@ use ferry_store::store::Store;
 const FOLDER_ID: [u8; 16] = [7u8; 16];
 const POLY: u64 = 0x1234_5678_9ABC_DEF0;
 
-/// Error-code assertion helper: bootstrap result types are plain structs
-/// without Debug, so `unwrap_err` is not available.
+
+
 #[track_caller]
 fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
     match r {
@@ -40,8 +40,8 @@ fn default_settings() -> Settings {
     }
 }
 
-/// init-equivalent: create + settings + flush, as every frontend's setup
-/// does (the polynomial record sits in staging until the store flushes).
+
+
 fn make_folder(root: &Path, id: &ferry_crypto::identity::DeviceIdentity) {
     let (store, _fmk) = create_folder(root, id, FOLDER_ID, POLY).unwrap();
     save_settings(root, &default_settings()).unwrap();
@@ -59,7 +59,7 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
 
     make_folder(&root, &id);
 
-    // Spec layout exists.
+    
     assert!(root.join(".ferry/config").is_file());
     assert!(root.join(".ferry/packs").is_dir());
     assert!(root.join(".ferry/index").is_dir());
@@ -73,7 +73,7 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
     assert_eq!(opened.state_dir(), dot_dir(&root));
     assert_eq!(opened.path(), root.as_path());
 
-    // Polynomial lookup through the index finds exactly the stored record.
+    
     assert_eq!(find_polynomial(&opened.store).unwrap(), POLY);
 }
 
@@ -118,7 +118,7 @@ fn open_rejects_a_device_the_folder_was_never_shared_with() {
 
     make_folder(&root, &owner);
     let err = open_folder(&root, &stranger).err().unwrap();
-    assert_eq!(err.code, "not-shared-with-device"); // The display shorthand names the refused device.
+    assert_eq!(err.code, "not-shared-with-device"); 
     assert!(
         err.message.contains(&short_device(stranger.public())),
         "{}",
@@ -132,7 +132,7 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
     let (_a_home, a) = identity_at("a");
     let (_b_home, b) = identity_at("b");
 
-    // A owns a folder; B adopts its key material via the accept-side path.
+    
     make_folder(&work.path().join("owned"), &a);
     let fmk = ferry_crypto::folder_key::generate_fmk();
     let target = work.path().join("adopted");
@@ -141,16 +141,16 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
 
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
-    // The accepting frontend persists settings after adopting (the ritual
-    // does this inside PendingAcceptance::complete); mirror that here.
+    
+    
     ferry_folder::folder::save_settings(&target, &default_settings()).unwrap();
 
-    // B opens its adopted copy; A cannot.
+    
     let opened_b = open_folder(&target, &b).expect("adopter opens");
     assert_eq!(opened_b.folder_id, FOLDER_ID);
     assert_eq!(code_of(open_folder(&target, &a)), "not-shared-with-device");
 
-    // Adopted CONFIG_HEAD holds exactly one wrap (the adopter's own).
+    
     let head = ferry_crypto::config_head::parse_config_head(
         &std::fs::read(target.join(".ferry/config")).unwrap(),
     )
@@ -210,14 +210,14 @@ fn opened_store_is_encrypted_at_rest() {
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
 
-    // The blob round-trips through the opened store...
+    
     assert_eq!(
         opened.store.get(BlobKind::DataChunk, &blob).unwrap(),
         marker
     );
 
-    // ...but the marker is nowhere in the raw packs: the store this
-    // interface hands out is ChaCha20-Poly1305, never plaintext.
+    
+    
     for entry in std::fs::read_dir(root.join(".ferry/packs"))
         .unwrap()
         .flatten()
@@ -239,8 +239,8 @@ fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
     std::fs::create_dir_all(&root).unwrap();
     make_folder(&root, &id);
 
-    // Flip one byte of this device's wrapped FMK: the envelope still parses,
-    // but the key cannot be unwrapped.
+    
+    
     let config_path = root.join(".ferry/config");
     let mut head =
         ferry_crypto::config_head::parse_config_head(&std::fs::read(&config_path).unwrap())
@@ -255,7 +255,7 @@ fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
     let err = open_folder(&root, &id).err().unwrap();
     assert_eq!(err.code, "key-unwrap");
 
-    // No fallback ran: the store packs are untouched on disk.
+    
     assert!(root.join(".ferry/packs").is_dir());
 }
 
@@ -268,8 +268,8 @@ fn wrong_fmk_cannot_reopen_the_store() {
     make_folder(&root, &id);
     drop(open_folder(&root, &id).expect("open succeeds"));
 
-    // The deleted zero-key reopen path: opening with the wrong FMK fails
-    // loudly, it does not degrade to plaintext.
+    
+    
     assert!(
         Store::open(
             &root,

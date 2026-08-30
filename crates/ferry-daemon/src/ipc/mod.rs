@@ -1,13 +1,13 @@
-//! IPC server implementation for the sync daemon.
-//!
-//! Exposes a typed newline-delimited JSON wire protocol over local platform transports
-//! (Unix domain sockets on Unix, named pipes on Windows).
-//!
-//! Connected clients receive:
-//! - An immediate initial [`DaemonMessage::Snapshot`] containing the full folder and engine state.
-//! - Live broadcasts of [`DaemonMessage::StateChanged`], [`DaemonMessage::TransferProgress`],
-//!   and [`DaemonMessage::ConflictRecorded`].
-//! - Responses to [`ClientCommand`] requests (`GetStatus`, `StartPin`, `ReleasePin`, `TriggerScan`, `ListConflicts`, `Ping`).
+
+
+
+
+
+
+
+
+
+
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use ferry_store::format::hex as hex_str;
 
 use crate::state::DaemonState;
 
-/// Handle to a running daemon IPC server.
+
 pub struct IpcServerHandle {
     socket_path: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -33,13 +33,13 @@ pub struct IpcServerHandle {
 }
 
 impl IpcServerHandle {
-    /// Return the bound socket or pipe path.
+    
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
-    /// Gracefully shutdown the IPC server and remove socket files.
+    
     pub fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.server_task.take() {
@@ -71,9 +71,9 @@ impl Drop for IpcServerHandle {
     }
 }
 
-/// Spawns the daemon IPC server listening at `socket_path`.
-///
-/// Supports execution inside or outside an active Tokio runtime.
+
+
+
 pub fn spawn_ipc_server(
     socket_path: PathBuf,
     state: Arc<DaemonState>,
@@ -130,7 +130,7 @@ pub fn spawn_ipc_server(
     })
 }
 
-/// Main accept loop for incoming IPC client connections.
+
 async fn run_server_loop(
     server: IpcServer,
     state: Arc<DaemonState>,
@@ -166,12 +166,12 @@ async fn run_server_loop(
     server.close();
 }
 
-/// Handle a single connected client over an arbitrary async duplex stream.
+
 pub async fn handle_client_connection<S>(mut conn: IpcConnection<S>, state: Arc<DaemonState>)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    // 1. Send initial snapshot immediately upon connection
+    
     let initial_snapshot = state.snapshot();
     if let Err(e) = conn
         .send_message(&DaemonMessage::Snapshot(initial_snapshot))
@@ -195,7 +195,7 @@ where
                         }
                     }
                     Ok(None) => {
-                        // EOF / client disconnected
+                        
                         break;
                     }
                     Err(e) => {
@@ -216,7 +216,7 @@ where
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Resync with full snapshot
+                        
                         let snap = state.snapshot();
                         if sender.send_message(&DaemonMessage::Snapshot(snap)).await.is_err() {
                             break;
@@ -240,8 +240,8 @@ fn registry_error(e: ferry_folder::FolderError) -> DaemonMessage {
     }
 }
 
-/// The unified pairing ritual on this daemon's home, joined to the
-/// process-wide rendezvous (CLI, GUI, and IPC clients share one map).
+
+
 fn pairing_ritual(
     home: PathBuf,
     identity: ferry_crypto::identity::DeviceIdentity,
@@ -260,7 +260,7 @@ fn expires_rfc3339(t: std::time::SystemTime) -> String {
     ferry_platform::time::fmt_rfc3339(secs.as_secs() as i64)
 }
 
-/// Process a single client command and return the immediate response message.
+
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
         ClientCommand::GetStatus => DaemonMessage::Snapshot(state.snapshot()),
@@ -417,7 +417,7 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
     }
 }
 
-/// Dispatch for the centralized Supervisor (multi-engine) daemon.
+
 pub fn dispatch_supervisor_command(
     supervisor: &mut crate::supervisor::Supervisor,
     cmd: ClientCommand,
@@ -520,7 +520,7 @@ fn dispatch_client_command_fallback(cmd: ClientCommand) -> DaemonMessage {
     }
 }
 
-/// Handle a supervisor-backed client connection over a duplex stream.
+
 pub async fn handle_supervisor_connection<S>(
     mut conn: IpcConnection<S>,
     supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
@@ -563,7 +563,7 @@ pub async fn handle_supervisor_connection<S>(
     }
 }
 
-/// Spawn a supervisor-backed IPC server.
+
 pub fn spawn_supervisor_ipc_server(
     socket_path: PathBuf,
     supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
@@ -637,7 +637,7 @@ async fn run_supervisor_server_loop(
     server.close();
 }
 
-/// Background watcher task that monitors engine state transitions and new conflict records.
+
 async fn run_state_watcher(
     state: Arc<DaemonState>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -721,7 +721,7 @@ async fn run_state_watcher(
                     });
                 }
 
-                // Check for new conflicts in .ferry/conflicts.jsonl when file metadata changes
+                
                 let cur_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
                 if cur_meta != last_meta {
                     last_meta = cur_meta;

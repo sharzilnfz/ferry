@@ -1,27 +1,27 @@
-//! Pack-granularity garbage collection behind a grace period.
-//!
-//! Reconciles with T-001/T-002 scope: the format spec defers pruning
-//! ("Packs are immutable after rename. Pruning removes whole packs."), and
-//! this module is exactly that pruning half, required by ticket T-002.
-//!
-//! Rules (documented contract of [`collect_garbage`]):
-//! 1. NEVER delete a pack while ANY caller-designated live manifest can
-//!    reach any blob inside it (whole-pack granularity: one live blob keeps
-//!    the entire pack). Packs containing a polynomial record are always
-//!    live -- losing the polynomial loses the folder's chunking.
-//! 2. A pack whose EVERY blob is unreachable is garbage, but it is only
-//!    deleted once it has been continuously unreferenced for longer than
-//!    the grace period. First-seen-unreferenced timestamps live in a small
-//!    local ledger (`.ferry/gc-state`) so the clock survives restarts;
-//!    deleting the ledger only resets the clock, never correctness.
-//! 3. Packs that fail name/footer verification are reported and skipped,
-//!    never deleted (they may be evidence, and they cannot become worse).
-//!
-//! The grace period protects against concurrent writers: a writer stages
-//! blobs, then commits a manifest referencing them. Anything written within
-//! the last `grace` is treated as possibly-about-to-be-referenced. Within
-//! one process, writers and GC share the store mutexes anyway; cross-process
-//! racing GC against writers is accepted v0 residual risk (single-user CLI).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
@@ -42,13 +42,13 @@ mod tests {
     fn fresh() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::create(dir.path(), fmk(), Box::new(PassthroughCipher)).unwrap();
-        // Tiny seal target so each blob tends to land in its own pack: this
-        // makes whole-pack liveness deterministic for the assertions below.
+        
+        
         store.set_seal_target(512);
         (dir, store)
     }
 
-    /// Commit a manifest object into the store and return its blob id.
+    
     fn put_manifest(store: &Store, m: &RootManifest) -> BlobId {
         let bytes = serialize_manifest(m);
         store.put_meta(BlobKind::Manifest, &bytes).unwrap()
@@ -79,7 +79,7 @@ mod tests {
     fn gc_deletes_only_fully_unreferenced_packs_after_grace() {
         let (_dir, store) = fresh();
 
-        // Live world: M1 -> T1 -> chunks a,b (+ polynomial always live).
+        
         let a = chunk(&store, 10, 300);
         let b = chunk(&store, 20, 300);
         let poly_id = store.put_polynomial(0x1234).unwrap();
@@ -94,7 +94,7 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        // Orphans nobody references yet (simulating deleted snapshots).
+        
         let _c = chunk(&store, 30, 300);
         let d = chunk(&store, 40, 300);
         let _t2 = put_tree(
@@ -111,21 +111,21 @@ mod tests {
         let t0 = SystemTime::now();
         let grace = Duration::from_secs(10);
 
-        // Run 1 at t0: records unreferenced packs, deletes NOTHING.
+        
         let r1 = collect_garbage(&store, &[m1], grace, t0).unwrap();
         assert!(r1.deleted.is_empty(), "nothing past grace yet");
         assert!(r1.recorded_unreferenced > 0, "orphans were recorded");
 
-        // Run 2 halfway through grace: still nothing.
+        
         let r2 = collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(5)).unwrap();
         assert!(r2.deleted.is_empty());
 
-        // Run 3 past grace: fully-dead packs vanish, live data untouched.
+        
         let r3 = collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(11)).unwrap();
         assert!(!r3.deleted.is_empty(), "orphan-only packs were collected");
         assert!(r3.deleted.len() < total_packs, "live packs must survive");
 
-        // Every live blob is still readable.
+        
         for id in [&a, &b, &t1, &m1, &poly_id] {
             store
                 .get(BlobKind::DataChunk, id)
@@ -135,8 +135,8 @@ mod tests {
                 .unwrap_or_else(|e| panic!("live blob {} lost: {e}", crate::format::hex(id)));
         }
 
-        // Fixpoint: after another full pass, NO pack remains whose contents
-        // are entirely unreachable.
+        
+        
         collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(12)).unwrap();
         assert_no_dead_packs(&store, &[m1]);
     }
@@ -145,7 +145,7 @@ mod tests {
     fn reachability_report_lists_superseded_packs_and_never_live_ones() {
         let (_dir, store) = fresh();
 
-        // Live world: M1 -> T1 -> chunks a,b.
+        
         let a = chunk(&store, 10, 300);
         let b = chunk(&store, 20, 300);
         let poly_id = store.put_polynomial(0x1234).unwrap();
@@ -160,7 +160,7 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        // Superseded world: content only an older snapshot referenced.
+        
         let d = chunk(&store, 40, 300);
         let _t2 = put_tree(
             &store,
@@ -179,8 +179,8 @@ mod tests {
         assert_eq!(r.garbage_packs.len(), 1, "exactly one dead pack: {r:?}");
         assert!(r.reclaimable_bytes > 0);
 
-        // The live manifest, its tree, its chunks, and the polynomial must be
-        // reachable — so NO pack containing them may appear as garbage.
+        
+        
         let garbage_contents: HashSet<_> = r.garbage_packs.iter().map(|(id, _)| *id).collect();
         for path in std::fs::read_dir(store.packs_dir()).unwrap().flatten() {
             let stem = path.file_name().to_string_lossy().to_string();
@@ -192,8 +192,8 @@ mod tests {
             }
             let (_, entries) = store.pack_blob_list(&claimed).unwrap();
             for e in entries {
-                // Only a, b, t1, m1, and the polynomial are live; `d` is
-                // deliberately orphaned, so its presence here is correct.
+                
+                
                 let live_ids = [a, b, t1, m1, poly_id];
                 assert!(
                     !live_ids.contains(&e.id),
@@ -203,7 +203,7 @@ mod tests {
             }
         }
 
-        // Everything-live edge: with every blob referenced, garbage is empty.
+        
         let m2 = put_manifest(&store, &manifest_for(_t2));
         let r_all_live = reachability_report(&store, &[m1, m2]).unwrap();
         assert!(r_all_live.garbage_packs.is_empty(), "{r_all_live:?}");
@@ -222,16 +222,16 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        // Orphan content that will be "restored" mid-grace.
+        
         let revived = chunk(&store, 60, 300);
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
         let t0 = SystemTime::now();
         let grace = Duration::from_secs(100);
-        collect_garbage(&store, &[m1], grace, t0).unwrap(); // records orphans
+        collect_garbage(&store, &[m1], grace, t0).unwrap(); 
 
-        // Resurrection: a NEW manifest now references the old content.
+        
         let _t2 = put_tree(
             &store,
             &TreeNode {
@@ -242,9 +242,9 @@ mod tests {
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
-        // Long past the original recording time...
+        
         let r = collect_garbage(&store, &[m1, m2], grace, t0 + Duration::from_secs(200)).unwrap();
-        // ...but because the pack became REFERENCED again, it survived.
+        
         store.get(BlobKind::DataChunk, &revived).unwrap();
         let _ = r;
     }
@@ -261,7 +261,7 @@ mod tests {
         );
         let m = put_manifest(&store, &manifest_for(t));
 
-        // An extra pack whose name lies about its content.
+        
         let liar = store.packs_dir().join(format!("{}.pack", "f".repeat(64)));
         std::fs::write(&liar, b"garbage pretending to be a pack").unwrap();
 
@@ -280,14 +280,14 @@ mod tests {
         assert_eq!(r.scanned, 0);
     }
 
-    // --- helpers ---
+    
 
     fn count_packs(store: &Store) -> usize {
         std::fs::read_dir(store.packs_dir()).unwrap().count()
     }
 
-    /// After GC reaches a fixpoint, every remaining pack must contain at
-    /// least one blob reachable from the live manifests (or a polynomial).
+    
+    
     fn assert_no_dead_packs(store: &Store, live: &[BlobId]) {
         let reachable = collect_referenced(store, live).unwrap();
         for entry in std::fs::read_dir(store.packs_dir()).unwrap().flatten() {
@@ -317,7 +317,7 @@ use crate::format::{hex, BlobId, BlobKind};
 use crate::manifest::{parse_manifest, parse_tree_node};
 use crate::store::{Store, StoreError};
 
-/// One ledger row: when a pack was FIRST seen unreferenced.
+
 const LEDGER_FILE: &str = "gc-state";
 
 #[derive(Debug, Error)]
@@ -336,39 +336,39 @@ pub enum GcError {
 
 #[derive(Debug, Default)]
 pub struct GcReport {
-    /// Pack files inspected.
+    
     pub scanned: usize,
-    /// Packs deleted this run.
+    
     pub deleted: Vec<BlobId>,
-    /// Newly recorded unreferenced packs (not yet deletable).
+    
     pub recorded_unreferenced: usize,
-    /// Packs that failed verification; left alone on purpose.
+    
     pub skipped_corrupt: Vec<String>,
 }
 
-/// Read-only reachability report backing `ferry store gc --dry-run`.
+
 #[derive(Debug, Default)]
 pub struct ReachabilityReport {
-    /// Pack files inspected.
+    
     pub scanned_packs: usize,
-    /// Packs holding at least one blob reachable from the live manifests
-    /// (or a polynomial). Never candidates for deletion.
+    
+    
     pub live_packs: usize,
-    /// Packs whose every blob is unreachable, with their on-disk sizes in
-    /// bytes. Sorted by pack id for stable reports.
+    
+    
     pub garbage_packs: Vec<(BlobId, u64)>,
-    /// Sum of [`ReachabilityReport::garbage_packs`] sizes.
+    
     pub reclaimable_bytes: u64,
-    /// Packs that failed verification; never touched.
+    
     pub skipped_corrupt: Vec<String>,
 }
 
-/// Mark-from-live-manifests WITHOUT deleting or recording anything: which
-/// packs could a later [`collect_garbage`] collect? The polynomial record
-/// keeps its pack live exactly as in real collection; corrupt packs are
-/// reported and skipped. This is the reachability report half of T-20's
-/// GC story (`ferry store gc --dry-run`); the delete path behind it is
-/// [`collect_garbage`], gated on an explicit grace period.
+
+
+
+
+
+
 pub fn reachability_report(
     store: &Store,
     live_manifest_ids: &[BlobId],
@@ -411,12 +411,12 @@ pub fn reachability_report(
     Ok(report)
 }
 
-/// Collect garbage packs per the module rules. `live_manifest_ids` names the
-/// manifests the caller considers current; everything unreachable from them
-/// is garbage. `now` is injected so callers (and tests) control time.
-///
-/// This function deletes files. It is deliberately conservative: see the
-/// three rules at the top of this module.
+
+
+
+
+
+
 pub fn collect_garbage(
     store: &Store,
     live_manifest_ids: &[BlobId],
@@ -447,8 +447,8 @@ pub fn collect_garbage(
         let _ = &bytes;
         let pack_is_live = match store.pack_blob_list(&claimed) {
             Ok((_, entries)) => entries.iter().any(|e| match e.kind {
-                // The polynomial record keeps the folder chunkable; its
-                // pack is always considered live.
+                
+                
                 BlobKind::Polynomial => true,
                 _ => reachable.contains(&(e.kind, e.id)),
             }),
@@ -490,9 +490,9 @@ pub fn collect_garbage(
     Ok(report)
 }
 
-/// Every (kind, id) pair reachable from the given live manifests: the
-/// manifests themselves, their root tree nodes, all descendant tree nodes,
-/// and all file chunks. Used as the liveness oracle by [`collect_garbage`].
+
+
+
 pub fn collect_referenced(
     store: &Store,
     live_manifest_ids: &[BlobId],
@@ -509,7 +509,7 @@ pub fn collect_referenced(
 
     while let Some(tree_id) = tree_stack.pop() {
         if !set.insert((BlobKind::TreeNode, tree_id)) {
-            continue; // already walked
+            continue; 
         }
         let bytes = store.get(BlobKind::TreeNode, &tree_id)?;
         let node = parse_tree_node(&bytes)?;
@@ -534,8 +534,8 @@ fn ledger_path(store: &Store) -> PathBuf {
 
 type Ledger = std::collections::HashMap<BlobId, SystemTime>;
 
-/// Ledger rows are `hex(pack_id) unix_nanos`; unreadable rows are ignored so
-/// a damaged ledger degrades to "clock reset", never wrong deletions.
+
+
 fn load_ledger(path: &std::path::Path) -> Result<Ledger, GcError> {
     let mut map = Ledger::new();
     if !path.exists() {

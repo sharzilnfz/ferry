@@ -1,5 +1,5 @@
-//! Subcommand implementations. Each `run*` maps parsed args onto explicit
-//! parameters so tests call the logic directly.
+
+
 
 pub mod conflicts;
 pub mod daemon;

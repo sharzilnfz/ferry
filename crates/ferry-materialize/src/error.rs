@@ -1,18 +1,18 @@
-//! Error and divergence types for materialization.
+
 
 use std::path::PathBuf;
 
 use ferry_store::diff::{join_path, CompPath};
 use thiserror::Error;
 
-/// Why one live path diverged from the caller's base expectation.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DivergeReason {
-    /// The base expectation says nothing lives here, but something does.
+    
     ExpectedAbsent,
-    /// The base expectation describes an entry here, but the path is gone.
+    
     ExpectedPresent,
-    /// The entry exists but is a different kind of filesystem object.
+    
     KindMismatch {
         expected: ferry_store::diff::EntryKind,
         found: ferry_store::diff::EntryKind,
@@ -29,11 +29,11 @@ pub enum DivergeReason {
         expected: String,
         found: String,
     },
-    /// Same kind, same size, different bytes (or a store chunk read failed
-    /// while proving equality).
+    
+    
     ContentMismatch,
-    /// A deletion was requested for a path the expected manifest does not
-    /// describe at all — refusing to destroy unaccounted-for data.
+    
+    
     NotInBase,
 }
 
@@ -68,7 +68,7 @@ impl std::fmt::Display for DivergeReason {
     }
 }
 
-/// One divergent path found by the [`crate::Overwrite::Expect`] guard.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Divergence {
     pub path: CompPath,
@@ -166,7 +166,7 @@ pub enum MaterializeError {
     },
 }
 
-/// Wrap an io error with the path it happened at.
+
 pub(crate) fn io_at(path: impl Into<PathBuf>, e: std::io::Error) -> MaterializeError {
     MaterializeError::Io {
         path: path.into(),

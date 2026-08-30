@@ -1,5 +1,5 @@
-//! The hold seam: what the sync loop consults BEFORE converging, and where
-//! held decisions are ledgered after a pinned convergence.
+
+
 
 use std::collections::BTreeSet;
 
@@ -11,9 +11,9 @@ use crate::matcher::PathMatcher;
 use crate::pin::PinStore;
 use crate::pin_error::PinError;
 
-/// Load the active pin's scope as a compiled matcher. `None` when no pin
-/// exists, is released, or its writer is dead (stale) — stale pins surface
-/// elsewhere but never hold.
+
+
+
 pub fn hold_matcher(state_dir: &std::path::Path) -> Result<Option<PathMatcher>, PinError> {
     let Some(rec) = PinStore::new(state_dir).load()? else {
         return Ok(None);
@@ -24,13 +24,13 @@ pub fn hold_matcher(state_dir: &std::path::Path) -> Result<Option<PathMatcher>, 
     Ok(Some(PathMatcher::new(&rec.paths)?))
 }
 
-/// Persist one convergence's held decisions to the peer's ledger.
-///
-/// Returns how many lines were appended. Lines already ledgered for the
-/// same (path, remote manifest) pair are skipped: long pins span many
-/// poll ticks and identical rounds must append nothing. Call AFTER a
-/// successful pinned convergence — the engine guarantees those paths were
-/// not touched.
+
+
+
+
+
+
+
 pub fn record_held(
     state_dir: &std::path::Path,
     peer_hex: &str,

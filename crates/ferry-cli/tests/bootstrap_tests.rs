@@ -11,11 +11,11 @@ fn ensure_daemon_fails_with_daemon_start_failed_when_binary_missing() {
     let hp = home.path().to_path_buf();
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
-    // Point binary at a nonexistent path so spawn fails immediately.
+    
     let prev = std::env::var("FERRY_BIN").ok();
     std::env::set_var("FERRY_BIN", "/nonexistent/ferry-missing-binary-xyz");
     let res = ensure_daemon(&hp);
-    // Restore env before assertions to avoid poisoning other tests.
+    
     match prev {
         Some(v) => std::env::set_var("FERRY_BIN", v),
         None => std::env::remove_var("FERRY_BIN"),
@@ -43,8 +43,8 @@ fn ensure_daemon_reuses_running_server_via_ping() {
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
 
-    // Start an explicit in-process IpcServer that answers Ping with Pong
-    // via the FerryStore/FakeBackend seam.
+    
+    
     let sock_clone = sock.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -91,11 +91,11 @@ fn ensure_daemon_reuses_running_server_via_ping() {
         });
     });
 
-    // Wait for the fake server to bind (poll with try_ping via ensure_daemon's fast path).
+    
     let mut waited = std::time::Duration::from_millis(0);
     while waited < std::time::Duration::from_millis(2000) {
         if sock.exists() {
-            // Try a cheap ensure that should hit the ping fast path once ready.
+            
             let probe = ensure_daemon(&hp);
             if probe.is_ok() {
                 break;
@@ -115,7 +115,7 @@ fn ensure_daemon_reuses_running_server_via_ping() {
         "reuse via ping should be fast, got {elapsed:?}"
     );
 
-    // Also verify ping path is within expected bound.
+    
     let start2 = std::time::Instant::now();
     let ok = ensure_daemon(&hp).is_ok();
     assert!(ok);
@@ -150,7 +150,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn share_and_join_json_round_trip_two_homes() {
-    // Two isolated homes, share in A, join in B, verify same folder_id and no pair-offer file when code path used
+    
     let home_a = temp_home();
     let home_b = temp_home();
     let work_a = tempfile::tempdir().unwrap();
@@ -168,26 +168,26 @@ fn share_and_join_json_round_trip_two_homes() {
     let code = out_a.json["code"].as_str().unwrap().to_string();
     let folder_id_a = out_a.json["folder_id"].as_str().unwrap().to_string();
     assert_eq!(folder_id_a.len(), 32);
-    // Should not have written legacy offer when code path succeeds
-    // (allow either, but prefer not)
+    
+    
     let _has_offer = proj_a.join(".ferry/pair-offer.ferry-pair").exists();
 
-    // Switch to home B
+    
     std::env::set_var("FERRY_HOME", home_b.path());
     let dest_b = work_b.path().join("proj-b");
     std::fs::create_dir_all(&dest_b).unwrap();
-    // dest must be empty; join will create .ferry
+    
     let out_b = ferry_cli::commands::join::run(&code, Some(&dest_b)).expect("join should succeed");
     assert_eq!(out_b.json["folder_id"], folder_id_a);
     assert_eq!(out_b.json["status"], "joined");
     assert!(dest_b.join(".ferry").is_dir());
     assert!(dest_b.join(".ferry/config").is_file());
-    // Verify folder_id matches via config head parse or json
+    
     let cfg_bytes = std::fs::read(dest_b.join(".ferry/config")).unwrap();
     let head = ferry_crypto::config_head::parse_config_head(&cfg_bytes).unwrap();
     assert_eq!(ferry_store::format::hex(&head.folder_id), folder_id_a);
 
-    // Restore
+    
     std::env::remove_var("FERRY_HOME");
 }
 
@@ -203,7 +203,7 @@ fn headless_share_json_works_without_tty() {
     let out = ferry_cli::commands::share::run(&proj, false, 5).unwrap();
     assert!(out.json["code"].is_string());
     assert!(out.json["expires_at"].is_string());
-    // Human output should contain Share code
+    
     assert!(out.human.contains("Share code"));
     std::env::remove_var("FERRY_HOME");
 }

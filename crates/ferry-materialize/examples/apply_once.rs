@@ -1,17 +1,17 @@
-//! Crash-test helper (T-005 acceptance): apply one tree SLOWLY so a
-//! harness can SIGKILL us at interesting moments.
-//!
-//! Usage:
-//!
-//! ```text
-//! apply_once --store <folder-with-.ferry> --target <dir> --tree <hex>
-//!            --fmk-hex <64 hex chars> [--delay-ms N]
-//! ```
-//!
-//! `--delay-ms N` sleeps N milliseconds between executed mutations, which
-//! stretches the operation sequence so randomly placed kills land between,
-//! before, or inside individual operations. Progress goes to stdout,
-//! flushed per line.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::PathBuf;
 

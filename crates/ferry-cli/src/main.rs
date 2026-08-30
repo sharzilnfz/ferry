@@ -1,9 +1,9 @@
 #![allow(warnings, clippy::all, clippy::pedantic)]
-//! `ferry` — entry point. Dispatch, render, exit codes.
-//!
-//! Contract: stdout carries exactly one human document OR (with --json) one
-//! JSON document; progress and diagnostics go to stderr. Errors print a
-//! structured document to stderr and exit nonzero.
+
+
+
+
+
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -101,7 +101,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
                     test: false,
                 });
             }
-            // Fallback to default picker (gui->web->tui) if no feature matches
+            
             return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
                 folder: None,
                 gui: false,

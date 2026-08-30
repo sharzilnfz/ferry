@@ -1,6 +1,6 @@
-//! Scan-side errors. Mirrors the failure shapes of `ferry-store::snapshot`
-//! (IO with the offending path, NFC sibling collisions) plus watcher-layer
-//! failures owned by this crate.
+
+
+
 
 use std::path::PathBuf;
 

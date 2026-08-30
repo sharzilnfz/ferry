@@ -20,7 +20,6 @@ unicode-normalization.workspace = true
 zeroize.workspace = true
 
 [features]
-# Compile-gates `open_or_create_test_store`; never enabled for production builds.
 test-util = []
 
 [lints]

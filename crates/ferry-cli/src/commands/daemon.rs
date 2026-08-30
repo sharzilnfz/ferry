@@ -1,5 +1,5 @@
-//! `ferry daemon`: watch folders, snapshot continuously, exchange with one
-//! peer over TCP in the background using the unified `SyncEngine`.
+
+
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -75,16 +75,16 @@ pub fn stop() -> CliResult<Output> {
     stop_in(&crate::home::ferry_home()?)
 }
 
-/// Stop whatever daemon `home` records. A pure function of the directory:
-/// termination, liveness polling, and PID-file ownership live in
-/// ferry-platform; this only renders outcomes.
+
+
+
 pub fn stop_in(home: &Path) -> CliResult<Output> {
     stop_with_deadline(home, TERMINATE_DEADLINE)
 }
 
-/// The socket the central daemon binds for `home`: `<home>/daemon.sock`
-/// on Unix, the fixed named pipe on Windows. Derived from the directory
-/// so stop and status stay pure functions of it.
+
+
+
 fn socket_path_for_home(home: &Path) -> PathBuf {
     #[cfg(windows)]
     {
@@ -140,9 +140,9 @@ pub fn status() -> CliResult<Output> {
     status_in(&crate::home::ferry_home()?)
 }
 
-/// Report whether the daemon `home` records is alive. A pure function of
-/// the directory: liveness is the platform's start-token check, never a
-/// blind pid probe.
+
+
+
 pub fn status_in(home: &Path) -> CliResult<Output> {
     let socket_path = socket_path_for_home(home);
     match ferry_platform::running_pid(home) {
@@ -165,14 +165,14 @@ mod tests {
     use super::*;
     use std::process::Command;
 
-    /// A SIGTERM-immune stand-in daemon, so stop's timeout path runs in
-    /// milliseconds instead of the real five-second deadline.
+    
+    
     fn spawn_term_immune_sleeper() -> std::process::Child {
         let child = Command::new("sh")
             .args(["-c", "trap \"\" TERM; sleep 30"])
             .spawn()
             .expect("spawn TERM-immune sleeper");
-        // Let the trap install before anything signals the child.
+        
         std::thread::sleep(Duration::from_millis(100));
         child
     }
@@ -225,8 +225,8 @@ fn check_transport(kind: &str) -> CliResult<()> {
     }
 }
 
-/// Render the daemon entry's typed failures as coded CLI errors. The codes,
-/// messages, and hints here are the CLI's stable output contract.
+
+
 fn render_daemon_error(e: ferry_daemon::device_daemon::DeviceDaemonError) -> CliError {
     use ferry_daemon::device_daemon::DeviceDaemonError as DaemonError;
     match e {

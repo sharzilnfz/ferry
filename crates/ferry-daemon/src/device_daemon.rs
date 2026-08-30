@@ -1,7 +1,7 @@
-//! The one device-daemon entry point. Lock acquisition and teardown,
-//! folder registration, engine spawning, the supervisor IPC server, signal
-//! handling, and the supervision tick loop each exist here and nowhere
-//! else; `ferry` and `ferry-sync` parse arguments and delegate.
+
+
+
+
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,20 +11,20 @@ use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::backend::OpError;
 use ferry_platform::{DaemonLock, DaemonLockError};
 
-/// Why the device daemon failed to start.
+
 #[derive(Debug)]
 pub enum DeviceDaemonError {
-    /// Another daemon holds the home's lock.
+    
     AlreadyRunning { pid: Option<u32> },
-    /// Lock acquisition failed on I/O.
+    
     Lock(std::io::Error),
-    /// A folder failed to register; `error` carries the coded cause.
+    
     Register { path: PathBuf, error: Box<OpError> },
-    /// Registered folders failed to spawn engines.
+    
     Spawn { code: String, message: String },
-    /// The async runtime could not start.
+    
     Runtime(std::io::Error),
-    /// The supervisor IPC server could not bind.
+    
     Ipc(String),
 }
 
@@ -51,9 +51,9 @@ impl std::fmt::Display for DeviceDaemonError {
 
 impl std::error::Error for DeviceDaemonError {}
 
-/// Run the device daemon for `home` until SIGINT or SIGTERM, then tear down
-/// cleanly. Registers `folders` into the supervisor before spawning engines.
-/// The lock is held for the duration; dropping it removes the PID file.
+
+
+
 pub fn run(
     home: &Path,
     identity: DeviceIdentity,
@@ -151,7 +151,7 @@ pub fn run(
     Ok(())
 }
 
-/// Arguments for ad-hoc single or multi-folder daemon runs (e.g. `--listen` or `--peer-url`).
+
 pub struct AdHocDaemonArgs {
     pub folders: Vec<PathBuf>,
     pub listen_addr: Option<std::net::SocketAddr>,
@@ -160,8 +160,8 @@ pub struct AdHocDaemonArgs {
     pub interval_secs: u64,
 }
 
-/// Run an ad-hoc daemon for specific folders and listen/peer addresses.
-/// Delegates engine construction and supervision to the supervisor.
+
+
 pub fn run_adhoc(
     home: &Path,
     identity: DeviceIdentity,

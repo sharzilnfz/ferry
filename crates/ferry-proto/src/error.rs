@@ -1,28 +1,28 @@
-//! Typed protocol failures.
-//!
-//! Every abnormal session end maps to exactly one variant here. The BYE
-//! reason codes on the wire (see `docs/store-format.md`, "Wire protocol v1")
-//! are the coarse wire-visible projection of this enum; the typed error is
-//! what callers match on.
+
+
+
+
+
+
 
 use crate::version::ProtocolVersion;
 use thiserror::Error;
 
-/// Why a peer sent BYE, or why we send one. Wire values are normative.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ByeReason {
-    /// Clean, expected end of session.
+    
     Normal = 0,
-    /// Version negotiation found no workable common version.
+    
     VersionIncompatible = 1,
-    /// Framing, magic, message type, or state-machine violation.
+    
     ProtocolViolation = 2,
-    /// Handshake authentication failed: bad tag, wrong identity, replay.
+    
     AuthFailed = 3,
-    /// A resource limit was exceeded (oversized frame, counter exhausted).
+    
     ResourceLimit = 4,
-    /// Anything else; detail travels only in local logs, never on the wire.
+    
     Internal = 5,
 }
 

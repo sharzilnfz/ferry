@@ -1,9 +1,9 @@
-//! `ferry share`: secret-scan gate first, then emit a share payload.
-//!
-//! The gate is LOUD: findings print redacted (never the secret itself) and
-//! the command refuses unless `--i-know`. Proceeding emits exactly what
-//! `ferry pair` does — v0 has one payload ritual for both commands, so the
-//! accepting side always runs `pair --accept`.
+
+
+
+
+
+
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -14,7 +14,7 @@ use crate::error::{CliError, CliResult};
 use crate::folder;
 use crate::out::Output;
 
-/// One finding shaped for both renderings.
+
 struct Finding {
     path: String,
     line: Option<usize>,
@@ -72,12 +72,12 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         return Err(err);
     }
 
-    // Try zero-file pairing transport (ticket 08) first.
+    
     if let Some(out) = try_pairing_code_share(&opened, &findings) {
         return out;
     }
 
-    // Fallback to file-offer flow.
+    
     let identity = {
         let home = crate::home::ferry_home()?;
         ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {

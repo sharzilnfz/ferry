@@ -1,41 +1,41 @@
-//! Incremental passes (T-004): rebuild dirty subtrees, splice them into the
-//! cached tree, and emit a manifest identical to a from-scratch
-//! [`ferry_store::snapshot::snapshot_dir`] result.
-//!
-//! How a pass works, in order:
-//!
-//! 1. The caller supplies a **transitivity-closed** dirty set: every marked
-//!    directory plus all of its ancestors up to the root (see
-//!    [`close_under_ancestors`]). Closure is what lets child-id changes flow
-//!    upward without a second pass.
-//! 2. Directories are rebuilt deepest-first. Rebuilding a directory lists it
-//!    on disk; for each entry:
-//!     - unchanged files are detected by a **size/mtime/exec short-circuit**
-//!       against the cached entry and reuse their chunk list without a single
-//!       byte read (`PassStats::bytes_chunked` counts only bytes actually
-//!       read+chunked — the hasher hook used by tests and the benchmark),
-//!     - changed/new files are read, CDC-chunked through the folder's chunker,
-//!       and stored like `snapshot_dir` does,
-//!    - untouched subdirectories keep their cached node and id wholesale —
-//!      not even a stat is spent on their contents,
-//!    - symlinks are re-read (cheap) and NFC/UTF-8 rules applied.
-//! 3. Per-entry admission rules are NOT re-implemented here (T-11): names,
-//!    reserved device names, symlink policy, and representable kinds all go
-//!    through `ferry_store::admission` — the same gate `snapshot.rs` runs —
-//!    so "incremental == from-scratch" holds by construction, not by oracle
-//!    tests alone. One documented divergence: an entry that vanishes
-//!    mid-pass is skipped rather than failed — the next event or audit
-//!    repairs it, and racing deletions are not a scan bug. Walker-local
-//!    filters (store-dir exclusion, ignore policy) deliberately sit BETWEEN
-//!    the gate's two phases: ignored entries are skipped silently, never
-//!    refused loudly.
-//! 4. The new root id is compared with the previous one. Only a CHANGED root
-//!    produces a manifest (parent = previous manifest id), so no-op bursts
-//!    write zero pack bytes.
-//!
-//! Cache hygiene: when a rebuilt listing lacks a previously cached child
-//! directory, that whole prefix is dropped from the cache so deleted or
-//! renamed-away subtrees can never satisfy later short-circuits.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
@@ -58,36 +58,36 @@ use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
 
-/// Structural exclusion: the store directory never enters manifests, walks,
-/// watches, or sweeps. This is folder-layout contract (`docs/store-format.md`),
-/// not an ignore rule — hence hard-coded rather than routed through
-/// [`IgnorePolicy`].
+
+
+
+
 pub(crate) fn is_store_component(name: &str) -> bool {
     name == ferry_store::store::STORE_DIR_NAME
 }
 
-/// Counters describing one completed pass. `bytes_chunked` is the
-/// short-circuit proof hook: a pass over an untouched tree must report 0.
+
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PassStats {
     pub trigger: Trigger,
-    /// Entries present in the resulting tree.
+    
     pub files: usize,
     pub dirs: usize,
     pub symlinks: usize,
-    /// Bytes actually read from disk and pushed through the chunker this
-    /// pass (0 when everything short-circuited).
+    
+    
     pub bytes_chunked: u64,
-    /// Files whose bytes were re-hashed (= re-chunked).
+    
     pub files_rehashed: usize,
-    /// Dirty directories rebuilt.
+    
     pub dirty_dirs: usize,
-    /// Wall-clock time of the pass itself (walk + hash + store IO),
-    /// excluding debounce/event latency.
+    
+    
     pub duration: Duration,
 }
 
-/// Result of one incremental pass whose root changed.
+
 #[derive(Clone, Debug)]
 pub struct ScanOutput {
     pub manifest: RootManifest,
@@ -97,8 +97,8 @@ pub struct ScanOutput {
     pub refused: Vec<RefusedPath>,
 }
 
-/// Close a set of marked directories under "all ancestors plus root", as the
-/// pass requires. Order-stable and deterministic.
+
+
 pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
     let mut out = BTreeSet::new();
     for d in dirs {
@@ -112,8 +112,8 @@ pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
     out
 }
 
-/// Everything one pass needs. Owns scratch state; the cache is borrowed
-/// mutably and left coherent for the next pass.
+
+
 pub(crate) struct Walker<'a> {
     store: &'a Store,
     poly: ferry_store::chunker::ValidatedPoly,
@@ -123,18 +123,18 @@ pub(crate) struct Walker<'a> {
 
     stats: PassStats,
     refused: Vec<RefusedPath>,
-    /// rel -> freshly rebuilt node id for this pass.
+    
     rebuilt: HashMap<RelPath, BlobId>,
-    /// Read buffer and current-chunk scratch reused across files instead of
-    /// a fresh 256 KiB allocation per rehashed file.
+    
+    
     read_buf: Vec<u8>,
     chunk_scratch: Vec<u8>,
 }
 
 impl<'a> Walker<'a> {
-    /// Run one incremental pass. Returns `None` when nothing below the root
-    /// changed (root tree id identical to `prev_root_tree_id`); stats are
-    /// still reported either way via `stats_out`.
+    
+    
+    
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run(
         store: &'a Store,
@@ -148,8 +148,8 @@ impl<'a> Walker<'a> {
         prev_root_tree_id: BlobId,
         stats_out: &mut PassStats,
     ) -> Result<Option<ScanOutput>, ScanError> {
-        // Deepest-first: every dirty descendant is rebuilt before any of its
-        // ancestors needs its id.
+        
+        
         if dirty_closed.is_empty() {
             return Ok(None);
         }
@@ -177,9 +177,9 @@ impl<'a> Walker<'a> {
             if w.rebuilt.contains_key(d) {
                 continue;
             }
-            // A vanished dirty directory is simply absent; its parent's
-            // rebuild omits it. The root itself vanishing is handled by the
-            // engine before a pass ever runs.
+            
+            
+            
             if d.is_empty() && !w.disk_root.is_dir() {
                 return Err(ScanError::Watch("watched root is not a directory".into()));
             }
@@ -227,9 +227,9 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// Record an empty listing for `rel`: vanished mid-pass, a file path
-    /// mis-marked as dirty, or the structurally excluded store directory.
-    /// Parents splicing this pass see absence and omit (and prune) it.
+    
+    
+    
     fn splice_absent(&mut self, rel: &RelPath) -> Result<BlobId, ScanError> {
         self.cache.remove_prefix(rel);
         let empty_bytes = serialize_tree_node(&TreeNode { entries: vec![] });
@@ -243,15 +243,15 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    /// List `rel` on disk, build its `TreeNode` reusing cache where valid,
-    /// store it, update the cache, prune stale children. Returns the node id.
+    
+    
     fn rebuild_dir(
         &mut self,
         rel: &RelPath,
         dirty_closed: &BTreeSet<RelPath>,
     ) -> Result<BlobId, ScanError> {
-        // Inside or at the store directory: structurally excluded. Behave
-        // exactly like absence so parents never point at it.
+        
+        
         if rel.last().is_some_and(|c| is_store_component(c)) {
             return self.splice_absent(rel);
         }
@@ -267,9 +267,9 @@ impl<'a> Walker<'a> {
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::NotFound
-                    // A changed FILE path can land in the dirty set (policy
-                    // marks event targets defensively); rebuilding it as a
-                    // directory must degrade to absence, not an error.
+                    
+                    
+                    
                     || e.kind() == std::io::ErrorKind::NotADirectory =>
             {
                 return self.splice_absent(rel);
@@ -278,10 +278,10 @@ impl<'a> Walker<'a> {
         }
         names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
-        // Take the old node out for the duration of the rebuild: the mutably
-        // borrowed cache must stay alive across the walk, but cloning the
-        // whole listing (chunk lists included) per rebuilt directory was
-        // pure waste. Re-inserted below.
+        
+        
+        
+        
         let old_node = self.cache.take(rel).map(|c| c.node);
         let old_entries: HashMap<&str, &TreeEntry> = old_node
             .as_ref()
@@ -295,9 +295,9 @@ impl<'a> Walker<'a> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            // Shared admission gate, phase 1 (T-11): UTF-8 + NFC. The
-            // walker-local filters below sit between the phases by design:
-            // ignored entries are skipped silently, never refused loudly.
+            
+            
+            
             let component = match admission::admit_name(name.as_os_str()) {
                 Ok(c) => c,
                 Err(r) => {
@@ -310,7 +310,7 @@ impl<'a> Walker<'a> {
                     continue;
                 }
             };
-            // Structural exclusion: the store directory is not user content.
+            
             if is_store_component(&component) {
                 continue;
             }
@@ -318,20 +318,20 @@ impl<'a> Walker<'a> {
             child_rel.push(component.clone());
             let child_disk = disk.join(&name);
 
-            // Stat BEFORE the ignore consult so the seam carries the entry's
-            // real kind (T-12): dir-only patterns bite real dirs with zero
-            // double evaluation and no extra disk access. The stat was
-            // already needed for every surviving entry, so this reorders,
-            // never adds.
+            
+            
+            
+            
+            
             let meta = match std::fs::symlink_metadata(&child_disk) {
                 Ok(m) => m,
-                // Vanished mid-pass: skip; next event or audit repairs.
+                
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(Self::io_err(&child_disk)(e)),
             };
             let ft = meta.file_type();
-            // Symlinks count as files, matching gitignore semantics and the
-            // manifest's link entries.
+            
+            
             let kind = if ft.is_dir() {
                 EntryKind::Dir
             } else {
@@ -341,9 +341,9 @@ impl<'a> Walker<'a> {
                 continue;
             }
 
-            // Shared admission gate, phase 2 (T-11): reserved device names,
-            // symlink policy, representable kinds — byte-for-byte the rules
-            // snapshot_dir runs, from one implementation.
+            
+            
+            
             let observed = if ft.is_symlink() {
                 ObservedKind::Symlink
             } else if ft.is_dir() {
@@ -405,7 +405,7 @@ impl<'a> Walker<'a> {
                                 EntryPayload::File { chunks, .. } => chunks.clone(),
                                 _ => unreachable!("reusable() guarantees a File payload"),
                             }
-                            // Short-circuit hit: zero bytes read.
+                            
                         }
                         _ => self.stream_file_chunks(&child_disk)?,
                     };
@@ -431,9 +431,9 @@ impl<'a> Walker<'a> {
             other => ScanError::Snapshot(other),
         })?;
 
-        // Cache hygiene: children absent from the fresh listing were deleted
-        // or renamed away — drop their records so no future pass can be
-        // fooled into reusing them.
+        
+        
+        
         let stale: Vec<RelPath> = self
             .cache
             .keys_under(rel)
@@ -452,15 +452,15 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    /// Stream one file through the CDC chunker with a bounded read buffer,
-    /// storing each chunk as its boundary completes (T-09). Peak memory is
-    /// one chunk (`MAX_SIZE`) plus the read buffer — never the file size;
-    /// GB-scale assets no longer spike RSS during rehash. Both buffers are
-    /// Walker-owned scratch, reused across files in one pass.
+    
+    
+    
+    
+    
     fn stream_file_chunks(&mut self, path: &Path) -> Result<Vec<(BlobId, u64)>, ScanError> {
         let store = self.store;
-        // `poly` is a ValidatedPoly from the store handle; rejection is
-        // unreachable but stays typed, never a panic.
+        
+        
         let mut chunker = ferry_store::chunker::Chunker::new(self.poly.get())?;
 
         let mut file = std::fs::File::open(path).map_err(Self::io_err(path))?;
@@ -468,8 +468,8 @@ impl<'a> Walker<'a> {
         if buf.len() != REHASH_READ_BUF {
             buf.resize(REHASH_READ_BUF, 0);
         }
-        // Current unterminated chunk only; never exceeds MAX_SIZE because a
-        // boundary fires there unconditionally.
+        
+        
         let cur: &mut Vec<u8> = &mut self.chunk_scratch;
         cur.clear();
         let mut chunks: Vec<(BlobId, u64)> = Vec::new();
@@ -481,8 +481,8 @@ impl<'a> Walker<'a> {
             }
             let mut eaten = 0usize;
             for len in chunker.feed(&buf[..n]) {
-                // The completed chunk spans `cur`'s pending tail plus
-                // `len - cur.len()` fresh bytes of this read.
+                
+                
                 let fresh = len - cur.len();
                 cur.extend_from_slice(&buf[eaten..eaten + fresh]);
                 eaten += fresh;
@@ -506,8 +506,8 @@ impl<'a> Walker<'a> {
         Ok(chunks)
     }
 
-    /// Resolve the tree-node id for a child directory encountered while
-    /// rebuilding `parent_disk`'s listing.
+    
+    
     fn ensure_child(
         &mut self,
         child_rel: &RelPath,
@@ -523,7 +523,7 @@ impl<'a> Walker<'a> {
                 return Ok(cached.id);
             }
         }
-        // Dirty, mtime changed, not cached, or gap: walk it now.
+        
         self.rebuild_dir(child_rel, dirty_closed)
     }
 
@@ -536,12 +536,12 @@ impl<'a> Walker<'a> {
     }
 }
 
-/// Read-buffer size for streamed rehashing; one allocation per pass.
+
 const REHASH_READ_BUF: usize = 256 * 1024;
 
-/// The short-circuit predicate: same size, mtime, exec bit, and file-ness
-/// means the bytes on disk are assumed identical to the recorded chunk list.
-/// Anything else forces a full read+hash.
+
+
+
 fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     match &prev.payload {
         EntryPayload::File {
@@ -556,9 +556,9 @@ fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     }
 }
 
-/// Exec-bit reading (SPEC subset); needs POSIX mode bits. Hosts without
-/// them report false uniformly — the same documented deviation as
-/// ferry-materialize's `live_exec` and ferry-store's snapshot walker.
+
+
+
 fn live_exec(perm: &std::fs::Permissions) -> bool {
     #[cfg(unix)]
     {
@@ -573,9 +573,9 @@ fn live_exec(perm: &std::fs::Permissions) -> bool {
     }
 }
 
-// Metadata accessors mirroring snapshot.rs's rules, now cross-platform:
-// mtime via `Metadata::modified()` with timespec-style negatives; hosts that
-// cannot represent an mtime read as epoch.
+
+
+
 fn split_mtime(t: std::time::SystemTime) -> (i64, u32) {
     ferry_platform::split_unix(t)
 }
@@ -596,10 +596,10 @@ mod tests {
     use ferry_store::snapshot::snapshot_dir;
     use std::collections::BTreeSet;
 
-    /// A seeded scenario: real store + real tree, initial full scan done,
-    /// cache seeded — exactly the state an engine hands to incremental
-    /// passes. Deterministic tests drive [`Walker::run`] directly, no
-    /// threads, no kernel timing.
+    
+    
+    
+    
     struct Fixture {
         _tmp: tempfile::TempDir,
         _store_dir: tempfile::TempDir,
@@ -631,8 +631,8 @@ mod tests {
             fx
         }
 
-        /// Full-scan path: what `run_full` does — whole-tree pass against an
-        /// EMPTY cache, then adopt it (the reseed IS the fresh cache).
+        
+        
         fn full_scan(&mut self) -> BlobId {
             let mut fresh = DirCache::new();
             let mut closed = BTreeSet::new();
@@ -658,7 +658,7 @@ mod tests {
             self.prev_root_tree_id
         }
 
-        /// Same as [`Self::full_scan`] but returns the refusal ledger.
+        
         fn full_scan_with_ledger(&mut self) -> Vec<ferry_store::snapshot::RefusedPath> {
             let mut fresh = DirCache::new();
             let mut closed = BTreeSet::new();
@@ -708,7 +708,7 @@ mod tests {
                 .expect("pass must produce a changed manifest")
         }
 
-        /// From-scratch oracle on the CURRENT disk state.
+        
         fn scratch_root_id(&self) -> BlobId {
             snapshot_dir(&self.store, self.poly, &self.root, &identity((3, 0)))
                 .unwrap()
@@ -742,10 +742,10 @@ mod tests {
         write_file(&fx.root.join("moved/x.txt"), b"mover", false, (15, 0));
         fx.full_scan();
 
-        // True mutation set, applied directly to disk:
-        //   create nested/new.txt, modify mod.txt (different length),
-        //   delete gone.txt, rename dir moved -> relocated (contents ride),
-        //   exec-bit flip on sub/a.txt without content change.
+        
+        
+        
+        
         write_file(
             &fx.root.join("nested/new.txt"),
             b"fresh bytes",
@@ -762,8 +762,8 @@ mod tests {
         std::fs::rename(fx.root.join("moved"), fx.root.join("relocated")).unwrap();
         write_file(&fx.root.join("sub/a.txt"), b"a", true, (13, 0));
 
-        // Dirty set = enclosing dirs of every touched path, closed under
-        // ancestry — precisely what the engine derives from watcher events.
+        
+        
         let dirty = vec![
             p(&["nested"]),
             p(&["nested", "new.txt"]),
@@ -775,21 +775,21 @@ mod tests {
         ];
         let out = fx.incremental_expect(&dirty);
 
-        // Strongest form: byte-identical tree to a fresh snapshot_dir.
+        
         assert_eq!(
             out.root_tree_id,
             fx.scratch_root_id(),
             "incremental splice must reproduce a from-scratch snapshot"
         );
 
-        // Diff oracle: incremental change set == scratch change set, i.e.
-        // exactly the true mutation set (1 added, 1 removed, 2 content-
-        // modified incl. rename-carry, 1 metadata-modified).
+        
+        
+        
         let inc_diff = fx.diff_since_baseline(out.root_tree_id);
         let scratch_diff = fx.diff_since_baseline(fx.scratch_root_id());
         assert_eq!(inc_diff, scratch_diff);
-        // Subtree flattening: intermediate dirs appear alongside leaves,
-        // parents before children.
+        
+        
         assert_eq!(inc_diff.added.len(), 4);
         let added_paths: Vec<_> = inc_diff.added.iter().map(|a| a.path.clone()).collect();
         assert_eq!(
@@ -812,9 +812,9 @@ mod tests {
         );
         assert_eq!(inc_diff.content_modified.len(), 1, "{inc_diff:?}");
         assert_eq!(inc_diff.content_modified[0].path, p(&["mod.txt"]));
-        // The metadata-only mutation is an EXEC-BIT flip; non-unix
-        // filesystems cannot store or observe it, so there it degrades to
-        // zero metadata drift.
+        
+        
+        
         let expect_meta = usize::from(cfg!(unix));
         assert_eq!(inc_diff.metadata_modified.len(), expect_meta);
         if cfg!(unix) {
@@ -829,8 +829,8 @@ mod tests {
         write_file(&fx.root.join("d/y.bin"), &prng(2, 8192), true, (2, 0));
         fx.full_scan();
 
-        // Mark the WHOLE tree dirty with zero disk changes: everything must
-        // hit the size/mtime/exec short-circuit.
+        
+        
         let mut stats = PassStats::default();
         let closed = close_under_ancestors(&[p(&[])]);
         let out = Walker::run(
@@ -863,13 +863,13 @@ mod tests {
         fx.full_scan();
         let baseline = fx.prev_root_tree_id;
 
-        // Silent tamper: SAME length, mtime RESTORED — invisible to stat.
+        
         let mut evil = original.clone();
         evil[0] ^= 0xff;
         evil[512] ^= 0x55;
         write_file(&victim, &evil, false, (100, 500));
 
-        // Half 1: an incremental pass over the whole tree may NOT notice...
+        
         let mut stats = PassStats::default();
         let closed = close_under_ancestors(&[p(&[])]);
         let out = Walker::run(
@@ -889,8 +889,8 @@ mod tests {
         assert_eq!(stats.bytes_chunked, 0);
         assert_eq!(fx.diff_since_baseline(baseline), ChangeSet::default());
 
-        // ...but the cache still matches disk-stat, so a subsequent
-        // incremental also stays silent. Only a full-hash AUDIT repairs.
+        
+        
         let audited = fx.full_scan();
         assert_ne!(audited, baseline, "audit must catch the drift");
         let cs = diff_roots(&fx.store, &baseline, &audited).unwrap();
@@ -916,7 +916,7 @@ mod tests {
         write_file(&fx.root.join("secrets/key.pem"), b"hidden", false, (2, 0));
         fx.full_scan();
 
-        // Touch BOTH subtrees; only the open one may enter the manifest.
+        
         write_file(&fx.root.join("open.txt"), b"visible v2", false, (3, 0));
         write_file(&fx.root.join("secrets/key.pem"), b"rotated", false, (4, 0));
 
@@ -937,9 +937,9 @@ mod tests {
         .unwrap()
         .expect("open.txt changed");
 
-        // With ignores active the from-scratch oracle (which knows no ignore
-        // rules) is not comparable; assert against the POLICY instead: the
-        // ignored subtree never entered the manifest, the visible change did.
+        
+        
+        
         let cs = fx.diff_since_baseline(out.root_tree_id);
         assert_eq!(cs.content_modified.len(), 1);
         assert_eq!(cs.content_modified[0].path, p(&["open.txt"]));
@@ -967,13 +967,13 @@ mod tests {
         assert_eq!(out.root_tree_id, fx.scratch_root_id());
         assert!(
             fx.cache.node(&p(&["doomed"])).is_none() || {
-                // Cache may hold the empty-splice record, but never stale files.
+                
                 let node = &fx.cache.node(&p(&["doomed"])).unwrap().node;
                 node.entries.is_empty()
             }
         );
         assert!(fx.cache.node(&p(&["doomed", "deep"])).is_none());
-        // Diff flattens removed subtrees per path: dir, nested dir, file.
+        
         let cs = fx.diff_since_baseline(out.root_tree_id);
         assert_eq!(cs.removed.len(), 3);
         assert_eq!(
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn store_directory_is_structurally_excluded() {
         let mut fx = Fixture::new("t7");
-        // Store dir appears FIRST, alone: a whole-tree pass must ignore it.
+        
         write_file(
             &fx.root.join(".ferry/packs/x.pack"),
             b"pack bytes",
@@ -1018,7 +1018,7 @@ mod tests {
         assert!(none.is_none(), "store-only content must not move the tree");
         assert_eq!(stats.bytes_chunked, 0);
 
-        // Real user content lands normally.
+        
         write_file(&fx.root.join("real.txt"), b"user content", false, (2, 0));
         let out = fx.incremental_expect(&[p(&["real.txt"])]);
         assert_eq!(out.stats.bytes_chunked, "user content".len() as u64);
@@ -1033,9 +1033,9 @@ mod tests {
         assert!(!root_node.entries.iter().any(|e| e.name == ".ferry"));
         assert!(root_node.entries.iter().any(|e| e.name == "real.txt"));
 
-        // Pack churn behind the watcher stays invisible too. The scratch
-        // oracle cannot be used alongside .ferry because snapshot_dir has no
-        // exclusion rule; the structural exclusion IS the spec here.
+        
+        
+        
         write_file(
             &fx.root.join(".ferry/packs/x.pack"),
             b"more pack bytes!",
@@ -1062,13 +1062,13 @@ mod tests {
 
     #[test]
     fn t12_policy_refusals_match_scratch_oracle_incrementally() {
-        // Reserved device names and policy-refused symlinks must behave
-        // identically in FULL and INCREMENTAL passes: loud ledger entries,
-        // absent from the manifest, with from-scratch parity preserved.
+        
+        
+        
         let mut fx = Fixture::new("t12policy");
         write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
-        // aux.txt is a reserved device name; windows refuses to create it at
-        // the filesystem layer before the scanner could ever refuse it.
+        
+        
         #[cfg(unix)]
         write_file(&fx.root.join("aux.txt"), b"reserved", false, (2, 0));
         #[cfg(unix)]
@@ -1079,10 +1079,10 @@ mod tests {
         let first = fx.full_scan_with_ledger();
 
         use ferry_store::snapshot::RefusalReason;
-        // Unix must loudly refuse reserved names. Windows cannot create any
-        // refusable artifact in this fixture (the filesystem itself rejects
-        // reserved device names; symlinks need privileges), so its ledger is
-        // legitimately empty.
+        
+        
+        
+        
         assert_eq!(
             first
                 .iter()
@@ -1094,8 +1094,8 @@ mod tests {
             .iter()
             .any(|r| r.reason == RefusalReason::AbsoluteSymlinkTarget));
 
-        // Incremental burst over the root keeps tree-id parity with a
-        // from-scratch snapshot; refused entries stay out of the manifest.
+        
+        
         write_file(&fx.root.join("keep.txt"), b"k2", false, (3, 0));
         let out = fx.incremental_expect(&[p(&[])]);
         let root = ferry_store::manifest::parse_tree_node(
@@ -1117,11 +1117,11 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn adversarial_entries_produce_identical_trees_and_ledgers_in_both_walkers() {
-        // T-11 acceptance: fold-adjacent adversarial cases (reserved names,
-        // non-UTF-8 names, unsupported types, link escapes) run through the
-        // SHARED gate, so the from-scratch snapshot_dir and the incremental
-        // walker must agree on the tree AND on every ledger line — nested
-        // paths included.
+        
+        
+        
+        
+        
         use std::os::unix::ffi::OsStrExt;
 
         let mut fx = Fixture::new("t11adv");
@@ -1135,8 +1135,8 @@ mod tests {
             .status()
             .unwrap()
             .success());
-        // Not every filesystem accepts non-UTF-8 names; only expect the
-        // ledger line where the host actually created the entry.
+        
+        
         let non_utf8 = std::ffi::OsStr::from_bytes(b"na\xffme");
         let name_refused = std::fs::write(sub.join(non_utf8), b"y").is_ok();
 
@@ -1202,7 +1202,7 @@ mod tests {
         }
         fx.full_scan();
 
-        // Deterministic pseudo-random op sequence (seeded LCG).
+        
         let mut seed: u64 = 0xC0FFEE;
         let mut next = move || {
             seed = seed
@@ -1254,7 +1254,7 @@ mod tests {
                 }
             }
 
-            // Batch-settle like the debouncer would: one pass per burst.
+            
             let batch: Vec<RelPath> = std::mem::take(&mut all_dirty).into_iter().collect();
             let closed = close_under_ancestors(&batch);
             let mut stats = PassStats::default();

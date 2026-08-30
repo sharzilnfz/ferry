@@ -159,7 +159,7 @@ impl FolderEngine {
         })
     }
 
-    /// Supervision tick: detect unhealthy engine loops and recover with exponential backoff.
+    
     pub fn tick(&mut self) -> bool {
         if let Some(deadline) = self.next_restart_at {
             if std::time::Instant::now() < deadline {

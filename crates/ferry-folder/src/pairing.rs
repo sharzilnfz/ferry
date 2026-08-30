@@ -1,52 +1,52 @@
-//! The unified pairing ritual: ONE engine for every frontend and BOTH
-//! transports. Callers express the intent to pair; transport selection is
-//! internal and never leaks.
-//!
-//! # The two transports, behind one interface
-//!
-//! - **In-band short-code rendezvous.** [`PairingRitual::create_offer`]
-//!   generates a 6-character Base32 code (5 data symbols + 1 CRC checksum
-//!   symbol, ADR-0006, minted privately inside this module), registers an
-//!   ephemeral session
-//!   in a shared rendezvous map (in-process) and a one-time rendezvous file
-//!   (cross-process, same machine), and returns the code.
-//! - **Out-of-band payload exchange.** The same offer is also sealed into a
-//!   payload envelope — a single `FERRY1:<code>:<hex offer>:<expires>` line
-//!   that is simultaneously the QR payload and the `.ferry-pair` file body.
-//!   Across machines there is no camera, so v0 uses PAYLOAD FILES standing
-//!   in for the ~93-byte out-of-band channel a camera scan provides; moving
-//!   the file between machines is the user's out-of-band act
-//!   (AirDrop/scp/USB) — exactly the trust step a camera scan performs.
-//!
-//! [`PairingRitual::accept_offer`] takes EITHER form and detects which:
-//! a 6-character code routes to the rendezvous, a `FERRY1:` envelope rides
-//! the file exchange, anything else is treated as a path to a payload file.
-//! Frontends never branch on transport.
-//!
-//! # File-transport handshake (unchanged wire format)
-//!
-//! ```text
-//! device A (in the folder to share)
-//!   -> create_offer     builds the offer (code + sealed envelope)
-//!      [frontend renders QR / code / instructions here]
-//!   -> PendingOffer::complete   writes <folder>/.ferry/pair-offer.ferry-pair,
-//!                        polls for pair-response.ferry-pair, completes the
-//!                        MAC, appends the peer wrap, seals pair-grant.ferry-grant
-//! device B (in the folder to adopt)
-//!   -> accept_offer     parses the envelope, writes pair-response.ferry-pair
-//!      [frontend shows the response path + expected short code here]
-//!   -> PendingAcceptance::complete  polls for the grant, adopts store +
-//!                        settings, records both devices in its CONFIG_HEAD
-//! ```
-//!
-//! Possession of the offer authorizes pairing; the FMK is wrapped only
-//! AFTER the response MAC proves both sides saw the same transcript. The
-//! grant is sealed under a key derived from the offer's one-time secret
-//! (HKDF-SHA-256, behind `ferry-crypto`), so only an acceptor holding those
-//! exact bytes can open it. Ephemeral session generation, checksum
-//! computation, FMK envelope wrapping, QR payload generation, timeout
-//! expiration, and transport selection all live HERE — callers get plain
-//! structs and coded [`FolderError`]s.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -77,17 +77,17 @@ pub const OFFER_SUFFIX: &str = "pair-offer.ferry-pair";
 pub const RESPONSE_SUFFIX: &str = "pair-response.ferry-pair";
 pub const GRANT_SUFFIX: &str = "pair-grant.ferry-grant";
 
-/// Prefix framing every payload envelope. The envelope is ONE line:
-/// `FERRY1:<code>:<hex offer bytes>:<expires unix secs>` — identical bytes
-/// for the QR symbol and the `.ferry-pair` file, so there is no second
-/// framing layer to drift.
+
+
+
+
 pub const PAYLOAD_PREFIX: &str = "FERRY1";
 
-// ---------------------------------------------------------------------------
-// rendezvous registry (in-band transport)
-// ---------------------------------------------------------------------------
 
-/// One live pairing session in the rendezvous map.
+
+
+
+
 #[derive(Clone)]
 pub struct SessionRecord {
     pub code: String,
@@ -103,7 +103,7 @@ pub struct SessionRecord {
 
 impl std::fmt::Debug for SessionRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The FMK and offer secret never appear in debug output.
+        
         f.debug_struct("SessionRecord")
             .field("code", &self.code)
             .field("folder_id_hex", &self.folder_id_hex)
@@ -114,9 +114,9 @@ impl std::fmt::Debug for SessionRecord {
     }
 }
 
-/// Shared in-memory rendezvous. Two rituals pair through each other by
-/// passing the same map (tests use `with_shared`; production uses
-/// [`shared_rendezvous`]).
+
+
+
 pub type SharedRendezvous = Arc<Mutex<HashMap<String, SessionRecord>>>;
 
 #[must_use]
@@ -124,15 +124,15 @@ pub fn new_shared_rendezvous() -> SharedRendezvous {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// The process-wide rendezvous every default-built ritual joins. Frontends
-/// and the daemon land in the same map without wiring.
+
+
 #[must_use]
 pub fn shared_rendezvous() -> SharedRendezvous {
     static STORE: OnceLock<SharedRendezvous> = OnceLock::new();
     STORE.get_or_init(new_shared_rendezvous).clone()
 }
 
-/// Canonical rendezvous key: uppercase, separators stripped.
+
 fn code_key(code: &str) -> String {
     code.trim()
         .chars()
@@ -141,8 +141,8 @@ fn code_key(code: &str) -> String {
         .to_ascii_uppercase()
 }
 
-/// One-time cross-process rendezvous file (same machine, separate
-/// processes): `/tmp/ferry-rendezvous-<CODE>.json`. Deleted when consumed.
+
+
 fn rendezvous_file_path(code: &str) -> PathBuf {
     std::env::temp_dir().join(format!("ferry-rendezvous-{}.json", code_key(code)))
 }
@@ -192,9 +192,9 @@ fn remove_rendezvous_file(code: &str) {
     let _ = std::fs::remove_file(rendezvous_file_path(code));
 }
 
-// ---------------------------------------------------------------------------
-// payload envelope (out-of-band transport framing)
-// ---------------------------------------------------------------------------
+
+
+
 
 fn encode_envelope(code: &str, offer_bytes: &[u8], expires_at: SystemTime) -> String {
     let secs = expires_at
@@ -207,9 +207,9 @@ fn encode_envelope(code: &str, offer_bytes: &[u8], expires_at: SystemTime) -> St
     )
 }
 
-/// A parsed `FERRY1` payload envelope: the pairing code, the sealed offer
-/// bytes, and the expiry. Frontends that render share status read the code
-/// through [`parse_payload_envelope`] instead of touching crypto internals.
+
+
+
 #[derive(Clone, Debug)]
 pub struct PayloadEnvelope {
     pub code: String,
@@ -217,8 +217,8 @@ pub struct PayloadEnvelope {
     pub expires_at: SystemTime,
 }
 
-/// Parse a `FERRY1:<code>:<hex offer>:<expires>` envelope line (the QR
-/// payload and the `.ferry-pair` file body are the same bytes).
+
+
 #[must_use]
 pub fn parse_payload_envelope(text: &str) -> Option<PayloadEnvelope> {
     let rest = text
@@ -244,19 +244,19 @@ pub fn parse_payload_envelope(text: &str) -> Option<PayloadEnvelope> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// short pairing code (ADR-0006, private to the ritual)
-// ---------------------------------------------------------------------------
 
-/// 24-hour code lifetime (ADR-0006).
+
+
+
+
 const CODE_EXPIRY: Duration = Duration::from_hours(24);
 
-/// The 6-character Base32 short code: 5 random symbols + 1 CRC32 checksum
-/// symbol (ADR-0006). Private to the ritual — callers only ever see codes
-/// through [`PendingOffer::short_code`] and answer through
-/// [`PairingRitual::accept_offer`]; there is no parallel public code
-/// workflow to bypass the ritual with. ferry-crypto keeps only the raw
-/// primitives (base32 alphabet, CRC-32, constant-time compare).
+
+
+
+
+
+
 struct PairingCode {
     code: Zeroizing<String>,
     expires_at: SystemTime,
@@ -264,7 +264,7 @@ struct PairingCode {
 
 impl std::fmt::Debug for PairingCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The code never appears in debug output.
+        
         f.debug_struct("PairingCode")
             .field("code", &"<redacted>")
             .field("expires_at", &self.expires_at)
@@ -299,13 +299,13 @@ impl PairingCode {
         self.expires_at
     }
 
-    /// Structural verification of a typed code (ADR-0006): normalize
-    /// (separators stripped, uppercased), require the exact Base32
-    /// alphabet, then recompute the CRC32 checksum and compare it to the
-    /// sixth symbol in constant time. Full equality against a live session
-    /// is enforced by the rendezvous lookup's exact match, so a structurally
-    /// valid but unknown code fails with the same `pairing-not-found`
-    /// refusal the lookup would produce.
+    
+    
+    
+    
+    
+    
+    
     fn verify(input: &str) -> bool {
         let bytes = code_key(input).into_bytes();
         if bytes.len() != 6 || !bytes.iter().all(|&b| ALPHABET.contains(&b)) {
@@ -316,25 +316,25 @@ impl PairingCode {
     }
 }
 
-/// One expiry comparison shared by both transports: true once `now` has
-/// passed `expires_at`. No hidden clock — callers pass the instant.
+
+
 fn expired(expires_at: SystemTime, now: SystemTime) -> bool {
     now.duration_since(expires_at).is_ok()
 }
 
-// ---------------------------------------------------------------------------
-// the ritual
-// ---------------------------------------------------------------------------
 
-/// The unified pairing engine. Owns identity, rendezvous, and every
-/// transport decision; callers express intent (`create_offer`,
-/// `accept_offer`) and render results.
+
+
+
+
+
+
 pub struct PairingRitual {
     home: PathBuf,
     identity: DeviceIdentity,
     rendezvous: SharedRendezvous,
-    /// Test injection: `folder_id_hex` -> path override. Checked before the
-    /// `$FERRY_HOME` registry.
+    
+    
     folder_overrides: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
 
@@ -358,8 +358,8 @@ impl PairingRitual {
         }
     }
 
-    /// Test helper: register a folder path for a `folder_id` hex without a
-    /// registry file.
+    
+    
     pub fn register_folder_path(&self, folder_id_hex: String, path: PathBuf) {
         self.folder_overrides
             .lock()
@@ -367,15 +367,15 @@ impl PairingRitual {
             .insert(folder_id_hex.to_ascii_lowercase(), path);
     }
 
-    // -- initiate (device A) ------------------------------------------------
+    
 
-    /// Build an offer for an opened folder: the 6-character short code AND
-    /// the sealed payload envelope (QR content / `.ferry-pair` body). The
-    /// rendezvous session goes live immediately; the payload file is
-    /// written only when the file transport is engaged
-    /// ([`PendingOffer::complete`] or [`PendingOffer::write_payload`]).
-    /// Nothing is rendered or written before the folder is proven openable
-    /// by this device (FMK unwraps).
+    
+    
+    
+    
+    
+    
+    
     pub fn create_offer(&self, opened: &OpenFolder) -> FolderResult<PendingOffer> {
         let dot = dot_dir(&opened.root);
         std::fs::create_dir_all(&dot).code("io", "check folder permissions")?;
@@ -416,9 +416,9 @@ impl PairingRitual {
         })
     }
 
-    /// [`Self::create_offer`] for a registered folder id (hex) — the daemon
-    /// IPC entry point. Resolves the folder through the registry (or a
-    /// registered path override) and opens it first.
+    
+    
+    
     pub fn create_offer_for_folder(&self, folder_id_hex: &str) -> FolderResult<PendingOffer> {
         let hex = folder_id_hex.trim().to_ascii_lowercase();
         if ferry_store::format::unhex::<16>(&hex).is_none() {
@@ -439,10 +439,10 @@ impl PairingRitual {
         self.create_offer(&opened)
     }
 
-    /// Non-blocking initiator check: has the acceptor answered? Completes
-    /// the ritual when the response exists (MAC verify, wrap entry in OUR
-    /// `CONFIG_HEAD`, sealed grant for the acceptor); `Ok(None)` while the
-    /// offer is still pending.
+    
+    
+    
+    
     pub fn poll_offer(&self, opened: &OpenFolder) -> FolderResult<Option<PairingCompleted>> {
         poll_offer_at(
             opened,
@@ -451,18 +451,18 @@ impl PairingRitual {
         )
     }
 
-    // -- accept (device B) --------------------------------------------------
+    
 
-    /// Accept an offer in either form. Detection is internal:
-    ///
-    /// - a 6-character code (separators tolerated) routes to the rendezvous
-    ///   transport and completes immediately;
-    /// - a `FERRY1:` envelope string rides the file exchange — the session
-    ///   is answered through the rendezvous when reachable in-band, and
-    ///   otherwise refused with guidance (there is no return channel for
-    ///   pasted text);
-    /// - anything else is a filesystem path to a payload file, answered
-    ///   beside itself exactly where the initiator polls.
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     pub fn accept_offer(
         &self,
         code_or_payload: &str,
@@ -480,11 +480,11 @@ impl PairingRitual {
         self.accept_payload(envelope, offer_file, target)
     }
 
-    /// Rendezvous transport: dial by code, adopt the folder. ADR-0006
-    /// verification (alphabet + constant-time checksum) runs before the
-    /// rendezvous lookup; a mistyped or corrupted code can never match a
-    /// live session, so the refusal is the same `pairing-not-found` the
-    /// lookup would produce.
+    
+    
+    
+    
+    
     fn accept_code(&self, code: &str, target: Option<&Path>) -> FolderResult<PendingAcceptance> {
         let key = code_key(code);
         if !PairingCode::verify(code) {
@@ -507,8 +507,8 @@ impl PairingRitual {
         })
     }
 
-    /// Envelope (pasted QR / copied text): answer in-band when the session
-    /// is reachable, otherwise explain the missing return channel.
+    
+    
     fn accept_envelope(
         &self,
         envelope: PayloadEnvelope,
@@ -536,8 +536,8 @@ impl PairingRitual {
         }
     }
 
-    /// File transport: answer beside the payload file, then wait for the
-    /// grant in [`PendingAcceptance::complete`].
+    
+    
     fn accept_payload(
         &self,
         envelope: PayloadEnvelope,
@@ -560,7 +560,7 @@ impl PairingRitual {
             ));
         }
 
-        // Our half of the ritual, written where the initiator looks for it.
+        
         let offer = PairingOffer::parse(&envelope.offer_bytes).map_err(bad_offer)?;
         let response = respond(&offer, &self.identity, ferry_platform::time::now_unix().0);
         let response_path = offer_file.with_file_name(RESPONSE_SUFFIX);
@@ -583,7 +583,7 @@ impl PairingRitual {
         })
     }
 
-    // -- rendezvous internals ------------------------------------------------
+    
 
     fn peek_session(&self, key: &str) -> Option<SessionRecord> {
         if let Some(r) = self
@@ -598,8 +598,8 @@ impl PairingRitual {
         read_rendezvous_file(key)
     }
 
-    /// Fetch a live session or fail with the targeted coded error; an
-    /// expired session is consumed on sight.
+    
+    
     fn take_session(&self, key: &str) -> FolderResult<SessionRecord> {
         let record = self.peek_session(key).ok_or_else(|| {
             FolderError::new(
@@ -627,9 +627,9 @@ impl PairingRitual {
         Ok(record.clone())
     }
 
-    /// The joiner half over the in-band transport: prove possession via the
-    /// transcript MAC, adopt the folder, and record BOTH devices in the
-    /// trust records on both sides.
+    
+    
+    
     fn join_via_session(
         &self,
         record: &SessionRecord,
@@ -654,8 +654,8 @@ impl PairingRitual {
             )
         })?;
 
-        // Wrap the FMK for ourselves, sealed as the A->B grant so the exact
-        // same unsealing path runs as on the file transport.
+        
+        
         let wrapped_for_peer =
             wrap_folder_key(&record.fmk, &record.folder_id, self.identity.public()).code(
                 "crypto",
@@ -673,9 +673,9 @@ impl PairingRitual {
 
         let accepted = self.adopt(target, record.folder_id, &fmk, poly)?;
 
-        // Our CONFIG_HEAD must name EVERY authorized device: without the
-        // initiator's entry the first session to the owner is rejected as
-        // unauthorized and never converges.
+        
+        
+        
         let wrapped_for_initiator = wrap_folder_key(&fmk, &record.folder_id, &record.initiator_pub)
             .code(
                 "crypto",
@@ -688,8 +688,8 @@ impl PairingRitual {
             &wrapped_for_initiator,
         )?;
 
-        // Best-effort: give the initiator our entry so the allow-list is
-        // mutual without another round trip.
+        
+        
         let _ = append_wrap_entry_for(
             &record.folder_path,
             record.folder_id,
@@ -697,7 +697,7 @@ impl PairingRitual {
             &wrapped_for_peer,
         );
 
-        // Consume the session (one-time), everywhere it lives.
+        
         self.rendezvous
             .lock()
             .expect("rendezvous map")
@@ -707,8 +707,8 @@ impl PairingRitual {
         Ok(accepted)
     }
 
-    /// Shared adoption epilogue: build the local store around the adopted
-    /// key material and persist settings.
+    
+    
     fn adopt(
         &self,
         target: &Path,
@@ -761,37 +761,37 @@ impl PairingRitual {
     }
 }
 
-// ---------------------------------------------------------------------------
-// offer handle (initiator)
-// ---------------------------------------------------------------------------
 
-/// The initiator's half of the ritual, ready for the frontend to render:
-/// the 6-character short code, the sealed payload envelope (QR content AND
-/// `.ferry-pair` body), and where the payload file will land. Nothing is
-/// written to disk yet — render first, then call [`PendingOffer::complete`],
-/// which creates the file watchers look for.
+
+
+
+
+
+
+
+
 pub struct PendingOffer {
-    /// Human-typed pairing code (rendezvous key; compare across devices).
+    
     pub short_code: String,
-    /// Sealed payload envelope bytes: the QR content and the exact body of
-    /// the `.ferry-pair` file.
+    
+    
     pub payload: Vec<u8>,
-    /// Where [`PendingOffer::complete`] writes the payload file.
+    
     pub payload_path: PathBuf,
-    /// When the offer stops being answerable.
+    
     pub expires_at: SystemTime,
 }
 
 impl PendingOffer {
-    /// The string to encode in a QR symbol (identical to the payload file
-    /// body — one framing, no drift).
+    
+    
     #[must_use]
     pub fn qr_payload(&self) -> String {
         String::from_utf8_lossy(&self.payload).into_owned()
     }
 
-    /// Write the payload file for out-of-band exchange WITHOUT entering the
-    /// polling loop (frontends that report status separately).
+    
+    
     pub fn write_payload(&self) -> FolderResult<()> {
         std::fs::write(&self.payload_path, &self.payload).code(
             "io",
@@ -799,10 +799,10 @@ impl PendingOffer {
         )
     }
 
-    /// Engage the file transport: write the payload file, poll for the
-    /// responder's response beside it, and finish the ritual — transcript
-    /// MAC, wrap entry in OUR `CONFIG_HEAD`, sealed grant for the acceptor.
-    /// Polls up to `timeout_secs`, then fails with `pair-timeout`.
+    
+    
+    
+    
     pub fn complete(
         self,
         opened: &OpenFolder,
@@ -833,31 +833,31 @@ impl PendingOffer {
     }
 }
 
-/// Everything that happened when the initiator's side finished.
+
 pub struct PairingCompleted {
-    /// The device we just paired with (X25519 public key).
+    
     pub peer_device_id: DeviceId,
     pub folder_id: [u8; 16],
-    /// Short code for this offer (same as [`PendingOffer::short_code`]).
+    
     pub short_code: String,
     pub offer_path: PathBuf,
-    /// Where the sealed grant was written for the acceptor.
+    
     pub grant_path: PathBuf,
 }
 
-// ---------------------------------------------------------------------------
-// acceptance handle (acceptor)
-// ---------------------------------------------------------------------------
 
-/// The acceptor's half of the ritual after [`PairingRitual::accept_offer`]:
-/// what to show the human plus what [`PendingAcceptance::complete`] needs
-/// to finish. Transport specifics stay private — rendezvous acceptance is
-/// already finished here; file transport waits for the sealed grant.
+
+
+
+
+
+
+
 pub struct PendingAcceptance {
-    /// Short code the human should compare against the other screen.
+    
     pub expected_short_code: String,
-    /// Where OUR response was written for the initiator to pick up (file
-    /// transport only; `None` when the rendezvous already completed).
+    
+    
     pub response_path: Option<PathBuf>,
     target: PathBuf,
     grant_path: Option<PathBuf>,
@@ -867,11 +867,11 @@ pub struct PendingAcceptance {
 }
 
 impl PendingAcceptance {
-    /// Finish the ritual. Rendezvous acceptance returns immediately; the
-    /// file transport polls for the sealed grant, then adopts the folder:
-    /// unwrap the FMK, build the local store, persist settings, record BOTH
-    /// devices in our `CONFIG_HEAD`. Polls up to `timeout_secs`, then fails
-    /// with `pair-timeout`.
+    
+    
+    
+    
+    
     pub fn complete(self, timeout_secs: u64) -> FolderResult<Accepted> {
         if let Some(done) = self.done {
             return Ok(done);
@@ -925,11 +925,11 @@ impl PendingAcceptance {
     }
 }
 
-/// Acceptor adoption including the initiator's entry in OUR `CONFIG_HEAD`:
-/// the engine seeds its peer allow-list from `CONFIG_HEAD` wrap entries and
-/// denies unknown peers, so the head must name EVERY authorized device. The
-/// appended record is a real, usable key envelope — mirroring what
-/// `append_wrap_entry_for` does on the initiator's side.
+
+
+
+
+
 fn adopt_and_record(
     target: &Path,
     identity: &DeviceIdentity,
@@ -971,19 +971,19 @@ fn adopt_and_record(
     })
 }
 
-/// What the acceptor ended up with.
+
 pub struct Accepted {
-    /// The adopted folder root (the target given to
-    /// [`PairingRitual::accept_offer`], or `.` when none was).
+    
+    
     pub folder: PathBuf,
     pub folder_id: [u8; 16],
 }
 
-// ---------------------------------------------------------------------------
-// shared helpers
-// ---------------------------------------------------------------------------
 
-/// Where pairing artifacts live for one folder.
+
+
+
+
 fn artifact(folder_dot: &Path, suffix: &str) -> PathBuf {
     folder_dot.join(suffix)
 }
@@ -1011,8 +1011,8 @@ fn bad_offer(e: ferry_crypto::pairing::PairingError) -> FolderError {
     )
 }
 
-/// Key derivation and AEAD sealing live behind ferry-crypto: this module
-/// only builds the JSON body and maps errors.
+
+
 fn seal_grant(
     offer_bytes: &[u8],
     wrapped_for_peer: &[u8; WRAPPED_LEN],
@@ -1038,8 +1038,8 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> FolderResult<([u8; 16], u64, [u
         FolderError::new("bad-grant", "grant body incomplete", "redo the pairing")
     })?;
     let wrapped = unhex_80(wrapped_hex)?;
-    // folder_id rides in the offer itself (offsets pinned by ferry-crypto's
-    // v1 offer layout); bounds-checked, no panic path.
+    
+    
     let folder_id: [u8; 16] = offer_bytes
         .get(5..21)
         .and_then(|s| <&[u8] as TryInto<[u8; 16]>>::try_into(s).ok())
@@ -1053,7 +1053,7 @@ fn open_grant(offer_bytes: &[u8], raw: &[u8]) -> FolderResult<([u8; 16], u64, [u
     Ok((folder_id, poly, wrapped))
 }
 
-/// Map ferry-crypto's grant errors onto targeted coded errors.
+
 fn grant_error(e: GrantError) -> FolderError {
     match e {
         GrantError::Malformed { .. } => FolderError::new(
@@ -1089,9 +1089,9 @@ fn hex_of(b: &[u8]) -> String {
     ferry_store::format::hex(b)
 }
 
-/// Initiator poll driven by an explicit payload location: read the
-/// envelope, look for the responder's reply beside it, and finish the
-/// ritual when the reply exists. `Ok(None)` while still pending.
+
+
+
 fn poll_offer_at(
     opened: &OpenFolder,
     identity: &DeviceIdentity,

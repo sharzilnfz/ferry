@@ -1,4 +1,4 @@
-//! UI State model and transitions for Ferry TUI.
+
 
 use crate::activity_log::ActivityLog;
 use ferry_ipc::protocol::{
@@ -8,7 +8,7 @@ use ferry_ipc::protocol::{
 use ferry_platform::time::current_time_str;
 use std::collections::HashMap;
 
-/// Core synchronization state badge displayed in the TUI header.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncState {
     #[default]
@@ -22,7 +22,7 @@ pub enum SyncState {
 }
 
 impl SyncState {
-    /// Text label displayed on the engine state badge.
+    
     #[must_use]
     pub const fn badge_text(&self) -> &'static str {
         match self {
@@ -36,7 +36,7 @@ impl SyncState {
         }
     }
 
-    /// Primary badge foreground color.
+    
     #[must_use]
     pub const fn badge_color(&self) -> ratatui::style::Color {
         match self {
@@ -51,7 +51,7 @@ impl SyncState {
     }
 }
 
-/// Active chunk or file transfer state.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferProgressState {
     pub bytes_transferred: u64,
@@ -63,7 +63,7 @@ pub struct TransferProgressState {
     pub direction: Option<TransferDirection>,
 }
 
-/// Format bytes into human-readable representation.
+
 #[must_use]
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -81,7 +81,7 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Complete in-memory state of the Ferry TUI dashboard.
+
 #[derive(Debug, Clone)]
 pub struct TuiState {
     pub folder: String,
@@ -104,7 +104,7 @@ pub struct TuiState {
     pub is_connected: bool,
     pub should_quit: bool,
 
-    // Pre-computed strings for zero-allocation rendering in terminal draw loop:
+    
     pub cached_metrics_line: String,
     pub cached_manifest_line: String,
     pub cached_pin_line: String,
@@ -148,7 +148,7 @@ impl Default for TuiState {
 }
 
 impl TuiState {
-    /// Create a new state initialized with folder and device identifiers.
+    
     #[must_use]
     pub fn new(
         folder: impl Into<String>,
@@ -165,7 +165,7 @@ impl TuiState {
         s
     }
 
-    /// Resolve the authoritative high-level sync state from current fields.
+    
     #[must_use]
     pub fn resolve_sync_state(&self) -> SyncState {
         if !self.is_connected && self.raw_state_str.eq_ignore_ascii_case("offline") {
@@ -194,7 +194,7 @@ impl TuiState {
         }
     }
 
-    /// Apply an `EngineSnapshot` received from the daemon.
+    
     pub fn apply_snapshot(&mut self, snapshot: EngineSnapshot) {
         self.folder = snapshot.folder;
         self.folder_id = snapshot.folder_id;
@@ -234,7 +234,7 @@ impl TuiState {
         );
     }
 
-    /// Apply an engine state change notification.
+    
     pub fn apply_state_changed(
         &mut self,
         state: String,
@@ -266,7 +266,7 @@ impl TuiState {
         );
     }
 
-    /// Apply an active transfer progress notification.
+    
     #[allow(clippy::too_many_arguments)]
     pub fn apply_transfer_progress(
         &mut self,
@@ -309,7 +309,7 @@ impl TuiState {
         );
     }
 
-    /// Apply a recorded conflict notification.
+    
     pub fn apply_conflict_recorded(
         &mut self,
         path: String,
@@ -332,7 +332,7 @@ impl TuiState {
         );
     }
 
-    /// Apply an error notification from the daemon.
+    
     pub fn apply_error(&mut self, code: String, message: String) {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
@@ -341,7 +341,7 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Error { code, message });
     }
 
-    /// Apply an acknowledgement notification.
+    
     pub fn apply_ack(&mut self, command: String, message: Option<String>) {
         self.is_connected = true;
         if command == "list_conflicts" {
@@ -358,7 +358,7 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Ack { command, message });
     }
 
-    /// Apply a heartbeat pong notification.
+    
     pub fn apply_pong(&mut self) {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
@@ -367,7 +367,7 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Pong);
     }
 
-    /// Process any generic `DaemonMessage`.
+    
     pub fn handle_daemon_message(&mut self, msg: DaemonMessage) {
         match msg {
             DaemonMessage::Snapshot(s) => self.apply_snapshot(s),
@@ -412,7 +412,7 @@ impl TuiState {
         }
     }
 
-    /// Update pre-computed strings for zero-allocation rendering inside ratatui's draw loop.
+    
     pub fn update_cached_strings(&mut self) {
         self.cached_metrics_line = format!(
             "{} files, {} dirs, {} symlinks ({})",

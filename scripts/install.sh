@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Ferry installer: downloads and installs pre-compiled release binaries.
 set -euo pipefail
 
 REPO="nafisX/ferry"
 VERSION="${FERRY_VERSION:-latest}"
 
-# 1. Detect OS
 OS_RAW="$(uname -s)"
 case "$OS_RAW" in
     Darwin)
@@ -20,7 +18,6 @@ case "$OS_RAW" in
         ;;
 esac
 
-# 2. Detect Architecture
 ARCH_RAW="$(uname -m)"
 case "$ARCH_RAW" in
     x86_64|amd64)
@@ -38,7 +35,6 @@ esac
 TARGET="${ARCH}-${OS}"
 ARTIFACT="ferry-${TARGET}"
 
-# 3. Determine release version
 if [ "$VERSION" = "latest" ]; then
     RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
     TAG="$(curl -sSL -H "Accept: application/vnd.github.v3+json" "$RELEASE_URL" | grep '"tag_name":' | head -1 | cut -d'"' -f4 || true)"
@@ -51,7 +47,6 @@ fi
 
 echo "Installing Ferry ${TAG} for ${TARGET}..."
 
-# 4. Download archive and checksum
 TMPDIR="$(mktemp -d)"
 cleanup() {
     rm -rf "$TMPDIR"
@@ -81,11 +76,9 @@ if curl -sSLf -o "${TMPDIR}/${SHA_FILE}" "$CHECKSUM_URL"; then
     )
 fi
 
-# 5. Extract
 echo "Extracting binary..."
 tar -xzf "${TMPDIR}/${TAR_FILE}" -C "$TMPDIR"
 
-# 6. Locate extracted binary
 EXTRACTED_BIN=""
 for cand in "${TMPDIR}/${ARTIFACT}/ferry" "${TMPDIR}/ferry"; do
     if [ -f "$cand" ]; then
@@ -99,7 +92,6 @@ if [ -z "$EXTRACTED_BIN" ]; then
     exit 1
 fi
 
-# 7. Select destination
 DEST_DIR=""
 if [ -d "$HOME/.cargo/bin" ] && [ -w "$HOME/.cargo/bin" ]; then
     DEST_DIR="$HOME/.cargo/bin"
@@ -118,7 +110,6 @@ chmod +x "$DEST_BIN"
 
 echo "Successfully installed Ferry to ${DEST_BIN}"
 
-# 8. Check PATH
 case ":$PATH:" in
     *":$DEST_DIR:"*) ;;
     *)

@@ -1,9 +1,9 @@
-//! Shared harness for ferry-sync integration tests: two real engines over
-//! loopback TCP in temp dirs, plus the corrupting-transport test hook and
-//! tree-comparison helpers.
 
-// Each test binary compiles this module separately; not every binary uses
-// every helper.
+
+
+
+
+
 #![allow(dead_code)]
 
 pub mod corrupt;
@@ -22,14 +22,14 @@ use ferry_sync::engine::device_identity_for_tag;
 use ferry_sync::format::hex;
 use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
 
-/// Store for a test engine, opened through ferry-folder — the one module
-/// that owns key unwrap and cipher choice. No test here names a cipher.
+
+
 pub fn test_store(cfg: &EngineConfig) -> Arc<ferry_store::store::Store> {
     ferry_folder::open_or_create_test_store(&cfg.store_dir, &device_identity_for_tag(&cfg.tag))
         .expect("test folder store")
 }
 
-/// Build (but do not start) an engine over a ferry-folder-opened store.
+
 pub fn engine(cfg: EngineConfig, transport: Arc<dyn ferry_sync::Transport>) -> SyncEngine {
     let store = test_store(&cfg);
     SyncEngine::with_store(cfg, transport, store).expect("engine init")
@@ -38,7 +38,7 @@ pub fn engine(cfg: EngineConfig, transport: Arc<dyn ferry_sync::Transport>) -> S
 #[allow(unused_imports)]
 pub use corrupt::CorruptingTransport;
 
-/// N from the ticket: convergence budget. Default 30s, configurable.
+
 pub fn timeout_from_env() -> Duration {
     let secs = std::env::var("FERRY_SYNC_TEST_TIMEOUT_SECS")
         .ok()
@@ -47,25 +47,25 @@ pub fn timeout_from_env() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Transport selection for the WHOLE suite (T-009 seam payoff):
-///
-/// - unset / `tcp` → the M0 throwaway loopback TCP transport (default).
-/// - `iroh` → both engines ride `ferry_iroh::IrohTransport` end to end.
-///
-/// Run the parity proof with:
-///
-/// ```text
-/// FERRY_SYNC_E2E_TRANSPORT=iroh cargo test -p ferry-sync
-/// ```
-///
-/// The scenarios, assertions, and engine code are byte-identical in both
-/// modes; only this constructor differs. That is the seam doing its job.
+
+
+
+
+
+
+
+
+
+
+
+
+
 pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
     match std::env::var("FERRY_SYNC_E2E_TRANSPORT").as_deref() {
         Ok("iroh") => {
-            // Distinct fixed seeds per call would collide across fixture
-            // nodes; derive per-instance randomness instead. Two calls =
-            // two endpoints = two public keys, exactly like two machines.
+            
+            
+            
             use rand::RngCore;
             let mut seed_a = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut seed_a);
@@ -88,17 +88,17 @@ pub struct EngineFixture {
     pub b: EngineHandle,
 }
 
-/// Config hook passed to [`EngineFixture::start_with_cfg_a`].
+
 type CfgHook = Box<dyn FnOnce(&mut EngineConfig)>;
 
 impl EngineFixture {
-    /// Node A listens; node B connects. Both poll fast for snappy tests.
+    
     pub fn start(name: &str, seed: u64) -> Self {
         Self::start_inner(name, seed, None, None)
     }
 
-    /// Like [`start`], but node B dials through the given transport (test
-    /// hook point).
+    
+    
     pub fn start_with_transport_b(
         name: &str,
         seed: u64,
@@ -107,8 +107,8 @@ impl EngineFixture {
         Self::start_inner(name, seed, Some(transport_b), None)
     }
 
-    /// Like [`start`], but node A's config passes through `hook_cfg_a`
-    /// before the engine builds (e.g. to set `pin_state_dir`, T-06).
+    
+    
     pub fn start_with_cfg_a(
         name: &str,
         seed: u64,
@@ -198,8 +198,8 @@ impl EngineFixture {
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
-        // Trust policy is refuse-by-default; these fixtures test convergence,
-        // not pairing, so both nodes opt into TOFU explicitly (ADR-0007).
+        
+        
         engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let a = engine_a.start();
 
@@ -238,7 +238,7 @@ impl EngineFixture {
         cfg
     }
 
-    /// Stop the default B and start a fresh one through `transport`.
+    
     pub fn replace_b(&mut self, transport: Arc<dyn ferry_sync::Transport>) -> EngineHandle {
         self.b.shutdown();
         let cfg = self.b_config();
@@ -257,8 +257,8 @@ impl EngineFixture {
         self._dir.path().join("b/tree")
     }
 
-    /// Converged = same non-zero agreed manifest id on both sides AND equal
-    /// current root trees matching the agreed manifest.
+    
+    
     pub fn converged(&self) -> bool {
         match (
             self.a.agreed_id(),
@@ -284,7 +284,7 @@ fn self_cfg(base: &Path, slot: &str, tag: String, poly: u64) -> EngineConfig {
     cfg
 }
 
-/// Deterministic fixture tree writer used by several tests.
+
 pub struct TreeBuilder {
     root: PathBuf,
     rng: StdRng,
@@ -329,8 +329,8 @@ impl TreeBuilder {
         fs::remove_file(self.root.join(rel)).unwrap();
     }
 
-    /// `count` files spread across nested dirs with random content.
-    /// Returns rel paths written.
+    
+    
     pub fn create_random_files(&mut self, count: usize) -> Vec<String> {
         let mut out = Vec::new();
         for i in 0..count {
@@ -347,8 +347,8 @@ impl TreeBuilder {
     }
 }
 
-/// Byte-for-byte equality of every file under both trees, relative paths
-/// matched exactly. Extra files on either side are inequality.
+
+
 pub fn trees_identical(a: &Path, b: &Path) -> bool {
     let ra = listing(a);
     let rb = listing(b);

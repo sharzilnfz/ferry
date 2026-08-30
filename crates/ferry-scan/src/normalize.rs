@@ -1,15 +1,15 @@
-//! Mtime-noise normalization: the definition of "same tree" used by the
-//! correctness invariant and its tests.
-//!
-//! Two manifests are **equivalent modulo mtime noise** when stripping every
-//! entry's mtime (files, dirs, symlinks alike) makes their trees serialize
-//! identically. Content identity (chunk-id sequences), names, types, exec
-//! bits, and symlink targets all still count; only timestamps are forgiven.
-//!
-//! Why: filesystems and test harnesses bump directory mtimes as a side
-//! effect of unrelated operations, and an incremental pass legitimately
-//! re-derives mtimes from disk. A comparison that forgave nothing would flag
-//! phantom drift; one that forgave content would hide real bugs.
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 
@@ -22,8 +22,8 @@ use ferry_store::{BlobId, BlobKind};
 
 use crate::error::ScanError;
 
-/// BLAKE3 of the subtree serialization with all mtimes zeroed, computed
-/// recursively (dir children replaced by their own canonical ids).
+
+
 pub fn canonical_tree_id(store: &Store, tree_id: &BlobId) -> Result<BlobId, ScanError> {
     let mut memo = HashMap::new();
     canonical_inner(store, tree_id, &mut memo)
@@ -74,8 +74,8 @@ fn strip_entry(e: &TreeEntry) -> TreeEntry {
     }
 }
 
-/// The invariant comparator: true when the two roots describe the same tree
-/// ignoring mtimes.
+
+
 pub fn equivalent_modulo_mtime(store: &Store, a: &BlobId, b: &BlobId) -> Result<bool, ScanError> {
     Ok(canonical_tree_id(store, a)? == canonical_tree_id(store, b)?)
 }
@@ -132,8 +132,8 @@ mod tests {
         let tc = snap(&store, &c, 3);
 
         assert!(!equivalent_modulo_mtime(&store, &ta, &tb).unwrap());
-        // The exec-bit half only exists where the bit is storable; non-unix
-        // scans legitimately record c and a as identical.
+        
+        
         if cfg!(unix) {
             assert!(
                 !equivalent_modulo_mtime(&store, &ta, &tc).unwrap(),

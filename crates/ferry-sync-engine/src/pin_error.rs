@@ -1,5 +1,5 @@
-//! Typed errors for the pin subsystem. Every failure names its path (or
-//! peer) and says why — corrupt state is loud, never silently ignored.
+
+
 
 use std::path::PathBuf;
 

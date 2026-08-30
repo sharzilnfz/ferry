@@ -1,15 +1,15 @@
-//! The store: the API over `.ferry/` that turns bytes into indexed,
-//! pack-backed blobs and back.
-//!
-//! Write path (`docs/store-format.md`): blobs land in up-to-8 open staging
-//! packs per kind with CSPRNG assignment and a 16 MiB seal target; sealing
-//! serializes, encrypts (stubbed cipher for v0), writes to `tmp/`, fsyncs,
-//! and renames into `packs/` atomically. Readers only ever see complete
-//! packs.
-//!
-//! Concurrency: staging pools and the in-memory location table are mutexed;
-//! pack renames are atomic; index appends are new files, never rewrites. Any
-//! number of threads may put/get concurrently through a shared `&Store`.
+
+
+
+
+
+
+
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
@@ -22,7 +22,7 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_folder() -> tempfile::TempDir {
-        // Empty folder; Store::create makes .ferry itself.
+        
         tempfile::tempdir().unwrap()
     }
 
@@ -44,8 +44,8 @@ mod tests {
         .unwrap()
     }
 
-    /// Full acceptance path: arbitrary bytes -> chunks -> store -> reassembly
-    /// identical, across sizes spanning empty to multi-MiB.
+    
+    
     #[test]
     fn round_trip_property_bytes_to_chunks_to_blobs() {
         let folder = temp_folder();
@@ -82,7 +82,7 @@ mod tests {
                 all_chunk_ids.insert(id);
             }
 
-            // Reassembly from THIS session (staging fallback included).
+            
             let mut rejoined = Vec::with_capacity(data.len());
             for part in &parts {
                 let id: BlobId = *blake3::hash(part).as_bytes();
@@ -90,7 +90,7 @@ mod tests {
             }
             assert_eq!(rejoined, data, "session round trip failed at size {size}");
 
-            // Metadata blob rides PACK_META.
+            
             let tree = crate::manifest::TreeNode {
                 entries: vec![crate::manifest::file_entry(
                     &format!("f{i}"),
@@ -106,12 +106,12 @@ mod tests {
             let tree_bytes = crate::manifest::serialize_tree_node(&tree);
             store.put_meta(BlobKind::TreeNode, &tree_bytes).unwrap();
 
-            // Seal and snapshot after each file so later reopen checks see
-            // cumulative disk state.
+            
+            
             store.flush().unwrap();
             store.write_index_snapshot().unwrap();
 
-            // Fresh instance reads everything back through disk state only.
+            
             let reopened = reopen(folder.path());
             let mut rejoined = Vec::new();
             for part in &parts {
@@ -135,8 +135,8 @@ mod tests {
         let poly = generate_polynomial(&mut StdRng::seed_from_u64(78));
         let store = new_store(folder.path());
 
-        // ~14 MiB of structured pseudo-random content (large enough that
-        // many chunks exist downstream of the insertion point).
+        
+        
         let mut rng = StdRng::seed_from_u64(555);
         let base: Vec<u8> = (0..14 * 1024 * 1024)
             .map(|_| (rng.gen::<u8>() & 0x0f) | b'0')
@@ -153,7 +153,7 @@ mod tests {
             store.put_data(&base[*o..*o + l]).unwrap();
         }
 
-        // Insert 1 KiB near the start, well before most boundaries.
+        
         let insert_at = 96 * 1024;
         let mut shifted = Vec::with_capacity(base.len() + 1024);
         shifted.extend_from_slice(&base[..insert_at]);
@@ -166,7 +166,7 @@ mod tests {
             .map(|(o, l)| id_of(&shifted[*o..*o + l]))
             .collect();
 
-        // How many chunks AFTER the insertion point are byte-identical?
+        
         let downstream_before = &before_ids[1..];
         let downstream_after = &after_ids[1..];
         let shared: HashSet<&BlobId> = downstream_before
@@ -180,10 +180,10 @@ mod tests {
             shared.len(),
             downstream_before.len()
         );
-        // The tail chunk specifically must be unchanged.
+        
         assert_eq!(before_ids.last(), after_ids.last());
 
-        // Storing the shifted version adds few NEW blobs: most were deduped.
+        
         let known: HashSet<BlobId> = before_ids.iter().copied().collect();
         let new_blobs = after_ids.iter().filter(|id| !known.contains(*id)).count();
         assert!(
@@ -243,14 +243,14 @@ mod tests {
         let per_thread: Vec<Vec<(BlobKind, BlobId)>> =
             handles.into_iter().map(|h| h.join().unwrap()).collect();
 
-        // End-of-burst rule: seal everything.
+        
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
-        // Every pack on disk verifies against its own name.
+        
         verify_all_pack_names(folder.path());
 
-        // Every written blob is readable through a fresh store.
+        
         let reopened = Arc::new(reopen(folder.path()));
         let mut all_ids = Vec::new();
         for thread_ids in &per_thread {
@@ -266,7 +266,7 @@ mod tests {
         }
         assert_eq!(all_ids.len(), writers * blobs_per_writer);
 
-        // Concurrent readers racing a writer must also hold up.
+        
         let reader_handles: Vec<_> = (0..4)
             .map(|_| {
                 let s = Arc::clone(&reopened);
@@ -292,7 +292,7 @@ mod tests {
         store.write_index_snapshot().unwrap();
         drop(store);
 
-        // Corrupt every pack's first body byte.
+        
         let packs_dir = folder.path().join(".ferry/packs");
         for entry in std::fs::read_dir(&packs_dir).unwrap().flatten() {
             let mut bytes = std::fs::read(entry.path()).unwrap();
@@ -302,8 +302,8 @@ mod tests {
             }
         }
 
-        // The reopened store resolves the location, verifies the name first,
-        // and refuses without decrypting anything.
+        
+        
         let store = reopen(folder.path());
         let err = store.get(BlobKind::DataChunk, &id).unwrap_err();
         assert!(
@@ -314,8 +314,8 @@ mod tests {
             "{err}"
         );
 
-        // Recovery: rebuilding the index from packs cannot resurrect a
-        // corrupt pack either -- it is reported and skipped.
+        
+        
         let (_, skipped) = store.rebuild_index().unwrap();
         assert_eq!(skipped.len(), 1);
     }
@@ -347,14 +347,14 @@ mod tests {
             .count()
     }
 
-    /// T-15 acceptance: ingesting K packs appends K single-pack INDEX
-    /// records (cost proportional to K, never a full-store rescan), and the
-    /// union alone makes every blob readable from a cold start.
+    
+    
+    
     #[test]
     fn steady_state_ingest_appends_one_incremental_record_per_sealed_pack() {
         let folder = temp_folder();
         let mut store = new_store(folder.path());
-        store.set_seal_target(64 * 1024); // force several small packs
+        store.set_seal_target(64 * 1024); 
         let index_dir = folder.path().join(".ferry/index");
         assert_eq!(count_ferryindex(&index_dir), 0);
 
@@ -364,7 +364,7 @@ mod tests {
             let bytes: Vec<u8> = (0..80 * 1024).map(|_| rng.gen()).collect();
             let id = store.put_data(&bytes).unwrap();
             written.push((bytes, id));
-            store.flush().unwrap(); // end-of-burst seal
+            store.flush().unwrap(); 
         }
 
         let fmk = core::array::from_fn(|i| i as u8);
@@ -376,8 +376,8 @@ mod tests {
             "exactly one INDEX record per sealed pack"
         );
 
-        // Every record covers EXACTLY ONE pack: incremental appends, not
-        // full-table snapshots.
+        
+        
         for entry in std::fs::read_dir(&index_dir).unwrap().flatten() {
             let bytes = std::fs::read(entry.path()).unwrap();
             let rows = crate::index::open_index_container(&bytes, &fmk, &PassthroughCipher)
@@ -390,15 +390,15 @@ mod tests {
             );
         }
 
-        // The union alone resolves every blob from disk state only.
+        
         let reopened = reopen(folder.path());
         for (bytes, id) in &written {
             assert_eq!(&reopened.get(BlobKind::DataChunk, id).unwrap(), bytes);
         }
     }
 
-    /// Build a deliverable pack out-of-band (as a peer would send it):
-    /// one `DataChunk` blob sealed into a `PackData` container.
+    
+    
     fn sealed_test_pack(seed: u8, body_len: usize) -> (BlobId, Vec<u8>, Vec<u8>) {
         let body: Vec<u8> = (0..body_len)
             .map(|i| (i as u8).wrapping_add(seed))
@@ -436,11 +436,11 @@ mod tests {
         assert_eq!(count_ferryindex(&index_dir), 0);
         store.adopt_pack(&name, &file).unwrap();
 
-        // Readable immediately: the location table merged synchronously,
-        // no flush or rebuild involved.
+        
+        
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        // Exactly one pack landed and one incremental record covers it.
+        
         assert_eq!(pack_count(folder.path()), 1);
         assert_eq!(count_ferryindex(&index_dir), 1);
         let record = std::fs::read_dir(&index_dir)
@@ -457,18 +457,18 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pack, name);
 
-        // Re-adoption (CLI sync racing a daemon) is idempotent: no second
-        // pack file, blob still readable.
+        
+        
         store.adopt_pack(&name, &file).unwrap();
         assert_eq!(pack_count(folder.path()), 1);
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        // Cold start resolves it through the appended record alone.
+        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        // A lying claimed name is rejected before any disk write.
+        
         let (_id2, file2, _b2) = sealed_test_pack(9, 512);
         let fake = [0xEE; 32];
         let err = reopened.adopt_pack(&fake, &file2).unwrap_err();
@@ -486,20 +486,20 @@ mod tests {
             .any(|e| e.file_name().to_string_lossy().starts_with("eeee")));
     }
 
-    /// T-15 acceptance: a multi-MiB delivered pack ingests through the
-    /// incremental path with bounded work per stage and stays readable.
+    
+    
     #[test]
     fn large_delivered_pack_ingests_incrementally_and_reads_back() {
         let folder = temp_folder();
         let store = new_store(folder.path());
-        // ~8 MiB body: realistic pack scale, bounded RAM.
+        
         let (id, file, body) = sealed_test_pack(3, 8 * 1024 * 1024);
         let name = pack_name_of(&file);
 
         store.adopt_pack(&name, &file).unwrap();
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        // Cold start through the single incremental record.
+        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
@@ -514,13 +514,13 @@ mod tests {
         store.flush().unwrap();
 
         assert_eq!(store.pack_cache.len(), 0);
-        // Repeated gets populate and hit the cache
+        
         for _ in 0..5 {
             assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), payload);
         }
         assert_eq!(store.pack_cache.len(), 1);
 
-        // Reopen starts with clean cache and populates on read
+        
         let reopened = reopen(folder.path());
         assert_eq!(reopened.pack_cache.len(), 0);
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), payload);
@@ -536,10 +536,10 @@ mod tests {
         for _ in 0..10 {
             ids.push(store.put_data(payload).unwrap());
         }
-        // All IDs must match
+        
         assert!(ids.iter().all(|&id| id == ids[0]));
 
-        // Flush must produce exactly 1 pack with 1 entry
+        
         store.flush().unwrap();
         assert_eq!(pack_count(folder.path()), 1);
 
@@ -554,7 +554,7 @@ mod tests {
     fn index_compaction_consolidates_files_and_removes_old() {
         let folder = temp_folder();
         let mut store = new_store(folder.path());
-        store.set_seal_target(512); // small packs
+        store.set_seal_target(512); 
         let index_dir = folder.path().join(".ferry/index");
 
         let mut blobs = Vec::new();
@@ -568,15 +568,15 @@ mod tests {
         assert_eq!(count_ferryindex(&index_dir), 10);
         store.compact_index().unwrap();
 
-        // Exactly one consolidated index file survives
+        
         assert_eq!(count_ferryindex(&index_dir), 1);
 
-        // Every blob is readable from memory and disk
+        
         for (id, data) in &blobs {
             assert_eq!(store.get(BlobKind::DataChunk, id).unwrap(), *data);
         }
 
-        // Reopening with the compacted index file resolves all blobs
+        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(count_ferryindex(&index_dir), 1);
@@ -607,23 +607,23 @@ use crate::pack::{
 pub const STORE_DIR_NAME: &str = ".ferry";
 pub const INDEX_COMPACTION_THRESHOLD: usize = 512;
 
-/// Diagnostic counter (T-15): full index rebuilds this process has run.
-/// Steady-state ingest must never bump it; it is a cold-start recovery path
-/// only. Tests assert zero during normal operation.
+
+
+
 static REBUILD_INDEX_CALLS: AtomicU64 = AtomicU64::new(0);
 
-/// Diagnostic metric (T-15): longest single hold of the global inner lock,
-/// in microseconds, across every ingest/read critical section. A growing
-/// ceiling under load is the early-warning sign for lock starvation.
+
+
+
 static LOCK_HOLD_MAX_US: AtomicU64 = AtomicU64::new(0);
 static DEBUG_LOCKS: OnceLock<bool> = OnceLock::new();
 
-/// Full `rebuild_index` invocations in this process so far.
+
 pub fn rebuild_index_calls() -> u64 {
     REBUILD_INDEX_CALLS.load(Ordering::Relaxed)
 }
 
-/// Longest observed hold of the global lock, microseconds (process-wide).
+
 pub fn max_lock_hold_us() -> u64 {
     LOCK_HOLD_MAX_US.load(Ordering::Relaxed)
 }
@@ -665,29 +665,29 @@ struct Inner {
     locations: LocationTable,
 }
 
-/// Handle to one `.ferry/` store directory.
+
 pub struct Store {
-    root: PathBuf, // the .ferry directory itself
+    root: PathBuf, 
     fmk: [u8; KEY_LEN],
     cipher: Box<dyn PackCipher>,
     inner: Mutex<Inner>,
-    /// Serializes INDEX file allocation + rename so concurrent appends
-    /// never overwrite each other's numeric name. T-15 made appends
-    /// per-pack (frequent); the held region is number-scan + rename only,
-    /// no crypto or table work.
+    
+    
+    
+    
     index_seq: Mutex<()>,
-    /// Monotonic next INDEX record number, seeded from disk on first use.
-    /// 0 = not yet seeded. Guarded by `index_seq`; replaces a full
-    /// `read_dir` scan of every index record ever written, per append.
+    
+    
+    
     next_index: AtomicU64,
-    /// Packs observed missing on disk. A negative cache: repeated dedup
-    /// probes (`put_blob`) and reads skip the stat syscall for packs that
-    /// are known absent until the pack is written or re-adopted.
+    
+    
+    
     dangling_packs: Mutex<HashSet<PackId>>,
-    /// Bounded LRU cache of open verified pack file handles.
+    
     pack_cache: PackCache,
-    /// Staging seal target. Production default is the spec's 16 MiB
-    /// (`SEAL_TARGET_BYTES`); tests shrink it to force many small packs.
+    
+    
     seal_target: usize,
 }
 
@@ -702,7 +702,7 @@ impl Store {
         )
     }
 
-    /// Create a fresh store layout. Fails if `.ferry` already exists.
+    
     pub fn create(
         folder_root: &Path,
         fmk: [u8; KEY_LEN],
@@ -729,7 +729,7 @@ impl Store {
         })
     }
 
-    /// Open an existing store, loading the union of its index files.
+    
     pub fn open(
         folder_root: &Path,
         fmk: [u8; KEY_LEN],
@@ -770,30 +770,30 @@ impl Store {
         })
     }
 
-    /// Override the staging seal target (tests only; production keeps the
-    /// spec's 16 MiB default). Must be called before any puts.
+    
+    
     pub fn set_seal_target(&mut self, target: usize) {
         self.seal_target = target;
     }
 
-    /// The `.ferry` directory backing this store.
+    
     pub fn store_dir(&self) -> &Path {
         &self.root
     }
 
-    /// Snapshot of every location entry currently known (disk-backed packs
-    /// plus sealed staging). Read-only convenience for transport (T-008):
-    /// the wire protocol advertises index entries to peers, and rebuilding
-    /// that view from pack footers outside the crate would duplicate format
-    /// logic. Purely additive; no write path uses it.
+    
+    
+    
+    
+    
     pub fn index_entries(&self) -> Result<Vec<crate::index::IndexEntry>, StoreError> {
         let inner = self.lock()?;
         Ok(inner.locations.iter_sorted())
     }
 
-    /// Address one blob by content. Dedup: when the location table already
-    /// knows the id AND at least one candidate pack still exists, or the blob
-    /// is already staged in the unsealed pool, nothing is staged or rewritten.
+    
+    
+    
     pub fn put_blob(&self, kind: BlobKind, bytes: &[u8]) -> Result<BlobId, StoreError> {
         if bytes.is_empty() {
             return Err(StoreError::EmptyBlob);
@@ -824,29 +824,29 @@ impl Store {
             note_hold(start);
             sealed
         };
-        // offer() returns any packs sealed early by the overflow rule.
+        
         for sp in sealed.drain(..) {
             self.seal_to_disk(sp)?;
         }
         Ok(id)
     }
 
-    /// Convenience for data chunks.
+    
     pub fn put_data(&self, bytes: &[u8]) -> Result<BlobId, StoreError> {
         self.put_blob(BlobKind::DataChunk, bytes)
     }
 
-    /// Convenience for metadata blobs (tree nodes, manifests, polynomial).
+    
     pub fn put_meta(&self, kind: BlobKind, bytes: &[u8]) -> Result<BlobId, StoreError> {
         debug_assert!(kind.is_meta(), "put_meta requires a metadata kind");
         self.put_blob(kind, bytes)
     }
 
-    /// Read one blob following the normative procedure, trying every known
-    /// location whose pack still exists. A footer/index DISAGREEMENT stops
-    /// the whole read immediately ("trust neither"), per spec.
+    
+    
+    
     pub fn get(&self, kind: BlobKind, id: &BlobId) -> Result<Vec<u8>, StoreError> {
-        // Read-your-writes: blobs still sitting in open staging packs.
+        
         {
             let inner = self.lock()?;
             if let Some(staged) = inner.staging.staged_bytes(kind, id) {
@@ -868,7 +868,7 @@ impl Store {
         if candidates.is_empty() {
             return Err(StoreError::NotFound { kind, id: hex(id) });
         }
-        // Spec resolution rule: prefer any entry whose pack still exists.
+        
         let mut ordered: Vec<IndexEntry> = candidates;
         ordered.sort_by_key(|e| !self.pack_exists(&e.pack));
 
@@ -911,7 +911,7 @@ impl Store {
             ) {
                 Ok(pt) => return Ok(pt),
                 Err(err @ PackError::Disagreement { .. }) => {
-                    // Trust neither source; abort the whole read now.
+                    
                     return Err(StoreError::Pack(err));
                 }
                 Err(other) => last_err = Some(StoreError::Pack(other)),
@@ -920,8 +920,8 @@ impl Store {
         Err(last_err.unwrap_or(StoreError::NotFound { kind, id: hex(id) }))
     }
 
-    /// End-of-burst rule: seal every open staging pack (empties discarded).
-    /// Returns how many pack files landed.
+    
+    
     pub fn flush(&self) -> Result<usize, StoreError> {
         let drained = {
             let mut inner = self.lock()?;
@@ -934,8 +934,8 @@ impl Store {
         Ok(n)
     }
 
-    /// Append a fresh INDEX container capturing every known location. The
-    /// union across files is the index, so appends never rewrite history.
+    
+    
     pub fn write_index_snapshot(&self) -> Result<PathBuf, StoreError> {
         let entries = {
             let inner = self.lock()?;
@@ -944,8 +944,8 @@ impl Store {
         self.append_index_file(&entries)
     }
 
-    /// Consolidate all index files in `.ferry/index/` into a single snapshot
-    /// file, deleting superseded index files.
+    
+    
     pub fn compact_index(&self) -> Result<PathBuf, StoreError> {
         let index_dir = self.root.join("index");
         let _seq = self.index_seq.lock().map_err(|_| StoreError::Poisoned)?;
@@ -995,11 +995,11 @@ impl Store {
         Ok(path)
     }
 
-    /// Seal and atomically append one INDEX container covering exactly
-    /// `entries`. Crypto work happens before the critical section; number
-    /// allocation and the final rename share one short serialized region
-    /// (`index_seq`) so concurrent appends can never overwrite each other's
-    /// numeric name. Callers must NOT hold the inner lock.
+    
+    
+    
+    
+    
     fn append_index_file(&self, entries: &[IndexEntry]) -> Result<PathBuf, StoreError> {
         let mut salt = [0u8; SALT_LEN];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
@@ -1017,9 +1017,9 @@ impl Store {
         Ok(path)
     }
 
-    /// Allocate the next INDEX record number. Caller holds `index_seq`.
-    /// Seeded from disk once (max existing + 1), then purely monotonic in
-    /// memory — appends no longer rescan the index directory.
+    
+    
+    
     fn alloc_index_number(&self, index_dir: &Path) -> Result<u64, StoreError> {
         let mut n = self.next_index.load(Ordering::Relaxed);
         if n == 0 {
@@ -1029,18 +1029,18 @@ impl Store {
         Ok(n)
     }
 
-    /// T-15: fold an externally delivered pack (bytes received over the
-    /// wire) into the store WITHOUT any full-store rescan. Verifies the
-    /// BLAKE3 name, parses the footer, writes the pack atomically — all
-    /// OUTSIDE the global lock — then merges just this pack's locations
-    /// into the table under a short hold and appends an incremental INDEX
-    /// record covering only them. Full rebuilds become cold-start-only.
-    ///
-    /// Idempotent: re-adopting an existing pack (CLI sync while a daemon
-    /// runs) skips the disk write but still refreshes the location table,
-    /// healing a crash between rename and index append.
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     pub fn adopt_pack(&self, claimed: &PackId, bytes: &[u8]) -> Result<(), StoreError> {
-        // Step 2 (name verification precedes any crypto or disk IO).
+        
         let found = crate::pack::pack_name_of(bytes);
         if &found != claimed {
             return Err(StoreError::Pack(PackError::NameMismatch {
@@ -1048,7 +1048,7 @@ impl Store {
                 found: hex(&found),
             }));
         }
-        // Footer parse outside the lock: O(this pack), never O(store).
+        
         let ctx = crate::pack::open_pack(bytes, claimed, &self.fmk, self.cipher.as_ref())?;
         let footer = ctx.entries.clone();
 
@@ -1060,7 +1060,7 @@ impl Store {
                 bytes,
             )?;
         }
-        // Present or just written: the negative cache must forget it.
+        
         self.note_pack_written(claimed);
         self.pack_cache.insert(VerifiedPack::from_parts(
             *claimed,
@@ -1088,10 +1088,10 @@ impl Store {
         Ok(())
     }
 
-    /// Recovery: rebuild the location table straight from the packs and
-    /// append it as a fresh index file (restic-style `rebuild`). T-15: this
-    /// is a cold-start recovery path only — steady-state ingest folds
-    /// locations in incrementally and must never reach here.
+    
+    
+    
+    
     pub fn rebuild_index(&self) -> Result<(usize, Vec<String>), StoreError> {
         REBUILD_INDEX_CALLS.fetch_add(1, Ordering::Relaxed);
         let (entries, skipped) = crate::index::rebuild_entries(
@@ -1108,13 +1108,13 @@ impl Store {
         Ok((count, skipped))
     }
 
-    /// Store the folder's chunker polynomial as `blob_kind` 0x04 inside a
-    /// `PACK_META` (protected like a key, per the folder layout section).
+    
+    
     pub fn put_polynomial(&self, poly: u64) -> Result<BlobId, StoreError> {
         self.put_meta(BlobKind::Polynomial, &poly.to_le_bytes())
     }
 
-    /// Read back the polynomial record (8-byte LE u64).
+    
     pub fn get_polynomial(&self, id: &BlobId) -> Result<u64, StoreError> {
         let bytes = self.get(BlobKind::Polynomial, id)?;
         let arr: [u8; 8] = bytes.try_into().map_err(|_| {
@@ -1125,7 +1125,7 @@ impl Store {
         Ok(u64::from_le_bytes(arr))
     }
 
-    // --- internals ---
+    
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Inner>, StoreError> {
         self.inner.lock().map_err(|_| StoreError::Poisoned)
@@ -1135,9 +1135,9 @@ impl Store {
         self.root.join("packs").join(format!("{}.pack", hex(pack)))
     }
 
-    /// Existence of a pack file with a negative cache: the first stat that
-    /// finds a pack missing records it, and every later probe is a hash
-    /// lookup until the pack is written or re-adopted.
+    
+    
+    
     fn pack_exists(&self, pack: &PackId) -> bool {
         let mut dangling = self
             .dangling_packs
@@ -1189,13 +1189,13 @@ impl Store {
             inner.locations.merge(index_entries.iter().cloned());
             note_hold(start);
         }
-        // T-15: persist an incremental record covering only this pack so a
-        // flush alone leaves the store fully indexed; no rebuild needed.
+        
+        
         self.append_index_file(&index_entries)?;
         Ok(())
     }
 
-    /// Expose footer entries of a pack for GC callers.
+    
     pub(crate) fn pack_blob_list(
         &self,
         pack: &PackId,

@@ -1,4 +1,4 @@
-//! Comprehensive unit and headless render tests for `ferry-gui`.
+
 
 use std::sync::Arc;
 
@@ -64,7 +64,7 @@ fn test_beacon_states_and_pulses() {
     assert!(BeaconState::Syncing.pulse_speed() > BeaconState::Synced.pulse_speed());
     assert!(BeaconState::Conflict.pulse_speed() > BeaconState::Holding.pulse_speed());
 
-    // Headless UI render
+    
     let ctx = Context::default();
     let _ = ctx.run(RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -151,7 +151,7 @@ fn test_qr_generation() {
 fn test_modals_render() {
     let ctx = Context::default();
 
-    // 1. Conflicts modal
+    
     let mut show_conflicts = true;
     let conflicts = vec![ConflictEntry {
         ts: "2026-08-28T03:10:00Z".to_string(),
@@ -175,7 +175,7 @@ fn test_modals_render() {
         render_conflicts_modal(ctx, &mut show_conflicts, &conflicts, || {});
     });
 
-    // 2. Share modal with warnings
+    
     let mut show_share = true;
     let warnings = vec![".env: line 1 [Private Key]".to_string()];
     let mut override_secrets = false;
@@ -191,7 +191,7 @@ fn test_modals_render() {
         );
     });
 
-    // 3. Share modal with active offer
+    
     let offer = ShareOffer {
         folder: "/test/folder".to_string(),
         token: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX".to_string(),
@@ -214,14 +214,14 @@ fn test_modals_render() {
         );
     });
 
-    // 4. Pair modal
+    
     let mut show_pair = true;
     let mut pair_input = "/tmp/pair-offer.ferry-pair".to_string();
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_pair_modal(ctx, &mut show_pair, &mut pair_input, |_| {});
     });
 
-    // 5. Pin modal
+    
     let mut show_pin = true;
     let mut pin_input = "src/**".to_string();
     let _ = ctx.run(RawInput::default(), |ctx| {
@@ -234,11 +234,11 @@ fn test_gui_app_full_lifecycle() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    // 1. Initial State
+    
     assert_eq!(app.current_badge().0, "OFFLINE");
     assert_eq!(app.beacon_state(), BeaconState::Offline);
 
-    // 2. Receive Snapshot
+    
     let mut snap = EngineSnapshot::new("/test/folder", "folder123", "device456", "synced");
     snap.scanned = ScanStatsView::new(100, 20, 0, 10_000_000);
     snap.peers.push(PeerStatusView::new("peer-1", "online"));
@@ -250,7 +250,7 @@ fn test_gui_app_full_lifecycle() {
     assert_eq!(app.snapshot.as_ref().unwrap().scanned.files, 100);
     assert_eq!(app.activity_log.len(), 1);
 
-    // 3. Receive Transfer Progress
+    
     app.handle_event(UiEvent::TransferProgress {
         bytes_transferred: 5_000_000,
         total_bytes: 10_000_000,
@@ -265,7 +265,7 @@ fn test_gui_app_full_lifecycle() {
     assert_eq!(app.beacon_state(), BeaconState::Syncing);
     assert!(app.active_transfer.is_some());
 
-    // 4. Receive Conflict
+    
     app.handle_event(UiEvent::ConflictRecorded {
         path: "src/main.rs".to_string(),
         conflict_path: "src/main.rs.ferry-conflict.peer1-1787574890".to_string(),
@@ -277,7 +277,7 @@ fn test_gui_app_full_lifecycle() {
     assert_eq!(app.beacon_state(), BeaconState::Conflict);
     assert_eq!(app.conflicts.len(), 1);
 
-    // 5. Receive Typed FolderRegistered Event
+    
     app.handle_event(UiEvent::FolderRegistered {
         path: "/test/registered/folder".to_string(),
     });
@@ -295,7 +295,7 @@ fn test_gui_app_full_lifecycle() {
             && entry.message == "Folder added: /test/registered/folder"
             && entry.color == colors::FERRY_GREEN));
 
-    // 6. Test Full Frame Update in Headless egui Context
+    
     let ctx = Context::default();
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
@@ -350,8 +350,8 @@ async fn register_initialized_folder_reaches_backend_unchanged() {
         path: dir.path().to_path_buf(),
     });
 
-    // The guard passes; FakeBackend answers with its own wave-0 stub error,
-    // proving the dispatch was not blocked client-side.
+    
+    
     let reached = wait_for_status_banner(&mut app, "not-implemented").await;
     assert!(reached, "initialized path must reach the backend");
     assert!(

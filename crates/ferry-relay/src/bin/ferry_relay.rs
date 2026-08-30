@@ -1,17 +1,17 @@
-//! `ferry-relay` CLI: one blind relay binary for a VPS.
-//!
-//! ```text
-//! ferry-relay --http-bind 0.0.0.0:3340
-//! ```
-//!
-//! Prints `RELAY <url>` once serving; clients pass that URL as their
-//! `--relay`. Logs go to stderr and contain ONLY connection metadata:
-//! client endpoint public keys, addresses, timing. No payload data is ever
-//! readable or logged here — see crate docs.
-//!
-//! Production notes (docs/nat-validation.md has the full runbook): put this
-//! behind real TLS (reverse proxy or the ACME support in iroh-relay) for
-//! anything internet-facing; plain HTTP is fine on loopback/private nets.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::process::ExitCode;
 
@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         None => "127.0.0.1:3340".parse().unwrap(),
     };
 
-    // Operator-visible logging: metadata only, by construction.
+    
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -1,12 +1,12 @@
-//! `ferry pin`: session pinning. Start/stop declare the active-writer
-//! window; status surfaces the pin and its held set; release reconciles
-//! every held change through ferry-sync-engine's three-way logic, so
-//! outcomes are exactly ADR-0004 outcomes — winner live, loser quarantined,
-//! entry in conflicts.jsonl. Nothing merges; nothing vanishes.
-//!
-//! `stop` ends the hold without reconciling but deliberately keeps the
-//! ledgers: a later `release` still recovers them. Discarding held changes
-//! is never an implicit side effect.
+
+
+
+
+
+
+
+
+
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -31,7 +31,7 @@ pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
         paths.to_vec()
     };
 
-    // Try dispatching over IPC to running daemon first.
+    
     let ipc_res = crate::ipc::send_command(
         folder,
         ferry_ipc::ClientCommand::StartPin {
@@ -117,7 +117,7 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
     let state_dir = opened.state_dir();
     let pin_mgr = PinManager::new(&state_dir);
 
-    // Try dispatching over IPC to running daemon first.
+    
     let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
     let existed = match ipc_res {
         Some(ferry_ipc::DaemonMessage::Ack { message, .. }) => {
@@ -126,7 +126,7 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
         _ => pin_mgr.stop_session().map_err(pin_error)?,
     };
 
-    // Surface what remains held so nobody mistakes stop for reconciliation.
+    
     let summary = pin_mgr.summary().map_err(pin_error)?;
     let mut by_peer = serde_json::Map::new();
     for (peer, paths) in &summary.held_by_peer {
@@ -161,8 +161,8 @@ pub fn release(folder: &Path) -> CliResult<Output> {
     let state_dir = opened.state_dir();
     let pin_mgr = PinManager::new(&state_dir);
 
-    // Fresh scan: release reconciles the peer's held manifest against the
-    // tree AS IT IS NOW (the apply half of earlier rounds may have landed).
+    
+    
     let scan = crate::commands::status::scan_now(&opened)?;
 
     let now = ferry_platform::time::now_unix();
@@ -183,7 +183,7 @@ pub fn release(folder: &Path) -> CliResult<Output> {
         }));
     }
 
-    // End the marker too. Dispatch over IPC if daemon running.
+    
     let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
     let ended = match ipc_res {
         Some(ferry_ipc::DaemonMessage::Ack { .. }) => true,
@@ -241,8 +241,8 @@ pub fn status(folder: &Path) -> CliResult<Output> {
 
     let started_at = summary.started_sec.map(ferry_platform::time::fmt_rfc3339);
 
-    // Documented shape for `pin status`: peer → DISTINCT PATHS (the actual
-    // held set), not counts.
+    
+    
     let mut held_by_peer = serde_json::Map::new();
     for (peer, list) in &summary.held_by_peer {
         held_by_peer.insert(peer.clone(), json!(list));
@@ -313,7 +313,7 @@ fn cli(code: &'static str, e: impl std::fmt::Display) -> CliError {
     }
 }
 
-/// Map typed pin errors onto stable CLI error codes with honest hints.
+
 fn pin_error(e: ferry_pin::PinError) -> CliError {
     use ferry_pin::PinError as E;
     let (code, hint) = match &e {
