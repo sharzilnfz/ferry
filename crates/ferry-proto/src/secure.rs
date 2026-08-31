@@ -1,44 +1,44 @@
-//! Handshake cryptography and the session sealing layer.
-//!
-//! # Design (normative in `docs/store-format.md`, "Wire protocol v1")
-//!
-//! Mutual authentication WITHOUT signatures, Noise-style: possession of a
-//! static X25519 secret is proven implicitly through Diffie-Hellman terms.
-//! After Hello/HelloAck both sides compute
-//!
-//! ```text
-//! e1 = X25519(eph_a,  eph_b)    // fresh per connection → forward secrecy
-//! m1 = X25519(stat_a, eph_b)    // derivable only with stat_A's secret
-//! m2 = X25519(stat_b, eph_a)    // derivable only with stat_B's secret
-//! ```
-//!
-//! (`X25519(x, Y)` is symmetric in who runs it, so both parties reach all
-//! three values.) The key schedule is then two HKDF-SHA-256 stages:
-//!
-//! ```text
-//! ext1 = EXTRACT(salt = hash(Hello || HelloAck), ikm = e1 || m1 || m2)
-//! prk  = EXPAND(ext1, "ferry/v1/handshake")
-//! auth keys: EXPAND(prk, "ferry/v1/htk/{i2r|r2i}")
-//! ext2 = EXTRACT(salt = hash(... || AuthInit_ct || AuthConfirm_ct), ikm = prk)
-//! traffic keys: EXPAND(ext2, "ferry/v1/tk/{i2r|r2i}")
-//! ```
-//!
-//! Each side seals exactly ONE message under its auth key — an [`AuthProof`]
-//! carrying its own `device_id`. A peer without the claimed static secret
-//! cannot produce a valid Poly1305 tag, so the tag IS the proof-of-
-//! possession; no separate signature-analogue round trip exists. This beats
-//! sealing challenges to the peer's public key because ONE schedule serves
-//! auth and traffic, the transcript hash binds every handshake byte into the
-//! proof, and replay dies automatically: fresh ephemerals and nonces make
-//! every connection's transcript unique, so a replayed `AUTH_INIT` fails its
-//! tag against the new salt.
-//!
-//! Post-auth frames are sealed with ChaCha20-Poly1305 under per-direction
-//! traffic keys, nonce `b"FPN1" || u64 BE sequence`, strictly increasing per
-//! direction. Reordered frames fail tag verification (wrong counter).
-//! Ceiling: the u64 counter cannot wrap within any conceivable session;
-//! hitting it is a hard typed error, never reuse. No rekey in v1 — a future
-//! minor can add it behind a feature flag without breaking this layout.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
@@ -62,18 +62,18 @@ use crate::version::{negotiate, ProtocolVersion};
 pub const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
-// HKDF info labels (normative strings).
+
 pub const INFO_HANDSHAKE: &[u8] = b"ferry/v1/handshake";
 pub const INFO_HTK_I2R: &[u8] = b"ferry/v1/htk/i2r";
 pub const INFO_HTK_R2I: &[u8] = b"ferry/v1/htk/r2i";
 pub const INFO_TK_I2R: &[u8] = b"ferry/v1/tk/i2r";
 pub const INFO_TK_R2I: &[u8] = b"ferry/v1/tk/r2i";
 
-/// Traffic-nonce prefix "FPN1" || u64 BE sequence.
+
 const TRAFFIC_NONCE_PREFIX: [u8; 4] = *b"FPN1";
 
-/// BLAKE3 over length-prefixed concatenation of the given byte strings.
-/// Length prefixes keep concatenation unambiguous.
+
+
 pub fn transcript_hash(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     for p in parts {
@@ -91,18 +91,18 @@ fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
     okm
 }
 
-/// Stage 1: handshake PRK plus the two single-use auth keys.
-///
-/// Returns `(htk_i2r, htk_r2i, prk)`; all zeroized on drop.
-/// Handshake-stage outputs: the two single-use auth keys plus the PRK that
-/// traffic keys re-root from. All zeroized on drop.
-pub(crate) type HandshakeKeys = (
+
+
+
+
+
+pub type HandshakeKeys = (
     Zeroizing<[u8; KEY_LEN]>,
     Zeroizing<[u8; KEY_LEN]>,
     Box<[u8; KEY_LEN]>,
 );
 
-pub(crate) fn kdf_handshake(
+pub fn kdf_handshake(
     transcript: &[u8; 32],
     e1: &[u8; 32],
     m1: &[u8; 32],
@@ -121,22 +121,26 @@ pub(crate) fn kdf_handshake(
     (htk_i2r, htk_r2i, prk_box)
 }
 
-/// A traffic-direction key. Zeroized on drop, never cloned out.
-#[derive(Debug)] // Debug shows nothing secret; see test below.
+
+#[derive(Debug)] 
 pub struct SessionKey(Zeroizing<[u8; KEY_LEN]>);
 
 impl SessionKey {
     pub fn cipher(self) -> SessionCipher {
         SessionCipher::new(self)
     }
+
+    pub fn from_bytes(key: [u8; KEY_LEN]) -> Self {
+        SessionKey(Zeroizing::new(key))
+    }
 }
 
-/// Stage 2: per-direction traffic keys after both AUTH messages.
-///
-/// `final_transcript` covers Hello || `HelloAck` || `AuthInit_ct` ||
-/// `AuthConfirm_ct`, chaining the proof bytes into session-key derivation so
-/// any tampering upstream changes every downstream key.
-pub(crate) fn traffic_keys(
+
+
+
+
+
+pub fn traffic_keys(
     prk: &[u8; KEY_LEN],
     final_transcript: &[u8; 32],
 ) -> (SessionKey, SessionKey) {
@@ -150,9 +154,9 @@ pub(crate) fn traffic_keys(
     )
 }
 
-/// Seal/open helper for the single-use auth messages: fixed all-zero nonce
-/// (each key encrypts exactly one message per connection), AAD = transcript
-/// hash at that point.
+
+
+
 pub(crate) fn seal_auth(
     key: &[u8; KEY_LEN],
     th: &[u8; 32],
@@ -192,19 +196,19 @@ pub(crate) fn open_auth(
         .map_err(|_| ProtoError::Auth("auth plaintext wrong length"))
 }
 
-/// One direction's frame-level AEAD state: key + strictly increasing
-/// sequence counter.
+
+
 pub struct SessionCipher {
     key: SessionKey,
     seq: u64,
 }
 
 impl SessionCipher {
-    pub(crate) fn new(key: SessionKey) -> Self {
+    pub fn new(key: SessionKey) -> Self {
         SessionCipher { key, seq: 0 }
     }
 
-    /// Test/audit hook: construct a cipher already AT a given sequence.
+    
     #[cfg(test)]
     pub(crate) fn at_sequence(key: SessionKey, seq: u64) -> Self {
         SessionCipher { key, seq }
@@ -221,9 +225,9 @@ impl SessionCipher {
         Ok(n)
     }
 
-    /// Seal one frame body region (type || version || payload), binding the
-    /// wire-visible length prefix into the tag as AAD. Returns ciphertext of
-    /// `plaintext.len() + 16`.
+    
+    
+    
     pub fn seal_frame(
         &mut self,
         len_prefix: u32,
@@ -242,8 +246,8 @@ impl SessionCipher {
             .map_err(|_| ProtoError::ProtocolViolation("frame seal failure"))
     }
 
-    /// Open one sealed frame body region. Any tamper, reorder, splice, or
-    /// replay fails the tag check here.
+    
+    
     pub fn open_frame(&mut self, len_prefix: u32, ct: &[u8]) -> Result<Vec<u8>, ProtoError> {
         if ct.len() < 16 {
             return Err(ProtoError::ProtocolViolation("sealed body too short"));
@@ -270,7 +274,7 @@ impl core::fmt::Debug for SessionCipher {
     }
 }
 
-// --- Pre-auth framing & handshake helpers ------------------------------------
+
 
 fn full_wire(fb: &FrameBody) -> Vec<u8> {
     let body = fb.encode();
@@ -356,12 +360,12 @@ struct HelloWires {
     responder: Vec<u8>,
 }
 
-// --- SecureSession -----------------------------------------------------------
 
-/// An established, mutually authenticated protocol session.
-///
-/// Encapsulates the 7-step Noise handshake, frame AEAD encryption/decryption,
-/// frame counters, and unknown-message-type policy.
+
+
+
+
+
 pub struct SecureSession<S: ByteStream> {
     io: S,
     version: ProtocolVersion,
@@ -373,16 +377,16 @@ pub struct SecureSession<S: ByteStream> {
 }
 
 impl<S: ByteStream> SecureSession<S> {
-    /// Establish a mutually authenticated secure session over `io`.
-    ///
-    /// Executes the 7-step Noise handshake:
-    /// 1. Generate fresh ephemeral key pair + random nonce.
-    /// 2. Exchange Hello / `HelloAck` preauth frames.
-    /// 3. Verify peer static key identity equals `expected_peer`.
-    /// 4. Calculate the 3 DH terms (`e1`, `m1`, `m2`).
-    /// 5. Derive handshake keys (`htk_i2r`, `htk_r2i`, `prk`) with `transcript_hash`.
-    /// 6. Mutual auth proof exchange (`AUTH_INIT` / `AUTH_CONFIRM`).
-    /// 7. Finalize transcript, derive traffic keys, initialize directional `SessionCipher` instances if `encryption` is enabled.
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     pub fn establish(
         mut io: S,
         role: Role,
@@ -438,7 +442,7 @@ impl<S: ByteStream> SecureSession<S> {
         ProtoError,
     > {
         let flags = FLAG_EXTENSION_AWARE;
-        // Step 1: Generate fresh ephemeral key pair + random nonce.
+        
         let esk = StaticSecret::random_from_rng(OsRng);
         let my_epk = *PublicKey::from(&esk).as_bytes();
         let my_nonce = random32();
@@ -452,7 +456,7 @@ impl<S: ByteStream> SecureSession<S> {
             nonce: my_nonce,
         };
 
-        // Step 2: Exchange Hello / HelloAck preauth frames.
+        
         let (peer_hello, hello_wires) = match role {
             Role::Initiator => {
                 let my_wire = send_preauth(io, codec::MSG_HELLO, our_max, &my_hello.encode())?;
@@ -461,7 +465,7 @@ impl<S: ByteStream> SecureSession<S> {
                     return Err(ProtoError::ProtocolViolation("expected hello ack"));
                 }
                 let ack = HelloAck::parse(&fb.payload)?;
-                // Step 3: Verify peer static key identity equals expected_peer.
+                
                 check_identity(ack.stat_pub, expected_peer)?;
                 let expected_agreed = negotiate(our_max, ack.version)?;
                 if ack.agreed != expected_agreed {
@@ -483,7 +487,7 @@ impl<S: ByteStream> SecureSession<S> {
                     return Err(ProtoError::ProtocolViolation("expected hello"));
                 }
                 let hello = Hello::parse(&fb.payload)?;
-                // Step 3: Verify peer static key identity equals expected_peer.
+                
                 check_identity(hello.stat_pub, expected_peer)?;
                 let agreed = negotiate(our_max, hello.version)?;
                 let ack = HelloAck {
@@ -518,7 +522,7 @@ impl<S: ByteStream> SecureSession<S> {
 
         let th_hello = transcript_hash(&[&hello_wires.initiator, &hello_wires.responder]);
 
-        // Step 4: Calculate the 3 DH terms (e1, m1, m2).
+        
         fn dh(sk: &StaticSecret, peer: [u8; 32]) -> Result<[u8; 32], ProtoError> {
             let shared = sk.diffie_hellman(&PublicKey::from(peer));
             if !shared.was_contributory() {
@@ -542,10 +546,10 @@ impl<S: ByteStream> SecureSession<S> {
             ),
         };
 
-        // Step 5: Derive handshake keys (htk_i2r, htk_r2i, prk) with transcript_hash.
+        
         let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
 
-        // Step 6: Mutual auth proof exchange (AUTH_INIT / AUTH_CONFIRM).
+        
         let proof_a: AuthProof = seal_auth(&htk_i2r, &th_hello, identity.device_id())?;
         let proof_b_key = htk_r2i.clone();
 
@@ -583,7 +587,7 @@ impl<S: ByteStream> SecureSession<S> {
             }
         };
 
-        // Step 7: Finalize transcript, derive traffic keys, initialize directional SessionCipher instances if encryption is enabled.
+        
         let th_final = transcript_hash(&[
             &hello_wires.initiator,
             &hello_wires.responder,
@@ -638,7 +642,7 @@ impl<S: ByteStream> SecureSession<S> {
                     && self.peer_max.minor() > ProtocolVersion::V1_0.minor();
                 let flagged = (self.peer_flags & !FLAG_EXTENSION_AWARE) != 0;
                 if higher && flagged {
-                    continue; // skip-if-flagged
+                    continue; 
                 }
                 return Err(ProtoError::UnknownMessage {
                     msg_type: fb.msg_type,
@@ -742,8 +746,8 @@ mod tests {
     use crate::version::ProtocolVersion;
 
     fn dh_terms() -> ([Box<[u8; 32]>; 3], [u8; 32]) {
-        // Arbitrary-but-fixed terms for wiring tests; real values come from
-        // X25519 in the engine.
+        
+        
         (
             [
                 Box::new(core::array::from_fn(|i| i as u8 + 1)),
@@ -761,10 +765,10 @@ mod tests {
         assert_ne!(h_a2b.as_ref(), h_b2a.as_ref());
 
         let (t_a2b, t_b2a) = traffic_keys(&prk, &th);
-        // Direction separation survives into traffic keys...
+        
         assert_ne!(t_a2b.0.as_ref(), t_b2a.0.as_ref());
-        // ...and the same inputs give the same outputs (both sides must
-        // land on identical keys independently).
+        
+        
         let again = kdf_handshake(&th, &terms[0], &terms[1], &terms[2]);
         assert_eq!(again.0.as_ref(), h_a2b.as_ref());
         let (t2, _) = traffic_keys(&again.2, &th);
@@ -787,7 +791,7 @@ mod tests {
         assert_ne!(base.0.as_ref(), changed_e.0.as_ref());
         assert_ne!(base.2.as_ref(), changed_e.2.as_ref());
 
-        // Traffic keys re-rooted on a different final transcript differ.
+        
         let (ta, _) = traffic_keys(&base.2, &th);
         let (tb, _) = traffic_keys(&base.2, &th2);
         assert_ne!(ta.0.as_ref(), tb.0.as_ref());
@@ -801,7 +805,7 @@ mod tests {
         assert_eq!(proof.ciphertext.len(), AuthProof::CT_LEN);
         assert_eq!(open_auth(&h_a2b, &th, &proof).unwrap(), [9; 32]);
 
-        // Wrong transcript (replay context): tag fails.
+        
         let mut th_evil = th;
         th_evil[0] ^= 1;
         assert!(open_auth(&h_a2b, &th_evil, &proof).is_err());
@@ -811,8 +815,8 @@ mod tests {
     fn frames_seal_open_with_counters_and_reject_reorder_replay_tamper() {
         let (terms, th) = dh_terms();
         let (_, _, prk) = kdf_handshake(&th, &terms[0], &terms[1], &terms[2]);
-        // Both ENDS of a direction hold that direction's key; derive twice
-        // (deterministic schedule) so tx and rx share `a2b`.
+        
+        
         let (ka, _) = traffic_keys(&prk, &th);
         let (kb2, _) = traffic_keys(&prk, &th);
         let mut tx = ka.cipher();
@@ -822,13 +826,13 @@ mod tests {
         let f1 = tx.seal_frame(105, b"second").unwrap();
         assert_ne!(f0, f1, "counter must change the ciphertext");
 
-        // Out-of-order delivery: f1 arrives while rx expects sequence 0.
-        // Wrong nonce → tag failure. One failure burns rx's counter slot,
-        // so the session is dead afterwards BY DESIGN (fatal-error policy;
-        // the engine disconnects rather than resync).
+        
+        
+        
+        
         assert!(rx.open_frame(105, &f1).is_err());
 
-        // Fresh pair, happy path first, then the abuse cases.
+        
         let (ka3, _) = traffic_keys(&prk, &th);
         let (ka4, _) = traffic_keys(&prk, &th);
         let mut tx = ka3.cipher();
@@ -838,17 +842,17 @@ mod tests {
         assert_eq!(rx.open_frame(100, &g0).unwrap(), b"first");
         assert_eq!(rx.open_frame(105, &g1).unwrap(), b"second");
 
-        // Replay of an ALREADY-consumed frame fails (counter moved on).
+        
         assert!(rx.open_frame(100, &g0).is_err());
 
-        // Tamper anywhere fails.
+        
         let fresh = tx.seal_frame(10, b"payload").unwrap();
         let mut evil = fresh.clone();
         evil[3] ^= 0x80;
         assert!(rx.open_frame(10, &evil).is_err());
 
-        // Length-prefix binding: same ciphertext under a different declared
-        // length fails.
+        
+        
         let bound = tx.seal_frame(77, b"x").unwrap();
         assert!(rx.open_frame(78, &bound).is_err());
     }
@@ -869,7 +873,7 @@ mod tests {
         let (_, _, prk) = kdf_handshake(&[0u8; 32], &[1; 32], &[2; 32], &[3; 32]);
         let (k, _) = traffic_keys(&prk, &[5u8; 32]);
         let rendered = format!("{:?}\n{:?}", k, SessionCipher::new(SessionKey(k.0.clone())));
-        // The key bytes are 0x.. deterministic; search for their hex pattern.
+        
         let hexy = hex(&k.0.as_ref()[..4]);
         assert!(!rendered.contains(&hexy));
         assert!(!rendered.contains("secret"));
@@ -982,7 +986,7 @@ mod tests {
             }
         });
 
-        // Initiator expects id_wrong, but responder presents id_b
+        
         let cli_res = SecureSession::establish(
             client_io,
             Role::Initiator,
@@ -1007,7 +1011,7 @@ mod tests {
             let id_b = id_b.clone();
             let id_wrong_dev = *id_wrong.device_id();
             move || {
-                // Responder expects id_wrong, but initiator presents id_a
+                
                 SecureSession::establish(
                     server_io,
                     Role::Responder,
@@ -1074,25 +1078,25 @@ mod tests {
             }
         });
 
-        // Proxy forwards Hello from client to server untouched
+        
         let hello = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &hello).unwrap();
 
-        // Proxy forwards HelloAck from server to client untouched
+        
         let ack = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &ack).unwrap();
 
-        // Client sends AUTH_INIT: proxy tampers with the ciphertext tag
+        
         let mut auth_init = crate::frame::read_body(&mut pipe_a).unwrap();
         let last = auth_init.len() - 1;
         auth_init[last] ^= 0xFF;
         crate::frame::write_body(&mut pipe_b, &auth_init).unwrap();
 
-        // Server rejects corrupted AUTH_INIT
+        
         let srv_res = srv.join().unwrap();
         assert!(matches!(srv_res, Err(ProtoError::Auth(_))), "{srv_res:?}");
 
-        // Server sends BYE(AuthFailed) which client receives
+        
         let bye = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &bye).unwrap();
 
@@ -1145,19 +1149,19 @@ mod tests {
             }
         });
 
-        // Proxy forwards Hello
+        
         let hello = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &hello).unwrap();
 
-        // Proxy forwards HelloAck
+        
         let ack = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &ack).unwrap();
 
-        // Proxy forwards AUTH_INIT untouched
+        
         let auth_init = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &auth_init).unwrap();
 
-        // Server sends AUTH_CONFIRM: proxy tampers with it
+        
         let mut auth_confirm = crate::frame::read_body(&mut pipe_b).unwrap();
         let last = auth_confirm.len() - 1;
         auth_confirm[last] ^= 0xFF;
@@ -1191,7 +1195,7 @@ mod tests {
             }
         });
 
-        // Client requests v2.0 (major version mismatch)
+        
         let cli_res = SecureSession::establish(
             client_io,
             Role::Initiator,

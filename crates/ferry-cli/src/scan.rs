@@ -1,10 +1,10 @@
-//! One-shot scans for CLI commands (status/sync/daemon rounds).
-//!
-//! Everything goes through ferry-scan's real pipeline (`ScanEngine`) so
-//! ignore rules, `.ferry` structural exclusion, NFC normalization, and
-//! refusal ledgers behave identically to the continuous daemon path. The
-//! initial full scan completes synchronously before `watch_with` returns;
-//! we snapshot `current()` and stop the background threads immediately.
+
+
+
+
+
+
+
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use ferry_store::chunker::ValidatedPoly;
 use crate::error::{CliError, CliResult};
 use crate::folder::OpenFolder;
 
-/// The result of one policy-aware full scan.
+
 pub struct OneShot {
     pub manifest: RootManifest,
     pub manifest_bytes: Vec<u8>,
@@ -26,7 +26,7 @@ pub struct OneShot {
     pub stats: ferry_scan::walk::PassStats,
 }
 
-/// Scan `opened.folder` once with its own rules and return the fresh state.
+
 pub fn one_shot(opened: &OpenFolder, device_id: [u8; 32]) -> CliResult<OneShot> {
     let rules = folder_rules(opened)?;
     let out = one_shot_raw(
@@ -40,8 +40,8 @@ pub fn one_shot(opened: &OpenFolder, device_id: [u8; 32]) -> CliResult<OneShot> 
     Ok(out)
 }
 
-/// Same as [`one_shot`] but for callers that already hold compiled rules
-/// (the exchange path reuses the daemon's compiled set).
+
+
 pub fn one_shot_raw(
     root: &Path,
     store: &Arc<ferry_store::store::Store>,
@@ -50,9 +50,9 @@ pub fn one_shot_raw(
     device_id: [u8; 32],
     ignore: Arc<dyn IgnorePolicy>,
 ) -> CliResult<OneShot> {
-    // Validate the folder's polynomial once at open/scan time (T-02): a
-    // corrupt or hand-edited polynomial record must be a typed CLI error,
-    // never a chunker panic mid-scan.
+    
+    
+    
     let poly = ValidatedPoly::try_from(poly).map_err(|e| {
         CliError::new(
             "poly-invalid",
@@ -83,7 +83,7 @@ pub fn one_shot_raw(
     })?;
     let manifest = current.manifest.clone();
     let stats = current.stats.clone();
-    // Drop stops watcher/poller/auditor threads (Drop impl in ferry-scan).
+    
     drop(engine);
     Ok(OneShot {
         manifest_bytes: serialize_manifest(&manifest),
@@ -94,8 +94,5 @@ pub fn one_shot_raw(
 }
 
 fn folder_rules(opened: &OpenFolder) -> CliResult<Arc<dyn IgnorePolicy>> {
-    Ok(Arc::new(crate::folder::load_rules(
-        &opened.root,
-        &opened.settings,
-    )?))
+    Ok(opened.ignore_policy())
 }

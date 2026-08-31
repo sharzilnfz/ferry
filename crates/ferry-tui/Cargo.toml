@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 crossterm = { workspace = true, features = ["event-stream"] }
+ferry-folder.workspace = true
 ferry-ipc.workspace = true
 ferry-platform.workspace = true
 ratatui.workspace = true
@@ -16,6 +17,7 @@ tokio = { workspace = true, features = ["io-util", "net", "sync", "macros", "tim
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-util"] }
+ferry-ipc = { path = "../ferry-ipc", features = ["test-util"] }
 
 [lints]
 workspace = true

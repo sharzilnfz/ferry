@@ -1,10 +1,10 @@
-//! Dynamic frontend switch and dispatch (`ferry ui`).
-//!
-//! Dispatches to Native Desktop GUI (`--gui`), Web Dashboard (`--web`), or
-//! Terminal TUI (`--tui`) backed by `AutoBackend`. When no explicit flag is
-//! passed, selects the preferred compiled frontend (GUI -> Web -> TUI).
-//! When a requested frontend is excluded at compile time, fails gracefully
-//! with `feature-disabled` code and actionable recompilation hints.
+
+
+
+
+
+
+
 
 use std::path::{Path, PathBuf};
 #[cfg(feature = "web-ui")]
@@ -28,7 +28,7 @@ use serde_json::json;
 use crate::error::{CliError, CliResult};
 use crate::out::Output;
 
-/// 10 minutes of inactivity before automatic web server shutdown.
+
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct UiArgs<'a> {
@@ -42,7 +42,7 @@ pub struct UiArgs<'a> {
     pub test: bool,
 }
 
-/// Shared server state preserved for backwards compatibility with tests and callers.
+
 #[cfg(feature = "web-ui")]
 #[derive(Clone, Debug)]
 pub struct UiServerState {
@@ -77,19 +77,21 @@ impl UiServerState {
     }
 }
 
-/// Construct the Axum router for the web UI backed by `DashboardServer` and `AutoBackend`.
+
 #[cfg(feature = "web-ui")]
 pub fn router(state: Arc<UiServerState>) -> Router {
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&state.folder);
-    let backend =
-        ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(state.folder.clone());
+    let fs_back = ferry_daemon::ui::fs_backend(state.folder.clone());
+    let backend = ferry_daemon::ui::AutoBackend::new(socket_path)
+        .with_fallback(state.folder.clone())
+        .with_fallback_backend(Arc::new(fs_back));
     let server = DashboardServer::new(Arc::new(backend))
         .with_token(&state.token)
         .with_inactivity_timeout(INACTIVITY_TIMEOUT);
     server.router()
 }
 
-/// Platform-specific browser opener.
+
 pub fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");
@@ -147,7 +149,7 @@ fn run_gui_mode(folder_path: &Path, test_mode: bool) -> CliResult<Output> {
 
     let socket_path = ferry_ipc::paths::socket_path_for_dir(folder_path);
     let backend: Arc<dyn ferry_ipc::backend::UiBackend> = Arc::new(
-        ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(folder_path.to_path_buf()),
+        ferry_ipc::backend::connect_auto(socket_path, folder_path.to_path_buf()),
     );
 
     let handle = rt.handle().clone();
@@ -236,7 +238,10 @@ fn run_web_mode(
         );
 
         let socket_path = ferry_ipc::paths::socket_path_for_dir(&folder_owned);
-        let backend = ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(folder_owned);
+        let fs_back = ferry_daemon::ui::fs_backend(folder_owned.clone());
+        let backend = ferry_daemon::ui::AutoBackend::new(socket_path)
+            .with_fallback(folder_owned)
+            .with_fallback_backend(Arc::new(fs_back));
         let server = DashboardServer::new(Arc::new(backend))
             .with_token(token.clone())
             .with_inactivity_timeout(INACTIVITY_TIMEOUT);
@@ -265,7 +270,7 @@ fn run_web_mode(
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
-        // Inactivity monitor
+        
         let monitor_server = server.clone();
         let monitor_shutdown = shutdown_tx.clone();
         let monitor_handle = tokio::spawn(async move {
@@ -325,7 +330,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         let _ = crate::bootstrap::ensure_daemon(&home);
     }
 
-    // 1. Explicit --gui flag
+    
     if args.gui {
         #[cfg(feature = "gui")]
         {
@@ -341,7 +346,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    // 2. Explicit --web flag
+    
     if args.web {
         #[cfg(feature = "web-ui")]
         {
@@ -357,7 +362,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    // 3. Explicit --tui flag
+    
     if args.tui {
         #[cfg(feature = "tui")]
         {
@@ -373,7 +378,7 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    // 4. Default frontend selection (GUI -> Web -> TUI)
+    
     #[cfg(feature = "gui")]
     {
         return run_gui_mode(&_folder_path, args.test);

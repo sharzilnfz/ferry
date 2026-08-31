@@ -12,18 +12,14 @@ blake3.workspace = true
 rand.workspace = true
 thiserror.workspace = true
 
-# unix only: symlink mtime restoration via utimensat(AT_SYMLINK_NOFOLLOW);
-# std cannot set times on a link itself (see apply::set_symlink_times).
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-# windows (non-unix) only: std cannot open directory handles for time writes
-# there — it lacks FILE_FLAG_BACKUP_SEMANTICS — so dir mtime restoration in
-# apply::set_mtime goes through filetime's SetFileTime wrapper.
 [target.'cfg(not(unix))'.dependencies]
 filetime.workspace = true
 
 [dev-dependencies]
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 
 [lints]

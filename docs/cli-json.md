@@ -25,11 +25,11 @@ Types below use JSON Schema-ish shorthand: `string`, `int`, `bool`,
 | `-v/--verbose` | more stderr detail |
 | `--version` | version string |
 
-## `ferry init [path]` / `ferry add <path>`
+## `ferry init [path]`
 
 ```json
 {
-  "command": "init" | "add",
+  "command": "init",
   "folder": string,             // as given on the command line
   "folder_id": string,          // 32 lowercase hex
   "device_id": string,          // 64 lowercase hex (X25519 public key)
@@ -312,6 +312,31 @@ binding (`--listen`) for scripts, plus per-round summaries on stderr.
 
 Error codes: `transport-unavailable` (any `--transport` value other than
 `tcp`; iroh QUIC lands with T-009/T-014), `bind`, `bad-address`.
+
+## `ferry daemon stop`
+
+```json
+{"command": "daemon", "action": "stop", "status": "stopped", "pid": int}
+{"command": "daemon", "action": "stop", "status": "not_running"}
+```
+
+`stopped` exits 0 after the OS confirms the daemon process exited; only
+then are the PID and socket files unlinked. `not_running` exits 0 and
+still clears a stale socket file. If the daemon outlives the five-second
+stop deadline the command fails with code `daemon-stop-timeout` (exit 4)
+and the PID file is preserved, so a following `ferry daemon status`
+reports the live PID.
+
+## `ferry daemon status`
+
+```json
+{"command": "daemon", "action": "status", "status": "running", "pid": int, "socket": string}
+{"command": "daemon", "action": "status", "status": "stopped"}
+```
+
+`running` means the PID file records a process the OS confirms is the
+same instance that wrote it (start-token check, so a reused PID is
+reported as `stopped`). Exits 0 either way; liveness is not an error.
 
 ## `ferry pin start|stop|release|status`
 

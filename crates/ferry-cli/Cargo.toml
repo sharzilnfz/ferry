@@ -9,13 +9,9 @@ ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-ignore = { path = "../ferry-ignore" }
-# One owner for folder bootstrap + the pairing ritual (ticket 08); this
-# crate is only a presentation adapter over it.
 ferry-folder.workspace = true
-# Ferry engine: daemon and sync commands run SyncEngine directly (T-14).
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
-ferry-pin = { path = "../ferry-pin" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-tui = { path = "../ferry-tui", optional = true }
 ferry-gui = { path = "../ferry-gui", optional = true }
@@ -28,8 +24,6 @@ serde.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 thiserror.workspace = true
-# Terminal QR rendering only (ASCII art over the matrix). All pairing and
-# key-handling crypto lives behind ferry-crypto (T-03).
 qrcode.workspace = true
 subtle.workspace = true
 
@@ -42,7 +36,7 @@ lean = []
 
 [dev-dependencies]
 tempfile.workspace = true
-# Test fixtures spawn a cross-platform sleeper child (see ferry-platform).
+ferry-folder = { workspace = true, features = ["test-util"] }
 ferry-platform = { path = "../ferry-platform" }
 axum = { workspace = true }
 ferry-tui = { path = "../ferry-tui" }

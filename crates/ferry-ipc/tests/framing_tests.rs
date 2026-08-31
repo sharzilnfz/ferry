@@ -5,7 +5,7 @@ use tokio::io::AsyncWriteExt;
 async fn test_in_memory_single_message_roundtrip() {
     let (mut client, mut server) = create_in_memory_pair();
 
-    // Client sends command
+    
     client
         .send_command(&ClientCommand::Ping)
         .await
@@ -18,7 +18,7 @@ async fn test_in_memory_single_message_roundtrip() {
         .expect("expected command");
     assert_eq!(received_cmd, ClientCommand::Ping);
 
-    // Server sends response
+    
     server
         .send_message(&DaemonMessage::Pong)
         .await
@@ -67,7 +67,7 @@ async fn test_fragmented_stream_and_whitespace_tolerance() {
     let mut writer = a;
     let mut receiver = IpcConnection::new(b);
 
-    // Write message in fragments with arbitrary chunk boundaries and blank lines
+    
     tokio::spawn(async move {
         writer.write_all(b"\n\n").await.unwrap();
         writer.write_all(b"{\"command\":\"get_").await.unwrap();
@@ -96,7 +96,7 @@ async fn test_fragmented_stream_and_whitespace_tolerance() {
 async fn test_message_size_limit_rejection() {
     let (a, b) = tokio::io::duplex(1024);
     let mut writer = a;
-    // Set low max message size of 32 bytes
+    
     let mut receiver = IpcConnection::with_max_message_size(b, 32);
 
     tokio::spawn(async move {
@@ -118,7 +118,7 @@ async fn test_message_size_limit_rejection() {
 async fn test_clean_eof_detection() {
     let (client, mut server) = create_in_memory_pair();
 
-    // Drop client to simulate connection close
+    
     drop(client);
 
     let res = server
@@ -135,7 +135,7 @@ async fn test_split_concurrent_tasks() {
     let (mut client_tx, mut client_rx) = client.split();
     let (mut server_tx, mut server_rx) = server.split();
 
-    // Client task: send 50 commands and receive 50 responses concurrently
+    
     let client_task = tokio::spawn(async move {
         for i in 0..50 {
             client_tx
@@ -160,7 +160,7 @@ async fn test_split_concurrent_tasks() {
         received
     });
 
-    // Server task: receive commands and send acks
+    
     let server_task = tokio::spawn(async move {
         let mut processed = 0;
         while let Some(cmd) = server_rx.recv_command().await.unwrap() {

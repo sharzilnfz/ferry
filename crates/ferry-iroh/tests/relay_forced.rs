@@ -1,22 +1,22 @@
-//! THE local acceptance proof for T-009 (the verbatim ticket acceptance —
-//! two machines behind separate home NATs — is MANUAL-UNRUN; this file is
-//! its local stand-in, docs/nat-validation.md is its runbook).
-//!
-//! What is proven here, honestly:
-//!
-//! 1. **Relay-forced convergence**: with `force_relay` (iroh's
-//!    `clear_ip_transports`) BOTH endpoints can reach each other ONLY via a
-//!    running ferry-relay, and the full ferry-sync engine still converges
-//!    end-to-end through it. This is the same shape as "two NATs": every
-//!    byte of the sync transits the relay.
-//! 2. **Plaintext absence at the relay**: every line the relay logs plus
-//!    its structured connection ledger are scanned for the transferred
-//!    plaintext markers and must contain NONE. The relay's metadata
-//!    surface (endpoint public keys, connects) IS expected — its absence
-//!    would mean the scan was vacuous.
-//! 3. **Direct upgrade in normal mode**: without forcing, iroh's own
-//!    negotiation moves the selected path from relay to direct; observed
-//!    via `PathObservation`, again with zero engine awareness.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::io::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -29,15 +29,15 @@ use ferry_sync::{EngineConfig, SyncEngine};
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 
-/// One shared capture buffer per test binary: tracing allows exactly one
-/// global subscriber, so all relay-side log lines land here.
+
+
 static CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
 
 fn relay_log_capture() -> &'static Arc<Mutex<Vec<u8>>> {
     CAPTURE.get_or_init(|| {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        // First-and-only global install; tracing permits one subscriber per
-        // process, and one test binary is one process.
+        
+        
         let _ = ferry_relay::install_capturing_subscriber(Arc::clone(&buffer));
         buffer
     })
@@ -59,18 +59,23 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
     let dir = tempfile::tempdir().expect("tempdir");
     let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(0xBEEF));
 
+    let shared = ferry_iroh::RouteTable::new();
     let mk_transport = |seed_byte: u8| {
         let mut seed = [0u8; 32];
         seed[0] = seed_byte;
         seed[31] = 0x77;
-        let mut cfg = IrohConfig::builder().secret(seed);
-        if let Some(url) = &relay_url {
-            cfg = cfg.relays(ferry_iroh::RelaySetting::Custom(vec![url.clone()]));
-        }
-        if force_relay {
-            cfg = cfg.force_relay(true);
-        }
-        let cfg = cfg.dial_timeout(Duration::from_secs(15)).build();
+        let cfg = IrohConfig {
+            secret: Some(seed),
+            routes: Some(shared.clone()),
+            relays: if let Some(url) = &relay_url {
+                ferry_iroh::RelaySetting::Custom(vec![url.clone()])
+            } else {
+                ferry_iroh::RelaySetting::Disabled
+            },
+            force_relay,
+            dial_timeout: Duration::from_secs(15),
+            ..Default::default()
+        };
         IrohTransport::new(cfg).expect("transport")
     };
 
@@ -86,18 +91,61 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
     cfg_a.tree_dir = dir.path().join("a/tree");
     cfg_a.quiet = true;
     cfg_a.bind_addr = Some("127.0.0.1:0".parse().unwrap());
-    let engine_a = SyncEngine::new(cfg_a, Arc::new(t_a.clone())).expect("engine A");
-    let addr = engine_a.listen_addr().expect("A bound an alias");
 
     let mut cfg_b = EngineConfig::default_for_test(poly);
     cfg_b.tag = format!("{name}-b");
     cfg_b.store_dir = dir.path().join("b/store");
     cfg_b.tree_dir = dir.path().join("b/tree");
     cfg_b.quiet = true;
+
+    let id_a = ferry_sync::engine::device_identity_for_tag(&cfg_a.tag);
+    let id_b = ferry_sync::engine::device_identity_for_tag(&cfg_b.tag);
+
+    let (store_a, fmk) =
+        ferry_folder::folder::create_folder(&cfg_a.store_dir, &id_a, cfg_a.folder_id, poly)
+            .expect("create folder a");
+    ferry_folder::folder::save_settings(
+        &cfg_a.store_dir,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_sync::format::hex(&cfg_a.folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_a.flush().unwrap();
+    store_a.write_index_snapshot().unwrap();
+
+    let store_b =
+        ferry_folder::folder::adopt_folder(&cfg_b.store_dir, &id_b, cfg_b.folder_id, &fmk, poly)
+            .expect("adopt folder b");
+    ferry_folder::folder::save_settings(
+        &cfg_b.store_dir,
+        &ferry_folder::folder::Settings {
+            format_version: ferry_folder::folder::SETTINGS_FORMAT_VERSION,
+            folder_id: ferry_sync::format::hex(&cfg_b.folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )
+    .unwrap();
+    store_b.flush().unwrap();
+    store_b.write_index_snapshot().unwrap();
+
+    let mut engine_a =
+        SyncEngine::with_store(cfg_a, Arc::new(t_a.clone()), Arc::new(store_a)).expect("engine A");
+    engine_a.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*id_b.public()]));
+    let addr = engine_a.listen_addr().expect("A bound an alias");
+
     cfg_b.connect_to = Some(addr);
 
+    let mut engine_b =
+        SyncEngine::with_store(cfg_b, Arc::new(t_b.clone()), Arc::new(store_b)).expect("engine B");
+    engine_b.set_peer_policy(ferry_sync::PeerPolicy::from_allowed([*id_a.public()]));
     let engine_a_started = engine_a.start();
-    let engine_b = SyncEngine::new(cfg_b, Arc::new(t_b.clone())).expect("engine B");
     let engine_b_started = engine_b.start();
 
     PairFixture {
@@ -109,10 +157,10 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
 
 const MARKER_NEEDLE: &str = "FERRY-PLAINTEXT-MARKER";
 
-/// Write distinctive plaintext into A's tree: file CONTENTS carrying the
-/// marker needle, plus filenames that also carry it. Everything here ends
-/// up on the wire in M0 (pass-through cipher) but must never appear at the
-/// relay, whose view is endpoint-to-endpoint QUIC ciphertext.
+
+
+
+
 fn plant_markers(tree_a: &std::path::Path) -> Vec<String> {
     let mut rels = Vec::new();
     for i in 0..12 {
@@ -149,10 +197,10 @@ fn wait_converged(pair: &PairFixture, budget: Duration) {
     }
 }
 
-/// Agreement ids can settle on an intermediate round while A is still
-/// scanning in freshly planted markers, and the materializer's rename
-/// lands on B's disk after agreement under loaded-runner scheduling.
-/// Poll until every marker exists instead of racing the applier.
+
+
+
+
 fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Duration) {
     let deadline = Instant::now() + budget;
     loop {
@@ -174,10 +222,10 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "127.0.0.1:0".parse().unwrap(),
     ))
     .expect("local relay spawns");
-    let _capture = relay_log_capture(); // ensure subscriber exists from the start
+    let _capture = relay_log_capture(); 
 
     let pair = start_pair(
-        true, /* FORCE */
+        true, 
         Some(relay.url().to_string()),
         "forced",
     );
@@ -189,13 +237,13 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
     wait_converged(&pair, Duration::from_secs(90));
     wait_markers_landed(&tree_b, &planted, Duration::from_secs(30));
 
-    // Give iroh's path sampler one last beat, then stop the engines so
-    // observations are final before asserting.
+    
+    
     std::thread::sleep(Duration::from_millis(300));
     pair.a.0.shutdown();
     pair.b.0.shutdown();
 
-    // --- Path evidence: traffic rode the relay and NEVER went direct. ---
+    
     let obs_b = pair
         .b
         .1
@@ -214,7 +262,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "an IP path was selected despite force_relay config"
     );
 
-    // --- Relay-side ledger: metadata present (non-vacuous), plaintext absent. ---
+    
     let entries = relay.ledger().entries();
     let ids: Vec<String> = entries
         .iter()
@@ -234,7 +282,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "relay never saw node B connect: {ids:?}"
     );
 
-    // The actual plaintext-absence assertion, over BOTH surfaces:
+    
     assert_eq!(
         scan_relay_side(MARKER_NEEDLE),
         0,
@@ -251,7 +299,7 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     ))
     .expect("local relay spawns");
 
-    // NOT forced: relays available, direct transports intact.
+    
     let pair = start_pair(false, Some(relay.url().to_string()), "normal");
 
     let tree_a = pair._dir.path().join("a/tree");
@@ -259,9 +307,9 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     std::fs::write(tree_a.join("hello.txt"), b"normal mode hello").unwrap();
 
     wait_converged(&pair, Duration::from_secs(90));
-    // Agreement ids settle before the materializer's rename lands on B's
-    // disk under loaded-runner scheduling; poll briefly rather than race.
-    let landed_by = Instant::now() + Duration::from_secs(30);
+    
+    
+    let landed_by = Instant::now() + Duration::from_secs(90);
     loop {
         match std::fs::read(tree_b.join("hello.txt")) {
             Ok(bytes) => {
@@ -279,8 +327,8 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
         }
     }
 
-    // Watch the negotiation settle on a direct path (same-host here; the
-    // mechanism — hole punch / local addresses — is iroh's job either way).
+    
+    
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let obs = pair

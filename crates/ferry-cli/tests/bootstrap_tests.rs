@@ -5,45 +5,121 @@ fn temp_home() -> tempfile::TempDir {
 }
 
 #[test]
-fn ensure_daemon_spawns_when_socket_absent_and_reuses() {
+fn ensure_daemon_fails_with_daemon_start_failed_when_binary_missing() {
+    let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
-    // Ensure no socket exists
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
-
-    let p1 = ensure_daemon(&hp).expect("first ensure should spawn dummy daemon");
+    
+    let prev = std::env::var("FERRY_BIN").ok();
+    std::env::set_var("FERRY_BIN", "/nonexistent/ferry-missing-binary-xyz");
+    let res = ensure_daemon(&hp);
+    
+    match prev {
+        Some(v) => std::env::set_var("FERRY_BIN", v),
+        None => std::env::remove_var("FERRY_BIN"),
+    }
+    let err = res.expect_err("ensure_daemon should fail when binary missing");
+    assert_eq!(err.code, "daemon-start-failed");
     assert!(
-        p1.exists() || sock.exists(),
-        "socket should appear within 5s"
+        err.hint.contains("check $FERRY_HOME permissions"),
+        "hint must contain permissions guidance, got {}",
+        err.hint
     );
-    // Socket should be at home/daemon.sock
-    assert_eq!(p1, sock);
-
-    // Second call should reuse without spawning second daemon (fast return)
-    let start = std::time::Instant::now();
-    let p2 = ensure_daemon(&hp).expect("second ensure reuses");
-    let elapsed = start.elapsed();
-    assert_eq!(p2, sock);
     assert!(
-        elapsed < std::time::Duration::from_millis(500),
-        "second call should be fast (ping within 200ms), got {elapsed:?}"
+        err.message.contains(&sock.display().to_string())
+            || err.message.contains("daemon failed to start"),
+        "message should mention socket or failure, got {}",
+        err.message
     );
 }
 
 #[test]
-fn ensure_daemon_ping_within_200ms_when_running() {
+fn ensure_daemon_reuses_running_server_via_ping() {
+    let _lock = ENV_LOCK.lock().unwrap();
     let home = temp_home();
     let hp = home.path().to_path_buf();
-    // Start ensure once to have daemon
-    let _ = ensure_daemon(&hp).unwrap();
     let sock = hp.join("daemon.sock");
+    assert!(!sock.exists());
+
+    
+    
+    let sock_clone = sock.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let _ = std::fs::remove_file(&sock_clone);
+            if let Some(parent) = sock_clone.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let Ok(server) = ferry_ipc::IpcServer::bind(&sock_clone) else {
+                return;
+            };
+            loop {
+                let conn_res = server.accept().await;
+                if let Ok(conn) = conn_res {
+                    tokio::spawn(async move {
+                        let mut c = conn;
+                        let snap = ferry_ipc::EngineSnapshot::new("", "", "", "idle");
+                        let _ = c
+                            .send_message(&ferry_ipc::DaemonMessage::Snapshot(snap))
+                            .await;
+                        loop {
+                            match c.recv_command().await {
+                                Ok(Some(ferry_ipc::ClientCommand::Ping)) => {
+                                    let _ = c.send_message(&ferry_ipc::DaemonMessage::Pong).await;
+                                }
+                                Ok(Some(_)) => {
+                                    let _ = c
+                                        .send_message(&ferry_ipc::DaemonMessage::Ack {
+                                            command: "ok".into(),
+                                            message: None,
+                                        })
+                                        .await;
+                                }
+                                Ok(None) => break,
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    
+    let mut waited = std::time::Duration::from_millis(0);
+    while waited < std::time::Duration::from_millis(2000) {
+        if sock.exists() {
+            
+            let probe = ensure_daemon(&hp);
+            if probe.is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += std::time::Duration::from_millis(50);
+    }
+    assert!(sock.exists(), "fake server should have created socket");
+
     let start = std::time::Instant::now();
-    let ok = ensure_daemon(&hp).is_ok();
-    let _ = ok;
-    let _ = sock;
+    let p2 = ensure_daemon(&hp).expect("second ensure should reuse running server");
     let elapsed = start.elapsed();
-    assert!(elapsed < std::time::Duration::from_millis(800));
+    assert_eq!(p2, sock);
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "reuse via ping should be fast, got {elapsed:?}"
+    );
+
+    
+    let start2 = std::time::Instant::now();
+    let ok = ensure_daemon(&hp).is_ok();
+    assert!(ok);
+    assert!(start2.elapsed() < std::time::Duration::from_millis(800));
 }
 
 #[test]
@@ -74,7 +150,7 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn share_and_join_json_round_trip_two_homes() {
-    // Two isolated homes, share in A, join in B, verify same folder_id and no pair-offer file when code path used
+    
     let home_a = temp_home();
     let home_b = temp_home();
     let work_a = tempfile::tempdir().unwrap();
@@ -84,7 +160,7 @@ fn share_and_join_json_round_trip_two_homes() {
     std::env::set_var("FERRY_HOME", home_a.path());
     let proj_a = work_a.path().join("proj-a");
     std::fs::create_dir_all(&proj_a).unwrap();
-    ferry_cli::commands::init::run(&proj_a, "init").unwrap();
+    ferry_cli::commands::init::run(&proj_a).unwrap();
 
     let out_a = ferry_cli::commands::share::run(&proj_a, false, 5)
         .expect("share should succeed with code path");
@@ -92,26 +168,26 @@ fn share_and_join_json_round_trip_two_homes() {
     let code = out_a.json["code"].as_str().unwrap().to_string();
     let folder_id_a = out_a.json["folder_id"].as_str().unwrap().to_string();
     assert_eq!(folder_id_a.len(), 32);
-    // Should not have written legacy offer when code path succeeds
-    // (allow either, but prefer not)
+    
+    
     let _has_offer = proj_a.join(".ferry/pair-offer.ferry-pair").exists();
 
-    // Switch to home B
+    
     std::env::set_var("FERRY_HOME", home_b.path());
     let dest_b = work_b.path().join("proj-b");
     std::fs::create_dir_all(&dest_b).unwrap();
-    // dest must be empty; join will create .ferry
+    
     let out_b = ferry_cli::commands::join::run(&code, Some(&dest_b)).expect("join should succeed");
     assert_eq!(out_b.json["folder_id"], folder_id_a);
     assert_eq!(out_b.json["status"], "joined");
     assert!(dest_b.join(".ferry").is_dir());
     assert!(dest_b.join(".ferry/config").is_file());
-    // Verify folder_id matches via config head parse or json
+    
     let cfg_bytes = std::fs::read(dest_b.join(".ferry/config")).unwrap();
     let head = ferry_crypto::config_head::parse_config_head(&cfg_bytes).unwrap();
     assert_eq!(ferry_store::format::hex(&head.folder_id), folder_id_a);
 
-    // Restore
+    
     std::env::remove_var("FERRY_HOME");
 }
 
@@ -123,11 +199,11 @@ fn headless_share_json_works_without_tty() {
     std::env::set_var("FERRY_HOME", home.path());
     let proj = work.path().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    ferry_cli::commands::init::run(&proj, "init").unwrap();
+    ferry_cli::commands::init::run(&proj).unwrap();
     let out = ferry_cli::commands::share::run(&proj, false, 5).unwrap();
     assert!(out.json["code"].is_string());
     assert!(out.json["expires_at"].is_string());
-    // Human output should contain Share code
+    
     assert!(out.human.contains("Share code"));
     std::env::remove_var("FERRY_HOME");
 }

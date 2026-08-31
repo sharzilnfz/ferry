@@ -1,5 +1,5 @@
-//! `ferry conflicts list`: read `.ferry/conflicts.jsonl` through
-//! ferry-sync-engine and render a table or a JSON array.
+
+
 
 use std::fmt::Write as _;
 use std::path::Path;

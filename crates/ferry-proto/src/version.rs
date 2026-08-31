@@ -1,19 +1,19 @@
-//! Protocol version arithmetic and the negotiation rule.
-//!
-//! A version is one `u16`: high byte major, low byte minor. Wire v1 is
-//! `1.0`. The negotiation rule (normative in `docs/store-format.md`):
-//!
-//! - Peers advertise the MAXIMUM version they speak.
-//! - Majors MUST match exactly; a mismatch is a clean disconnect
-//!   ([`ProtoError::VersionIncompatible`]) after BYE(1).
-//! - The agreed version is `min(a.minor, b.minor)` under the common major.
-//!   Both sides speak at or below it for the rest of the session.
-//! - Messages introduced in minors above the agreed version MUST NOT be
-//!   sent, even when both sides understand them.
+
+
+
+
+
+
+
+
+
+
+
+
 
 use crate::error::ProtoError;
 
-/// Major.minor packed into a u16: `(major << 8) | minor`.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProtocolVersion(u16);
 
@@ -40,9 +40,9 @@ impl ProtocolVersion {
         ProtocolVersion(v)
     }
 
-    /// Componentwise minimum via the packed representation: within a major
-    /// this is the lower minor; across majors the lower major wins, so the
-    /// result can never silently upgrade past either speaker.
+    
+    
+    
     pub const fn min_minor(a: ProtocolVersion, b: ProtocolVersion) -> ProtocolVersion {
         if a.0 <= b.0 {
             a
@@ -58,10 +58,10 @@ impl core::fmt::Display for ProtocolVersion {
     }
 }
 
-/// Negotiate the session version from both sides' advertised maxima.
-///
-/// Returns [`ProtoError::VersionIncompatible`] on any major mismatch — the
-/// caller translates that into BYE(1) and a clean disconnect.
+
+
+
+
 pub fn negotiate(
     ours: ProtocolVersion,
     theirs: ProtocolVersion,
@@ -93,7 +93,7 @@ mod tests {
             negotiate(ProtocolVersion::new(1, 4), ProtocolVersion::new(1, 7)).unwrap(),
             ProtocolVersion::new(1, 4)
         );
-        // Symmetric: either side may be the lower one.
+        
         assert_eq!(
             negotiate(ProtocolVersion::new(1, 7), ProtocolVersion::new(1, 4)).unwrap(),
             ProtocolVersion::new(1, 4)
@@ -118,8 +118,8 @@ mod tests {
     fn min_minor_never_crosses_majors() {
         let a = ProtocolVersion::new(1, 9);
         let b = ProtocolVersion::new(2, 0);
-        // Even misused across majors the helper keeps ONE major; negotiate()
-        // is the gate callers must pass first.
+        
+        
         assert_eq!(ProtocolVersion::min_minor(a, b).major(), 1);
     }
 }

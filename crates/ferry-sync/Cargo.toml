@@ -9,8 +9,7 @@ ferry-store = { path = "../ferry-store" }
 ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-folder = { path = "../ferry-folder" }
-# Session-pin types for sync engine tests and release planning.
-ferry-pin = { path = "../ferry-pin" }
+ferry-ignore = { path = "../ferry-ignore" }
 blake3.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -18,15 +17,14 @@ serde_json.workspace = true
 thiserror.workspace = true
 ferry-platform.workspace = true
 ferry-materialize = { path = "../ferry-materialize" }
+ferry-scan = { path = "../ferry-scan" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true
-hkdf.workspace = true
-sha2.workspace = true
-zeroize.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 rand.workspace = true
 tempfile.workspace = true
 filetime.workspace = true

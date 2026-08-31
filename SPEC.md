@@ -50,7 +50,7 @@ chunking but gets no special features yet.
 5. **Crypto**: per-folder keys, device pairing via short code / QR, age-style
    wrapped key envelopes, AEAD on every blob and manifest (ADR-0002).
 6. **CLI-first UX**:
-   - `ferry init` inside a project directory (or `ferry add <path>`)
+    - `ferry init [path]` inside a project directory
    - `ferry pair` (device pairing)
    - `ferry share <folder>` / accept flow
    - status/list/conflicts commands

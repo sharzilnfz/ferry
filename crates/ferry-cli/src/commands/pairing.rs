@@ -1,8 +1,8 @@
-//! The pairing ritual as a CLI flow. The ritual itself (codes, envelopes,
-//! files, ordering, wrap entries, grant sealing, transport selection) lives
-//! in `ferry-folder`'s unified `PairingRitual`; this module adds only what
-//! the CLI owns: QR art, stderr instructions, and the `{command: "pair"}`
-//! output documents.
+
+
+
+
+
 
 use std::path::Path;
 
@@ -13,10 +13,10 @@ use crate::folder::OpenFolder;
 use crate::out::Output;
 use ferry_crypto::identity::DeviceIdentity;
 
-/// Run the initiator side inside an opened folder. Prints the 6-char code +
-/// ASCII QR + instructions BEFORE the payload file exists (so nothing races
-/// a reader watching for it), then polls for the responder and completes
-/// the FMK wrap.
+
+
+
+
 pub fn initiate(
     opened: &OpenFolder,
     identity: &DeviceIdentity,
@@ -56,10 +56,10 @@ pub fn initiate(
     Ok(Output::new(json_doc, human))
 }
 
-/// Run the acceptor side against an offer payload. The ritual detects the
-/// input form (code, `FERRY1:` envelope, or payload file path) internally;
-/// for the file transport this prints the response path + the expected code
-/// on stderr, then waits for the sealed grant and adopts the folder.
+
+
+
+
 pub fn accept(
     identity: &DeviceIdentity,
     offer_file: &Path,
@@ -94,7 +94,7 @@ pub fn accept(
     Ok(Output::new(json_doc, human))
 }
 
-/// The unified ritual on this device's home + the process-wide rendezvous.
+
 fn ritual_for(identity: &DeviceIdentity) -> CliResult<ferry_folder::pairing::PairingRitual> {
     let home = crate::home::ferry_home()?;
     Ok(ferry_folder::pairing::PairingRitual::with_shared(
@@ -104,12 +104,12 @@ fn ritual_for(identity: &DeviceIdentity) -> CliResult<ferry_folder::pairing::Pai
     ))
 }
 
-// ---------------------------------------------------------------------------
-// QR rendering
-// ---------------------------------------------------------------------------
 
-/// Unicode half-block ASCII-art QR (with a one-module quiet zone). Terminal
-/// width is irrelevant: modules print at half height via ▀▄█.
+
+
+
+
+
 pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     let code = qrcode::QrCode::new(bytes).map_err(|e| {
         CliError::new(
@@ -131,13 +131,13 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     let total = w + quiet * 2;
 
     let mut out = String::new();
-    out.push('\u{2b}'); // '+' frame corner
+    out.push('\u{2b}'); 
     for _ in 0..total {
-        out.push('\u{2500}'); // ─ top rule
+        out.push('\u{2500}'); 
     }
     out.push('\u{2b}');
     out.push('\n');
-    let mut y = 0usize; // y indexes the QUIET-padded grid
+    let mut y = 0usize; 
     while y < total {
         let mut line = String::from('\u{2502}');
         let mut x = 0usize;
@@ -150,9 +150,9 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
                 false
             };
             line.push(match (top, bottom) {
-                (true, true) => '\u{2588}',  // █
-                (true, false) => '\u{2580}', // ▀
-                (false, true) => '\u{2584}', // ▄
+                (true, true) => '\u{2588}',  
+                (true, false) => '\u{2580}', 
+                (false, true) => '\u{2584}', 
                 (false, false) => ' ',
             });
             x += 1;
@@ -170,7 +170,7 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     Ok(out)
 }
 
-/// Canonical display for an artifact path (falls back to raw on error).
+
 fn offer_path_display(p: &Path) -> std::path::Display<'_> {
     let _ = p.canonicalize();
     p.display()

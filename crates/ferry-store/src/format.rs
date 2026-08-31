@@ -1,20 +1,20 @@
-//! Wire constants and shared primitives from `docs/store-format.md`.
-//!
-//! Every multi-byte integer on the wire is little-endian except the 4-byte
-//! nonce counter word, which is big-endian (age STREAM compatibility); the
-//! exception lives in [`crypto`], not here.
+
+
+
+
+
 
 use thiserror::Error;
 
-/// Magic bytes starting every standalone container file.
+
 pub const MAGIC: [u8; 5] = *b"FERRY";
-/// Current container `format_version`. Writers MUST write this; readers MUST
-/// reject anything else.
+
+
 pub const FORMAT_VERSION: u32 = 1;
-/// Length of the fixed container prologue: magic(5) + kind(1) + version(4).
+
 pub const HEADER_LEN: usize = 10;
 
-/// Kinds of standalone container files (file header kind byte).
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContainerKind {
     PackData = 0x01,
@@ -39,7 +39,7 @@ impl ContainerKind {
     }
 }
 
-/// Kinds of blobs stored inside packs (footer / index kind byte).
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlobKind {
     DataChunk = 0x01,
@@ -63,16 +63,16 @@ impl BlobKind {
         self as u8
     }
 
-    /// Metadata blobs ride `PACK_META`; data chunks ride `PACK_DATA`.
+    
     pub fn is_meta(self) -> bool {
         !matches!(self, BlobKind::DataChunk)
     }
 }
 
-/// A BLAKE3 content address (32 raw bytes). Addresses chunks, tree nodes,
-/// manifests, and pack files alike.
+
+
 pub type BlobId = [u8; 32];
-/// Content address of a pack file: BLAKE3 over its full ciphertext.
+
 pub type PackId = [u8; 32];
 
 #[derive(Debug, Error)]
@@ -89,7 +89,7 @@ pub enum FormatError {
     ReservedNonzero,
 }
 
-/// Serialize the 10-byte file header.
+
 pub fn write_header(kind: ContainerKind) -> [u8; HEADER_LEN] {
     let mut h = [0u8; HEADER_LEN];
     h[..5].copy_from_slice(&MAGIC);
@@ -98,7 +98,7 @@ pub fn write_header(kind: ContainerKind) -> [u8; HEADER_LEN] {
     h
 }
 
-/// Parse and validate a 10-byte file header, returning its kind.
+
 pub fn parse_header(bytes: &[u8]) -> Result<ContainerKind, FormatError> {
     if bytes.len() < HEADER_LEN {
         return Err(FormatError::Truncated {
@@ -123,7 +123,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<ContainerKind, FormatError> {
     Ok(kind)
 }
 
-// --- little-endian scalar primitives used by every serializer ---
+
 
 pub fn put_u8(out: &mut Vec<u8>, v: u8) {
     out.push(v);
@@ -149,7 +149,7 @@ pub fn put_bytes(out: &mut Vec<u8>, v: &[u8]) {
     out.extend_from_slice(v);
 }
 
-/// Cursor over a byte slice producing typed reads with truncation checks.
+
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -202,8 +202,8 @@ impl<'a> Reader<'a> {
         s
     }
 
-    /// All input must be consumed; trailing bytes mean the object was not
-    /// serialized by a conforming writer.
+    
+    
     pub fn expect_end(&mut self) -> Result<(), FormatError> {
         if self.pos != self.buf.len() {
             return Err(FormatError::Truncated {
@@ -215,27 +215,22 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Lowercase hex encoding for ids and names (display form per spec).
+
 pub fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit(u32::from(b >> 4), 16).unwrap());
-        s.push(char::from_digit(u32::from(b & 0xf), 16).unwrap());
-    }
-    s
+    hex::encode(bytes)
 }
 
-/// Decode lowercase hex into a fixed-size array.
+pub fn short_hex(bytes: &[u8], chars: usize) -> String {
+    let full = hex::encode(bytes);
+    full[..chars.min(full.len())].to_string()
+}
+
 pub fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
-    if s.len() != N * 2 {
+    let decoded = hex::decode(s).ok()?;
+    if decoded.len() != N {
         return None;
     }
     let mut out = [0u8; N];
-    let b = s.as_bytes();
-    for i in 0..N {
-        let hi = (b[2 * i] as char).to_digit(16)?;
-        let lo = (b[2 * i + 1] as char).to_digit(16)?;
-        out[i] = ((hi << 4) | lo) as u8;
-    }
+    out.copy_from_slice(&decoded);
     Some(out)
 }

@@ -1,22 +1,4 @@
 #!/usr/bin/env bash
-# ferry M0 walking skeleton — end-to-end acceptance (T-006, extended T-009):
-#
-#   "script starts both daemons, touches 50 random files including an
-#    append-heavy log file, asserts convergence within N seconds, tears
-#    down."
-#
-# T-009 adds TRANSPORT PARITY: the same scenario runs TWICE — once over
-# the default iroh QUIC transport through a local ferry-relay (blind
-# ciphertext pipe), once over the legacy loopback TCP transport — and both
-# runs must converge to byte-identical trees. ADR-0003: peers are
-# addressed by public key; the relay never sees plaintext (asserted by a
-# marker scan of the relay's captured output).
-#
-# Usage: scripts/skeleton-e2e.sh [TIMEOUT_SECONDS]   (default 30 per mode)
-#
-# Everything runs under an OS temp dir; teardown happens via trap even on
-# failure or Ctrl-C. Exit 0 iff BOTH modes converge and verify. Portable
-# across macOS (bash 3.2) and GNU/Linux: POSIX tools plus seq/cksum/find.
 
 set -u
 
@@ -51,7 +33,6 @@ MODES_LOG="$TMP/modes.log"
 cleanup() {
     trap - EXIT INT TERM
     if [ -n "$PIDS" ]; then
-        # shellcheck disable=SC2086
         kill $PIDS >/dev/null 2>&1 || true
         wait $PIDS >/dev/null 2>&1 || true
     fi
@@ -67,7 +48,6 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 POLY="$("$FERRY_BIN" genpoly --seed 20260824)" || fail "genpoly"
 
-# --- helpers ----------------------------------------------------------------
 last_field_of() { # file -> value of key= from the newest STATE line
     awk '/ STATE /{for(k=1;k<=NF;k++) if ($k ~ /^'"$2"'=/){v=substr($k,length("'"$2"'")+2)}} END{if(v=="")v="none"; print v}' "$1"
 }
@@ -99,11 +79,6 @@ wait_converged() { # a_log b_log tree_a tree_b deadline_s -> sets CONVERGED=1/0,
 verify_trees() { # tree_a tree_b log_lines total_files_min
     local ta="$1" tb="$2" lines="$3" minfiles="$4" rel="logs/app.log" tries=0
     [ -f "$tb/$rel" ] || fail "[${MODE}] log missing on node B"
-    # The writer finished before convergence polling started, but node A's
-    # final appends can still be one quiet-window/exchange behind when the
-    # two manifests FIRST agree (both sides matching on a partial tail is a
-    # legitimate transient). Give the tail a bounded window (~30s) to land
-    # instead of demanding exactness from a single sample; flaked on CI.
     while [ "$tries" -lt 150 ]; do
         GOT_LINES="$(wc -l < "$tb/$rel" | tr -d ' ')"
         [ "$GOT_LINES" -eq "$lines" ] && break
@@ -168,7 +143,6 @@ append_log_while_syncing() { # tree_a -> sets WRITER_PID
 TOTAL_LINES=250
 LOG_REL="logs/app.log"
 
-# --- MODE: tcp --------------------------------------------------------------
 MODE=tcp
 A_TREE="$TMP/tcp-a/tree"; A_STORE="$TMP/tcp-a/store"
 B_TREE="$TMP/tcp-b/tree"; B_STORE="$TMP/tcp-b/store"
@@ -215,7 +189,6 @@ TCP_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
 echo "== mode tcp: converged in <=${ELAPSED}s (agreed=$TCP_AGREED)"
 verify_trees "$A_TREE" "$B_TREE" "$TOTAL_LINES" 51
-# T-014: sessions must be protocol v1 WITH encryption ON by default.
 grep -q "encrypted=yes" "$A_LOG" || fail "[tcp] node A never ran an ENCRYPTED v1 session"
 grep -q "encrypted=yes" "$B_LOG" || fail "[tcp] node B never ran an ENCRYPTED v1 session"
 if grep -q "encrypted=no" "$A_LOG" "$B_LOG"; then
@@ -224,11 +197,9 @@ fi
 echo "== mode tcp: OK, full tree byte-identical, v1 sealed sessions verified"
 echo "tcp agreed=$TCP_AGREED" >> "$MODES_LOG"
 
-# Stop this pair before the next mode.
 PIDS_A="$PIDS"; PIDS=""
 for p in $PIDS_A; do kill "$p" >/dev/null 2>&1 || true; wait "$p" 2>/dev/null || true; done
 
-# --- MODE: iroh (through a local blind relay) --------------------------------
 MODE=iroh
 A_TREE="$TMP/iroh-a/tree"; A_STORE="$TMP/iroh-a/store"
 B_TREE="$TMP/iroh-b/tree"; B_STORE="$TMP/iroh-b/store"
@@ -236,8 +207,6 @@ mkdir -p "$A_TREE" "$B_TREE" "$A_STORE" "$B_STORE"
 A_LOG="$TMP/node-a-iroh.log"; B_LOG="$TMP/node-b-iroh.log"
 RELAY_LOG="$TMP/relay-iroh.log"
 
-# The self-hostable blind relay: clients fall back to it whenever a direct
-# path is unavailable; its output is captured for the plaintext scan.
 "$RELAY_BIN" --http-bind 127.0.0.1:0 >"$RELAY_LOG" 2>&1 &
 PIDS="$!"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -271,8 +240,6 @@ populate_tree "$A_TREE"
 append_log_while_syncing "$A_TREE"
 wait "$WRITER_PID"
 
-# Iroh path setup (endpoint handshake via relay) deserves a little more
-# rope than raw loopback TCP; still bounded by N_SECONDS + slack.
 IROH_BUDGET=$((N_SECONDS + 15))
 wait_converged "$A_LOG" "$B_LOG" "$A_TREE" "$B_TREE" "$IROH_BUDGET"
 [ "$CONVERGED" = 1 ] || fail "[iroh] manifest ids did not converge within ${IROH_BUDGET}s (a=$AGREED_A b=$AGREED_B)"
@@ -280,7 +247,6 @@ IROH_AGREED="$AGREED"
 ELAPSED=$((SECONDS - START))
 echo "== mode iroh: converged in <=${ELAPSED}s (agreed=$IROH_AGREED)"
 verify_trees "$A_TREE" "$B_TREE" "$TOTAL_LINES" 51
-# T-014: sessions must be protocol v1 WITH encryption ON by default.
 grep -q "encrypted=yes" "$A_LOG" || fail "[iroh] node A never ran an ENCRYPTED v1 session"
 grep -q "encrypted=yes" "$B_LOG" || fail "[iroh] node B never ran an ENCRYPTED v1 session"
 if grep -q "encrypted=no" "$A_LOG" "$B_LOG"; then
@@ -288,9 +254,6 @@ if grep -q "encrypted=no" "$A_LOG" "$B_LOG"; then
 fi
 echo "== mode iroh: OK, full tree byte-identical"
 
-# Blind-relay plaintext scan: every byte the relay printed must be free of
-# our known-plaintext markers (file names travel inside encrypted-to-peer
-# frames; the relay sees only opaque ciphertext).
 MARKERS_FOUND=0
 for needle in "e2e log line" "payload-" "#!/bin/sh" "skeleton"; do
     if grep -qF -- "$needle" "$RELAY_LOG" 2>/dev/null; then

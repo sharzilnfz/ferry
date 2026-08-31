@@ -1,14 +1,14 @@
-//! `ferry store gc` (T-20): mark-from-live-manifests pack collection.
-//!
-//! The engine lives in ferry-store (`gc.rs`): `reachability_report` for the
-//! read-only report, `collect_garbage` for the delete path behind it. This
-//! module only gathers the LIVE ROOTS and renders the report:
-//!
-//! - every last-agreed manifest recorded for this folder
-//!   (`.ferry/agreement/`, one per peer), and
-//! - every held-change manifest still awaiting `ferry pin release`
-//!   (`.ferry/held/<peer>.jsonl`), so releasing a pin can never hit a
-//!   chunk whose pack GC already removed.
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -88,8 +88,8 @@ pub fn run(args: GcArgs<'_>) -> CliResult<Output> {
     }
 }
 
-/// Live manifest roots for this folder's store: last-agreed pointers plus
-/// held-change manifests. Sorted + deduped so reports are stable.
+
+
 fn live_roots(folder_root: &Path, folder_id: &[u8; 16]) -> CliResult<Vec<BlobId>> {
     let state_dir = folder::state_dir(folder_root);
     let mut roots: BTreeSet<BlobId> = BTreeSet::new();
@@ -103,7 +103,7 @@ fn live_roots(folder_root: &Path, folder_id: &[u8; 16]) -> CliResult<Vec<BlobId>
     })? {
         roots.insert(rec.manifest_id);
     }
-    let held = ferry_pin::HeldLedger::new(&state_dir);
+    let held = ferry_sync_engine::pin::HeldLedger::new(&state_dir);
     for peer in held.peers().code("store", "held ledger unreadable")? {
         for e in held
             .load_peer(&peer)

@@ -1,8 +1,8 @@
-//! `--json` schema stability: every command's document is reduced to its
-//! KEY STRUCTURE (sorted path:type pairs, array shapes pinned by element)
-//! and compared against checked-in files under tests/expected/. Values are
-//! deliberately ignored — these snapshots pin NAMES and TYPES, which is the
-//! stability promise docs/cli-json.md makes.
+
+
+
+
+
 
 mod common;
 
@@ -10,7 +10,7 @@ use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
 
-/// Reduce a JSON value to a deterministic schema description.
+
 fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
     match v {
         Value::Object(map) => {
@@ -22,8 +22,8 @@ fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
         }
         Value::Array(items) => {
             out.push(format!("{path}[]"));
-            // Pin the shape of the FIRST element only (arrays are
-            // homogeneous by contract).
+            
+            
             if let Some(first) = items.first() {
                 schema(first, &format!("{path}[0]"), out);
             }
@@ -54,7 +54,7 @@ fn schema_of(v: &Value) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Compare-or-bless. Set `FERRY_UPDATE_EXPECTED=1` to rewrite the file.
+
 fn assert_matches_expected(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));
@@ -70,9 +70,9 @@ fn assert_matches_expected(name: &str, actual: &str) {
             file.display()
         )
     });
-    // Normalize checkout line endings: git may hand these fixtures back with
-    // CRLF on windows runners (autocrlf), while generated schemas always use
-    // LF. The schema bytes are what this test guards, not the newline style.
+    
+    
+    
     let expected = expected.replace("\r\n", "\n");
     assert_eq!(expected, actual, "JSON schema for {name} drifted");
 }
@@ -81,7 +81,7 @@ fn assert_matches_expected(name: &str, actual: &str) {
 fn init_document_schema_is_stable() {
     let env = Env::new("schema-init");
     let proj = env.work().join("proj");
-    let out = commands::init::run(&proj, "init").unwrap();
+    let out = commands::init::run(&proj).unwrap();
     assert_matches_expected("init", &schema_of(&out.json));
 }
 
@@ -89,7 +89,7 @@ fn init_document_schema_is_stable() {
 fn status_document_schema_is_stable() {
     let env = Env::new("schema-status");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("a.txt"), b"x").unwrap();
     let out = commands::status::run(&proj).unwrap();
     assert_matches_expected("status", &schema_of(&out.json));
@@ -99,7 +99,7 @@ fn status_document_schema_is_stable() {
 fn conflicts_document_schema_is_stable() {
     let env = Env::new("schema-conflicts");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     ferry_sync_engine::append_entries(
         &ferry_cli::folder::state_dir(&proj),
         &[ferry_sync_engine::ConflictEntry {
@@ -129,7 +129,7 @@ fn conflicts_document_schema_is_stable() {
 fn ignore_list_document_schema_is_stable() {
     let env = Env::new("schema-ignore");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     commands::ignore_cmd::run(&proj, Some("*.log"), None, false).unwrap();
     commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
     let out = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
@@ -140,7 +140,7 @@ fn ignore_list_document_schema_is_stable() {
 fn ignore_mutations_share_one_document_shape() {
     let env = Env::new("schema-ignore-mutate");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     let added = commands::ignore_cmd::run(&proj, Some("dist/"), None, false).unwrap();
     assert_matches_expected("ignore-added", &schema_of(&added.json));
     let preset = commands::ignore_cmd::run(&proj, None, Some("opencode"), false).unwrap();
@@ -151,10 +151,10 @@ fn ignore_mutations_share_one_document_shape() {
 fn store_gc_document_schema_is_stable() {
     let env = Env::new("schema-store-gc");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
 
-    // Orphan content: blobs with no manifest referencing them must show up
-    // as garbage in the dry-run report (and pin the array element shape).
+    
+    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     opened
         .store
@@ -174,7 +174,7 @@ fn store_gc_document_schema_is_stable() {
     assert!(!dry.json["garbage_packs"].as_array().unwrap().is_empty());
     assert_matches_expected("store-gc-dry", &schema_of(&dry.json));
 
-    // The delete path behind the report shares the document skeleton.
+    
     let real = commands::store::run(commands::store::GcArgs {
         folder: &proj,
         dry_run: false,
@@ -189,7 +189,7 @@ fn store_gc_document_schema_is_stable() {
 fn pin_documents_are_stable_across_the_lifecycle() {
     let env = Env::new("schema-pin");
     let proj = env.work().join("proj");
-    commands::init::run(&proj, "init").unwrap();
+    commands::init::run(&proj).unwrap();
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/a.rs"), b"fn main() {}\n").unwrap();
 
@@ -197,12 +197,12 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     let started = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 
-    // While pinned with held changes absent, status still pins the shape.
+    
     let status = commands::pin::status(&proj).unwrap();
     assert_eq!(status.json["state"], "active");
 
-    // Simulate a held change arriving (the exchange loop writes these);
-    // its manifest must REALLY be in the store or release refuses loudly.
+    
+    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     let scan = ferry_cli::commands::status::scan_now(&opened).unwrap();
     let mid = opened
@@ -212,16 +212,16 @@ fn pin_documents_are_stable_across_the_lifecycle() {
             &scan.manifest_bytes,
         )
         .unwrap();
-    // Staged metadata is only readable after sealing (same rule the
-    // exchange loop follows before anything references it).
+    
+    
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
     let state_dir = ferry_cli::folder::state_dir(&proj);
-    let ledger = ferry_pin::HeldLedger::new(&state_dir);
+    let ledger = ferry_sync_engine::pin::HeldLedger::new(&state_dir);
     ledger
         .append(
             &"b".repeat(32),
-            &[ferry_pin::HeldEntry {
+            &[ferry_sync_engine::pin::HeldEntry {
                 held_sec: 1_787_574_000,
                 held_nsec: 0,
                 path: "src/a.rs".into(),

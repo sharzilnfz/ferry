@@ -1,7 +1,7 @@
-//! `ferry-ipc`: Lightweight local IPC wire protocol, framing, and transports for Ferry.
-//!
-//! Provides typed newline-delimited JSON messaging over Unix domain sockets,
-//! Windows named pipes, and in-memory duplex streams.
+
+
+
+
 
 pub mod backend;
 pub mod client;
@@ -13,15 +13,17 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::{
-    BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary,
-    PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiBackend, UiEvent,
-    UiEventStream,
+    connect_auto, AutoBackend, BoxFuture, InventoryDomain, OpError, PairResult, PinRecord,
+    PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain,
+    UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
 };
+#[cfg(any(test, feature = "test-util"))]
+pub use backend::FakeBackend;
 pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;
-// The folder inventory data shapes and guards live in `ferry-folder` (single
-// owner of registry persistence and inspection); re-exported here so the
-// wire protocol and frontends keep one import site.
+
+
+
 pub use ferry_folder::inventory::{
     default_listing_root, sort_entries, validate_and_normalize, validate_path, DirectoryEntry,
     FolderInventory, FolderRecord, ListDirectoryRequest, ListDirectoryResponse,

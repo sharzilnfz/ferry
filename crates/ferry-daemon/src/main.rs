@@ -1,29 +1,29 @@
-//! `ferry-sync` CLI: run one M0 daemon over iroh (default) or loopback TCP,
-//! or generate a folder polynomial.
-//!
-//! Daemon pairs (iroh mode, the ADR-0003 path):
-//!
-//! ```text
-//! # Node A (listener): announces its public endpoint id
-//! ferry-sync daemon --role listen \
-//!     --store /tmp/node-a/store --tree /tmp/node-a/tree --tag node-a --poly <hex16> \
-//!     [--relay http://relay.example:3340] [--discovery mdns]
-//! # -> prints `ENDPOINT <hex64>` once the QUIC endpoint is up
-//!
-//! # Node B (connector): dials A BY PUBLIC KEY
-//! ferry-sync daemon --role connect --peer <A's hex64> \
-//!     --store /tmp/node-b/store --tree /tmp/node-b/tree --tag node-b --poly <hex16> \
-//!     [--relay http://relay.example:3340] ...
-//! ```
-//!
-//! TCP mode (`--transport tcp`) keeps the M0 localhost shape: `--addr`
-//! HOST:PORT means an actual socket again.
-//!
-//! Both print machine-greppable `STATE root=<hex> agreed=<hex|none>` lines;
-//! the connector drives sessions, the listener serves them and relies on
-//! the peer's opportunistic dials to discover its changes.
-//!
-//! Status lines go to stdout; errors to stderr.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::process::ExitCode;
 use std::str::FromStr as _;
@@ -39,7 +39,7 @@ use ferry_daemon::ui;
 use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
 
-/// Port 0 makes the transport mint a unique alias.
+
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
 
 const USAGE: &str = "\
@@ -155,8 +155,8 @@ fn ferry_home() -> std::path::PathBuf {
 }
 
 fn cmd_daemon(args: &[String]) -> ExitCode {
-    // Central supervisor mode: `ferry daemon` without legacy flags runs Supervisor.
-    // Preserve `--listen` single-folder deprecated wrapper by routing to legacy when --store/--role present.
+    
+    
     let is_legacy = has_flag(args, "--store")
         || has_flag(args, "--tree")
         || has_flag(args, "--role")
@@ -170,12 +170,12 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
             }
         }
     }
-    // Legacy single-folder path (also used for `ferry daemon --listen` deprecated wrapper)
+    
     if has_flag(args, "--listen") {
         eprintln!(
             "warning: --listen is deprecated; use `ferry daemon` without args for device daemon"
         );
-        // If --listen is given with a path arg, register it before falling through to legacy
+        
         if let Some(p) = flag(args, "--listen") {
             let home = ferry_home();
             let _ = std::fs::create_dir_all(&home);
@@ -201,76 +201,18 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
 
 fn run_central_daemon(args: &[String]) -> Result<(), String> {
     let home = ferry_home();
-    std::fs::create_dir_all(&home).map_err(|e| format!("home {}: {e}", home.display()))?;
-    // Device identity persisted under $FERRY_HOME/identity (or legacy $FERRY_HOME)
+    let folders: Vec<std::path::PathBuf> = args
+        .iter()
+        .filter(|a| !a.starts_with('-') && a.as_str() != "daemon")
+        .map(std::path::PathBuf::from)
+        .collect();
+    
     let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
         .or_else(|_| {
             ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
         })
         .map_err(|e| format!("device identity: {e}"))?;
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-    let mut supervisor = ferry_daemon::supervisor::Supervisor::new(home.clone(), identity.clone());
-    // Register any folder args before spawning (e.g., `ferry daemon /tmp/a /tmp/b`)
-    for arg in args {
-        if arg.starts_with('-') {
-            continue;
-        }
-        if arg == "daemon" {
-            continue;
-        }
-        let p = std::path::PathBuf::from(arg);
-        if p.as_os_str().is_empty() {
-            continue;
-        }
-        let abs = if p.is_relative() {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&p))
-                .unwrap_or(p.clone())
-        } else {
-            p.clone()
-        };
-        // handle_register may need tokio runtime for engine spawn; run inside runtime
-        let rec = rt.block_on(async { supervisor.handle_register(abs.clone()) });
-        match rec {
-            Ok(r) => eprintln!("registered {} -> {}", r.path.display(), r.folder_id),
-            Err(e) if e.code == "already-synced" => {
-                eprintln!("already-synced {}: {}", p.display(), e.message);
-            }
-            Err(e) => return Err(format!("register {}: {}", p.display(), e.message)),
-        }
-    }
-    rt.block_on(async {
-        supervisor
-            .spawn_engines()
-            .map_err(|e| format!("spawn engines: {}: {}", e.code, e.message))
-    })?;
-    let socket_path = ferry_ipc::paths::default_socket_path();
-    if let Some(parent) = socket_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let supervisor_arc = std::sync::Arc::new(tokio::sync::Mutex::new(supervisor));
-    let sup_for_ipc = std::sync::Arc::clone(&supervisor_arc);
-    let _ipc_handle = rt
-        .block_on(async {
-            ferry_daemon::ipc::spawn_supervisor_ipc_server(socket_path.clone(), sup_for_ipc)
-        })
-        .map_err(|e| format!("ipc server: {e}"))?;
-    eprintln!("ferry device daemon listening at {}", socket_path.display());
-    // Supervision loop with backoff — runs until killed
-    rt.block_on(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            interval.tick().await;
-            let mut sup = supervisor_arc.lock().await;
-            sup.tick();
-        }
-    });
-    #[allow(unreachable_code)]
-    Ok(())
+    ferry_daemon::device_daemon::run(&home, identity, &folders).map_err(|e| e.to_string())
 }
 
 enum TransportKind {
@@ -297,8 +239,8 @@ struct DaemonArgs {
     socket_path: Option<std::path::PathBuf>,
 }
 
-/// `--ui [ADDR]`: bare flag means the documented default; any non-loopback
-/// address is refused at startup (v0 auth stance: localhost only).
+
+
 fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String> {
     if !has_flag(args, "--ui") {
         return Ok(None);
@@ -328,7 +270,7 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
     let parsed = DaemonArgs {
         kind,
         role: require(args, "--role")?,
-        // TCP mode demands --addr; iroh mode ignores it (fixed labels below).
+        
         addr: match flag(args, "--addr") {
             Some(a) => {
                 Some(std::net::SocketAddr::from_str(&a).map_err(|e| format!("--addr: {e}"))?)
@@ -384,8 +326,8 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         tag: d.tag.clone(),
         store_dir: d.store_dir.clone(),
         tree_dir: d.tree_dir.clone(),
-        // T-02: validate the user-supplied --poly HERE, at config load. A
-        // typo used to surface as a chunker .expect() panic mid-scan.
+        
+        
         poly: ferry_store::chunker::ValidatedPoly::new(d.poly)
             .map_err(|e| format!("--poly: {e}"))?,
         folder_id: d.folder_id,
@@ -393,22 +335,22 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         opportunistic_every: d.opportunistic_every,
         bind_addr: None,
         connect_to: None,
-        // Strict peer pinning arrives with T-007's pairing ritual; the
-        // skeleton accepts whichever identity proves key possession.
-        expected_peer_id: None,
-        // T-06: production daemons enforce session pins at the engine's
-        // execution boundary. The --store dir IS the folder root whose
-        // `.ferry/` holds pin-state.json and the held ledgers.
+        
+        
+        allow_trust_on_first_use: false,
+        
+        
+        
         pin_state_dir: Some(d.store_dir.join(".ferry")),
         quiet: false,
     };
 
-    // ONE device-identity source for every transport (ticket 12): a real
-    // keypair persisted under `<store>/.device-identity`, loaded or created
-    // exactly once. Tag-derived ids are test-only and unreachable here.
-    // NOTE: the file lives in a SIBLING of the store's `.ferry/` — that
-    // directory belongs to the store layout, and creating it early would
-    // flip Store::create into Store::open on first run.
+    
+    
+    
+    
+    
+    
     let device = crypto_identity::load_or_create(&d.store_dir.join(".device-identity"))
         .map_err(|e| format!("device identity: {e}"))?;
 
@@ -423,22 +365,25 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
             Arc::new(ferry_sync::TcpTransport)
         }
         TransportKind::Iroh => {
-            // Stable endpoint identity derived from THIS store's device
-            // identity (ferry-crypto): restart-safe public addressing.
-            let mut builder = ferry_iroh::IrohConfig::builder().device_identity(&device);
-            if !d.relays.is_empty() {
-                builder = builder.relays(ferry_iroh::RelaySetting::Custom(d.relays.clone()));
-            }
-            if d.mdns {
-                builder = builder.mdns(ferry_iroh::MdnsSetting {
-                    service_name: "ferry-sync".into(),
-                    advertise: true,
-                });
-            }
-            if d.force_relay {
-                builder = builder.force_relay(true);
-            }
-            let t = ferry_iroh::IrohTransport::new(builder.build())
+            let cfg_iroh = ferry_iroh::IrohConfig {
+                device_identity: Some(device.clone()),
+                relays: if d.relays.is_empty() {
+                    ferry_iroh::RelaySetting::Disabled
+                } else {
+                    ferry_iroh::RelaySetting::Custom(d.relays.clone())
+                },
+                mdns: if d.mdns {
+                    Some(ferry_iroh::MdnsSetting {
+                        service_name: "ferry-sync".into(),
+                        advertise: true,
+                    })
+                } else {
+                    None
+                },
+                force_relay: d.force_relay,
+                ..Default::default()
+            };
+            let t = ferry_iroh::IrohTransport::new(cfg_iroh)
                 .map_err(|e| format!("iroh transport: {e}"))?;
 
             let endpoint_hex = hex(&t.endpoint_id());
@@ -457,19 +402,45 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
                 }
                 _ => unreachable!("validated above"),
             }
-            // Announce AFTER wiring config so the listener's alias exists
-            // before any STATE line; ordering with LISTENING is preserved.
+            
+            
             println!("ENDPOINT {endpoint_hex}");
             Arc::new(t)
         }
     };
 
-    let mut engine = SyncEngine::new(cfg, transport).map_err(|e| format!("startup failed: {e}"))?;
+    
+    
+    
+    
+    
+    let store: Arc<ferry_store::store::Store> =
+        if ferry_folder::folder::dot_dir(&d.store_dir).is_dir() {
+            ferry_folder::folder::open_folder(&d.store_dir, &device)
+                .map_err(|e| format!("startup failed: {e}"))?
+                .store
+        } else {
+            let (store, _fmk) =
+                ferry_folder::folder::create_folder(&d.store_dir, &device, d.folder_id, d.poly)
+                    .map_err(|e| format!("startup failed: {e}"))?;
+            
+            
+            store
+                .flush()
+                .map_err(|e| format!("startup failed: flush: {e}"))?;
+            store
+                .write_index_snapshot()
+                .map_err(|e| format!("startup failed: index snapshot: {e}"))?;
+            Arc::new(store)
+        };
+
+    let mut engine = SyncEngine::with_store(cfg, transport, store)
+        .map_err(|e| format!("startup failed: {e}"))?;
     engine.set_identity(device.clone());
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");
     }
-    // Run until killed; EngineHandle shutdown happens on drop.
+    
     let handle = engine.start();
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);

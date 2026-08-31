@@ -1831,7 +1831,6 @@ dependencies = [
  "ferry-gui",
  "ferry-ignore",
  "ferry-ipc",
- "ferry-pin",
  "ferry-platform",
  "ferry-scan",
  "ferry-store",
@@ -1855,6 +1854,7 @@ dependencies = [
  "argon2",
  "blake3",
  "chacha20poly1305",
+ "crc32fast",
  "ferry-store",
  "hkdf",
  "hmac",
@@ -1878,12 +1878,13 @@ dependencies = [
  "ferry-ignore",
  "ferry-ipc",
  "ferry-iroh",
- "ferry-pin",
  "ferry-platform",
  "ferry-scan",
  "ferry-store",
  "ferry-sync",
  "ferry-sync-engine",
+ "notify",
+ "percent-encoding",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -1901,6 +1902,7 @@ dependencies = [
  "ferry-crypto",
  "ferry-ignore",
  "ferry-platform",
+ "ferry-scan",
  "ferry-store",
  "rand 0.8.7",
  "serde",
@@ -1920,6 +1922,7 @@ dependencies = [
  "eframe",
  "egui",
  "ferry-daemon",
+ "ferry-folder",
  "ferry-ipc",
  "ferry-platform",
  "ferry-tui",
@@ -1927,6 +1930,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -1970,6 +1974,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "ferry-crypto",
+ "ferry-folder",
  "ferry-relay",
  "ferry-store",
  "ferry-sync",
@@ -1996,28 +2001,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferry-pin"
-version = "0.1.0"
-dependencies = [
- "ferry-materialize",
- "ferry-platform",
- "ferry-store",
- "ferry-sync-engine",
- "ignore",
- "libc",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "ferry-platform"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
  "unicode-normalization",
  "windows-sys 0.59.0",
 ]
@@ -2061,6 +2051,8 @@ name = "ferry-scan"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ferry-crypto",
+ "ferry-folder",
  "ferry-platform",
  "ferry-store",
  "notify",
@@ -2076,8 +2068,11 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "ferry-platform",
+ "ferry-store",
  "filetime",
+ "hex",
  "hkdf",
+ "lru 0.12.5",
  "rand 0.8.7",
  "sha2 0.10.9",
  "tempfile",
@@ -2093,24 +2088,22 @@ dependencies = [
  "chacha20poly1305",
  "ferry-crypto",
  "ferry-folder",
+ "ferry-ignore",
  "ferry-iroh",
  "ferry-materialize",
- "ferry-pin",
  "ferry-platform",
  "ferry-proto",
+ "ferry-scan",
  "ferry-store",
  "ferry-sync-engine",
  "filetime",
- "hkdf",
  "rand 0.8.7",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -2122,12 +2115,15 @@ dependencies = [
  "ferry-platform",
  "ferry-store",
  "filetime",
+ "ignore",
+ "libc",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "unicode-normalization",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2135,6 +2131,7 @@ name = "ferry-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "ferry-folder",
  "ferry-ipc",
  "ferry-platform",
  "ratatui",

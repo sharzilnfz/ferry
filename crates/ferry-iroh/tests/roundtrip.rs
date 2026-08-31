@@ -1,5 +1,5 @@
-//! Transport-level tests: frames ride iroh exactly like they rode TCP, and
-//! dial failures come out cleanly typed.
+
+
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -14,22 +14,38 @@ fn test_transport(seed_byte: u8) -> IrohTransport {
     seed[0] = seed_byte;
     seed[1] = seed_byte;
     rand::thread_rng().fill_bytes(&mut seed[2..]);
-    IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
+    IrohTransport::new(IrohConfig {
+        secret: Some(seed),
+        ..Default::default()
+    })
+    .expect("transport builds")
+}
+
+fn test_transport_with_routes(seed_byte: u8, routes: ferry_iroh::RouteTable) -> IrohTransport {
+    let mut seed = [0u8; 32];
+    seed[0] = seed_byte;
+    seed[1] = seed_byte;
+    rand::thread_rng().fill_bytes(&mut seed[2..]);
+    IrohTransport::new(IrohConfig {
+        secret: Some(seed),
+        routes: Some(routes),
+        ..Default::default()
+    })
+    .expect("transport builds")
 }
 
 #[test]
 fn frames_round_trip_over_iroh_including_empty_and_multi() {
-    let a = test_transport(0xA0);
-    let b = test_transport(0xB0);
+    let shared = ferry_iroh::RouteTable::new();
+    let a = test_transport_with_routes(0xA0, shared.clone());
+    let b = test_transport_with_routes(0xB0, shared.clone());
 
     let lst = a
         .listen("127.0.0.1:0".parse().unwrap())
         .expect("listen publishes a route");
     let addr = lst.local_addr().unwrap();
 
-    // The listener's route resolves to A's PUBLIC KEY, not an IP: the whole
-    // point of ADR-0003.
-    let route = ferry_iroh::resolve_route(&addr).expect("route published");
+    let route = a.routes().resolve_route(&addr).expect("route published");
     assert_eq!(route.0.endpoint_id, a.endpoint_id());
 
     let server = std::thread::spawn(move || {
@@ -38,7 +54,7 @@ fn frames_round_trip_over_iroh_including_empty_and_multi() {
         let empty = c.recv_frame().unwrap();
         c.send_frame(&empty).unwrap();
         c.send_frame(&first).unwrap();
-        // Peer closes; next read is a clean EOF error.
+        
         assert_eq!(c.recv_frame().unwrap_err().kind(), ErrorKind::UnexpectedEof);
     });
 
@@ -47,19 +63,20 @@ fn frames_round_trip_over_iroh_including_empty_and_multi() {
     cli.send_frame(&[]).unwrap();
     assert_eq!(cli.recv_frame().unwrap(), b"");
     assert_eq!(cli.recv_frame().unwrap(), b"over-quic");
-    drop(cli); // closes the connection
+    drop(cli); 
     server.join().unwrap();
 }
 
 #[test]
 fn large_frames_survive_the_quic_path() {
-    // Multi-MB frame: exercises write coalescing across stream writes and
-    // the receive-side allocation path.
+    
+    
     let payload: Vec<u8> = (0..3 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
     let payload_hash = blake3_hash(&payload);
 
-    let a = test_transport(0xA1);
-    let b = test_transport(0xB1);
+    let shared = ferry_iroh::RouteTable::new();
+    let a = test_transport_with_routes(0xA1, shared.clone());
+    let b = test_transport_with_routes(0xB1, shared.clone());
     let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let addr = lst.local_addr().unwrap();
 
@@ -93,14 +110,15 @@ fn unknown_alias_dial_is_typed_not_found() {
 
 #[test]
 fn wrong_key_dial_fails_cleanly_typed() {
-    // Route exists but points at a well-formed key nobody holds, with no
-    // relays or discovery configured: resolution must fail within budget,
-    // as TimedOut (not a hang, not a panic).
+    
+    
+    
     let mut ghost_key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut ghost_key);
 
     let alias: SocketAddr = "127.0.0.1:49771".parse().unwrap();
-    ferry_iroh::register_explicit_route(
+    let shared = ferry_iroh::RouteTable::new();
+    shared.register_explicit_route(
         alias,
         ferry_iroh::Route {
             endpoint_id: ghost_key,
@@ -108,12 +126,12 @@ fn wrong_key_dial_fails_cleanly_typed() {
         },
     );
 
-    let short_timeout = IrohTransport::new(
-        IrohConfig::builder()
-            .secret([9u8; 32])
-            .dial_timeout(Duration::from_secs(2))
-            .build(),
-    )
+    let short_timeout = IrohTransport::new(IrohConfig {
+        secret: Some([9u8; 32]),
+        dial_timeout: Duration::from_secs(2),
+        routes: Some(shared),
+        ..Default::default()
+    })
     .unwrap();
     let err = short_timeout
         .dial(alias)
@@ -131,9 +149,9 @@ fn wrong_key_dial_fails_cleanly_typed() {
             || err.to_string().contains("Connect"),
         "error should carry diagnostic context: {err}"
     );
-    // Failing fast is correct: with no relays and no lookups there is no
-    // resolution path at all, so iroh refuses immediately instead of
-    // burning the budget. The property under test is CLEAN + TYPED, not slow.
+    
+    
+    
 }
 
 #[test]

@@ -1,7 +1,7 @@
-//! Integration: `FerryIgnore` plugged into ferry-scan's engine. A
-//! mixed-content tree scans to a manifest containing EXACTLY the allowed
-//! paths; watcher events under ignored subtrees are filtered; share-time
-//! secret warnings fire for what the rules would send.
+
+
+
+
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,8 +33,8 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap();
 }
 
-/// Recursively flatten a tree node into relative paths (dirs included,
-/// parents before children) — the manifest's exact content set.
+
+
 fn collect_paths(store: &Store, id: &BlobId, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     let bytes = store.get(BlobKind::TreeNode, id).unwrap();
     let node = parse_tree_node(&bytes).unwrap();
@@ -64,8 +64,8 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
 
-    // Mixed content: allowed files, default-junk, opted-out-and-back-in,
-    // depth-overridden logs, an opted-in .env with credentials.
+    
+    
     write_file(
         &root.join("ferry.ignore"),
         b"*.log\n!node_modules/\n!.env\nscratch/\n",
@@ -98,13 +98,14 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         device_id: [9; 32],
     };
 
-    let cfg = IgnoreConfig::default(); // gitignore OFF; rules come from files
+    let cfg = IgnoreConfig::default(); 
     let policy = Arc::new(FerryIgnore::new(&root, &cfg).unwrap());
 
     let scan_cfg = ScanConfig {
         quiet_window: Duration::from_millis(10),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(50),
+        parent_manifest_id: None,
     };
     let engine = ScanEngine::watch_with(root.clone(), handle, scan_cfg, policy.clone()).unwrap();
 
@@ -112,9 +113,9 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     let mut paths = Vec::new();
     collect_paths(&store, &current.root_tree_id, &mut Vec::new(), &mut paths);
     paths.sort();
-    // EXACTLY the allowed set: rule files themselves sync (peers converge),
-    // .env rides only because ferry.ignore opted it in, node_modules came
-    // back via negation, sub/keep.log wins by depth — everything else out.
+    
+    
+    
     let mut want: Vec<Vec<String>> = [
         ".env",
         "README.md",
@@ -134,17 +135,17 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     want.sort();
     assert_eq!(paths, want, "manifest must contain exactly the allowed set");
 
-    // From here the test drives signals BY HAND, so stop the live watcher
-    // and worker threads first: a real FS event from the writes below can
-    // otherwise win the race, publish first, and leave the injected pass
-    // with nothing to do (exact-return-value assertions then flake on
-    // loaded Linux CI). scan_once executes inline either way; stopping
-    // only removes the competing debounced worker. Live-event convergence
-    // under real watchers is covered by ferry-scan's integration tests.
+    
+    
+    
+    
+    
+    
+    
     engine.stop();
 
-    // Watcher-event filtering: an event UNDER an ignored subtree must not
-    // dirty anything. Inject through the same pipeline real events take.
+    
+    
     write_file(&root.join("scratch/junk.bin"), b"churn");
     engine.debug_inject_signal(WatchSignal::Changed(vec![rel("scratch/junk.bin")]));
     let run = engine.scan_once().unwrap();
@@ -154,7 +155,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     );
     assert_eq!(run.stats.bytes_chunked, 0);
 
-    // A real change to an ALLOWED file flows through.
+    
     write_file(&root.join("README.md"), b"hello v2");
     engine.debug_inject_signal(WatchSignal::Changed(vec![rel("README.md")]));
     let run = engine.scan_once().unwrap();
@@ -165,8 +166,8 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         "manifest lineage chains"
     );
 
-    // Share time: the effective rules INCLUDE .env (opted in), so the secret
-    // scan must flag it loudly — path-level plus credential hits.
+    
+    
     let warnings = ferry_ignore::secrets::scan_for_secrets(&policy, &root);
     assert!(warnings
         .iter()
@@ -179,8 +180,8 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
 
 #[test]
 fn policy_filters_poll_sweeps_like_walker_events() {
-    // Poll fallback consults the same IgnorePolicy; prove swept ignored
-    // dirs never look ignorable-then-syncable to the policy itself.
+    
+    
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     write_file(&root.join("ferry.ignore"), b"cache/\n");
@@ -188,9 +189,9 @@ fn policy_filters_poll_sweeps_like_walker_events() {
     write_file(&root.join("cache/blob.bin"), b"cached junk v1");
 
     let policy = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-    // Kinds are explicit at the seam now: cache/ is a real directory,
-    // blob.bin a file — the same verdicts the old disk-resolving adapter
-    // produced.
+    
+    
+    
     assert!(policy.ignored(&rel("cache"), EntryKind::Dir));
     assert!(policy.ignored(&rel("cache/blob.bin"), EntryKind::File));
     assert!(!policy.ignored(&rel("keep.txt"), EntryKind::File));

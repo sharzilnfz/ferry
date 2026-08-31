@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-# dashboard-e2e.sh — live end-to-end proof for the web dashboard (ticket 04):
-#
-#   two ferry-sync daemons over loopback TCP, EACH with its own --ui HTTP
-#   server; a file dropped into tree A must byte-converge into tree B, and
-#   BOTH dashboards' /api/status must report settled agreement. One POST
-#   round-trip (/api/pin/start then /api/pin/stop) exercises the write path.
-#
-# /api/events is 501 not-implemented in this build, so agreement is read by
-# polling /api/status (exactly what the bundled app.js degrades to).
-#
-# Usage: scripts/dashboard-e2e.sh [TIMEOUT_SECONDS]   (default 60)
-# Exit: 0 iff convergence + status agreement + pin round-trip all hold.
-# macOS-compatible (bash 3.2): POSIX tools plus curl/python3 only.
 
 set -u
 
@@ -39,10 +26,7 @@ PIDS=""
 cleanup() {
     trap - EXIT INT TERM
     if [ -n "$PIDS" ]; then
-        # shellcheck disable=SC2086
         kill $PIDS >/dev/null 2>&1 || true
-        # deliberate word split over the pid list
-        # shellcheck disable=SC2086
         wait $PIDS >/dev/null 2>&1 || true
     fi
     if [ "${FERRY_KEEP:-0}" = "1" ]; then
@@ -64,8 +48,6 @@ step() { printf '\n== %s\n' "$1" >&2; }
 
 pick_port() { echo $((20000 + RANDOM % 20000)); }
 
-# GET /api/status -> body in $1's file; echoes the HTTP code. Empty output
-# (connection refused) reads as code 000 and keeps the caller looping.
 get_status() { # url out_file -> http_code
     curl -sS -m 3 -o "$2" -w '%{http_code}' "$1/api/status" 2>/dev/null || echo 000
 }
@@ -173,10 +155,6 @@ fi
 echo "converged byte-for-byte: $(wc -c < "$TREE_B/$REL" | tr -d ' ') bytes identical"
 
 step "assert agreement green in BOTH /api/status documents"
-# Byte convergence and ledger recording are separate events (the engine can
-# adopt the peer's root a tick before its own agreement lands); poll until
-# BOTH documents pass, bounded. Same bounded-window stance as
-# scripts/skeleton-e2e.sh's torn-tail handling.
 AGREED=0
 deadline=$(( SECONDS + (N_SECONDS * 2) / 5 ))
 while [ "$SECONDS" -lt "$deadline" ]; do

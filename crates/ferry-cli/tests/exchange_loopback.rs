@@ -1,7 +1,7 @@
-//! End-to-end loopback: two simulated devices on one machine pair via the
-//! file ritual and converge over localhost TCP using the real `ferry`
-//! binary. This is the scripted core of scripts/quickstart-e2e.sh and of
-//! the five-minute acceptance.
+
+
+
+
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ fn ferry_bin() -> PathBuf {
         .expect("bin built by cargo")
 }
 
-/// Kill a daemon when the test ends, however it ends.
+
 struct Daemon(Child);
 
 impl Drop for Daemon {
@@ -68,7 +68,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     let a = Device::new("a");
     let b = Device::new("b");
 
-    // --- device A: init + content -----------------------------------------
+    
     let out = a.command(&["init"]).output().expect("run init");
     assert!(
         out.status.success(),
@@ -79,14 +79,14 @@ fn two_devices_pair_and_converge_over_localhost() {
     std::fs::write(a.tree.join("hello.txt"), b"hello from device A\n").unwrap();
     std::fs::create_dir_all(a.tree.join("src")).unwrap();
     std::fs::write(a.tree.join("src/main.py"), b"print('hi')\n").unwrap();
-    // .env stays OUT by default; assert below that B never receives it.
+    
     std::fs::write(
         a.tree.join(".env"),
         "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
     )
     .unwrap();
 
-    // --- pairing ritual via payload files ----------------------------------
+    
     let mut pair_a = a
         .command(&["pair", "--timeout-secs", "60"])
         .stdout(Stdio::null())
@@ -116,7 +116,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     assert!(status_a, "device A's `ferry pair` never completed");
     assert!(b.tree.join(".ferry/config").is_file(), "B adopted a store");
 
-    // --- daemons: A listens, B drives ---------------------------------------
+    
     let log_dir = std::env::temp_dir().join(format!("ferry-test-logs-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log_dir);
     let mut daemon_a_cmd =
@@ -138,7 +138,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     );
     let _ = &mut daemon_b;
 
-    // --- convergence ---------------------------------------------------------
+    
     let hello_a_path = a.tree.join("hello.txt");
     let hello_b = b.tree.join("hello.txt");
     let src_b = b.tree.join("src/main.py");
@@ -153,10 +153,10 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    // --- agreement settles, THEN live change propagates A -> B --------------
-    // Deletions only carry meaning against a recorded agreement: before the
-    // first settle, "present on one side" wins by design (safe default). So
-    // wait for the agreement pointer before mutating anything.
+    
+    
+    
+    
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
@@ -184,7 +184,7 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    // --- deletion propagates too --------------------------------------------
+    
     std::fs::remove_file(a.tree.join("hello.txt")).unwrap();
     let mut timeline: Vec<String> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -230,13 +230,13 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    // --- secrets hygiene: default rules keep .env local ---------------------
+    
     assert!(
         !b.tree.join(".env").exists(),
         ".env must not sync under default rules"
     );
 
-    // --- conflicts report empty on both sides --------------------------------
+    
     for d in [&a, &b] {
         let out = d
             .command(&["conflicts", "list", "--json"])
@@ -247,7 +247,7 @@ fn two_devices_pair_and_converge_over_localhost() {
         assert_eq!(doc["entries"].as_array().unwrap().len(), 0, "{doc}");
     }
 
-    // --- agreement state visible in status ----------------------------------
+    
     let out = b.command(&["status", "--json"]).output().unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let peers = doc["peers"].as_array().unwrap();
@@ -258,7 +258,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     drop(daemon_b);
 }
 
-/// Wait for a child to exit successfully within `secs`.
+
 fn wait_for(child: &mut Child, secs: u64) -> bool {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
@@ -270,7 +270,7 @@ fn wait_for(child: &mut Child, secs: u64) -> bool {
     }
 }
 
-/// Read stdout until the `LISTENING <addr>` line appears.
+
 fn read_listening<R: std::io::Read>(r: R, secs: u64) -> Option<String> {
     let reader = BufReader::new(r);
     let deadline = Instant::now() + Duration::from_secs(secs);

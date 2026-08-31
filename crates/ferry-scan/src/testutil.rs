@@ -1,5 +1,5 @@
-//! Test helpers shared by unit tests in this crate. Not compiled outside
-//! `cargo test`; integration tests under `tests/` keep their own copies.
+
+
 
 #![cfg(test)]
 
@@ -17,7 +17,7 @@ pub fn fmk() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| i as u8)
 }
 
-/// Fresh store rooted at its own tempdir.
+
 pub fn fresh_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::create(dir.path(), fmk(), Box::new(PassthroughCipher)).unwrap();

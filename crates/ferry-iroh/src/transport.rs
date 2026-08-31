@@ -1,11 +1,11 @@
-//! [`IrohTransport`]: the M0 `Transport` seam over iroh QUIC endpoints.
-//!
-//! Sync trait, async library: the transport owns a private tokio runtime on
-//! which the iroh endpoint lives; every blocking call bridges through
-//! `block_on`. Frames keep the exact TCP wire shape (u32 LE length prefix),
-//! so the protocol layer cannot tell transports apart.
-//!
-//! iroh types stop here. Nothing in this file's public surface names one.
+
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 use std::io;
@@ -22,44 +22,44 @@ use ferry_sync::transport::{
 use ferry_sync::Transport;
 use iroh::endpoint::{presets, Connection as IrohConn};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, TransportAddr, Watcher as _};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 use crate::config::{IrohConfig, RelaySetting};
 use crate::directory::{Route, RouteTable};
 use crate::FERRY_ALPN;
 
-/// Where accepted/dialed connections' path choices get recorded, per peer.
-///
-/// Sampled from a background task while each connection lives. This is how
-/// tests assert "went through relay" / "upgraded to direct" without any
-/// engine awareness — ADR-0003's negotiation, observed at the seam.
+
+
+
+
+
 #[derive(Debug, Default)]
 pub struct PathObservation {
-    /// A relay-borne path was the selected transmission path at least once.
+    
     pub selected_relay_seen: AtomicBool,
-    /// A direct IP path was the selected transmission path at least once.
+    
     pub selected_ip_seen: AtomicBool,
 }
 
 impl PathObservation {
-    /// True when traffic has been observed riding only relays so far.
+    
     pub fn relay_only_so_far(&self) -> bool {
         self.selected_relay_seen.load(Ordering::SeqCst)
             && !self.selected_ip_seen.load(Ordering::SeqCst)
     }
 }
 
-/// Typed dial failures. They map onto `io::ErrorKind`s for the trait
-/// boundary but stay distinguishable for tests and logs.
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialFailure {
-    /// No route registered for this alias.
+    
     NoRoute(SocketAddr),
-    /// Refusing to connect to ourselves.
+    
     SelfDial,
-    /// The route resolved, but no usable path appeared in time.
+    
     Timeout,
-    /// iroh refused/failed the connection attempt.
+    
     Connect(String),
 }
 
@@ -82,17 +82,33 @@ impl DialFailure {
 }
 
 struct Inner {
-    rt: Runtime,
+    rt_handle: Handle,
     ep: Endpoint,
     my_id: EndpointId,
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
-    /// Relay URLs from config. Attached to dialed `EndpointAddrs` so
-    /// key-only dialing can resolve through OUR relay (deployment rule:
-    /// peers we sync with are clients of the same self-hosted relay).
     relay_urls: Vec<iroh::RelayUrl>,
     routes: RouteTable,
+}
+
+fn block_on<F, T>(handle: &Handle, f: F) -> T
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(curr) if curr.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(f))
+        }
+        Ok(_) => {
+            let h = handle.clone();
+            std::thread::spawn(move || h.block_on(f))
+                .join()
+                .unwrap_or_else(|p| std::panic::resume_unwind(p))
+        }
+        Err(_) => handle.block_on(f),
+    }
 }
 
 impl Inner {
@@ -102,10 +118,20 @@ impl Inner {
             .or_insert_with(|| Arc::new(PathObservation::default()))
             .clone()
     }
+
+    fn rt_handle(&self) -> &Handle {
+        &self.rt_handle
+    }
 }
 
-/// The T-009 transport: iroh QUIC endpoints addressed by derived device
-/// public keys, behind [`ferry_sync::Transport`].
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+
+
 #[derive(Clone)]
 pub struct IrohTransport {
     inner: Arc<Inner>,
@@ -123,8 +149,23 @@ impl std::fmt::Debug for IrohTransport {
 }
 
 impl IrohTransport {
-    /// Build with [`IrohConfig`].
+    /// Creates a transport with an owned Tokio runtime. The runtime is intentionally leaked
+    /// (via `mem::forget`) so the stored `Handle` remains valid for the transport's lifetime.
+    /// Prefer `new_with_handle` with a caller-provided runtime when the caller owns the runtime
+    /// lifecycle and wants clean shutdown via `shutdown()`.
     pub fn new(cfg: IrohConfig) -> io::Result<Self> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
+        let handle = rt.handle().clone();
+        std::mem::forget(rt);
+        Self::new_with_handle(cfg, handle)
+    }
+
+    /// Caller-provided runtime must outlive the transport; the transport keeps only a Handle.
+    pub fn new_with_handle(cfg: IrohConfig, handle: Handle) -> io::Result<Self> {
         let seed = cfg.resolve_secret().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -132,26 +173,25 @@ impl IrohTransport {
             )
         })?;
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
-
-        let ep = rt.block_on(build_endpoint(&cfg, seed))?;
-        let my_id = ep.id();
+        let dial_timeout = cfg.dial_timeout;
         let relay_urls = match &cfg.relays {
             RelaySetting::Custom(urls) => urls.iter().filter_map(|u| u.parse().ok()).collect(),
             _ => Vec::new(),
         };
-        let routes = cfg.routes.unwrap_or_default();
+        let routes = cfg.routes.clone().unwrap_or_default();
+
+        let ep = {
+            let cfg = cfg.clone();
+            block_on(&handle, async move { build_endpoint(&cfg, seed).await })?
+        };
+        let my_id = ep.id();
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
-                rt,
+                rt_handle: handle,
                 ep,
                 my_id,
-                dial_timeout: cfg.dial_timeout,
+                dial_timeout,
                 closed: AtomicBool::new(false),
                 observations: Mutex::new(HashMap::new()),
                 relay_urls,
@@ -160,50 +200,39 @@ impl IrohTransport {
         })
     }
 
-    /// Access this transport's route table.
+    
     pub fn routes(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    /// Access this transport's route table.
+    
     pub fn route_table(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    /// Register an explicit route for this transport instance:
-    /// route-key → peer endpoint id.
+    
+    
     pub fn with_route(&self, key: SocketAddr, endpoint_id: [u8; 32]) -> &Self {
         let route = Route {
             endpoint_id,
             ip_hints: Vec::new(),
         };
-        self.inner
-            .routes
-            .register_explicit_route(key, route.clone());
-        crate::directory::register_explicit_route(key, route);
+        self.inner.routes.register_explicit_route(key, route);
         self
     }
 
-    /// Register a peer identity explicitly into this transport's route table,
-    /// returning a fresh synthesized route key.
+    
+    
     pub fn register_peer(&self, endpoint_id: [u8; 32]) -> SocketAddr {
-        let key = self.inner.routes.register_peer(endpoint_id, Vec::new());
-        crate::directory::register_explicit_route(
-            key,
-            Route {
-                endpoint_id,
-                ip_hints: Vec::new(),
-            },
-        );
-        key
+        self.inner.routes.register_peer(endpoint_id, Vec::new())
     }
 
-    /// This endpoint's public id — print it; peers dial by it.
+    
     pub fn endpoint_id(&self) -> [u8; 32] {
         *self.inner.my_id.as_bytes()
     }
 
-    /// Dial a peer directly by 32-byte public key identity.
+    
     pub fn dial_peer(&self, endpoint_id: &[u8; 32]) -> Result<Box<dyn DynConnection>, DialFailure> {
         let hints = self
             .inner
@@ -214,9 +243,9 @@ impl IrohTransport {
         self.dial_endpoint(*endpoint_id, hints)
     }
 
-    /// Dial straight by public key — the ADR-0003 primitive that alias
-    /// dialing resolves into. `hints` are optional direct addresses; with
-    /// relays or discovery configured, an empty hint list still connects.
+    
+    
+    
     pub fn dial_endpoint(
         &self,
         endpoint_id: [u8; 32],
@@ -234,18 +263,18 @@ impl IrohTransport {
         for h in hints {
             addr.addrs.insert(TransportAddr::Ip(h));
         }
-        // Our relays are legitimate addressing information for peers we
-        // sync with (same self-hosted relay, ADR-0003). With IP transports
-        // stripped (force_relay) this is REQUIRED: without it iroh refuses
-        // with "no addressing information available".
+        
+        
+        
+        
         for url in &self.inner.relay_urls {
             addr.addrs.insert(TransportAddr::Relay(url.clone()));
         }
-        // Connect AND open our bi-stream in one async step: the dialer gets
-        // back a ready pipe, and accept_bi on the peer resolves immediately.
+        
+        
         let ep = self.inner.ep.clone();
         let budget = self.inner.dial_timeout;
-        let opened = self.inner.rt.block_on(async move {
+        let opened = block_on(self.inner.rt_handle(), async move {
             match tokio::time::timeout(budget, async {
                 let conn = ep
                     .connect(addr, FERRY_ALPN)
@@ -272,17 +301,17 @@ impl IrohTransport {
             Err(detail) => return Err(DialFailure::Connect(detail)),
         };
         let obs = self.inner.observe(conn.remote_id());
-        spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
+        spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
         Ok(Box::new(FramedConnection {
-            rt: self.inner.rt.handle().clone(),
+            inner: Arc::clone(&self.inner),
             conn,
-            send: Mutex::new(send),
-            recv: Mutex::new(recv),
+            send: Arc::new(tokio::sync::Mutex::new(send)),
+            recv: Arc::new(tokio::sync::Mutex::new(recv)),
         }))
     }
 
-    /// Path observations recorded so far for a peer id, if we ever
-    /// connected to or accepted from it.
+    
+    
     pub fn path_observation(&self, endpoint_id: &[u8; 32]) -> Option<Arc<PathObservation>> {
         self.inner
             .observations
@@ -292,17 +321,19 @@ impl IrohTransport {
             .cloned()
     }
 
-    /// Best-effort graceful close; also runs on Drop.
+    
     pub fn shutdown(&self) {
-        self.inner.closed.store(true, Ordering::SeqCst);
+        if self.inner.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let ep = self.inner.ep.clone();
-        let _ = self.inner.rt.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(500), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(500), ep.close()).await;
         });
     }
 }
 
-/// Direct-address hints for a freshly bound endpoint.
+
 fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for bound in ep.bound_sockets() {
@@ -323,7 +354,7 @@ fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
 
 impl Drop for IrohTransport {
     fn drop(&mut self) {
-        // Only when the last clone goes; Arc gives us that for free.
+        
         if Arc::strong_count(&self.inner) == 1 && !self.inner.closed.load(Ordering::SeqCst) {
             self.shutdown();
         }
@@ -356,8 +387,8 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
     }
 
     if cfg.force_relay {
-        // "direct disabled by config": strip every IP transport so all bytes
-        // must transit a relay, even between same-host peers.
+        
+        
         builder = builder.clear_ip_transports();
     }
 
@@ -370,9 +401,9 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
 fn spawn_path_sampler(handle: &Handle, conn: &IrohConn, obs: Arc<PathObservation>) {
     let conn = conn.clone();
     handle.spawn(async move {
-        // Observations are monotone latches: one sample at open, one final
-        // sample once the connection closes (post-upgrade state included),
-        // no polling in between.
+        
+        
+        
         latch_selected_paths(&conn, &obs);
         let _ = conn.closed().await;
         latch_selected_paths(&conn, &obs);
@@ -392,18 +423,13 @@ fn latch_selected_paths(conn: &IrohConn, obs: &PathObservation) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Transport impl: alias dialing over explicit routes + the route table.
-// ---------------------------------------------------------------------------
+
+
+
 
 impl Transport for IrohTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn DynConnection>> {
-        let route = self
-            .inner
-            .routes
-            .resolve_route(&addr)
-            .or_else(|| crate::directory::resolve_route(&addr));
-        let Some((route, _scope)) = route else {
+        let Some((route, _scope)) = self.inner.routes.resolve_route(&addr) else {
             return Err(DialFailure::NoRoute(addr).into_io());
         };
         self.dial_endpoint(route.endpoint_id, route.ip_hints)
@@ -426,13 +452,12 @@ impl Transport for IrohTransport {
         } else {
             addr
         };
-        // Publish ourselves so dialers resolve this key to our public key + real bound sockets.
+        
         let route = Route {
             endpoint_id: *self.inner.my_id.as_bytes(),
             ip_hints: direct_hints(&self.inner.ep),
         };
-        self.inner.routes.publish_route(key, route.clone());
-        crate::directory::publish_route(key, route);
+        self.inner.routes.publish_route(key, route);
         Ok(Box::new(IrohListener {
             inner: Arc::clone(&self.inner),
             key,
@@ -453,10 +478,12 @@ impl DynListener for IrohListener {
     }
 
     fn close(&self) -> io::Result<()> {
-        self.closed.store(true, Ordering::SeqCst);
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
         let ep = self.inner.ep.clone();
-        let _ = self.inner.rt.block_on(async move {
-            tokio::time::timeout(Duration::from_millis(200), ep.close()).await
+        block_on(self.inner.rt_handle(), async move {
+            let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
         });
         Ok(())
     }
@@ -469,8 +496,9 @@ impl DynListener for IrohListener {
                     "listener closed".into(),
                 ));
             }
-            let next = self.inner.rt.block_on(async {
-                tokio::time::timeout(Duration::from_millis(200), self.inner.ep.accept()).await
+            let ep = self.inner.ep.clone();
+            let next = block_on(self.inner.rt_handle(), async move {
+                tokio::time::timeout(Duration::from_millis(200), ep.accept()).await
             });
             let incoming = match next {
                 Ok(Some(incoming)) => incoming,
@@ -482,7 +510,7 @@ impl DynListener for IrohListener {
                 }
                 Err(_elapsed) => continue,
             };
-            let conn = self.inner.rt.block_on(async {
+            let conn = block_on(self.inner.rt_handle(), async move {
                 match incoming.accept() {
                     Ok(accepting) => accepting
                         .await
@@ -491,33 +519,33 @@ impl DynListener for IrohListener {
                 }
             })?;
             let obs = self.inner.observe(conn.remote_id());
-            spawn_path_sampler(self.inner.rt.handle(), &conn, obs);
+            spawn_path_sampler(self.inner.rt_handle(), &conn, obs);
 
-            let streams = self
-                .inner
-                .rt
-                .block_on(conn.accept_bi())
-                .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
+            let conn_for_streams = conn.clone();
+            let streams = block_on(self.inner.rt_handle(), async move {
+                conn_for_streams.accept_bi().await
+            })
+            .map_err(|e| io::Error::other(format!("accept_bi: {e:#}")))?;
             return Ok(Box::new(FramedConnection {
-                rt: self.inner.rt.handle().clone(),
+                inner: Arc::clone(&self.inner),
                 conn,
-                send: Mutex::new(streams.0),
-                recv: Mutex::new(streams.1),
+                send: Arc::new(tokio::sync::Mutex::new(streams.0)),
+                recv: Arc::new(tokio::sync::Mutex::new(streams.1)),
             }));
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// One framed connection type; wire shape identical to TcpTransport's frames.
-// ---------------------------------------------------------------------------
+
+
+
 
 struct FramedConnection {
-    rt: Handle,
+    inner: Arc<Inner>,
     #[allow(dead_code)]
     conn: IrohConn,
-    send: Mutex<iroh::endpoint::SendStream>,
-    recv: Mutex<iroh::endpoint::RecvStream>,
+    send: Arc<tokio::sync::Mutex<iroh::endpoint::SendStream>>,
+    recv: Arc<tokio::sync::Mutex<iroh::endpoint::RecvStream>>,
 }
 
 fn io_error(kind: io::ErrorKind, msg: String) -> io::Error {
@@ -547,24 +575,27 @@ fn check_incoming_len(len: u32) -> io::Result<()> {
 impl DynConnection for FramedConnection {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         check_outgoing_len(payload.len())?;
-        let mut send = lock(&self.send);
         let len = (payload.len() as u32).to_le_bytes();
-        self.rt.block_on(async {
+        let payload = payload.to_vec();
+        let send = Arc::clone(&self.send);
+        block_on(self.inner.rt_handle(), async move {
+            let mut send = send.lock().await;
             send.write_all(&len).await?;
             if !payload.is_empty() {
-                send.write_all(payload).await?;
+                send.write_all(&payload).await?;
             }
             Ok::<(), io::Error>(())
         })
     }
 
     fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
-        let mut recv = lock(&self.recv);
-        let mut len_buf = [0u8; 4];
-        self.rt.block_on(async {
+        let recv = Arc::clone(&self.recv);
+        block_on(self.inner.rt_handle(), async move {
+            let mut recv = recv.lock().await;
+            let mut len_buf = [0u8; 4];
             match recv.read_exact(&mut len_buf).await {
                 Ok(()) => {}
-                // FinishedEarly(0): peer closed cleanly at a frame boundary.
+                
                 Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => {
                     return Err(io_error(
                         io::ErrorKind::UnexpectedEof,
@@ -591,5 +622,135 @@ impl DynConnection for FramedConnection {
             }
             Ok(payload)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::RngCore as _;
+
+    fn test_transport(seed_byte: u8) -> IrohTransport {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        seed[1] = seed_byte;
+        rand::thread_rng().fill_bytes(&mut seed[2..]);
+        IrohTransport::new(IrohConfig {
+            secret: Some(seed),
+            ..Default::default()
+        })
+        .expect("transport builds")
+    }
+
+    fn test_transport_with_routes(seed_byte: u8, routes: RouteTable) -> IrohTransport {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        seed[1] = seed_byte;
+        rand::thread_rng().fill_bytes(&mut seed[2..]);
+        IrohTransport::new(IrohConfig {
+            secret: Some(seed),
+            routes: Some(routes),
+            ..Default::default()
+        })
+        .expect("transport builds")
+    }
+
+    #[test]
+    fn synchronous_calls_work_inside_multithread_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let shared = RouteTable::new();
+            let a = test_transport_with_routes(0x31, shared.clone());
+            let b = test_transport_with_routes(0x32, shared.clone());
+
+            let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+            let addr = lst.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                let mut c = lst.accept().unwrap();
+                let msg = c.recv_frame().unwrap();
+                assert_eq!(msg, b"ping");
+                c.send_frame(b"pong").unwrap();
+            });
+
+            let mut cli = b.dial(addr).unwrap();
+            cli.send_frame(b"ping").unwrap();
+            let reply = cli.recv_frame().unwrap();
+            assert_eq!(reply, b"pong");
+
+            server.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn synchronous_calls_work_inside_current_thread_tokio_runtime() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let shared = RouteTable::new();
+            let a = test_transport_with_routes(0x41, shared.clone());
+            let b = test_transport_with_routes(0x42, shared.clone());
+
+            let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+            let addr = lst.local_addr().unwrap();
+
+            let server = std::thread::spawn(move || {
+                let mut c = lst.accept().unwrap();
+                let msg = c.recv_frame().unwrap();
+                assert_eq!(msg, b"current-thread-ping");
+                c.send_frame(b"current-thread-pong").unwrap();
+            });
+
+            let mut cli = b.dial(addr).unwrap();
+            cli.send_frame(b"current-thread-ping").unwrap();
+            let reply = cli.recv_frame().unwrap();
+            assert_eq!(reply, b"current-thread-pong");
+
+            server.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn connection_and_listener_survive_transport_drop() {
+        let shared = RouteTable::new();
+        let a = test_transport_with_routes(0x51, shared.clone());
+        let b = test_transport_with_routes(0x52, shared.clone());
+
+        let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = lst.local_addr().unwrap();
+        drop(a);
+
+        let server = std::thread::spawn(move || {
+            let mut c = lst.accept().unwrap();
+            let msg = c.recv_frame().unwrap();
+            assert_eq!(msg, b"survived-transport-drop");
+            c.send_frame(b"ack").unwrap();
+            let _ = c.recv_frame();
+        });
+
+        let mut cli = b.dial(addr).unwrap();
+        drop(b);
+
+        cli.send_frame(b"survived-transport-drop").unwrap();
+        let reply = cli.recv_frame().unwrap();
+        assert_eq!(reply, b"ack");
+        drop(cli);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn transport_shutdown_is_idempotent() {
+        let a = test_transport(0x61);
+        a.shutdown();
+        a.shutdown();
     }
 }

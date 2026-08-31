@@ -5,7 +5,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 let isHolding = false;
 
-// Activity Icons (Apple Minimal SVG hairline)
+
 const ICONS = {
   check: '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
   sync: '<svg viewBox="0 0 24 24"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>',
@@ -135,7 +135,7 @@ function init() {
     addActivity("Work Protection Released", "Held modifications merged cleanly", "check");
   });
 
-  // Modal
+  
   $("btn-pair").addEventListener("click", () => $("pair-modal").classList.add("open"));
   $("btn-close-modal").addEventListener("click", () => $("pair-modal").classList.remove("open"));
   $("pair-modal").addEventListener("click", (e) => {
@@ -163,7 +163,7 @@ function init() {
     pill.addEventListener("click", () => applyState(pill.getAttribute("data-state")));
   });
 
-  // Initial Seed Activity Feed Items
+  
   addActivity("Continuous Sync Verified", "Local tree matches peer cluster", "check");
   addActivity("MacBook Pro M3 Connected", "Encrypted QUIC link · 4ms latency", "device");
   addActivity("Ferry Daemon Attached", "Localhost session token authenticated", "check");

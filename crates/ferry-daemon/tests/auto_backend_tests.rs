@@ -7,9 +7,10 @@ use std::time::Duration;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
-use ferry_daemon::ui::backend::{AutoBackend, DaemonIpcAdapter};
+use ferry_daemon::ui::backend::{FolderBackend, FsStateSource};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::backend::{SessionDomain, StatusDomain};
+use ferry_ipc::client::DaemonClient;
 use ferry_ipc::protocol::PinView;
 use ferry_store::format::hex;
 use ferry_sync::{EngineConfig, SyncEngine, TcpTransport};
@@ -35,7 +36,7 @@ impl TestRig {
         let folder_id = [42u8; 16];
         let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::from_seed([42u8; 32]));
 
-        // Initialize folder format
+        
         let (store, _fmk) =
             create_folder(&tree_dir, &identity, folder_id, poly).expect("create folder");
         store.flush().expect("store flush");
@@ -58,7 +59,8 @@ impl TestRig {
         cfg.poly = ferry_store::chunker::ValidatedPoly::new(poly).expect("valid poly");
         cfg.pin_state_dir = Some(tree_dir.join(".ferry"));
 
-        let mut engine = SyncEngine::new(cfg, Arc::new(TcpTransport)).expect("engine init");
+        let mut engine = SyncEngine::with_store(cfg, Arc::new(TcpTransport), Arc::new(store))
+            .expect("engine init");
         engine.set_identity(identity.clone());
 
         Self {
@@ -76,11 +78,13 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
     let rig = TestRig::new();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&rig.tree_dir);
 
-    let backend = AutoBackend::new(socket_path.clone())
+    let fs_src = FsStateSource::new(rig.tree_dir.clone()).with_identity(rig.identity.clone());
+    let fb = FolderBackend::from_source(fs_src);
+    let backend = ferry_ipc::backend::AutoBackend::new(socket_path.clone())
         .with_fallback(rig.tree_dir.clone())
-        .with_identity(rig.identity.clone());
+        .with_fallback_backend(Arc::new(fb));
 
-    // Phase 1: Daemon is OFFLINE -> AutoBackend falls back to InProcessAdapter
+    
     let offline_snap = backend
         .get_status()
         .await
@@ -95,7 +99,7 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
         .expect("offline list_conflicts");
     assert!(offline_conflicts.is_empty());
 
-    // Phase 2: Start Daemon and IPC Server -> AutoBackend queries remote IPC
+    
     let handle = rig.engine.start();
     let (tx, _) = tokio::sync::broadcast::channel(128);
     let daemon_state = Arc::new(DaemonState::new(
@@ -110,33 +114,33 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
     let ipc_server =
         spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state)).expect("spawn ipc");
 
-    // Give server a moment to bind and accept connections
+    
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Status query now succeeds through IPC
+    
     let online_snap = backend
         .get_status()
         .await
-        .expect("online status via DaemonIpcAdapter");
+        .expect("online status via DaemonClient");
     assert_eq!(online_snap.folder, rig.tree_dir.display().to_string());
 
-    // Start a pin over IPC through AutoBackend
+    
     let pin_rec = backend
         .start_pin(vec!["src/main.rs".to_string()], None)
         .await
         .expect("start pin over IPC");
     assert_eq!(pin_rec.paths, vec!["src/main.rs"]);
 
-    // Verify pin is reflected in daemon state snapshot
+    
     let snap_pinned = backend.get_status().await.expect("pinned status");
     assert!(snap_pinned.pin.holding);
     assert_eq!(snap_pinned.pin.paths, vec!["src/main.rs"]);
 
-    // Release pin over IPC
+    
     let release_summary = backend.release_pin().await.expect("release pin over IPC");
     assert_eq!(release_summary.status, "release_pin");
 
-    // Phase 3: Stop Daemon and IPC Server -> AutoBackend transitions back to InProcessAdapter
+    
     ipc_server.shutdown();
     handle.shutdown();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -155,17 +159,17 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
 }
 
 #[tokio::test]
-async fn test_daemon_ipc_adapter_direct() {
+async fn test_daemon_client_direct() {
     let rig = TestRig::new();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&rig.tree_dir);
 
-    let ipc_adapter = DaemonIpcAdapter::new(socket_path.clone());
+    let ipc_client = DaemonClient::new(socket_path.clone());
 
-    // Offline fails with the transport error code (fallback routing key)
-    let err = ipc_adapter.get_status().await.unwrap_err();
+    
+    let err = ipc_client.get_status().await.unwrap_err();
     assert_eq!(err.code, "daemon-unreachable");
 
-    // Start daemon
+    
     let handle = rig.engine.start();
     let (tx, _) = tokio::sync::broadcast::channel(128);
     let daemon_state = Arc::new(DaemonState::new(
@@ -182,18 +186,18 @@ async fn test_daemon_ipc_adapter_direct() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Status over IPC
-    let snap = ipc_adapter.get_status().await.expect("get_status over IPC");
+    
+    let snap = ipc_client.get_status().await.expect("get_status over IPC");
     assert_eq!(snap.folder, rig.tree_dir.display().to_string());
 
-    // Trigger scan over IPC
-    ipc_adapter
+    
+    ipc_client
         .trigger_scan()
         .await
         .expect("trigger_scan over IPC");
 
-    // List conflicts over IPC
-    let conflicts = ipc_adapter
+    
+    let conflicts = ipc_client
         .list_conflicts()
         .await
         .expect("list_conflicts over IPC");

@@ -1,29 +1,30 @@
-//! T-05 regression: hostile symlink targets are REFUSED loudly through the
-//! ENGINE's apply path.
-//!
-//! The v1 pull stages both materialize through `ferry-materialize::Applier`.
-//! The deleted inline applier had NO policy:
-//! `/etc`, `../../outside`, and `C:x` went straight to `symlink()`. These
-//! tests prove the engine path now refuses every hostile class with a loud
-//! `SymlinkRefused` error and zero filesystem effect — and that a benign
-//! relative link still syncs.
+
+
+
+
+
+
+
+
+
 
 use std::path::Path;
+use std::sync::Arc;
 
 use ferry_materialize::{Applier, MaterializeError};
 use ferry_platform::LinkRefusal;
-use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::{Added, ChangeSet, EntryKind, EntryState};
 use ferry_store::manifest::{serialize_tree_node, RootManifest, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
 
-fn open_store(dir: &Path) -> Store {
-    std::fs::create_dir_all(dir).unwrap();
-    Store::create(dir, [0u8; 32], Box::new(PassthroughCipher)).unwrap()
+fn open_store(dir: &Path) -> Arc<Store> {
+    
+    let identity = ferry_crypto::identity::DeviceIdentity::from_secret_bytes(&[0xB2u8; 32]);
+    ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
 }
 
-/// A root manifest whose tree is the canonical empty node.
+
 fn empty_manifest(store: &Store) -> RootManifest {
     let bytes = serialize_tree_node(&TreeNode {
         entries: Vec::new(),
@@ -56,8 +57,8 @@ fn symlink_added(path: &[&str], target: &str) -> ChangeSet {
     }
 }
 
-/// Run one hostile entry through the same adapter call the v1 pull stages
-/// make; require the typed refusal and an untouched working tree.
+
+
 fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(&dir.path().join("store"));
@@ -86,7 +87,7 @@ fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
         other => panic!("expected SymlinkRefused for {target:?}, got {other}"),
     }
 
-    // Nothing may exist at the link's slot (or anywhere else).
+    
     let mut probe = tree.clone();
     for c in path {
         probe.push(c);
@@ -101,8 +102,8 @@ fn absolute_target_is_refused_through_the_engine_path() {
 
 #[test]
 fn escaping_dotdot_target_is_refused_through_the_engine_path() {
-    // From depth 1 ("sub/lnk"), three `..` components climb two levels
-    // past the synced root.
+    
+    
     assert_refused(
         &["sub", "lnk"],
         "../../../outside",
@@ -112,8 +113,8 @@ fn escaping_dotdot_target_is_refused_through_the_engine_path() {
 
 #[test]
 fn windows_drive_prefixed_target_is_refused_through_the_engine_path() {
-    // Drive-relative ("C:x") names a location outside the folder by
-    // construction — refused on EVERY host, not just windows.
+    
+    
     assert_refused(&["drive"], "C:x", LinkRefusal::AbsoluteTarget);
 }
 
@@ -126,14 +127,14 @@ fn unc_and_backslash_root_targets_are_refused_too() {
 #[test]
 #[cfg(unix)]
 fn benign_relative_link_still_applies_through_the_engine_path() {
-    // Positive control: the policy refuses HOSTILE targets only.
+    
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(&dir.path().join("store"));
     let tree = dir.path().join("tree");
     std::fs::create_dir_all(&tree).unwrap();
     let manifest = empty_manifest(&store);
-    // A real diff flattens added subtrees per-path, so `sub` would ride
-    // along in the change set; mirror that by having it exist already.
+    
+    
     std::fs::create_dir_all(tree.join("sub")).unwrap();
 
     Applier::new(&store, &tree)

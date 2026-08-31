@@ -1,6 +1,4 @@
-//! `ferry init` / `ferry add`: create a synced folder under this device's
-//! identity. Both commands share one implementation; they differ in the
-//! wording of the next-step hint.
+
 
 use std::path::Path;
 
@@ -15,7 +13,7 @@ use crate::folder::{
 use crate::home;
 use crate::out::Output;
 
-pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
+pub fn run(path: &Path) -> CliResult<Output> {
     if path.exists() && !path.is_dir() {
         return Err(CliError::new(
             "not-a-directory",
@@ -42,8 +40,8 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
         },
     )?;
 
-    // Fresh randomness for the two per-folder secrets: folder id + chunker
-    // polynomial (irreducible by construction; see ferry-store::chunker).
+    
+    
     let mut seed = [0u8; 32];
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut seed);
@@ -63,9 +61,9 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
     save_settings(path, &settings)?;
     let ignore_written = write_default_ignore_if_absent(path)?;
 
-    // Seal nothing yet — an empty folder has no blobs; the polynomial record
-    // from create_folder is still sitting in staging. Flush so the store is
-    // complete on disk even if the process dies right now.
+    
+    
+    
     store.flush().map_err(|e| {
         CliError::new(
             "store",
@@ -83,7 +81,7 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
 
     let device_id = ferry_store::format::hex(identity.public());
     let json_doc = json!({
-        "command": command_name,
+        "command": "init",
         "folder": path.display().to_string(),
         "folder_id": settings.folder_id,
         "device_id": device_id,
@@ -91,7 +89,7 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
         "ignore_file_created": ignore_written,
     });
 
-    let hint = next_step(command_name);
+    let hint = next_step();
     let human = format!(
         "Initialized Ferry folder {}\
          \n  folder id  {}\
@@ -106,17 +104,13 @@ pub fn run(path: &Path, command_name: &str) -> CliResult<Output> {
     Ok(Output::new(json_doc, human))
 }
 
-fn next_step(command_name: &str) -> String {
-    if command_name == "add" {
-        "Next: `ferry pair` inside this folder to link another device.".to_string()
-    } else {
-        "Next: `ferry pair` to connect another device and start syncing.\n\
+fn next_step() -> String {
+    "Next: `ferry pair` to connect another device and start syncing.\n\
          Or run `ferry --help` for the full five-minute walkthrough."
-            .to_string()
-    }
+        .to_string()
 }
 
-/// Show `.` for an empty/relative-current path so hints read naturally.
+
 pub fn display_path(p: &Path) -> String {
     if p.as_os_str().is_empty() {
         ".".to_string()

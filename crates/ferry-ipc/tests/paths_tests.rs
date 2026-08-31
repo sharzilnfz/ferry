@@ -34,7 +34,7 @@ fn test_socket_path_for_dir() {
         assert!(path.to_string_lossy().starts_with(r"\\.\pipe\ferry-"));
     }
 
-    // When dir already ends in .ferry
+    
     let ferry_dir = Path::new("/custom/project/.ferry");
     let path2 = socket_path_for_dir(ferry_dir);
     #[cfg(unix)]

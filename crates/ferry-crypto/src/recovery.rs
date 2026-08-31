@@ -1,36 +1,36 @@
-//! Passphrase-wrapped export/import: the ONE disaster-recovery door, per
-//! ADR-0002's consequence list ("key backup becomes a UX problem"). There is
-//! deliberately no other: losing all devices AND the export loses the data,
-//! loudly and permanently.
-//!
-//! # Envelope (v1)
-//!
-//! ```text
-//! magic    = "FRRX" (46 52 52 58)
-//! version  = 0x01
-//! salt     = 16 CSPRNG bytes (Argon2id salt)
-//! nonce    = 12 CSPRNG bytes (ChaCha20-Poly1305, NOT the zero nonce used
-//!            for device-pub wraps — passphrase keys are low entropy by
-//!            human nature, so nonces must never repeat under one KDF output)
-//! ct+tag   = ChaCha20-Poly1305_seal(wrap_key, nonce, aad = PURPOSE, pt)
-//! wrap_key = Argon2id(passphrase, salt, m = 19456 KiB, t = 2, p = 1, L = 32)
-//! ```
-//!
-//! Plaintext payload is `fmk[32] || device_secret[32]` (64 bytes), so one
-//! export restores both folder access AND the device identity on a wiped
-//! machine. `aad = "ferry/v1/recovery/export"` binds the purpose: an export
-//! blob cannot be replayed as some other protocol object.
-//!
-//! Argon2id parameters follow the OWASP Password Storage Cheat Sheet's
-//! second recommended configuration (m=19 MiB, t=2, p=1) — a deliberate
-//! middle ground: strong against offline guessing at interactive latencies
-//! on laptops, while staying usable on ARM boards that Ferry targets. The
-//! parameters are FIXED by v1 (not stored in the envelope); changing them is
-//! a format-version bump.
-//!
-//! Import refuses to clobber an existing identity file: overwriting live
-//! trust roots silently would fork trust exactly like silent regeneration
-//! ([`crate::identity`]).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
@@ -41,20 +41,20 @@ use rand::RngCore;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// Magic + version for recovery exports.
+
 pub const EXPORT_MAGIC: [u8; 4] = *b"FRRX";
 pub const EXPORT_VERSION: u8 = 1;
-/// Argon2id salt length.
+
 pub const SALT_LEN: usize = 16;
-/// AEAD nonce length.
+
 pub const NONCE_LEN: usize = 12;
-/// Total serialized export size.
-pub const EXPORT_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 16 /* tag */ + 64;
+
+pub const EXPORT_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 16  + 64;
 
 const PURPOSE: &[u8] = b"ferry/v1/recovery/export";
-/// Fixed v1 KDF cost: OWASP-recommended m=19456 KiB, t=2, p=1.
+
 fn kdf() -> Argon2<'static> {
-    // 19456 KiB, 2 iterations, parallelism 1; expect 32-byte output.
+    
     let params = Params::new(19_456, 2, 1, Some(32)).expect("fixed valid params");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
@@ -75,19 +75,19 @@ pub enum RecoveryError {
     IdentityExists(std::path::PathBuf),
 }
 
-/// Decrypted export payload: `(fmk, device_secret)`, both zeroized on drop.
+
 pub type RestoredMaterial = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
 
-/// Everything needed to resurrect a device after total loss.
+
 pub struct RecoveryExport<'a> {
     pub fmk: &'a [u8; 32],
     pub device_secret: &'a [u8; 32],
 }
 
 impl RecoveryExport<'_> {
-    /// Serialize + encrypt under `passphrase`. Fresh random salt/nonce from
-    /// OS randomness on every call; two exports of identical state differ in
-    /// ciphertext (no codebook to mine).
+    
+    
+    
     pub fn seal(&self, passphrase: &str) -> Vec<u8> {
         let mut salt = [0u8; SALT_LEN];
         rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -120,10 +120,10 @@ impl RecoveryExport<'_> {
         out
     }
 
-    /// Decrypt and validate an export under `passphrase`.
-    ///
-    /// Wrong passphrase, bitrot, and truncation all collapse into
-    /// [`RecoveryError::AuthFailed`] or shape errors — never garbage success.
+    
+    
+    
+    
     pub fn open(bytes: &[u8], passphrase: &str) -> Result<RestoredMaterial, RecoveryError> {
         if bytes.len() != EXPORT_LEN {
             return Err(RecoveryError::Truncated {
@@ -159,10 +159,10 @@ impl RecoveryExport<'_> {
         Ok((Zeroizing::new(fmk), Zeroizing::new(sk)))
     }
 
-    /// Full wipe-and-restore drill: write the export image to `dest`, then
-    /// import it back into a FRESH identity directory, reconstructing both
-    /// the device secret file and returning the FMK. Refuses if `identity_dir`
-    /// already holds an identity (callers wiping state should have removed it).
+    
+    
+    
+    
     #[cfg(test)]
     pub fn round_trip_through_files(
         &self,
@@ -203,8 +203,8 @@ mod tests {
     const ALICE_SK_HEX: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
 
     fn fixture() -> RecoveryExport<'static> {
-        // Leak-free test fixture via Box::leak keeps lifetimes simple; the
-        // bytes are fixed RFC vectors, not real secrets.
+        
+        
         let fmk: &'static [u8; 32] = Box::leak(Box::new(core::array::from_fn(|i| i as u8 + 1)));
         let sk: &'static [u8; 32] = Box::leak(Box::new(unhex(ALICE_SK_HEX).unwrap()));
         RecoveryExport {
@@ -218,7 +218,7 @@ mod tests {
         let exp = fixture();
         let sealed = exp.seal("correct horse battery staple");
         assert_eq!(sealed.len(), EXPORT_LEN);
-        // 4 magic + 1 version + 16 salt + 12 nonce + 64 plaintext + 16 tag.
+        
         assert_eq!(sealed.len(), 113);
         assert_eq!(&sealed[..4], b"FRRX");
         assert_eq!(sealed[4], 1);
@@ -233,7 +233,7 @@ mod tests {
         let a = exp.seal("same passphrase");
         let b = exp.seal("same passphrase");
         assert_ne!(a, b, "exports must not be reproducible byte-for-byte");
-        // Salt occupies bytes 5..21: differing across calls.
+        
         assert_ne!(&a[5..21], &b[5..21]);
     }
 
@@ -245,7 +245,7 @@ mod tests {
             Err(RecoveryError::AuthFailed) => {}
             other => panic!("expected AuthFailed, got {other:?}"),
         }
-        // Near-miss passphrases too.
+        
         for probe in ["Right", "righ", "right ", "", "richt"] {
             assert!(matches!(
                 RecoveryExport::open(&sealed, probe),
@@ -259,8 +259,8 @@ mod tests {
         let exp = fixture();
         let good = exp.seal("p");
 
-        // Flip one bit at each structural region: magic, version, salt,
-        // nonce, ciphertext, tag.
+        
+        
         for idx in [0usize, 4, 10, 25, 40, 80] {
             let mut evil = good.clone();
             evil[idx] ^= 0x01;
@@ -275,7 +275,7 @@ mod tests {
                 "flip at {idx} gave {err:?}"
             );
         }
-        // Truncation and padding are shape errors, never decrypt attempts.
+        
         assert!(matches!(
             RecoveryExport::open(&good[..good.len() - 1], "p"),
             Err(RecoveryError::Truncated { .. })
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn exported_key_restores_access_on_a_wiped_device() {
-        // The acceptance scenario end-to-end, through real files:
+        
         let dir = tempfile::tempdir().unwrap();
         let export_path = dir.path().join("ferry-backup.ferryexport");
         let original_dir = dir.path().join("identity-original");
@@ -309,15 +309,15 @@ mod tests {
             .unwrap();
         assert_eq!(*restored, fmk);
 
-        // The wiped device now HAS its old identity back: loading it yields
-        // the same public key the export carried.
+        
+        
         let reborn = load_or_create(&wiped_dir).unwrap();
         assert_eq!(
             *reborn.public(),
             *DeviceIdentity::from_secret_bytes(&sk).public()
         );
 
-        // And it can unwrap envelopes addressed to that identity.
+        
         let folder_id = [2u8; 16];
         let wrapped =
             crate::folder_key::wrap_folder_key(&fmk, &folder_id, reborn.public()).unwrap();
@@ -332,12 +332,12 @@ mod tests {
     fn import_refuses_to_clobber_existing_identity() {
         let dir = tempfile::tempdir().unwrap();
         let existing = dir.path().join("identity");
-        load_or_create(&existing).unwrap(); // creates identity
+        load_or_create(&existing).unwrap(); 
 
         let sk = unhex(ALICE_SK_HEX).unwrap();
         let err = crate::identity::import_identity(&existing, &sk).unwrap_err();
         assert!(matches!(err, IdentityError::Io(_)), "{err}");
-        // The pre-existing identity survived untouched.
+        
         let kept = load_or_create(&existing).unwrap();
         assert_ne!(
             *kept.public(),

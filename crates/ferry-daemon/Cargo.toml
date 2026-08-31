@@ -4,11 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Lives apart from ferry-sync because it wires BOTH transports together:
-# ferry-iroh depends on ferry-sync for the Transport trait, so a single
-# crate containing the lib, the iroh impl, AND the binary would be a
-# normal-dependency cycle (illegal). The shipped artifact keeps the
-# historical name `ferry-sync`.
 [dependencies]
 ferry-sync = { path = "../ferry-sync" }
 ferry-iroh = { path = "../ferry-iroh" }
@@ -16,22 +11,21 @@ ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
 ferry-folder = { workspace = true }
 ferry-ignore = { path = "../ferry-ignore" }
-# Dashboard state reads go through the typed owners instead of hand-parsing
-# .ferry/pin-state.json, held/*.jsonl and conflicts.jsonl.
-ferry-pin = { path = "../ferry-pin" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-platform.workspace = true
+notify = "8"
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 toml = "0.8"
 tempfile.workspace = true
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 axum = { workspace = true, optional = true }
+percent-encoding.workspace = true
 
 [features]
 default = ["web-ui"]
@@ -49,6 +43,8 @@ path = "src/main.rs"
 [dev-dependencies]
 tempfile.workspace = true
 axum = { workspace = true }
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
+ferry-ipc = { path = "../ferry-ipc", features = ["test-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [lints]

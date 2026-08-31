@@ -1,0 +1,442 @@
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use ferry_crypto::identity::DeviceIdentity;
+use ferry_folder::inventory::FolderRecord;
+use ferry_ipc::backend::UiEvent;
+use ferry_ipc::protocol::{EngineSnapshot, ScanStatsView};
+use ferry_store::format::hex as hex_str;
+use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
+use notify::Watcher as _;
+
+use super::SupervisorError;
+
+pub type FolderId = String;
+
+#[derive(Debug, Clone, Default)]
+pub struct EngineSpawnOptions {
+    pub bind_addr: Option<SocketAddr>,
+    pub connect_to: Option<SocketAddr>,
+    pub opportunistic_every: Option<u32>,
+    pub poll_interval: Option<Duration>,
+}
+
+pub struct FolderEngine {
+    pub record: FolderRecord,
+    pub handle: Arc<EngineHandle>,
+    pub folder_id_bytes: [u8; 16],
+    pub restart_count: u32,
+    pub next_restart_at: Option<std::time::Instant>,
+    identity: DeviceIdentity,
+    transport: Arc<dyn ferry_sync::Transport>,
+    options: EngineSpawnOptions,
+    broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+    watcher_shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
+    watcher_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl FolderEngine {
+    pub fn start(
+        folder_path: &Path,
+        identity: &DeviceIdentity,
+        transport: Arc<dyn ferry_sync::Transport>,
+        options: EngineSpawnOptions,
+        broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+    ) -> Result<Self, SupervisorError> {
+        Self::start_internal(
+            folder_path,
+            identity,
+            transport,
+            options,
+            broadcast_tx,
+            None,
+            0,
+        )
+    }
+
+    pub fn start_with_record(
+        record: FolderRecord,
+        identity: &DeviceIdentity,
+        transport: Arc<dyn ferry_sync::Transport>,
+        options: EngineSpawnOptions,
+        broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+    ) -> Result<Self, SupervisorError> {
+        let path = record.path.clone();
+        Self::start_internal(
+            &path,
+            identity,
+            transport,
+            options,
+            broadcast_tx,
+            Some(record),
+            0,
+        )
+    }
+
+    fn start_internal(
+        folder_path: &Path,
+        identity: &DeviceIdentity,
+        transport: Arc<dyn ferry_sync::Transport>,
+        options: EngineSpawnOptions,
+        broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+        existing_record: Option<FolderRecord>,
+        restart_count: u32,
+    ) -> Result<Self, SupervisorError> {
+        let (handle_raw, opened_record, folder_id_bytes) =
+            ferry_sync::SyncEngine::open_watched_folder(
+                folder_path,
+                identity,
+                Arc::clone(&transport),
+                options.bind_addr,
+                options.connect_to,
+                options.poll_interval,
+                options.opportunistic_every,
+            )
+            .map_err(|e| {
+                let msg = e.to_string();
+                if let Some((code, rest)) = msg.split_once(": ") {
+                    if !code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                        return SupervisorError {
+                            code: code.to_string(),
+                            message: rest.to_string(),
+                        };
+                    }
+                }
+                SupervisorError {
+                    code: "bind".to_string(),
+                    message: msg,
+                }
+            })?;
+        let handle = Arc::new(handle_raw);
+
+        let record = existing_record.unwrap_or_else(|| {
+            let (secs, _) = ferry_platform::time::now_unix();
+            let added_at = ferry_platform::time::fmt_rfc3339(secs);
+            FolderRecord {
+                folder_id: opened_record.folder_id.clone(),
+                path: opened_record.path.clone(),
+                added_at,
+            }
+        });
+
+        let (watcher_shutdown_tx, watcher_task) = spawn_engine_watcher(
+            Arc::clone(&handle),
+            record.path.join(".ferry"),
+            broadcast_tx.clone(),
+        );
+
+        Ok(Self {
+            record,
+            handle,
+            folder_id_bytes,
+            restart_count,
+            next_restart_at: None,
+            identity: identity.clone(),
+            transport,
+            options,
+            broadcast_tx,
+            watcher_shutdown_tx,
+            watcher_task,
+        })
+    }
+
+    
+    pub fn tick(&mut self) -> bool {
+        if let Some(deadline) = self.next_restart_at {
+            if std::time::Instant::now() < deadline {
+                return false;
+            }
+        }
+
+        if self.watcher_task.is_none() {
+            let (tx, task) = spawn_engine_watcher(
+                Arc::clone(&self.handle),
+                self.record.path.join(".ferry"),
+                self.broadcast_tx.clone(),
+            );
+            self.watcher_shutdown_tx = tx;
+            self.watcher_task = task;
+        }
+
+        if self.handle.is_healthy() {
+            false
+        } else {
+            let backoff_ms = 100u64.saturating_mul(1u64 << self.restart_count.min(5));
+            self.stop_watcher();
+            self.handle.shutdown();
+
+            let _ = self.broadcast_tx.send(UiEvent::Error {
+                code: "engine-crashed".to_string(),
+                message: format!(
+                    "engine {} crashed, restarting with {backoff_ms}ms backoff",
+                    self.record.folder_id
+                ),
+            });
+
+            match Self::start_internal(
+                &self.record.path,
+                &self.identity,
+                Arc::clone(&self.transport),
+                self.options.clone(),
+                self.broadcast_tx.clone(),
+                Some(self.record.clone()),
+                self.restart_count.saturating_add(1),
+            ) {
+                Ok(mut new_engine) => {
+                    new_engine.next_restart_at = None;
+                    *self = new_engine;
+                    true
+                }
+                Err(e) => {
+                    self.next_restart_at =
+                        Some(std::time::Instant::now() + Duration::from_millis(backoff_ms));
+                    let _ = self.broadcast_tx.send(UiEvent::Error {
+                        code: e.code,
+                        message: e.message,
+                    });
+                    false
+                }
+            }
+        }
+    }
+
+    fn stop_watcher(&mut self) {
+        if let Some(tx) = self.watcher_shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(task) = self.watcher_task.take() {
+            task.abort();
+        }
+    }
+
+    pub fn shutdown(&mut self) {
+        self.stop_watcher();
+        self.handle.shutdown();
+    }
+
+    pub fn snapshot(&self) -> EngineSnapshot {
+        let manifest_id = self.handle.current_manifest_id().map(|id| hex_str(&id));
+        let scanned = self
+            .handle
+            .scan_counts()
+            .map(|s| {
+                ScanStatsView::new(
+                    s.files as u64,
+                    s.dirs as u64,
+                    s.symlinks as u64,
+                    s.bytes_chunked,
+                )
+            })
+            .unwrap_or_default();
+        let state = if manifest_id.is_some() {
+            "idle".to_string()
+        } else {
+            "initializing".to_string()
+        };
+        let mut snap = EngineSnapshot::new(
+            self.record.path.display().to_string(),
+            self.record.folder_id.clone(),
+            String::new(),
+            state,
+        );
+        snap.manifest_id = manifest_id;
+        snap.scanned = scanned;
+        snap.pending_changes = self.handle.pending_changes();
+        snap
+    }
+
+    pub fn handle(&self) -> &Arc<EngineHandle> {
+        &self.handle
+    }
+
+    pub fn record(&self) -> &FolderRecord {
+        &self.record
+    }
+
+    pub fn folder_id(&self) -> &str {
+        &self.record.folder_id
+    }
+
+    pub fn folder_id_bytes(&self) -> [u8; 16] {
+        self.folder_id_bytes
+    }
+
+    pub fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.handle.is_healthy()
+    }
+
+    pub fn broadcast_tx(&self) -> &tokio::sync::broadcast::Sender<UiEvent> {
+        &self.broadcast_tx
+    }
+}
+
+impl Drop for FolderEngine {
+    fn drop(&mut self) {
+        self.stop_watcher();
+    }
+}
+
+fn spawn_engine_watcher(
+    handle: Arc<EngineHandle>,
+    state_dir: PathBuf,
+    broadcast_tx: tokio::sync::broadcast::Sender<UiEvent>,
+) -> (
+    Option<tokio::sync::watch::Sender<bool>>,
+    Option<tokio::task::JoinHandle<()>>,
+) {
+    if let Ok(rt_handle) = tokio::runtime::Handle::try_current() {
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let task = rt_handle.spawn(async move {
+            let mut last_manifest = handle.current_manifest_id();
+            let mut last_agreed = handle.agreed_id();
+            let mut last_scanned = handle.scan_counts().map(|s| {
+                ScanStatsView::new(
+                    s.files as u64,
+                    s.dirs as u64,
+                    s.symlinks as u64,
+                    s.bytes_chunked,
+                )
+            });
+            let mut last_pending = handle.pending_changes();
+            if last_manifest.is_some() || last_agreed.is_some() || last_scanned.is_some() {
+                let manifest_hex = last_manifest.map(|r| hex_str(&r)).unwrap_or_default();
+                let agreed_hex = last_agreed.map(|a| hex_str(&a));
+                let state_str = if last_manifest.is_some() {
+                    "idle".to_string()
+                } else {
+                    "initializing".to_string()
+                };
+                let _ = broadcast_tx.send(UiEvent::StateChanged {
+                    state: state_str,
+                    manifest_id: manifest_hex,
+                    agreed_id: agreed_hex,
+                    pending_changes: last_pending,
+                    stats: last_scanned,
+                });
+            }
+
+            let mut last_conflicts_count = ferry_sync_engine::list_conflicts(&state_dir)
+                .map_or(0, |c| c.len());
+
+            let (conflict_tx, mut conflict_rx) =
+                tokio::sync::mpsc::unbounded_channel::<()>();
+            let _conflicts_watcher: Option<notify::RecommendedWatcher> = {
+                let tx = conflict_tx.clone();
+                let watch_path = state_dir.clone();
+                if std::fs::create_dir_all(&watch_path).is_ok() {
+                    match notify::RecommendedWatcher::new(
+                        move |res: Result<notify::Event, notify::Error>| {
+                            if let Ok(ev) = res {
+                                let is_conflict = ev.paths.iter().any(|p| {
+                                    p.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .is_some_and(|n| n == "conflicts.jsonl")
+                                }) || ev.paths.is_empty();
+                                if is_conflict {
+                                    let _ = tx.send(());
+                                }
+                            } else {
+                                let _ = tx.send(());
+                            }
+                        },
+                        notify::Config::default(),
+                    ) {
+                        Ok(mut w) => {
+                            let _ = w.watch(&watch_path, notify::RecursiveMode::NonRecursive);
+                            Some(w)
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            };
+
+            loop {
+                let handle_for_block = Arc::clone(&handle);
+                let wait_future =
+                    tokio::task::spawn_blocking(move || handle_for_block.wait_for_change(Duration::from_secs(1)));
+                tokio::select! {
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = wait_future => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                        let cur_manifest = handle.current_manifest_id();
+                        let cur_agreed = handle.agreed_id();
+                        let cur_scan = handle.scan_counts().map(|s| {
+                            ScanStatsView::new(
+                                s.files as u64,
+                                s.dirs as u64,
+                                s.symlinks as u64,
+                                s.bytes_chunked,
+                            )
+                        });
+                        let cur_pending = handle.pending_changes();
+                        let changed = cur_manifest != last_manifest
+                            || cur_agreed != last_agreed
+                            || cur_scan != last_scanned
+                            || cur_pending != last_pending;
+                        if changed {
+                            last_manifest = cur_manifest;
+                            last_agreed = cur_agreed;
+                            last_scanned = cur_scan;
+                            last_pending = cur_pending;
+                            let manifest_hex = cur_manifest.map(|r| hex_str(&r)).unwrap_or_default();
+                            let agreed_hex = cur_agreed.map(|a| hex_str(&a));
+                            let state_str = if cur_manifest.is_some() {
+                                "idle".to_string()
+                            } else {
+                                "initializing".to_string()
+                            };
+                            let _ = broadcast_tx.send(UiEvent::StateChanged {
+                                state: state_str,
+                                manifest_id: manifest_hex,
+                                agreed_id: agreed_hex,
+                                pending_changes: cur_pending,
+                                stats: cur_scan,
+                            });
+                        }
+                    }
+                    _ = conflict_rx.recv() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                        if let Ok(conflicts) = ferry_sync_engine::list_conflicts(&state_dir) {
+                            if conflicts.len() > last_conflicts_count {
+                                for entry in &conflicts[last_conflicts_count..] {
+                                    let ts = ferry_platform::time::parse_rfc3339_to_unix(&entry.ts)
+                                        .unwrap_or_else(|| ferry_platform::time::now_unix().0 as u64);
+                                    let _ = broadcast_tx.send(UiEvent::ConflictRecorded {
+                                        path: entry.path.clone(),
+                                        conflict_path: entry
+                                            .quarantined_as
+                                            .clone()
+                                            .unwrap_or_else(|| entry.path.clone()),
+                                        timestamp: ts,
+                                        quarantined_as: entry.quarantined_as.clone(),
+                                    });
+                                }
+                            }
+                            last_conflicts_count = conflicts.len();
+                        }
+                    }
+                }
+            }
+        });
+        (Some(shutdown_tx), Some(task))
+    } else {
+        (None, None)
+    }
+}

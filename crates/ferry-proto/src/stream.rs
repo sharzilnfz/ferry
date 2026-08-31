@@ -1,41 +1,41 @@
-//! The transport seam: any byte stream with `read_exact`/`write_all`
-//! semantics.
-//!
-//! v0 speaks over std `TcpStream` (which implements [`Read`] + [`Write`],
-//! including through `&TcpStream` for split halves). The in-memory duplex
-//! pair exists for loopback harnesses and corruption-injection tests; it
-//! preserves WRITE RECORDS, which real streams do not, so tests can tamper
-//! with "the Nth outbound buffer" deterministically.
-//!
-//! Relay integration later (ADR-0003) plugs in here: anything that can
-//! deliver exact-length reads and writes is a Ferry transport.
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Condvar, Mutex};
 
-/// A bidirectional byte stream with exact read/write semantics.
-///
-/// Blanket-implemented for every `Read + Write` type; the trait names the
-/// concept the protocol is written against (mirroring ferry-store's
-/// `PackCipher` style of naming a seam).
+
+
+
+
+
 pub trait ByteStream: io::Read + io::Write {}
 impl<T: io::Read + io::Write> ByteStream for T {}
 
-/// One end of an in-memory duplex pair.
-///
-/// Reads block until bytes are available or the pipe closes. Writes append
-/// one record per call and wake the reader.
+
+
+
+
 pub struct DuplexHalf {
     shared: Arc<DuplexShared>,
-    /// Which queue this half reads from: index 0 consumes `a_to_b`, 1
-    /// consumes `b_to_a`.
+    
+    
     inbox: usize,
 }
 
 struct DuplexShared {
-    /// ONE lock guards both queues and the open flag: a Condvar may only
-    /// ever wait on a single Mutex.
+    
+    
     state: Mutex<DuplexState>,
     cv: Condvar,
 }
@@ -45,8 +45,8 @@ struct DuplexState {
     open: bool,
 }
 
-/// Build a connected in-memory pair `(a, b)`; whatever `a` writes, `b`
-/// reads, and vice versa.
+
+
 pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
     let shared = Arc::new(DuplexShared {
         state: Mutex::new(DuplexState {
@@ -59,16 +59,16 @@ pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
         DuplexHalf {
             shared: Arc::clone(&shared),
             inbox: 1,
-        }, // a reads b_to_a
-        DuplexHalf { shared, inbox: 0 }, // b reads a_to_b
+        }, 
+        DuplexHalf { shared, inbox: 0 }, 
     )
 }
 
 impl Drop for DuplexHalf {
     fn drop(&mut self) {
-        // A dropped half tears the pipe down (socketpair semantics): the
-        // peer's blocked readers wake with EOF instead of hanging forever
-        // after an error on this side.
+        
+        
+        
         let mut st = self.shared.state.lock().expect("duplex lock");
         st.open = false;
         self.shared.cv.notify_all();
@@ -76,9 +76,9 @@ impl Drop for DuplexHalf {
 }
 
 impl DuplexHalf {
-    /// Shut the pipe down explicitly: blocked and future reads drain then
-    /// return Ok(0). Mirrors a transport teardown, not a graceful protocol
-    /// close.
+    
+    
+    
     pub fn close(&self) {
         let mut st = self.shared.state.lock().expect("duplex lock");
         st.open = false;
@@ -101,8 +101,8 @@ impl io::Read for DuplexHalf {
                 let n = record.len().min(buf.len());
                 buf[..n].copy_from_slice(&record[..n]);
                 if n < record.len() {
-                    // Partial consumption of a large record: push the rest
-                    // back at the front to preserve stream semantics.
+                    
+                    
                     st.queues[self.inbox].push_front(record[n..].to_vec());
                 }
                 return Ok(n);
@@ -174,7 +174,7 @@ mod tests {
     fn partial_reads_preserve_stream_semantics() {
         let (mut a, mut b) = duplex_pair();
         a.write_all(b"abcdefgh").unwrap();
-        // Consume 3 bytes at a time across record boundaries.
+        
         let mut acc = Vec::new();
         let mut chunk = [0u8; 3];
         while acc.len() < 8 {
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn close_wakes_a_blocked_reader_on_the_other_half() {
         let (_keep_writer_half_alive, mut b) = duplex_pair();
-        // NOTE: writer half intentionally unnamed-but-alive via binding.
+        
         let reader = std::thread::spawn(move || {
             let mut chunk = [0u8; 4];
             b.read(&mut chunk).map(|_| ())

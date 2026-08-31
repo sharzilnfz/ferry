@@ -1,29 +1,29 @@
-//! Protocol v1 session driver: link adaptation, handshake, sealed frames.
-//!
-//! This is ferry-sync's half of `docs/store-format.md` §"Wire protocol v1"
-//! (reference implementation `crates/ferry-proto`). The M0 throwaway message
-//! set is replaced by the v1 inventory; the crypto below transcribes the
-//! normative handshake byte for byte and is proven compatible with the
-//! reference engine by interop tests (`tests/protocol_v1.rs` runs THIS code
-//! against `ferry_proto::run_engine` over real TCP, encrypted, in both role
-//! assignments).
-//!
-//! Layers, bottom-up:
-//!
-//! - [`Link`] — one frame body region per call. [`ConnLink`] rides the
-//!   existing `Transport` seam 1:1 (the transport's own length prefix
-//!   represents the spec's u32 BE prefix); [`RawLink`] speaks the literal
-//!   wire framing over any `Read + Write` stream, which is what reference-
-//!   interop and direct-TCP tests use.
-//! - [`DirectionCipher`] — ChaCha20-Poly1305 per direction, nonce
-//!   `"FPN1" || u64 BE seq`, AAD = u32 BE body length. One failed open
-//!   consumes the counter slot; any tag failure kills the session.
-//! - [`establish`] — HELLO / `HELLO_ACK` / `AUTH_INIT` / `AUTH_CONFIRM` with
-//!   device-key mutual auth (possession proofs, no signatures) and version
-//!   negotiation. Peer identity policy: strict pin or trust-on-first-use
-//!   ([`ExpectPeer`]); TOFU is a LOCAL policy only — on the wire both modes
-//!   are byte-identical, because possession of the claimed static secret is
-//!   always proven before any folder state moves.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::io::{self, Read, Write};
 
@@ -31,46 +31,41 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
-use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
 
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_proto::codec::{self, AuthProof, Bye, FrameBody, Hello, HelloAck};
 use ferry_proto::error::{ByeReason, ProtoError};
 use ferry_proto::secure::{
-    transcript_hash, INFO_HANDSHAKE, INFO_HTK_I2R, INFO_HTK_R2I, INFO_TK_I2R, INFO_TK_R2I, KEY_LEN,
+    kdf_handshake, traffic_keys, transcript_hash, SessionCipher, KEY_LEN,
 };
 use ferry_proto::version::{negotiate, ProtocolVersion};
 
-/// Hard cap on one frame's body region (normative v1 limit).
+
 pub const MAX_FRAME_BODY: usize = ferry_proto::frame::MAX_FRAME_BODY;
 
 const NONCE_LEN: usize = 12;
-/// Traffic-nonce prefix "FPN1".
-const TRAFFIC_NONCE_PREFIX: [u8; 4] = *b"FPN1";
 
-// --- link layer ---------------------------------------------------------------
 
-/// One frame-body region per call: exactly what sits between the spec's
-/// length prefix and the next frame — plaintext pre-auth, ciphertext after.
-///
-/// `Send` because sessions run each side on its own thread (lockstep
-/// conversation), and the trait object forms cross thread boundaries in the
-/// engine's session handlers.
+
+
+
+
+
+
+
 pub trait Link: Send {
     fn send_body(&mut self, body: &[u8]) -> Result<(), ProtoError>;
     fn recv_body(&mut self) -> Result<Vec<u8>, ProtoError>;
 }
 
-/// Ride the existing M0 transport seam. The connection already delivers
-/// exact-length frames, so the spec's u32 BE prefix is represented by the
-/// transport's own framing rather than duplicated on the wire; the AEAD
-/// length binding still holds because sender and receiver derive the same
-/// `body_len` from the frame they handle.
+
+
+
+
+
 pub struct ConnLink<'a>(pub &'a mut dyn crate::transport::Connection);
 
 impl Link for ConnLink<'_> {
@@ -84,14 +79,14 @@ impl Link for ConnLink<'_> {
     }
 }
 
-/// Literal wire framing over any byte stream (u32 BIG-ENDIAN prefix), used
-/// against raw streams — reference-engine interop tests and direct TCP.
+
+
 pub struct RawLink<S>(pub S);
 
 impl<S: Read + Write + Send> Link for RawLink<S> {
     fn send_body(&mut self, body: &[u8]) -> Result<(), ProtoError> {
-        // Assembled and written as ONE buffer: the spec forbids splitting a
-        // frame across writes at this layer.
+        
+        
         let mut frame = Vec::with_capacity(4 + body.len());
         frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
         frame.extend_from_slice(body);
@@ -120,8 +115,8 @@ impl<S: Read + Write + Send> Link for RawLink<S> {
     }
 }
 
-/// The full wire image of a body region: u32 BE prefix || body. Handshake
-/// transcript hashes cover exactly these bytes.
+
+
 fn wire_image(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -129,129 +124,15 @@ fn wire_image(body: &[u8]) -> Vec<u8> {
     out
 }
 
-// --- AEAD ---------------------------------------------------------------------
 
-/// One direction's sealing state: traffic key + strictly increasing counter.
-/// Byte-compatible with `ferry_proto::secure::SessionCipher` (proven by
-/// interop tests).
-pub struct DirectionCipher {
-    key: Zeroizing<[u8; KEY_LEN]>,
-    seq: u64,
-}
 
-impl DirectionCipher {
-    pub fn new(key: [u8; KEY_LEN]) -> Self {
-        DirectionCipher {
-            key: Zeroizing::new(key),
-            seq: 0,
-        }
-    }
 
-    /// Take the next nonce, consuming the counter slot EVEN IF the operation
-    /// later fails — a failed open burns the slot by design (no resync).
-    fn next_nonce(&mut self) -> Result<[u8; NONCE_LEN], ProtoError> {
-        if self.seq == u64::MAX {
-            return Err(ProtoError::CounterExhausted);
-        }
-        let mut n = [0u8; NONCE_LEN];
-        n[..4].copy_from_slice(&TRAFFIC_NONCE_PREFIX);
-        n[4..].copy_from_slice(&self.seq.to_be_bytes());
-        self.seq += 1;
-        Ok(n)
-    }
 
-    fn cipher(&self) -> ChaCha20Poly1305 {
-        ChaCha20Poly1305::new(Key::from_slice(self.key.as_ref()))
-    }
 
-    /// Seal one body region, binding its wire-visible length as AAD.
-    pub fn seal(&mut self, len_prefix: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
-        let nonce = self.next_nonce()?;
-        self.cipher()
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: body,
-                    aad: &len_prefix.to_be_bytes(),
-                },
-            )
-            .map_err(|_| ProtoError::ProtocolViolation("frame seal failure"))
-    }
 
-    /// Open one sealed body region. Any tamper, reorder, splice, or replay
-    /// fails here.
-    pub fn open(&mut self, len_prefix: u32, ct: &[u8]) -> Result<Vec<u8>, ProtoError> {
-        if ct.len() < 16 {
-            return Err(ProtoError::ProtocolViolation("sealed body too short"));
-        }
-        let nonce = self.next_nonce()?;
-        self.cipher()
-            .decrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: ct,
-                    aad: &len_prefix.to_be_bytes(),
-                },
-            )
-            .map_err(|_| ProtoError::Auth("post-auth frame failed tag verification"))
-    }
-}
 
-// --- handshake key schedule (transcription of the normative section) ----------
 
-fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
-    let hk = Hkdf::<Sha256>::from_prk(prk).expect("prk is a valid SHA-256 length");
-    let mut okm = Zeroizing::new([0u8; KEY_LEN]);
-    hk.expand(info, okm.as_mut())
-        .expect("32-byte OKM always valid");
-    okm
-}
 
-/// `(htk_i2r, htk_r2i, prk)` — all zeroizing-on-drop key material.
-type HandshakeKeys = (
-    Zeroizing<[u8; KEY_LEN]>,
-    Zeroizing<[u8; KEY_LEN]>,
-    Box<[u8; KEY_LEN]>,
-);
-
-/// Stage 1: `(htk_i2r, htk_r2i, prk)` from the three DH terms under the
-/// hello transcript hash.
-fn kdf_handshake(th: &[u8; 32], e1: &[u8; 32], m1: &[u8; 32], m2: &[u8; 32]) -> HandshakeKeys {
-    let mut ikm = Zeroizing::new([0u8; 96]);
-    ikm[..32].copy_from_slice(e1);
-    ikm[32..64].copy_from_slice(m1);
-    ikm[64..].copy_from_slice(m2);
-    let ext = Hkdf::<Sha256>::new(Some(th), ikm.as_ref());
-    let mut prk = Box::new([0u8; KEY_LEN]);
-    ext.expand(INFO_HANDSHAKE, prk.as_mut())
-        .expect("valid prk length");
-    let htk_i2r = expand_from(prk.as_slice(), INFO_HTK_I2R);
-    let htk_r2i = expand_from(prk.as_slice(), INFO_HTK_R2I);
-    (htk_i2r, htk_r2i, prk)
-}
-
-/// Stage 2: per-direction traffic keys re-rooted on the final transcript.
-///
-/// NOTE: matches the REFERENCE IMPLEMENTATION (`ferry_proto::secure`), which
-/// routes through an intermediate `"ferry/v1/traffic"` expand between the
-/// extract and the per-direction labels — one stage more than the doc's
-/// sketch. Interop, not prose, is authoritative here.
-fn traffic_keys(prk: &[u8; KEY_LEN], th_final: &[u8; 32]) -> (DirectionCipher, DirectionCipher) {
-    let ext = Hkdf::<Sha256>::new(Some(th_final), prk);
-    let mut root = Zeroizing::new([0u8; KEY_LEN]);
-    ext.expand(b"ferry/v1/traffic", root.as_mut())
-        .expect("valid root length");
-    let tk_i2r = expand_from(root.as_slice(), INFO_TK_I2R);
-    let tk_r2i = expand_from(root.as_slice(), INFO_TK_R2I);
-    let mut i2r = [0u8; KEY_LEN];
-    let mut r2i = [0u8; KEY_LEN];
-    i2r.copy_from_slice(tk_i2r.as_ref());
-    r2i.copy_from_slice(tk_r2i.as_ref());
-    (DirectionCipher::new(i2r), DirectionCipher::new(r2i))
-}
-
-/// Seal this side's possession proof: its OWN `device_id` under its
-/// direction's auth key, AAD = hello transcript hash, fixed zero nonce.
 fn seal_auth(
     key: &[u8; KEY_LEN],
     th: &[u8; 32],
@@ -271,8 +152,8 @@ fn seal_auth(
     AuthProof::new(ct)
 }
 
-/// Open the peer's possession proof. Tag failure == they do not hold the
-/// static secret they claim.
+
+
 fn open_auth(
     key: &[u8; KEY_LEN],
     th: &[u8; 32],
@@ -293,13 +174,13 @@ fn open_auth(
         .map_err(|_| ProtoError::Auth("auth plaintext wrong length"))
 }
 
-// --- peer identity policy -------------------------------------------------------
 
-/// Who we accept as the other side. `Pin` fails the session on any other
-/// authenticated identity; `TrustOnFirstUse` accepts whichever identity
-/// proves possession and reports it so the caller can pin it for next time.
-/// On the WIRE the two are indistinguishable — this is local acceptance
-/// policy, not protocol.
+
+
+
+
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExpectPeer {
     Pin(DeviceId),
@@ -332,53 +213,53 @@ fn check_identity(
     }
 }
 
-// --- established session ---------------------------------------------------------
 
-/// Everything one successful handshake produced.
+
+
 pub struct Established<'a> {
     pub io: SessionIo<'a>,
     pub agreed_version: ProtocolVersion,
-    /// The authenticated peer identity (possession-proven).
+    
     pub peer: DeviceId,
     pub peer_max: ProtocolVersion,
     pub peer_flags: u64,
-    /// Whether post-auth frames are sealed (handshake auth ALWAYS ran).
+    
     pub encrypted: bool,
 }
 
-/// Framed, (optionally) sealed message IO over a [`Link`].
+
 pub struct SessionIo<'a> {
     link: &'a mut dyn Link,
     version: ProtocolVersion,
-    tx: Option<DirectionCipher>,
-    rx: Option<DirectionCipher>,
+    tx: Option<SessionCipher>,
+    rx: Option<SessionCipher>,
     peer_max: ProtocolVersion,
     peer_flags: u64,
 }
 
 impl SessionIo<'_> {
-    /// Send one message. Sealed iff the handshake negotiated sealing.
+    
     pub fn send_frame(&mut self, msg_type: u8, payload: Vec<u8>) -> Result<(), ProtoError> {
         let body = FrameBody::new(msg_type, self.version, payload).encode();
         match self.tx.as_mut() {
             Some(c) => {
                 let len = (body.len() + 16) as u32;
-                let ct = c.seal(len, &body)?;
+                let ct = c.seal_frame(len, &body)?;
                 self.link.send_body(&ct)
             }
             None => self.link.send_body(&body),
         }
     }
 
-    /// Receive one message, enforcing the unknown-message-type rule:
-    /// unknown types post-auth are skipped iff the peer advertised a higher
-    /// minor within our major AND carries feature flags we do not know;
-    /// otherwise the session dies with [`ProtoError::UnknownMessage`].
+    
+    
+    
+    
     pub fn recv_frame(&mut self) -> Result<Option<FrameBody>, ProtoError> {
         loop {
             let raw = self.link.recv_body()?;
             let plain = match self.rx.as_mut() {
-                Some(c) => c.open(raw.len() as u32, &raw)?,
+                Some(c) => c.open_frame(raw.len() as u32, &raw)?,
                 None => raw,
             };
             let fb = FrameBody::parse(&plain)?;
@@ -387,7 +268,7 @@ impl SessionIo<'_> {
                     && self.peer_max.minor() > ProtocolVersion::V1_0.minor();
                 let flagged = (self.peer_flags & !codec::FLAG_EXTENSION_AWARE) != 0;
                 if higher && flagged {
-                    continue; // skip-if-flagged
+                    continue; 
                 }
                 return Err(ProtoError::UnknownMessage {
                     msg_type: fb.msg_type,
@@ -407,8 +288,8 @@ impl SessionIo<'_> {
         }
     }
 
-    /// Like [`expect_frame`] but accepting any of `msg_types` (e.g. a
-    /// PACK_ITEM-or-terminator response sequence).
+    
+    
     pub fn expect_frame_any(&mut self, msg_types: &[u8]) -> Result<FrameBody, ProtoError> {
         match self.recv_frame()? {
             Some(fb) if msg_types.contains(&fb.msg_type) => Ok(fb),
@@ -419,7 +300,7 @@ impl SessionIo<'_> {
         }
     }
 
-    /// Receive BYE; Normal closes cleanly, anything else surfaces typed.
+    
     pub fn recv_bye(&mut self) -> Result<(), ProtoError> {
         let fb = self.expect_frame(codec::MSG_BYE)?;
         let bye = Bye::parse(&fb.payload)?;
@@ -429,12 +310,12 @@ impl SessionIo<'_> {
         }
     }
 
-    /// Send BYE with a reason (last frame on errors and clean ends alike).
+    
     pub fn send_bye(&mut self, reason: ByeReason) -> Result<(), ProtoError> {
         self.send_frame(codec::MSG_BYE, Bye { reason }.encode())
     }
 
-    /// Best-effort BYE carrying the coarse reason for a typed error.
+    
     pub fn bye_for_error(&mut self, err: &ProtoError) {
         let reason = match err {
             ProtoError::VersionIncompatible { .. } => ByeReason::VersionIncompatible,
@@ -461,7 +342,7 @@ impl core::fmt::Debug for Established<'_> {
     }
 }
 
-// --- the handshake -----------------------------------------------------------------
+
 
 fn random32() -> [u8; 32] {
     let mut b = [0u8; 32];
@@ -469,11 +350,11 @@ fn random32() -> [u8; 32] {
     b
 }
 
-/// Drive HELLO → `HELLO_ACK` → `AUTH_INIT` → `AUTH_CONFIRM`. Always authenticates
-/// both devices, even when `encryption` is false (dev-only plaintext mode):
-/// possession proofs are not optional. On any handshake failure the peer
-/// receives a best-effort plaintext BYE with the coarse reason before the
-/// typed error propagates.
+
+
+
+
+
 pub fn establish<'a, L: Link>(
     link: &'a mut L,
     role: ferry_proto::Role,
@@ -481,8 +362,8 @@ pub fn establish<'a, L: Link>(
     expect: ExpectPeer,
     encryption: bool,
 ) -> Result<Established<'a>, ProtoError> {
-    // Core returns lifetime-free data so a failed handshake can still use
-    // `link` for the goodbye frame.
+    
+    
     match handshake_core(link, role, identity, expect, encryption) {
         Ok(hs) => Ok(Established {
             io: SessionIo {
@@ -526,8 +407,8 @@ struct HandshakeData {
     peer: DeviceId,
     peer_max: ProtocolVersion,
     peer_flags: u64,
-    tx: Option<DirectionCipher>,
-    rx: Option<DirectionCipher>,
+    tx: Option<SessionCipher>,
+    rx: Option<SessionCipher>,
 }
 
 fn handshake_core<L: Link>(
@@ -540,8 +421,8 @@ fn handshake_core<L: Link>(
     let our_max = ProtocolVersion::V1_0;
     let flags = codec::FLAG_EXTENSION_AWARE;
 
-    // StaticSecret (not EphemeralSecret): its diffie_hellman BORROWS, so one
-    // fresh scalar feeds all three DH terms.
+    
+    
     let esk = StaticSecret::random_from_rng(OsRng);
     let my_epk = *PublicKey::from(&esk).as_bytes();
     let my_stat = *identity.device_id();
@@ -553,7 +434,7 @@ fn handshake_core<L: Link>(
         nonce: random32(),
     };
 
-    // --- hellos (initiator speaks first) ---
+    
     let (peer_hello_fb, hello_wires) = match role {
         ferry_proto::Role::Initiator => {
             let body = FrameBody::new(codec::MSG_HELLO, our_max, my_hello.encode()).encode();
@@ -623,7 +504,7 @@ fn handshake_core<L: Link>(
 
     let th_hello = transcript_hash(&[&hello_wires[0], &hello_wires[1]]);
 
-    // --- three DH terms ---
+    
     fn dh(esk: &StaticSecret, peer: [u8; 32]) -> Result<[u8; 32], ProtoError> {
         let shared = esk.diffie_hellman(&PublicKey::from(peer));
         if !shared.was_contributory() {
@@ -632,7 +513,7 @@ fn handshake_core<L: Link>(
         Ok(*shared.as_bytes())
     }
     let e1 = dh(&esk, peer_eph)?;
-    // m1 authenticates the INITIATOR's static key, m2 the RESPONDER's.
+    
     let (m1, m2): ([u8; 32], [u8; 32]) = match role {
         ferry_proto::Role::Initiator => (
             *identity
@@ -650,7 +531,7 @@ fn handshake_core<L: Link>(
 
     let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
 
-    // --- mutual proofs: initiator first, then responder ---
+    
     let my_proof = match role {
         ferry_proto::Role::Initiator => seal_auth(&htk_i2r, &th_hello, &my_stat)?,
         ferry_proto::Role::Responder => seal_auth(&htk_r2i, &th_hello, &my_stat)?,
@@ -688,14 +569,16 @@ fn handshake_core<L: Link>(
         }
     };
 
-    // Traffic keys re-root from the transcript that includes both proofs.
+    
     let th_final = transcript_hash(&[
         &hello_wires[0],
         &hello_wires[1],
         &proof_wires[0],
         &proof_wires[1],
     ]);
-    let (tk_i2r, tk_r2i) = traffic_keys(&prk, &th_final);
+    let (tk_i2r_key, tk_r2i_key) = traffic_keys(&prk, &th_final);
+    let tk_i2r = tk_i2r_key.cipher();
+    let tk_r2i = tk_r2i_key.cipher();
 
     let (tx, rx) = match role {
         ferry_proto::Role::Initiator => (tk_i2r, tk_r2i),
@@ -731,14 +614,14 @@ mod tests {
         DeviceIdentity::from_secret_bytes(&sk)
     }
 
-    /// Duplex halves wrapped in the literal wire framing.
+    
     fn raw_pair() -> (RawLink<DuplexHalf>, RawLink<DuplexHalf>) {
         let (a, b) = duplex_pair();
         (RawLink(a), RawLink(b))
     }
 
-    /// Handshake over duplex with strict pins both ways; runs each side on
-    /// its own thread because the conversation is lockstep.
+    
+    
     fn pinned_pair<'a, 'b>(
         la: &'a mut RawLink<DuplexHalf>,
         lb: &'b mut RawLink<DuplexHalf>,
@@ -782,7 +665,7 @@ mod tests {
         assert_eq!(eb.peer, *id_a.device_id());
         assert_eq!(ea.agreed_version, ProtocolVersion::V1_0);
 
-        // Sealed round-trip: initiator's FOLDER_OFFER opens on responder.
+        
         let offer = codec::FolderOffer {
             folder_id: [7; 16],
             manifest_id: [9; 32],
@@ -796,7 +679,7 @@ mod tests {
         let got = codec::FolderOffer::parse(&fb.payload).unwrap();
         assert_eq!(got.manifest_id, [9; 32]);
 
-        // And back the other way on the responder's independent direction.
+        
         eb.io
             .send_frame(
                 codec::MSG_BYE,
@@ -816,8 +699,8 @@ mod tests {
         let id_b = identity(22);
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
-            // Dev mode (encryption=false): handshake + proofs still run; the
-            // post-auth body travels UNSEALED, so magic and type are visible.
+            
+            
             let ha = s.spawn(|| {
                 let mut est = establish(
                     &mut la,
@@ -843,8 +726,8 @@ mod tests {
                 .unwrap();
                 assert!(!est.encrypted);
                 let raw = est.io.link_recv_raw_for_test();
-                // The body region IS magic || type || version || payload
-                // (the transport prefix is not part of the body).
+                
+                
                 assert_eq!(&raw[..4], b"FRW1");
                 assert_eq!(raw[4], codec::MSG_FOLDER_OFFER);
                 let fb = FrameBody::parse(&raw).unwrap();
@@ -881,11 +764,11 @@ mod tests {
                 )
             });
             let results = (ha.join().unwrap(), hb.join().unwrap());
-            // The side whose PIN fails sees IdentityMismatch (after firing a
-            // best-effort plaintext BYE(3)). The other side was mid-handshake
-            // expecting AUTH_INIT: it consumes that BYE as an unexpected
-            // pre-auth frame and dies with a protocol violation — also
-            // clean, also immediate.
+            
+            
+            
+            
+            
             let detecting = |err: &ProtoError| {
                 matches!(
                     err,
@@ -915,7 +798,7 @@ mod tests {
 
     #[test]
     fn version_major_mismatch_responder_side_fails_cleanly_with_bye1() {
-        // A hostile "v2 engine": craft a HELLO advertising major 2 directly.
+        
         let id_a = identity(66);
         let id_b = identity(77);
         let (mut la, mut lb) = raw_pair();
@@ -932,7 +815,7 @@ mod tests {
             evil_hello.encode(),
         )
         .encode();
-        // Full literal frame: prefix || body.
+        
         la.0.write_all(&wire_image(&body)).unwrap();
 
         let res = establish(
@@ -954,10 +837,10 @@ mod tests {
             "{err}"
         );
 
-        // The responder sent a plaintext BYE(1) before hanging up — it
-        // travels toward the PEER, so read it from la's side. Bounded reads
-        // (prefix + exact body): the duplex pipe only signals EOF when the
-        // peer half drops, so read_to_end would block forever here.
+        
+        
+        
+        
         let mut prefix = [0u8; 4];
         la.0.read_exact(&mut prefix).unwrap();
         let body_len = u32::from_be_bytes(prefix) as usize;
@@ -976,7 +859,7 @@ mod tests {
         let peer_id = *id_b.device_id();
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
-            // Fake v2 responder: read the HELLO, answer claiming major 2.
+            
             let evil = s.spawn(move || {
                 let mut buf = vec![0u8; 65536];
                 let _ = la.0.read(&mut buf).unwrap_or(0);
@@ -1060,7 +943,7 @@ mod tests {
                     true,
                 )
                 .unwrap();
-                // Seal an honest frame, flip one ciphertext byte in flight.
+                
                 let payload = codec::FolderOffer {
                     folder_id: [1; 16],
                     manifest_id: [2; 32],
@@ -1094,11 +977,11 @@ mod tests {
     }
 
     impl SessionIo<'_> {
-        /// Test hook: seal without sending.
+        
         fn seal_for_test(&mut self, len: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
-            self.tx.as_mut().unwrap().seal(len, body)
+            self.tx.as_mut().unwrap().seal_frame(len, body)
         }
-        /// Test hook: one raw inbound body region without parsing.
+        
         fn link_recv_raw_for_test(&mut self) -> Vec<u8> {
             self.link.recv_body().unwrap_or_default()
         }

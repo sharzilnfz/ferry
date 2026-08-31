@@ -1,10 +1,10 @@
-//! Pack files: grouping, framing, sealing, and the normative blob read path
-//! (`docs/store-format.md`, "Pack files" and "Reading a blob").
-//!
-//! One pack is one immutable file: prologue (header + salt), one encrypted
-//! STREAM covering every blob plaintext back to back, encrypted footer, clear
-//! trailing `footer_len`. The file name is BLAKE3 of the entire ciphertext;
-//! it is verified before any decryption.
+
+
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
@@ -22,8 +22,8 @@ mod tests {
         StdRng::seed_from_u64(seed)
     }
 
-    /// Cipher that counts every primitive call, proving when we do NOT
-    /// decrypt.
+    
+    
     struct CountingCipher {
         inner: PassthroughCipher,
         opens: AtomicUsize,
@@ -77,10 +77,10 @@ mod tests {
 
     #[test]
     fn footer_plaintext_serialization_fixture() {
-        // Hand-computed footer: body_plain_len 18, two blobs.
-        //  blob 1: kind DataChunk, id AA*32, off 0, len 11
-        //  blob 2: kind TreeNode, id BB*32, off 11, len 7
-        //  reserved u32 zeros
+        
+        
+        
+        
         let entries = vec![
             FooterEntry {
                 kind: BlobKind::DataChunk,
@@ -97,8 +97,8 @@ mod tests {
         ];
         let got = footer_plain(&entries, 18);
         let mut expect: Vec<u8> = Vec::new();
-        expect.extend_from_slice(&18u64.to_le_bytes()); // body_plain_len
-        expect.extend_from_slice(&2u32.to_le_bytes()); // blob_count
+        expect.extend_from_slice(&18u64.to_le_bytes()); 
+        expect.extend_from_slice(&2u32.to_le_bytes()); 
         expect.push(0x01);
         expect.extend_from_slice(&[0xAA; 32]);
         expect.extend_from_slice(&0u64.to_le_bytes());
@@ -107,10 +107,10 @@ mod tests {
         expect.extend_from_slice(&[0xBB; 32]);
         expect.extend_from_slice(&11u64.to_le_bytes());
         expect.extend_from_slice(&7u64.to_le_bytes());
-        expect.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        expect.extend_from_slice(&0u32.to_le_bytes()); 
         assert_eq!(got, expect);
 
-        // Round trip.
+        
         let (bpl, parsed) = footer_parse(&got).unwrap();
         assert_eq!(bpl, 18);
         assert_eq!(parsed, entries);
@@ -120,7 +120,7 @@ mod tests {
     fn footer_parse_rejects_reserved_nonzero_and_truncation() {
         let mut bad = footer_plain(&[], 0);
         let n = bad.len();
-        bad[n - 1] = 1; // reserved byte
+        bad[n - 1] = 1; 
         assert!(matches!(
             footer_parse(&bad),
             Err(PackError::ReservedNonzero)
@@ -135,7 +135,7 @@ mod tests {
     fn sealed_pack_layout_is_spec_conformant() {
         let cipher = PassthroughCipher;
         let salt = [0x42u8; SALT_LEN];
-        let (id1, d1) = blob(1, 70_000, 101); // spans two segments
+        let (id1, d1) = blob(1, 70_000, 101); 
         let (id2, d2) = blob(2, 500, 102);
         let mut body = d1.clone();
         body.extend_from_slice(&d2);
@@ -163,28 +163,28 @@ mod tests {
         )
         .unwrap();
 
-        // Prologue.
+        
         assert_eq!(&file[..5], b"FERRY");
         assert_eq!(file[5], ContainerKind::PackData.to_u8());
         assert_eq!(&file[6..10], &1u32.to_le_bytes());
         assert_eq!(&file[10..26], &salt);
 
-        // Trailing footer_len in clear: length of the FOOTER ciphertext
-        // (u64 body_len + u32 count + 2 entries x 49 bytes + u32 reserved,
-        // plus the stub tag slot).
+        
+        
+        
         let flen = u32::from_le_bytes(file[file.len() - 4..].try_into().unwrap()) as usize;
         let footer_plain_len = 8 + 4 + entries.len() * 49 + 4;
         assert_eq!(flen, footer_plain_len + TAG_LEN);
 
-        // Body region length identity.
+        
         let segs = segment_count(body.len() as u64);
         let body_region = file.len() as u64 - 26 - flen as u64 - 4;
         assert_eq!(body_region, body.len() as u64 + TAG_LEN as u64 * segs);
 
-        // Stub tags are zero; with the real AEAD this region is opaque.
+        
         debug_assert!(file.len() > 26 + body.len());
 
-        // Name is BLAKE3 over everything.
+        
         let name: [u8; 32] = *blake3::hash(&file).as_bytes();
         assert_eq!(name, pack_name_of(&file));
     }
@@ -193,9 +193,9 @@ mod tests {
     fn read_blob_round_trip_across_segments() {
         let cipher = PassthroughCipher;
         let salt: [u8; SALT_LEN] = core::array::from_fn(|i| 0x10 + i as u8);
-        let (id1, d1) = blob(1, 65_540, 201); // crosses one boundary
-        let (id2, d2) = blob(2, 130_000, 202); // spans three segments
-        let (id3, d3) = blob(3, 33, 203); // tail
+        let (id1, d1) = blob(1, 65_540, 201); 
+        let (id2, d2) = blob(2, 130_000, 202); 
+        let (id3, d3) = blob(3, 33, 203); 
         let mut body = Vec::new();
         let mut entries = Vec::new();
         for (id, d) in [(&id1, &d1), (&id2, &d2), (&id3, &d3)] {
@@ -252,12 +252,12 @@ mod tests {
         let real_pid = pack_name_of(&file);
         let seals_from_setup = cipher.seals.load(Ordering::SeqCst);
 
-        // Flip one byte in the middle of the body.
+        
         let mut corrupt = file.clone();
         let mid = 27;
         corrupt[mid] ^= 0x80;
 
-        // Name check fires before any cipher call: zero opens, zero seals.
+        
         let err = read_blob(
             &corrupt,
             &real_pid,
@@ -276,8 +276,8 @@ mod tests {
             "no new seal work on a rejected pack"
         );
 
-        // Sanity: the honest pack decrypts exactly the footer plus its one
-        // body segment, and nothing more.
+        
+        
         read_blob(
             &file,
             &real_pid,
@@ -312,7 +312,7 @@ mod tests {
         .unwrap();
         let pid = pack_name_of(&file);
 
-        // Index claims a different offset: trust neither, stop.
+        
         let err = read_blob(
             &file,
             &pid,
@@ -325,7 +325,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, PackError::Disagreement { .. }), "{err}");
 
-        // Same for a wrong length and a wrong kind mapping.
+        
         let err = read_blob(
             &file,
             &pid,
@@ -341,8 +341,8 @@ mod tests {
 
     #[test]
     fn verify_after_decrypt_catches_tampered_body_with_valid_name() {
-        // Corrupt the body, then re-name the file so the name check passes.
-        // Step 6 (BLAKE3(plaintext) == id) must reject it.
+        
+        
         let cipher = PassthroughCipher;
         let salt = [0x5Au8; SALT_LEN];
         let (id1, d1) = blob(5, 3000, 501);
@@ -362,8 +362,8 @@ mod tests {
         .unwrap();
 
         let mut evil = file.clone();
-        evil[30] ^= 0xFF; // inside body plaintext (stub passes it through)
-        let evil_pid = pack_name_of(&evil); // attacker renames to match
+        evil[30] ^= 0xFF; 
+        let evil_pid = pack_name_of(&evil); 
 
         let err = read_blob(
             &evil,
@@ -383,8 +383,8 @@ mod tests {
         let cipher = PassthroughCipher;
         let mut junk = vec![0u8; 64];
         junk[..5].copy_from_slice(b"FERrY");
-        // Name check runs first (step 2 of the read procedure), so present
-        // the matching name to reach the header parse.
+        
+        
         let junk_name = pack_name_of(&junk);
         assert!(matches!(
             read_blob(
@@ -402,10 +402,10 @@ mod tests {
 
     #[test]
     fn staging_pool_membership_rules() {
-        // W=8 open packs per kind, redraw after overflow, empties dropped.
+        
         let mut pools = StagingPools::new();
         let mut rng = prng(9001);
-        let target = 1000usize; // tiny target for the test
+        let target = 1000usize; 
 
         let mut sealed_data = Vec::new();
         for i in 0..200 {
@@ -418,14 +418,14 @@ mod tests {
                 STAGING_OPEN_PACKS,
                 &mut rng,
             ));
-            // Never more than W open at any moment.
+            
             assert!(pools.open_count(BlobKind::DataChunk) <= STAGING_OPEN_PACKS);
         }
 
-        // Overflow path must have sealed some packs already.
+        
         assert!(!sealed_data.is_empty());
 
-        // Meta kind is independent.
+        
         let payload = vec![1u8; 10];
         let _ = pools.offer(
             BlobKind::TreeNode,
@@ -437,11 +437,11 @@ mod tests {
         );
         assert_eq!(pools.open_count(BlobKind::TreeNode), 1);
 
-        // Drain: everything non-empty seals, nothing empty survives.
+        
         let drained = pools.drain_all();
         assert_eq!(pools.open_count(BlobKind::DataChunk), 0);
         assert_eq!(pools.open_count(BlobKind::TreeNode), 0);
-        // All drained packs hold at least one blob.
+        
         assert!(drained.iter().all(|p| !p.entries.is_empty()));
     }
 
@@ -449,7 +449,7 @@ mod tests {
     fn oversized_single_blob_lands_in_fresh_pack() {
         let mut pools = StagingPools::new();
         let mut rng = prng(9002);
-        let huge = vec![7u8; 4000]; // > target
+        let huge = vec![7u8; 4000]; 
         let sealed = pools.offer(
             BlobKind::DataChunk,
             *blake3::hash(&huge).as_bytes(),
@@ -458,7 +458,7 @@ mod tests {
             STAGING_OPEN_PACKS,
             &mut rng,
         );
-        // Nothing sealed yet: fresh pack accepted the oversize blob.
+        
         assert!(sealed.is_empty());
         let drained = pools.drain_all();
         assert_eq!(drained.len(), 1);
@@ -498,7 +498,7 @@ mod tests {
             .join(format!("{}.pack", crate::format::hex(&name)));
         assert!(final_path.exists());
         assert_eq!(std::fs::read(&final_path).unwrap(), bytes);
-        // Temp area holds no leftovers.
+        
         assert!(std::fs::read_dir(tmp.path()).unwrap().next().is_none());
     }
 
@@ -537,15 +537,15 @@ mod tests {
         cache.insert(p1.clone());
         cache.insert(p2.clone());
         assert_eq!(cache.len(), 2);
-        assert!(cache.get(&p1.pack_id).is_some()); // touches p1, making p2 oldest
+        assert!(cache.get(&p1.pack_id).is_some()); 
 
-        cache.insert(p3.clone()); // evicts p2
+        cache.insert(p3.clone()); 
         assert_eq!(cache.len(), 2);
         assert!(cache.get(&p1.pack_id).is_some());
         assert!(cache.get(&p2.pack_id).is_none());
         assert!(cache.get(&p3.pack_id).is_some());
 
-        // Per-blob read from cached handle
+        
         let cached1 = cache.get(&p1.pack_id).unwrap();
         let read1 = cached1
             .read_blob(&cipher, BlobKind::DataChunk, &id1, None)
@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(pools.staged_bytes(BlobKind::DataChunk, &id1).unwrap(), d1);
         assert_eq!(pools.staged_bytes(BlobKind::DataChunk, &id2).unwrap(), d2);
 
-        // Offer that triggers overflow/sealing
+        
         let (id4, d4) = blob(4, 400, 804);
         let sealed = pools.offer(
             BlobKind::DataChunk,
@@ -605,7 +605,7 @@ mod tests {
             STAGING_OPEN_PACKS,
             &mut rng,
         );
-        // Overflow sealed some packs; index should reflect what's still unsealed vs sealed
+        
         for sp in &sealed {
             for e in &sp.entries {
                 assert!(!pools.contains(e.kind, &e.id));
@@ -619,8 +619,11 @@ mod tests {
     }
 }
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+
+use lru::LruCache;
 
 use rand::{Rng, RngCore};
 use thiserror::Error;
@@ -634,11 +637,11 @@ use crate::format::{
     FormatError, PackId, Reader, HEADER_LEN,
 };
 
-/// Open staging packs per kind (data, meta) during a write burst.
+
 pub const STAGING_OPEN_PACKS: usize = 8;
 
-/// Seal target for staging packs: assignment that would push a pack past
-/// this seals it immediately (`docs/store-format.md`, membership rules).
+
+
 pub const SEAL_TARGET_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -684,7 +687,7 @@ pub enum PackError {
     Io(#[from] std::io::Error),
 }
 
-/// One blob's position inside the reassembled body plaintext.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FooterEntry {
     pub kind: BlobKind,
@@ -693,8 +696,8 @@ pub struct FooterEntry {
     pub plain_len: u64,
 }
 
-/// Serialize footer plaintext: `u64 body_plain_len, u32 blob_count, entries
-/// in body order, u32 reserved zeros`.
+
+
 pub fn footer_plain(entries: &[FooterEntry], body_plain_len: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(12 + entries.len() * 81);
     put_u64(&mut out, body_plain_len);
@@ -705,11 +708,11 @@ pub fn footer_plain(entries: &[FooterEntry], body_plain_len: u64) -> Vec<u8> {
         put_u64(&mut out, e.plain_off);
         put_u64(&mut out, e.plain_len);
     }
-    put_u32(&mut out, 0); // reserved
+    put_u32(&mut out, 0); 
     out
 }
 
-/// Parse footer plaintext, validating the reserved field and trailing bytes.
+
 pub fn footer_parse(bytes: &[u8]) -> Result<(u64, Vec<FooterEntry>), PackError> {
     let mut r = Reader::new(bytes);
     let body_plain_len = r.u64().map_err(|_| PackError::FooterCorrupt("truncated"))?;
@@ -738,18 +741,18 @@ pub fn footer_parse(bytes: &[u8]) -> Result<(u64, Vec<FooterEntry>), PackError> 
     Ok((body_plain_len, entries))
 }
 
-/// BLAKE3 over the entire ciphertext: the pack file's name.
+
 pub fn pack_name_of(file_bytes: &[u8]) -> PackId {
     *blake3::hash(file_bytes).as_bytes()
 }
 
-/// Assemble a complete pack file image in memory: prologue, encrypted body
-/// segments, encrypted footer, clear trailing footer length. Disk IO happens
-/// separately in [`write_pack_atomically`] so tests can inspect the bytes.
-///
-/// With the v0 [`PassthroughCipher`] the "ciphertext" is plaintext plus a
-/// zeroed tag slot; every offset and length below is identical to what a
-/// real AEAD produces.
+
+
+
+
+
+
+
 pub fn seal_pack_bytes(
     kind: ContainerKind,
     fmk: &[u8; KEY_LEN],
@@ -771,7 +774,7 @@ pub fn seal_pack_bytes(
     let header = write_header(kind);
     let key = derive_pack_key(fmk, salt, kind);
 
-    // Body: consecutive 64 KiB STREAM segments.
+    
     let aad_body = body_aad(&header, kind);
     let n_segments = segment_count(body.len() as u64) as usize;
     let mut file = Vec::with_capacity(26 + body.len() + TAG_LEN * (n_segments + 1) + 4);
@@ -787,7 +790,7 @@ pub fn seal_pack_bytes(
         file.extend_from_slice(&ct);
     }
 
-    // Footer under the reserved counter.
+    
     let footer_pt = footer_plain(entries, body.len() as u64);
     let aad_footer = footer_aad(&header, kind);
     let footer_ct = cipher.seal(&key, &FOOTER_NONCE, &aad_footer, &footer_pt)?;
@@ -797,8 +800,8 @@ pub fn seal_pack_bytes(
     Ok(file)
 }
 
-/// Everything known about a pack after name verification and footer
-/// decryption, before any blob-specific work.
+
+
 #[derive(Clone, Debug)]
 pub struct PackContext {
     pub kind: ContainerKind,
@@ -809,17 +812,17 @@ pub struct PackContext {
     pub entries: Vec<FooterEntry>,
 }
 
-/// Steps 2-3 of the normative procedure for every pack access: verify
-/// BLAKE3(file bytes) == expected id WITHOUT decrypting anything on mismatch,
-/// then parse prologue, decrypt the footer under the reserved counter, and
-/// validate the body-region identity.
+
+
+
+
 pub fn open_pack(
     pack_bytes: &[u8],
     expected_pack_id: &PackId,
     fmk: &[u8; KEY_LEN],
     cipher: &dyn PackCipher,
 ) -> Result<PackContext, PackError> {
-    // Step 2: name verification precedes any crypto.
+    
     let actual_name = pack_name_of(pack_bytes);
     if &actual_name != expected_pack_id {
         return Err(PackError::NameMismatch {
@@ -855,7 +858,7 @@ pub fn open_pack(
         return Err(PackError::FooterCorrupt("footer overlaps prologue"));
     }
 
-    // Step 3: footer under the reserved counter.
+    
     let key = derive_pack_key(fmk, &salt, kind);
     let header_arr: [u8; HEADER_LEN] = pack_bytes[..HEADER_LEN].try_into().unwrap();
     let footer_pt = cipher.open(
@@ -866,7 +869,7 @@ pub fn open_pack(
     )?;
     let (body_plain_len, entries) = footer_parse(&footer_pt)?;
 
-    // Conformance: body region must satisfy plain_len + 16 * segments.
+    
     let body_start = HEADER_LEN + SALT_LEN;
     let want_region = crate::crypto::body_region_len(body_plain_len);
     let got_region = (footer_start - body_start) as u64;
@@ -887,7 +890,7 @@ pub fn open_pack(
     })
 }
 
-/// Decrypt and validate just the footer of a pack (used by index rebuild).
+
 pub fn read_footer(
     pack_bytes: &[u8],
     expected_pack_id: &PackId,
@@ -898,9 +901,9 @@ pub fn read_footer(
     Ok((ctx.body_plain_len, ctx.entries))
 }
 
-/// A verified, opened pack whose header and footer have been validated.
-/// Individual blob reads still perform per-blob segment decryption and
-/// verify-after-decrypt against the requested blob id.
+
+
+
 #[derive(Clone, Debug)]
 pub struct VerifiedPack {
     pub pack_id: PackId,
@@ -909,8 +912,8 @@ pub struct VerifiedPack {
 }
 
 impl VerifiedPack {
-    /// Verify whole-file hash, parse prologue, decrypt and parse footer,
-    /// and validate body region length.
+    
+    
     pub fn open(
         pack_bytes: Vec<u8>,
         expected_pack_id: &PackId,
@@ -925,7 +928,7 @@ impl VerifiedPack {
         })
     }
 
-    /// Construct from already verified pack context and bytes.
+    
     pub fn from_parts(pack_id: PackId, bytes: Arc<Vec<u8>>, ctx: PackContext) -> Self {
         VerifiedPack {
             pack_id,
@@ -942,8 +945,8 @@ impl VerifiedPack {
         &self.ctx.entries
     }
 
-    /// Read one blob from this verified pack, performing per-blob segment
-    /// decryption and verification.
+    
+    
     pub fn read_blob(
         &self,
         cipher: &dyn PackCipher,
@@ -964,27 +967,18 @@ impl VerifiedPack {
 
 pub const DEFAULT_PACK_CACHE_CAPACITY: usize = 64;
 
-/// Bounded LRU cache of open, verified pack handles.
-pub struct PackCache {
-    capacity: usize,
-    inner: Mutex<InnerPackCache>,
-}
 
-struct InnerPackCache {
-    entries: HashMap<PackId, VerifiedPack>,
-    order: VecDeque<PackId>,
+pub struct PackCache {
+    inner: Mutex<LruCache<PackId, VerifiedPack>>,
 }
 
 pub const MAX_CACHED_PACK_BYTES: usize = 2 * 1024 * 1024;
 
 impl PackCache {
     pub fn new(capacity: usize) -> Self {
+        let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
         PackCache {
-            capacity: capacity.max(1),
-            inner: Mutex::new(InnerPackCache {
-                entries: HashMap::new(),
-                order: VecDeque::new(),
-            }),
+            inner: Mutex::new(LruCache::new(cap)),
         }
     }
 
@@ -993,15 +987,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(pack) = inner.entries.get(pack_id).cloned() {
-            if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push_back(*pack_id);
-            Some(pack)
-        } else {
-            None
-        }
+        inner.get(pack_id).cloned()
     }
 
     pub fn insert(&self, pack: VerifiedPack) {
@@ -1012,26 +998,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = pack.pack_id;
-        if let std::collections::hash_map::Entry::Occupied(mut e) = inner.entries.entry(id) {
-            e.insert(pack);
-            if let Some(pos) = inner.order.iter().position(|p| p == &id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push_back(id);
-            return;
-        }
-
-        while inner.entries.len() >= self.capacity {
-            if let Some(oldest) = inner.order.pop_front() {
-                inner.entries.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-
-        inner.entries.insert(id, pack);
-        inner.order.push_back(id);
+        inner.put(pack.pack_id, pack);
     }
 
     pub fn remove(&self, pack_id: &PackId) {
@@ -1039,10 +1006,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.remove(pack_id);
-        if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
-            inner.order.remove(pos);
-        }
+        inner.pop(pack_id);
     }
 
     pub fn clear(&self) {
@@ -1050,8 +1014,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.clear();
-        inner.order.clear();
+        inner.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -1059,7 +1022,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.len()
+        inner.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1081,7 +1044,7 @@ fn read_blob_from_ctx(
     want_id: &BlobId,
     index_loc: Option<(u64, u64)>,
 ) -> Result<Vec<u8>, PackError> {
-    // Step 3 continued: the blob must appear, and agree with the index.
+    
     let entry = ctx
         .entries
         .iter()
@@ -1097,7 +1060,7 @@ fn read_blob_from_ctx(
         }
     }
 
-    // Steps 4-5: decrypt exactly the spanning segments.
+    
     let seg_plain = SEGMENT_PLAIN_LEN as u64;
     let n_segments = segment_count(ctx.body_plain_len);
     let first_seg = entry.plain_off / seg_plain;
@@ -1123,7 +1086,7 @@ fn read_blob_from_ctx(
         assembled.extend_from_slice(&pt);
     }
 
-    // Step 6: verify-after-decrypt.
+    
     let local = (entry.plain_off % seg_plain) as usize;
     let plain = &assembled[local..local + entry.plain_len as usize];
     let found = *blake3::hash(plain).as_bytes();
@@ -1136,15 +1099,15 @@ fn read_blob_from_ctx(
     Ok(plain.to_vec())
 }
 
-/// Normative read procedure (`docs/store-format.md`, "Reading a blob").
-///
-/// 1. Verify BLAKE3(file) == `expected_pack_id`; reject WITHOUT decrypting.
-/// 2. Parse header and salt; read trailing `footer_len`; decrypt footer under
-///    the reserved counter; validate the body-region identity.
-/// 3. Confirm `(kind, id)` appears; if `index_loc` disagrees with the
-///    footer, trust neither and stop.
-/// 4. Decrypt exactly the segments covering `[plain_off, plain_off+len)`.
-/// 5. Require BLAKE3(plaintext) == id before returning anything.
+
+
+
+
+
+
+
+
+
 pub fn read_blob(
     pack_bytes: &[u8],
     expected_pack_id: &PackId,
@@ -1158,10 +1121,10 @@ pub fn read_blob(
     read_blob_from_ctx(pack_bytes, &ctx, cipher, want_kind, want_id, index_loc)
 }
 
-/// Spec procedure steps 3-6 for creating a pack atomically: unique temp name
-/// under `tmp_dir`, write + fsync, rename into `packs_dir/<name>.pack`,
-/// fsync the directory. A crash anywhere leaves either nothing or a complete
-/// pack; readers only ever look in `packs_dir`.
+
+
+
+
 pub fn write_pack_atomically(
     tmp_dir: &std::path::Path,
     packs_dir: &std::path::Path,
@@ -1185,8 +1148,8 @@ pub fn write_pack_atomically(
     Ok(name)
 }
 
-/// fsync a directory so the rename itself is durable. Not supported on every
-/// platform (Windows); treated as best-effort there.
+
+
 pub fn sync_dir(dir: &std::path::Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -1199,8 +1162,8 @@ pub fn sync_dir(dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// One accumulating staging pack. Blobs append back-to-back; positions are
-/// recorded for the footer written at seal time.
+
+
 pub struct StagingPack {
     pub kind: ContainerKind,
     pub salt: [u8; SALT_LEN],
@@ -1239,16 +1202,16 @@ fn container_for(kind: BlobKind) -> ContainerKind {
     }
 }
 
-/// The two staging pools (data, meta) implementing the spec's membership
-/// randomization: up to W open packs per kind, uniform CSPRNG assignment,
-/// immediate seal plus redraw on target overflow, empties discarded.
-///
-/// Assignment order is never persisted or reproduced; it only shapes which
-/// blobs share a pack, which the footers and index record.
+
+
+
+
+
+
 pub struct StagingPools {
     data: Vec<StagingPack>,
     meta: Vec<StagingPack>,
-    /// Fast staged index: (`BlobKind`, `BlobId`) -> (`is_meta`, `pack_index`, `plain_off`, `plain_len`)
+    
     index: HashMap<(BlobKind, BlobId), (bool, usize, u64, u64)>,
 }
 
@@ -1258,7 +1221,7 @@ impl Default for StagingPools {
     }
 }
 
-/// Comparable snapshot of open-pack membership (tests).
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MembershipSnapshot {
     pub is_meta: bool,
@@ -1275,11 +1238,15 @@ impl StagingPools {
         }
     }
 
-    /// Assign one blob to a uniformly chosen open staging pack of its kind.
-    /// Returns packs that were sealed early because accepting the blob would
-    /// have pushed them past `target`.
-    pub fn offer(
-        &mut self,
+    fn pool(&self, kind: BlobKind) -> &Vec<StagingPack> {
+        if kind.is_meta() { &self.meta } else { &self.data }
+    }
+
+    fn pool_mut(&mut self, kind: BlobKind) -> &mut Vec<StagingPack> {
+        if kind.is_meta() { &mut self.meta } else { &mut self.data }
+    }
+
+    pub fn offer(&mut self,
         kind: BlobKind,
         id: BlobId,
         bytes: &[u8],
@@ -1291,71 +1258,59 @@ impl StagingPools {
         let is_meta = kind.is_meta();
         let mut sealed = Vec::new();
         loop {
-            let pool_len = if is_meta {
-                self.meta.len()
-            } else {
-                self.data.len()
-            };
-            if pool_len == 0 {
+            if self.pool(kind).is_empty() {
                 let fresh = StagingPack::new(container, rng);
-                if is_meta {
-                    self.meta.push(fresh);
-                } else {
-                    self.data.push(fresh);
-                }
+                self.pool_mut(kind).push(fresh);
             }
-            let pool_len = if is_meta {
-                self.meta.len()
-            } else {
-                self.data.len()
-            };
+            let pool_len = self.pool(kind).len();
             let idx = rng.gen_range(0..pool_len);
             let overflow = {
-                let pool = if is_meta { &self.meta } else { &self.data };
-                let sp = &pool[idx];
+                let sp = &self.pool(kind)[idx];
                 !sp.entries.is_empty() && sp.body.len() + bytes.len() > target
             };
             if overflow {
-                let pool = if is_meta {
-                    &mut self.meta
-                } else {
-                    &mut self.data
-                };
-                let sp = pool.remove(idx);
-                // Remove sealed entries from index
+                let sp = self.pool_mut(kind).remove(idx);
+                
                 for entry in &sp.entries {
                     self.index.remove(&(entry.kind, entry.id));
                 }
-                // Update indices for shifted packs
-                for (pack_i, remaining_sp) in pool.iter().enumerate().skip(idx) {
-                    for entry in &remaining_sp.entries {
-                        self.index.insert(
-                            (entry.kind, entry.id),
-                            (is_meta, pack_i, entry.plain_off, entry.plain_len),
-                        );
-                    }
+                
+                let to_reindex: Vec<(BlobKind, BlobId, usize, u64, u64)> = self
+                    .pool(kind)
+                    .iter()
+                    .enumerate()
+                    .skip(idx)
+                    .flat_map(|(pack_i, sp)| {
+                        sp.entries
+                            .iter()
+                            .map(move |e| (e.kind, e.id, pack_i, e.plain_off, e.plain_len))
+                    })
+                    .collect();
+                for (k, id2, pack_i, off, len) in to_reindex {
+                    self.index.insert((k, id2), (is_meta, pack_i, off, len));
                 }
                 sealed.push(sp);
                 continue;
             }
 
-            let pool = if is_meta {
-                &mut self.meta
-            } else {
-                &mut self.data
-            };
-            let plain_off = pool[idx].body.len() as u64;
+            let plain_off;
+            let pool_len;
+            {
+                let pool = self.pool_mut(kind);
+                plain_off = pool[idx].body.len() as u64;
+                pool[idx].push(kind, id, bytes);
+                pool_len = pool.len();
+            }
             let plain_len = bytes.len() as u64;
-            pool[idx].push(kind, id, bytes);
             self.index
                 .insert((kind, id), (is_meta, idx, plain_off, plain_len));
-            debug_assert!(pool.len() <= max_open.max(1));
+            debug_assert!(pool_len <= max_open.max(1));
             break;
         }
         sealed
     }
 
-    /// End-of-burst rule: seal everything still open, discarding empty packs.
+    
     pub fn drain_all(&mut self) -> Vec<StagingPack> {
         self.index.clear();
         let mut out = Vec::new();
@@ -1369,25 +1324,21 @@ impl StagingPools {
         out
     }
 
-    /// Currently open packs for a kind (never more than W after an offer).
+    
     pub fn open_count(&self, kind: BlobKind) -> usize {
-        if kind.is_meta() {
-            self.meta.len()
-        } else {
-            self.data.len()
-        }
+        self.pool(kind).len()
     }
 
-    /// Check if a blob is currently sitting in open staging packs.
+    
     pub fn contains(&self, kind: BlobKind, id: &BlobId) -> bool {
         self.index.contains_key(&(kind, *id))
     }
 
-    /// Look for a blob in the not-yet-sealed staging packs. Used by reads so
-    /// a writer sees its own puts before any flush.
+    
+    
     pub fn staged_bytes(&self, kind: BlobKind, id: &BlobId) -> Option<Vec<u8>> {
-        let &(is_meta, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
-        let pool = if is_meta { &self.meta } else { &self.data };
+        let &(_, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
+        let pool = self.pool(kind);
         let sp = pool.get(pack_idx)?;
         let start = plain_off as usize;
         let end = start + plain_len as usize;
@@ -1398,7 +1349,7 @@ impl StagingPools {
         }
     }
 
-    /// Deterministic view of open membership for tests.
+    
     pub fn snapshot_membership(&self) -> Vec<MembershipSnapshot> {
         let mut snap = Vec::new();
         for (is_meta, pool) in [(false, &self.data), (true, &self.meta)] {

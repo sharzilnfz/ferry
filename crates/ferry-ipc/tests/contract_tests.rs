@@ -17,6 +17,7 @@ fn directory_entry_json_round_trip() {
         is_symlink: false,
         is_git_repo: true,
         is_already_synced: false,
+        is_initialized: false,
     };
     let json = serde_json::to_string(&entry).expect("json ser");
     let back: DirectoryEntry = serde_json::from_str(&json).expect("json de");
@@ -32,6 +33,7 @@ fn directory_entry_json_symlink_variant() {
         is_symlink: true,
         is_git_repo: false,
         is_already_synced: true,
+        is_initialized: false,
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: DirectoryEntry = serde_json::from_str(&json).unwrap();
@@ -63,6 +65,7 @@ fn list_directory_response_round_trip() {
             is_symlink: false,
             is_git_repo: false,
             is_already_synced: false,
+            is_initialized: false,
         }],
         absolute_path: PathBuf::from("/tmp"),
     };
@@ -183,6 +186,7 @@ fn daemon_message_new_variants_round_trip() {
                 is_symlink: false,
                 is_git_repo: false,
                 is_already_synced: false,
+                is_initialized: false,
             }],
             absolute_path: PathBuf::from("/tmp"),
         },
@@ -296,7 +300,7 @@ async fn fake_backend_stubs_return_not_implemented() {
         .unwrap_err();
     assert_eq!(err.code, "not-found");
 
-    // Wave 3: pairing is now implemented via in-memory rendezvous (no files at $FERRY_HOME/pair-*)
+    
     let resp = backend
         .create_pairing_session(CreatePairingRequest {
             folder_id: "0123456789abcdef0123456789abcdef".to_string(),
@@ -321,7 +325,7 @@ async fn fake_backend_stubs_return_not_implemented() {
         .expect("join with correct code should succeed");
     assert_eq!(ok.folder_id, "0123456789abcdef0123456789abcdef");
     assert_eq!(ok.status, "paired");
-    // Re-join same code must fail (one-time)
+    
     let err = backend
         .join_pairing_session(JoinPairingRequest {
             code: resp.code,
@@ -338,4 +342,16 @@ async fn fake_backend_trait_object_works() {
     let err = backend.list_folders().await.unwrap_err();
     assert_eq!(err.code, "not-found");
     assert_eq!(err.message, "not-implemented");
+}
+
+#[test]
+fn ui_event_folder_registered_round_trip() {
+    let event = ferry_ipc::UiEvent::FolderRegistered {
+        path: "/home/user/workspace/project-a".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("folder_registered"));
+    assert!(json.contains("/home/user/workspace/project-a"));
+    let back: ferry_ipc::UiEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
 }

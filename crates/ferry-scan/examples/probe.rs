@@ -1,5 +1,5 @@
-//! Manual probe for debugging the worker pipeline (not a test).
-//! Run: cargo run -p ferry-scan --example probe
+
+
 
 use ferry_scan::engine::{ScanEngine, StoreHandle};
 use ferry_scan::policy::WatchSignal;
@@ -42,8 +42,8 @@ fn main() {
             .map(|c| (c.trigger, c.stats.files, c.stats.bytes_chunked))
     );
 
-    // Real-event path: write files, wait past quiet window, check worker.
-    // ALSO attach a raw second watcher to see what notify itself reports.
+    
+    
     let (raw_tx, raw_rx) = std::sync::mpsc::channel();
     let mut raw = notify::RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {

@@ -1,20 +1,21 @@
-//! Folder bootstrap exercised directly through `ferry-folder` (ported from
-//! the coverage that used to live only behind the CLI's library surface).
+
+
 
 use std::path::Path;
 
 use ferry_crypto::identity::load_or_create;
 use ferry_folder::folder::{
-    create_folder, dot_dir, find_polynomial, open_folder, save_settings, short_device,
-    write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
+    create_folder, dot_dir, find_polynomial, is_initialized, open_folder, save_settings,
+    short_device, write_default_ignore_if_absent, Settings, SETTINGS_FORMAT_VERSION,
 };
+use ferry_store::format::BlobKind;
 use ferry_store::store::Store;
 
 const FOLDER_ID: [u8; 16] = [7u8; 16];
 const POLY: u64 = 0x1234_5678_9ABC_DEF0;
 
-/// Error-code assertion helper: bootstrap result types are plain structs
-/// without Debug, so `unwrap_err` is not available.
+
+
 #[track_caller]
 fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
     match r {
@@ -39,8 +40,8 @@ fn default_settings() -> Settings {
     }
 }
 
-/// init-equivalent: create + settings + flush, as every frontend's setup
-/// does (the polynomial record sits in staging until the store flushes).
+
+
 fn make_folder(root: &Path, id: &ferry_crypto::identity::DeviceIdentity) {
     let (store, _fmk) = create_folder(root, id, FOLDER_ID, POLY).unwrap();
     save_settings(root, &default_settings()).unwrap();
@@ -58,7 +59,7 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
 
     make_folder(&root, &id);
 
-    // Spec layout exists.
+    
     assert!(root.join(".ferry/config").is_file());
     assert!(root.join(".ferry/packs").is_dir());
     assert!(root.join(".ferry/index").is_dir());
@@ -72,7 +73,7 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
     assert_eq!(opened.state_dir(), dot_dir(&root));
     assert_eq!(opened.path(), root.as_path());
 
-    // Polynomial lookup through the index finds exactly the stored record.
+    
     assert_eq!(find_polynomial(&opened.store).unwrap(), POLY);
 }
 
@@ -87,6 +88,27 @@ fn open_without_ferry_directory_is_not_a_folder() {
 }
 
 #[test]
+fn is_initialized_answers_structurally_without_unwrapping_keys() {
+    let work = tempfile::tempdir().unwrap();
+    let (_id_home, id) = identity_at("identity");
+
+    let plain = work.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert!(!is_initialized(&plain), "no .ferry at all");
+
+    let dot_only = work.path().join("dot_only");
+    std::fs::create_dir_all(dot_only.join(".ferry")).unwrap();
+    assert!(!is_initialized(&dot_only), ".ferry without config");
+
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+    assert!(is_initialized(&root), "a created folder is initialized");
+
+    assert!(!is_initialized(&work.path().join("missing")));
+}
+
+#[test]
 fn open_rejects_a_device_the_folder_was_never_shared_with() {
     let work = tempfile::tempdir().unwrap();
     let (_owner_home, owner) = identity_at("owner");
@@ -96,7 +118,7 @@ fn open_rejects_a_device_the_folder_was_never_shared_with() {
 
     make_folder(&root, &owner);
     let err = open_folder(&root, &stranger).err().unwrap();
-    assert_eq!(err.code, "not-shared-with-device"); // The display shorthand names the refused device.
+    assert_eq!(err.code, "not-shared-with-device"); 
     assert!(
         err.message.contains(&short_device(stranger.public())),
         "{}",
@@ -110,7 +132,7 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
     let (_a_home, a) = identity_at("a");
     let (_b_home, b) = identity_at("b");
 
-    // A owns a folder; B adopts its key material via the accept-side path.
+    
     make_folder(&work.path().join("owned"), &a);
     let fmk = ferry_crypto::folder_key::generate_fmk();
     let target = work.path().join("adopted");
@@ -119,16 +141,16 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
 
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
-    // The accepting frontend persists settings after adopting (the ritual
-    // does this inside PendingAcceptance::complete); mirror that here.
+    
+    
     ferry_folder::folder::save_settings(&target, &default_settings()).unwrap();
 
-    // B opens its adopted copy; A cannot.
+    
     let opened_b = open_folder(&target, &b).expect("adopter opens");
     assert_eq!(opened_b.folder_id, FOLDER_ID);
     assert_eq!(code_of(open_folder(&target, &a)), "not-shared-with-device");
 
-    // Adopted CONFIG_HEAD holds exactly one wrap (the adopter's own).
+    
     let head = ferry_crypto::config_head::parse_config_head(
         &std::fs::read(target.join(".ferry/config")).unwrap(),
     )
@@ -172,4 +194,89 @@ fn double_initialize_refuses_through_already_initialized_code() {
     make_folder(&root, &id);
     let err = code_of(create_folder(&root, &id, FOLDER_ID, POLY));
     assert_eq!(err, "already-initialized");
+}
+
+#[test]
+fn opened_store_is_encrypted_at_rest() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+
+    let opened = open_folder(&root, &id).expect("open succeeds");
+    let marker = b"FERRY-PLAINTEXT-MARKER-at-rest";
+    let blob = opened.store.put_data(marker).unwrap();
+    opened.store.flush().unwrap();
+    opened.store.write_index_snapshot().unwrap();
+
+    
+    assert_eq!(
+        opened.store.get(BlobKind::DataChunk, &blob).unwrap(),
+        marker
+    );
+
+    
+    
+    for entry in std::fs::read_dir(root.join(".ferry/packs"))
+        .unwrap()
+        .flatten()
+    {
+        let raw = std::fs::read(entry.path()).unwrap();
+        assert!(
+            !raw.windows(marker.len()).any(|w| w == marker),
+            "plaintext marker found in {}",
+            entry.path().display()
+        );
+    }
+}
+
+#[test]
+fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+
+    
+    
+    let config_path = root.join(".ferry/config");
+    let mut head =
+        ferry_crypto::config_head::parse_config_head(&std::fs::read(&config_path).unwrap())
+            .unwrap();
+    head.entries[0].wrapped[0] ^= 0xFF;
+    std::fs::write(
+        &config_path,
+        ferry_crypto::config_head::write_config_head(&head.folder_id, &head.entries),
+    )
+    .unwrap();
+
+    let err = open_folder(&root, &id).err().unwrap();
+    assert_eq!(err.code, "key-unwrap");
+
+    
+    assert!(root.join(".ferry/packs").is_dir());
+}
+
+#[test]
+fn wrong_fmk_cannot_reopen_the_store() {
+    let work = tempfile::tempdir().unwrap();
+    let (_home, id) = identity_at("identity");
+    let root = work.path().join("proj");
+    std::fs::create_dir_all(&root).unwrap();
+    make_folder(&root, &id);
+    drop(open_folder(&root, &id).expect("open succeeds"));
+
+    
+    
+    assert!(
+        Store::open(
+            &root,
+            [0u8; 32],
+            Box::new(ferry_crypto::pack_cipher::ChaChaCipher)
+        )
+        .is_err(),
+        "a wrong FMK must never reopen the store"
+    );
 }

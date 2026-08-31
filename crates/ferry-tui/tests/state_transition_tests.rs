@@ -1,4 +1,4 @@
-//! State machine transitions and IPC message handling tests.
+
 
 use ferry_ipc::protocol::{
     DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView, TransferDirection,
@@ -60,7 +60,7 @@ fn test_state_changed_transition() {
 fn test_transfer_progress_and_completion() {
     let mut app = TuiApp::default();
 
-    // In-progress transfer
+    
     app.handle_message(DaemonMessage::TransferProgress {
         bytes_transferred: 4_000_000,
         total_bytes: 10_000_000,
@@ -81,7 +81,7 @@ fn test_transfer_progress_and_completion() {
         .contains("assets/textures.pack"));
     assert!(app.state.cached_progress_label.contains("[40/100 chunks]"));
 
-    // Completed transfer
+    
     app.handle_message(DaemonMessage::TransferProgress {
         bytes_transferred: 10_000_000,
         total_bytes: 10_000_000,

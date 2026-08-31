@@ -12,6 +12,7 @@ gui = ["dep:rfd"]
 egui.workspace = true
 eframe.workspace = true
 ferry-ipc.workspace = true
+ferry-folder.workspace = true
 ferry-platform.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 qrcode.workspace = true
@@ -25,7 +26,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sy
 ferry-tui = { path = "../ferry-tui" }
 ferry-daemon = { path = "../ferry-daemon", features = ["web-ui"] }
 ferry-platform = { path = "../ferry-platform" }
+ferry-ipc = { path = "../ferry-ipc", features = ["test-util"] }
 axum = { workspace = true }
+tempfile.workspace = true
 
 [lints]
 workspace = true

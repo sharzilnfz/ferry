@@ -1,39 +1,45 @@
-//! Typed CLI errors. No anyhow: every error carries a stable machine
-//! `code`, a human message, and a `hint` (what happened, what to try) —
-//! the ticket's error discipline, enforced by the type.
 
-/// One actionable failure. Rendered as
-/// `error: <message> (code=<code>)\nhint: <hint>` for humans and as
-/// `{\"error\":…,\"code\":…,\"hint\":…}` under `--json`.
+
+
+
+
+
+
 #[derive(Debug)]
 pub struct CliError {
-    /// Stable machine identifier (see docs/cli-json.md). Never renamed.
-    pub code: &'static str,
-    /// What happened.
+    
+    pub code: String,
+    
     pub message: String,
-    /// What to try next.
+    
     pub hint: String,
-    /// Optional structured detail (e.g. share's redacted findings), merged
-    /// into the JSON error document under its own keys.
+    
+    
     pub detail: Option<serde_json::Value>,
 }
 
 impl CliError {
-    pub fn new(code: &'static str, message: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Self {
         CliError {
-            code,
+            code: code.into(),
             message: message.into(),
             hint: hint.into(),
             detail: None,
         }
     }
 
-    /// Process exit status. Usage errors never get here (clap exits 2 on
-    /// its own); everything else is a generic failure per the ticket
-    /// ("all errors exit nonzero").
+    
+    
+    
+    
     pub fn exit_code(&self) -> u8 {
-        match self.code {
+        match self.code.as_str() {
             "secrets-found" => 3,
+            "daemon-stop-timeout" => 4,
             _ => 1,
         }
     }
@@ -53,7 +59,7 @@ impl std::error::Error for CliError {}
 
 pub type CliResult<T> = Result<T, CliError>;
 
-/// Shorthand for mapping foreign errors into coded ones at the boundary.
+
 pub trait CodeInto<T> {
     fn code(self, code: &'static str, hint: impl Into<String>) -> CliResult<T>;
 }

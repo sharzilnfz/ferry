@@ -1,18 +1,18 @@
-//! The ignore engine: faithful gitignore semantics layered into Ferry's
-//! precedence model, exposed as [`FerryIgnore`] (implements
-//! `ferry_scan::IgnorePolicy`).
-//!
-//! Matching is delegated to `ignore::gitignore::Gitignore::matched()` (see
-//! crate docs for why). This module owns LAYERING:
-//!
-//! - The root-level chain (defaults → root `.gitignore` when honored → root
-//!   `ferry.ignore` → applied presets → user overrides) compiles as ONE
-//!   ordered gitignore; last-match-wins reproduces exactly the documented
-//!   layer precedence.
-//! - Per-directory rule files BELOW the root load lazily and answer queries
-//!   with paths relative to their OWN directory, evaluated shallow-to-deep so
-//!   deeper files override shallower ones (git's depth-first precedence), and
-//!   an unanchored pattern in a nested file reaches everything beneath it.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,19 +26,19 @@ use crate::config::IgnoreConfig;
 use crate::defaults::DEFAULT_RULES;
 use crate::error::IgnoreError;
 
-/// True for conflict-quarantine names (`path.ext.ferry-conflict.<dev>-<ts>`).
-/// Quarantine files must sync (ADR-0004), so they are NEVER ignorable.
+
+
 pub fn is_quarantine_name(name: &str) -> bool {
     name.contains(".ferry-conflict.")
 }
 
-/// Rule-file names consulted per directory. Within one directory,
-/// `.gitignore` compiles FIRST and `ferry.ignore` SECOND so Ferry-specific
-/// intent wins ties at equal depth.
+
+
+
 const FERRY_RULE_FILE: &str = "ferry.ignore";
 const GIT_RULE_FILE: &str = ".gitignore";
 
-/// One matched-layer verdict, flattened from `ignore::Match`.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V {
     Ign,
@@ -46,30 +46,30 @@ enum V {
     No,
 }
 
-/// Compiled rule set for one synced folder: the root-level layer chain plus
-/// lazily loaded per-directory rule files below the root.
+
+
 #[derive(Debug)]
 pub struct FerryIgnore {
     root: PathBuf,
     cfg: IgnoreConfig,
-    /// Root-level chain IN ORDER: defaults, root `.gitignore` (opt-in), root
-    /// `ferry.ignore`, applied presets, user overrides.
+    
+    
     chain: Gitignore,
-    /// Rule lines skipped because they were not valid gitignore globs. Git
-    /// warns and continues; so do we, observably.
+    
+    
     skipped_lines: AtomicUsize,
-    /// Per-directory rule-file matchers keyed by directory components;
-    /// `None` caches "no rules here". Loaded on first touch of any path
-    /// under that directory.
+    
+    
+    
     dirs: RwLock<HashMap<Vec<String>, Option<Gitignore>>>,
 }
 
 impl FerryIgnore {
-    /// Compile the folder's rule set. Reads the root `ferry.ignore` eagerly
-    /// (loud error if present-but-unreadable); nested files load lazily and
-    /// an unreadable nested file is treated as absent.
+    
+    
+    
     pub fn new(root: &Path, cfg: &IgnoreConfig) -> Result<Self, IgnoreError> {
-        // Unknown preset ids are typos; fail before anything is built.
+        
         for id in &cfg.presets {
             if crate::presets::Preset::builtin(id).is_none() {
                 return Err(IgnoreError::UnknownPreset(id.clone()));
@@ -131,31 +131,31 @@ impl FerryIgnore {
         })
     }
 
-    /// Number of rule lines skipped as invalid. Diagnostic only.
+    
     pub fn skipped_lines(&self) -> usize {
         self.skipped_lines.load(Ordering::Relaxed)
     }
 
-    /// Decide with an explicit directory/file interpretation of the final
-    /// component (no disk stat). This is the real decision surface of the
-    /// crate; the [`ferry_scan::IgnorePolicy`] impl is a one-line delegation
-    /// with the caller-supplied kind, and the secret scan calls this
-    /// directly with kinds it already knows from its own stat.
-    ///
-    /// Implements git's composite model:
-    /// - within a layer set, last non-neutral verdict wins (deeper files
-    ///   after shallower ones);
-    /// - once any ANCESTOR dir verdict is Ignore, descendants stay ignored —
-    ///   git does not re-include under an excluded directory (our walk
-    ///   enforces the same by pruning);
-    /// - quarantine-named final components always return false.
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     pub fn decided(&self, rel: &[String], is_dir: bool) -> bool {
         if rel.is_empty() || rel.last().is_some_and(|n| is_quarantine_name(n)) {
             return false;
         }
-        // Defensive NFC: the walker guarantees NFC components, but direct
-        // callers (secret scan on raw disk names, tests) might not. Fast
-        // path skips the copy when everything is already NFC.
+        
+        
+        
         let normalized;
         let rel = if rel.iter().any(|c| !unicode_normalization::is_nfc(c)) {
             normalized = rel
@@ -169,14 +169,14 @@ impl FerryIgnore {
         let mut excluded_parent = false;
         let mut final_ignored = false;
         for depth in 1..=rel.len() {
-            // Intermediate components are necessarily directories (the walk
-            // descended through them); symlinks are never descended into.
+            
+            
             let dir_here = depth < rel.len() || is_dir;
             let mut v = Self::match_layer(&self.chain, &rel[..depth], dir_here);
-            // Ancestor rule files, shallowest first: each may override the
-            // chain or shallower files for this path. A nested file's
-            // unanchored patterns reach every path beneath it, exactly like
-            // nested .gitignore in git.
+            
+            
+            
+            
             for j in 1..depth {
                 if let Some(Some(gi)) = self.dir_overlay(&rel[..j]) {
                     let vv = Self::match_layer(&gi, &rel[j..depth], dir_here);
@@ -186,8 +186,8 @@ impl FerryIgnore {
                 }
             }
             if depth < rel.len() {
-                // Sticky: a whitelisted child cannot revive an excluded
-                // parent's subtree (git quirk, mirrored by our pruning).
+                
+                
                 if v == V::Ign {
                     excluded_parent = true;
                 }
@@ -207,9 +207,9 @@ impl FerryIgnore {
         }
     }
 
-    /// Matcher for the rule files living in directory `dir` (never the root —
-    /// root files live in [`Self::chain`]). Loads on first use; caches
-    /// absence as `None`.
+    
+    
+    
     fn dir_overlay(&self, dir: &[String]) -> Option<Option<Gitignore>> {
         if let Some(cached) = self.dirs.read().expect("dirs lock").get(dir) {
             return Some(cached.clone());
@@ -256,9 +256,9 @@ impl FerryIgnore {
     }
 }
 
-/// Normalize one candidate line to NFC and feed it to the builder. Returns
-/// whether a real pattern was added; comments, blanks, and invalid globs are
-/// skipped (invalid ones counted).
+
+
+
 fn compile_line(builder: &mut GitignoreBuilder, skipped: &mut usize, line: &str) -> bool {
     let trimmed = line.trim_end();
     if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -274,14 +274,14 @@ fn compile_line(builder: &mut GitignoreBuilder, skipped: &mut usize, line: &str)
     }
 }
 
-/// Read a rule file: `None` when absent or unreadable (nested files are
-/// best-effort; only the ROOT ferry.ignore fails loudly).
+
+
 fn readable(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `Some` only when the file exists; `Err` surfaces read failures for the
-/// root rule file path.
+
+
 fn read_rule_file(path: &Path) -> Option<Result<String, std::io::Error>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Some(Ok(text)),
@@ -291,8 +291,8 @@ fn read_rule_file(path: &Path) -> Option<Result<String, std::io::Error>> {
 }
 
 impl ferry_scan::IgnorePolicy for FerryIgnore {
-    /// Walker/event-filter seam. The seam carries the entry kind (T-12), so
-    /// this is pure delegation: no double evaluation, no fallback stat.
+    
+    
     fn ignored(&self, rel: &[String], kind: ferry_scan::EntryKind) -> bool {
         self.decided(rel, kind == ferry_scan::EntryKind::Dir)
     }
@@ -303,8 +303,8 @@ mod tests {
     use super::*;
     use crate::config::IgnoreConfig;
 
-    /// Build a folder tree containing exactly the given files (path, text)
-    /// and return its root. Rule files are ordinary members of `files`.
+    
+    
     fn tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -331,7 +331,7 @@ mod tests {
     fn leading_slash_anchors_to_folder_root() {
         let (_t, root) = tree(&[("ferry.ignore", "/build\n/root.txt\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-        assert!(ig(&f, "build")); // anchored match at root
+        assert!(ig(&f, "build")); 
         assert!(
             !ig(&f, "deep/build"),
             "anchored pattern must not match deeper"
@@ -349,10 +349,10 @@ mod tests {
             ig(&f, "sub/main.rs"),
             "slash-less patterns apply at every level"
         );
-        // Git matches slash-less patterns against the BASENAME at any depth,
-        // so even a nested lib.rs is caught by `*.rs`.
+        
+        
         assert!(ig(&f, "sub/mod/lib.rs"));
-        // But wildcards inside a pattern never cross '/' themselves.
+        
         assert!(ig(&f, "foobar"));
         assert!(ig(&f, "fooxbar"));
         assert!(!ig(&f, "foo/x/bar"));
@@ -386,16 +386,16 @@ mod tests {
             "**/logs\nlogs/**\na/**/b.md\n**/temp/*.cache\n",
         )]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-        // **/logs : logs dirs at any depth
+        
         assert!(ig_dir(&f, "logs"));
         assert!(ig_dir(&f, "x/y/logs"));
-        // logs/** : everything under any logs dir
+        
         assert!(ig(&f, "logs/a.txt"));
         assert!(ig(&f, "x/y/logs/a.txt"));
-        // a/**/b.md : zero or more directories between
+        
         assert!(ig(&f, "a/b.md"));
         assert!(ig(&f, "a/m/n/b.md"));
-        // **/temp/*.cache : * after ** still single-level
+        
         assert!(ig(&f, "temp/x.cache"));
         assert!(ig(&f, "q/temp/x.cache"));
         assert!(!ig(&f, "temp/d/x.cache"));
@@ -407,7 +407,7 @@ mod tests {
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "noise.log"));
         assert!(!ig(&f, "important.log"));
-        // Re-excluding later re-wins again.
+        
         let (_t2, root2) = tree(&[("ferry.ignore", "*.log\n!important.log\n!*.log\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(!ig(&f2, "noise.log"));
@@ -443,12 +443,12 @@ mod tests {
 
     #[test]
     fn cannot_reinclude_under_an_excluded_directory() {
-        // Git's documented quirk: a parent exclusion makes children
-        // unreachable regardless of negations.
+        
+        
         let (_t, root) = tree(&[("ferry.ignore", "build/\n!build/keep.txt\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "build/keep.txt"));
-        // Same quirk when the parent was excluded by an unanchored dir name.
+        
         let (_t2, root2) = tree(&[("ferry.ignore", "logs\n!logs/critical.log\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f2, "logs/critical.log"));
@@ -500,8 +500,8 @@ mod tests {
 
     #[test]
     fn invalid_glob_lines_are_skipped_not_fatal() {
-        // `[z-a]` is an invalid character range; globset refuses it. One bad
-        // line must not blind the folder.
+        
+        
         let (_t, root) = tree(&[("ferry.ignore", "[z-a]\njunk.bin\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "junk.bin"));
@@ -544,7 +544,7 @@ mod tests {
         assert!(ig(&f, ".env.local"));
         assert!(ig(&f, "deploy/.env.production"));
 
-        // Opt in the exact file; siblings stay excluded.
+        
         let (_t2, root2) = tree(&[("ferry.ignore", "!.env\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(!ig(&f2, ".env"));
@@ -576,8 +576,8 @@ mod tests {
 
     #[test]
     fn presets_beat_ferry_ignore_but_lose_to_overrides() {
-        // claude preset excludes telemetry/; ferry.ignore tries to keep it;
-        // user override wins over both.
+        
+        
         let (_t, root) = tree(&[
             ("ferry.ignore", "!telemetry/\n"),
             ("telemetry/ping.json", "{}\n"),
@@ -593,7 +593,7 @@ mod tests {
             "preset (layer above ferry.ignore) wins"
         );
         assert!(!ig_dir(&f, "statsig"), "override beats preset exclusion");
-        // Preset includes rescue from its own excludes.
+        
         assert!(
             !ig(&f, "projects/proj/memory/notes.md"),
             "project memory travels despite sessions exclusion nearby"
@@ -616,12 +616,12 @@ mod tests {
 
     #[test]
     fn pattern_lines_are_nfc_normalized_before_matching() {
-        // Write the pattern in NFD; walker-supplied paths are NFC.
+        
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         std::fs::write(
             root.join("ferry.ignore"),
-            "cafe\u{301}.txt\n", // NFD: 'e' + combining acute
+            "cafe\u{301}.txt\n", 
         )
         .unwrap();
 
@@ -633,9 +633,9 @@ mod tests {
 
     #[test]
     fn decomposed_paths_are_treated_as_one_name_against_nfc_patterns() {
-        // T-012 NFC audit, ignore layer: a path arriving in a decomposed
-        // spelling (defensive NFC at the boundary) matches an NFC-composed
-        // pattern — one name, not two.
+        
+        
+        
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         std::fs::write(root.join("ferry.ignore"), "rapport-ann\u{e9}e.md\n").unwrap();
@@ -664,7 +664,7 @@ mod tests {
         let (_t, root) = tree(&[]);
         assert!(FerryIgnore::new(&root, &IgnoreConfig::default()).is_ok());
 
-        // A directory named ferry.ignore makes read_to_string fail (EISDIR).
+        
         std::fs::create_dir(root.join("ferry.ignore")).unwrap();
         let err = FerryIgnore::new(&root, &cfg_placeholder()).unwrap_err();
         assert!(matches!(err, IgnoreError::ReadRootRule { .. }));
@@ -676,37 +676,37 @@ mod tests {
 
     #[test]
     fn seam_decisions_parameterized_over_entry_kind_need_no_disk() {
-        // Every queried path is ABSENT from the fixture tree: the verdicts
-        // below come purely from compiled rules and the supplied kind.
+        
+        
         let (_t, root) = tree(&[
             ("ferry.ignore", "build/\ncache\n*.log\n!important.log\n"),
-            // Patterns inside sub/ferry.ignore are relative to sub/.
+            
             ("sub/ferry.ignore", "!build/\n"),
         ]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
 
         let cases: &[(&str, bool, bool)] = &[
-            // (path, ignored-as-FILE, ignored-as-DIR)
-            // Dir-only pattern: diverges by kind.
+            
+            
             ("build", false, true),
             ("deep/build", false, true),
-            // Unanchored bare name matches files and dirs alike.
+            
             ("cache", true, true),
             ("deep/cache/x.bin", true, true),
-            // Extension rules judge the name regardless of kind; the
-            // later negation wins within the layer chain.
+            
+            
             ("noise.log", true, true),
             ("important.log", false, false),
             ("deep/important.log", false, false),
-            // Sticky exclusion: an excluded ANCESTOR keeps descendants
-            // ignored regardless of the final component's kind.
+            
+            
             ("build/inner.txt", true, true),
             ("build/sub/deep.txt", true, true),
-            // Deeper overlay negates the root dir-only pattern inside sub/.
+            
             ("sub/build", false, false),
-            // ...and only there.
+            
             ("other/build", false, true),
-            // Ordinary file untouched.
+            
             ("keep.txt", false, false),
         ];
         for (path, want_file, want_dir) in cases {
@@ -724,8 +724,8 @@ mod tests {
         for (path, kind, want) in [
             ("build", EntryKind::File, false),
             ("build", EntryKind::Dir, true),
-            // Children of an excluded dir are unreachable at either kind;
-            // intermediate components are judged as dirs.
+            
+            
             ("build/inner.txt", EntryKind::File, true),
         ] {
             assert_eq!(f.ignored(&rel(path), kind), want, "{path:?} {kind:?}");
@@ -747,7 +747,7 @@ mod tests {
         use std::fmt::Write as _;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
-        // 10k mixed-shape patterns: literals, suffix globs, doublestars.
+        
         let mut text = String::with_capacity(1 << 17);
         for i in 0..2500 {
             let _ = writeln!(text, "/pkg/mod{i}/");
@@ -780,7 +780,7 @@ mod tests {
             }
         }
         let elapsed = started.elapsed();
-        // 3000 queries over a 10k-pattern set: sanity bound, not a benchmark.
+        
         assert!(
             elapsed.as_millis() < 10_000,
             "3000 queries took {}ms",

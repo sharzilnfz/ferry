@@ -1,10 +1,7 @@
-/* ==========================================================================
-   FERRY · ULTRA-MINIMAL FLUID GLASS DESIGN SYSTEM
-   Clean Single-Plane Glass Architecture (No Nested Boxes)
-   ========================================================================== */
+
 
 :root {
-  /* Motion Constants */
+  
   --ease-apple: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -14,11 +11,11 @@
   --duration-base: 180ms;
   --duration-slow: 280ms;
 
-  /* Typography Stack */
+  
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", "Helvetica Neue", sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
 
-  /* Dark Theme Tokens (Obsidian Glass) */
+  
   --bg-canvas: #09090b;
   --glass-bg: rgba(18, 18, 22, 0.72);
   --glass-dock: rgba(22, 22, 28, 0.85);
@@ -38,7 +35,7 @@
   --shadow-main: 0 24px 60px -12px rgba(0, 0, 0, 0.75), 0 1px 1px 0 rgba(255, 255, 255, 0.08) inset;
   --shadow-dock: 0 16px 36px -8px rgba(0, 0, 0, 0.6);
 
-  /* Status Accents */
+  
   --state-synced: #30d158;
   --state-synced-glow: rgba(48, 209, 88, 0.35);
   --state-syncing: #0a84ff;
@@ -52,7 +49,7 @@
 }
 
 [data-theme="light"] {
-  /* Light Theme Tokens (Crystal Frost) */
+  
   --bg-canvas: #f6f7fb;
   --glass-bg: rgba(255, 255, 255, 0.85);
   --glass-dock: rgba(255, 255, 255, 0.92);
@@ -84,7 +81,7 @@
   --state-offline-glow: rgba(113, 113, 122, 0.15);
 }
 
-/* Base Reset */
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -113,7 +110,7 @@ body {
   overflow-x: hidden;
 }
 
-/* Ambient Radial Lights */
+
 .ambient-glow {
   position: fixed;
   border-radius: 50%;
@@ -140,7 +137,7 @@ body {
   background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0) 70%);
 }
 
-/* Shell Layout */
+
 .app-shell {
   width: 100%;
   max-width: 680px;
@@ -151,7 +148,7 @@ body {
   z-index: 1;
 }
 
-/* Quiet Minimal Header */
+
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -205,7 +202,7 @@ body {
   transition: background-color var(--duration-base) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
 }
 
-/* Icon Buttons */
+
 .btn-icon {
   width: 28px;
   height: 28px;
@@ -231,7 +228,7 @@ body {
   transition: transform var(--duration-instant) var(--ease-out);
 }
 
-/* Single Unified Glass Main Card (No nested boxes) */
+
 .glass-main {
   background: var(--glass-bg);
   backdrop-filter: blur(32px) saturate(190%);
@@ -248,7 +245,7 @@ body {
   transition: filter var(--duration-base) var(--ease-out), opacity var(--duration-base) var(--ease-out);
 }
 
-/* Hero Stage */
+
 .hero-stage {
   padding: 32px 32px 24px;
   display: flex;
@@ -331,7 +328,7 @@ body {
   margin-top: 8px;
 }
 
-/* Primary Action Buttons */
+
 .btn {
   font-family: var(--font-display);
   font-size: 12.5px;
@@ -390,7 +387,7 @@ body {
   font-size: 11.5px;
 }
 
-/* Sync Track */
+
 .sync-track {
   width: 100%;
   height: 3px;
@@ -426,7 +423,7 @@ body {
   100% { transform: translateX(300%); }
 }
 
-/* Seamless Telemetry Strip (Hairline row, zero boxes) */
+
 .telemetry-strip {
   display: flex;
   align-items: center;
@@ -467,7 +464,7 @@ body {
   background: var(--border-subtle);
 }
 
-/* Content Flow (2-column quiet list layout) */
+
 .content-flow {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -536,7 +533,7 @@ body {
   border-radius: 3px;
 }
 
-/* Clean Line Rows (No box borders) */
+
 .flow-row {
   display: flex;
   justify-content: space-between;
@@ -599,7 +596,7 @@ body {
   font-family: var(--font-mono);
 }
 
-/* Floating State Dock */
+
 .simulator-dock {
   position: fixed;
   bottom: 20px;
@@ -658,13 +655,13 @@ body {
   font-weight: 700;
 }
 
-/* Emil Kowalski State Blur Morphing */
+
 .is-blur-transitioning {
   filter: blur(2px);
   opacity: 0.85;
 }
 
-/* Minimal Modal */
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -771,7 +768,7 @@ body {
   outline: none;
 }
 
-/* Responsive & Mobile Polishing */
+
 @media (max-width: 640px) {
   body {
     padding: 12px 10px 88px;
@@ -818,7 +815,7 @@ body {
     font-size: 12px;
   }
 
-  /* Compact 3-Column Structured Telemetry Grid on Mobile */
+  
   .telemetry-strip {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -871,7 +868,7 @@ body {
     font-size: 12px;
   }
 
-  /* Sleek Horizontal Scroll / Compact Dock on Mobile */
+  
   .simulator-dock {
     bottom: 12px;
     padding: 4px 6px;
@@ -901,9 +898,7 @@ body {
   }
 }
 
-/* ==========================================================================
-   ACCESSIBILITY & MOTION PREFERENCES
-   ========================================================================== */
+
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

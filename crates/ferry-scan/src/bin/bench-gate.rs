@@ -1,37 +1,37 @@
-//! T-004 acceptance gate (SPEC M1 scan-throughput risk):
-//!
-//! ```text
-//! cargo run --release -p ferry-scan --bin bench-gate
-//! ```
-//!
-//! Generates a deterministic 100k-file / ~500 MiB fixture, then measures:
-//!
-//! 1. INITIAL full scan — gate < 60 s
-//! 2. INCREMENTAL rescan after exactly 100 changed files — gate < 2 s
-//!
-//! Methodology notes (repeated in the output):
-//! - Fixture content is deterministic pseudo-random (splitmix64 per file),
-//!   so runs are comparable and no external corpus is needed.
-//! - The store lives INSIDE the fixture root at `.ferry` (realistic layout);
-//!   its structural exclusion from scans is exercised by the benchmark
-//!   itself.
-//! - Gate timing for the incremental rescan measures the SCAN PASS ONLY
-//!   (`scan_once` after events have settled), not notification latency or
-//!   the debounce window. Both are engine-quality concerns measured
-//!   elsewhere; the SPEC risk is scan throughput.
-//! - `PassthroughCipher` isolates scan/chunking cost from encryption cost;
-//!   ChaCha20-Poly1305 would add a near-constant per-byte multiplier and is
-//!   not part of this gate.
-//! - Machine info is printed for the record; gates are absolute per ticket.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_scan::config::ScanConfig;
 use ferry_scan::engine::{ScanEngine, StoreHandle};
-use ferry_store::crypto::PassthroughCipher;
 use ferry_store::diff::diff_manifests;
 use ferry_store::store::Store;
 
@@ -42,7 +42,7 @@ const CHANGED_COUNT: usize = 100;
 const INIT_GATE: f64 = 60.0;
 const INCR_GATE: f64 = 2.0;
 
-/// splitmix64 — tiny deterministic PRNG for fixture bytes and sizes.
+
 fn splitmix64(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *state;
@@ -115,8 +115,8 @@ fn main() {
         TARGET_TOTAL_BYTES / 1024 / 1024
     );
 
-    // Workspace root = crate dir ../../.. ; fixtures under target/ so they
-    // never pollute the repo.
+    
+    
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let bench_root = manifest_dir
         .join("../../target/bench-fixture")
@@ -127,7 +127,7 @@ fn main() {
     std::fs::create_dir_all(&fixture).unwrap();
     let fixture = fixture.canonicalize().unwrap();
 
-    // ---- 1. generate fixture ------------------------------------------------
+    
     let t_gen = Instant::now();
     let total_bytes = generate_fixture(&fixture);
     let gen_secs = t_gen.elapsed().as_secs_f64();
@@ -139,8 +139,8 @@ fn main() {
         fixture.display()
     );
 
-    // ---- 2. store inside the watched root ----------------------------------
-    let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(PassthroughCipher)).unwrap());
+    
+    let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(ChaChaCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
         poly: ferry_store::chunker::ValidatedPoly::new(0x0025_b468_838d_cb75 | (1 << 53))
@@ -149,11 +149,12 @@ fn main() {
         device_id: [8; 32],
     };
 
-    // ---- 3. GATE: initial full scan ----------------------------------------
+    
     let cfg = ScanConfig {
         quiet_window: Duration::from_millis(150),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_secs(10),
+        parent_manifest_id: None,
     };
     let t0 = Instant::now();
     let engine = ScanEngine::watch_with(
@@ -174,10 +175,10 @@ fn main() {
     );
     assert_eq!(baseline.stats.files, DIRS * FILES_PER_DIR);
 
-    // ---- 4. change exactly 100 DISTINCT files ------------------------------
+    
     let mut rng_state = 0xC10C_u64;
     let n = (DIRS * FILES_PER_DIR) as u64;
-    // Deterministic shuffle => 100 distinct targets, spread across the tree.
+    
     let mut idx: Vec<u64> = (0..n).collect();
     for i in (1..n).rev() {
         let j = splitmix64(&mut rng_state) % (i + 1);
@@ -197,13 +198,13 @@ fn main() {
     }
     assert_eq!(changed.len(), CHANGED_COUNT);
 
-    // Let the watcher queue the burst (FSEvents coalesces within ms).
+    
     std::thread::sleep(Duration::from_millis(700));
 
-    // ---- 5. GATE: incremental rescan of those 100 --------------------------
-    // The worker may win the race (it debounces 150 ms then scans), or this
-    // scan_once may drain the queue first; either way the measured quantity
-    // is the completed PASS duration recorded in stats (walk+hash+store IO).
+    
+    
+    
+    
     let _ = engine.scan_once();
     let deadline = Instant::now() + Duration::from_secs(10);
     let updated = wait_for_new_current(&engine, &baseline.manifest_id, deadline);
@@ -217,14 +218,14 @@ fn main() {
         verdict(incr_secs < INCR_GATE),
     );
 
-    // Correctness: EXACTLY the 100 touched files moved.
+    
     let cs = diff_manifests(&store, &baseline.manifest, &updated.manifest).unwrap();
     let modified = cs.content_modified.len() + cs.metadata_modified.len();
     assert_eq!(cs.added.len(), 0, "{cs:?}");
     assert_eq!(cs.removed.len(), 0, "{cs:?}");
     assert_eq!(modified, CHANGED_COUNT, "mutation set must be exact");
 
-    // Short-circuit proof at scale: zero-change pass hashes nothing.
+    
     let idle = engine.scan_once().unwrap();
     assert_eq!(idle.stats.bytes_chunked, 0);
 
@@ -277,7 +278,7 @@ fn generate_fixture(root: &Path) -> u64 {
         std::fs::create_dir(&dir).unwrap();
         for f in 0..FILES_PER_DIR {
             let mut seed = (d as u64) << 32 | f as u64;
-            // Mean ~5 KiB with deterministic variance; lands near 500 MiB.
+            
             let size = 2048 + (splitmix64(&mut seed) % 6144) as usize;
             let mut buf = vec![0u8; size];
             fill_block(&mut buf, &mut seed);

@@ -1,6 +1,6 @@
 #![allow(warnings, clippy::all, clippy::pedantic)]
-//! ferry-cli: the `ferry` binary. Library form exists so integration tests
-//! exercise the exact command logic without spawning processes.
+
+
 
 pub mod bootstrap;
 pub mod cli;
@@ -12,8 +12,8 @@ pub mod ipc;
 pub mod out;
 pub mod scan;
 
-/// Resolve the device identity under the resolved `FERRY_HOME`, creating it on
-/// first use. Shared by several commands.
+
+
 pub fn ensure_identity() -> error::CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = home::ferry_home()?;
     ferry_crypto::identity::load_or_create(&home::identity_root(&home)).map_err(|e| {

@@ -1,8 +1,8 @@
-//! IPC error types for Ferry.
+
 
 use thiserror::Error;
 
-/// Errors that can occur during IPC communication, serialization, or framing.
+
 #[derive(Debug, Error)]
 pub enum IpcError {
     #[error("I/O error: {0}")]

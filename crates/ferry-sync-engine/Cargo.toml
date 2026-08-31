@@ -13,16 +13,22 @@ serde_json.workspace = true
 thiserror.workspace = true
 blake3.workspace = true
 unicode-normalization.workspace = true
+ignore.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 rand.workspace = true
 
-# testutil::set_dir_mtime stamps directory mtimes; std cannot open
-# directory handles for time writes on Windows (SetFileTime needs
-# FILE_FLAG_BACKUP_SEMANTICS), so the windows branch goes through
-# filetime — same approach as ferry-store's and ferry-materialize's
-# fixtures (T-17 lineage).
 [target.'cfg(not(unix))'.dev-dependencies]
 filetime.workspace = true
 

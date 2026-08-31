@@ -1,18 +1,18 @@
-//! Hairline telemetry strip widget for Ferry GUI.
-//!
-//! Displays key system metadata:
-//! - Root Manifest ID (short hex)
-//! - Held Changes count
-//! - Active Conflict count
-//! - Encryption Cipher (Age-X25519)
-//! - Transport (QUIC / Iroh)
+
+
+
+
+
+
+
+
 
 use egui::{Color32, Frame, Margin, RichText, Rounding, Stroke};
 use ferry_ipc::protocol::EngineSnapshot;
 
 use crate::theme::colors;
 
-/// Format a manifest ID or hash to short hex display (e.g. `e3b0c442…`).
+
 #[must_use]
 pub fn format_short_hex(hash: Option<&str>) -> String {
     match hash {
@@ -22,7 +22,7 @@ pub fn format_short_hex(hash: Option<&str>) -> String {
     }
 }
 
-/// Render the hairline telemetry strip widget.
+
 pub fn render_telemetry_hairline(
     ui: &mut egui::Ui,
     snapshot: Option<&EngineSnapshot>,
@@ -36,7 +36,7 @@ pub fn render_telemetry_hairline(
         .rounding(Rounding::same(6.0f32))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // 1. Root Manifest ID
+                
                 ui.label(
                     RichText::new("ROOT:")
                         .color(colors::TEXT_MUTED)
@@ -56,7 +56,7 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                // 2. Held Changes
+                
                 let held = snapshot.map_or(0, |s| s.held_changes);
                 ui.label(
                     RichText::new("HELD:")
@@ -78,7 +78,7 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                // 3. Conflicts Count
+                
                 let conf_count =
                     snapshot.map_or(conflicts_count, |s| s.conflicts.max(conflicts_count));
                 ui.label(
@@ -105,7 +105,7 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                // 4. Cipher
+                
                 ui.label(
                     RichText::new("CIPHER:")
                         .color(colors::TEXT_MUTED)
@@ -120,7 +120,7 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                // 5. Transport
+                
                 ui.label(
                     RichText::new("TRANSPORT:")
                         .color(colors::TEXT_MUTED)

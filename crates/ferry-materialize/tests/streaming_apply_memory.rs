@@ -1,9 +1,9 @@
-//! T-09 streaming memory gate: applying a >32 MiB file must never hold the
-//! whole file (or all of its chunks) in RAM.
-//!
-//! This lives in its OWN integration-test binary on purpose: a tracking
-//! global allocator here sees only this process. Inside the unit-test
-//! binary, concurrently running fixtures would pollute the peak measurement.
+
+
+
+
+
+
 
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,8 +15,8 @@ use ferry_store::manifest::{file_entry, serialize_tree_node, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
 
-/// Counts only allocations of 4 MiB and up; smaller blocks cannot move a
-/// measurement whose subject is multi-MiB buffering behavior.
+
+
 struct BigBlockAlloc;
 
 const BIG_BLOCK_MIN: usize = 4 * 1024 * 1024;
@@ -34,7 +34,7 @@ fn big_track_sub(size: usize) {
 
 unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        // SAFETY: forwarding to System with the caller's layout.
+        
         let ptr = unsafe { std::alloc::System.alloc(layout) };
         if !ptr.is_null() && layout.size() >= BIG_BLOCK_MIN {
             big_track_add(layout.size());
@@ -46,7 +46,7 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
         if layout.size() >= BIG_BLOCK_MIN {
             big_track_sub(layout.size());
         }
-        // SAFETY: ptr was produced by the matching System alloc.
+        
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
 
@@ -54,7 +54,7 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
         if layout.size() >= BIG_BLOCK_MIN {
             big_track_sub(layout.size());
         }
-        // SAFETY: ptr was produced by the matching System alloc.
+        
         let p = unsafe { std::alloc::System.realloc(ptr, layout, new_size) };
         if !p.is_null() && new_size >= BIG_BLOCK_MIN {
             big_track_add(new_size);
@@ -66,7 +66,7 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
 #[global_allocator]
 static GLOBAL_ALLOC: BigBlockAlloc = BigBlockAlloc;
 
-/// Deterministic xorshift fill (cheap at tens of MiB).
+
 fn xorshift_fill(buf: &mut [u8], state: &mut u64) {
     for b in buf.iter_mut() {
         *state ^= *state << 13;
@@ -80,8 +80,8 @@ fn fmk() -> [u8; 32] {
     core::array::from_fn(|i| (i * 7 + 3) as u8)
 }
 
-/// Smallest valid monic degree-53 polynomial, found deterministically (no
-/// RNG dependency in this binary).
+
+
 fn first_valid_poly() -> u64 {
     let mut p = (1u64 << 53) | 1;
     while !is_irreducible(p) {
@@ -90,13 +90,13 @@ fn first_valid_poly() -> u64 {
     p
 }
 
-/// The pre-T-09 applier fetched EVERY chunk into RAM before writing any byte:
-/// peak >= file size on top of per-chunk store-read transients (~2x file).
-/// The streaming applier keeps one chunk resident, so the measured peak of
-/// >=4 MiB allocations during the apply must stay far below the file size.
-///
-/// Everything is seed-deterministic (fixed poly, fixed content stream), so
-/// once green this stays green.
+
+
+
+
+
+
+
 #[test]
 fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
     const BLOCK: usize = 1024 * 1024;
@@ -112,8 +112,8 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
 
     let poly = first_valid_poly();
 
-    // Build the content in bounded blocks, streaming it through the chunker
-    // exactly like the scanner does, storing each chunk as it completes.
+    
+    
     let mut chunker = Chunker::new(poly).unwrap();
     let mut block = vec![0u8; BLOCK];
     let mut cur: Vec<u8> = Vec::with_capacity(BLOCK * 2);
@@ -125,7 +125,7 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
         xorshift_fill(&mut block[..n], &mut state);
         let mut eaten = 0usize;
         for len in chunker.feed(&block[..n]) {
-            // The completed chunk spans cur's pending tail plus fresh bytes.
+            
             let fresh = len - cur.len();
             cur.extend_from_slice(&block[eaten..eaten + fresh]);
             eaten += fresh;
@@ -153,15 +153,15 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
         .unwrap();
     store.flush().unwrap();
 
-    // Measure ONLY the apply (setup sealed its packs above).
+    
     BIG_PEAK.store(0, Ordering::SeqCst);
     Applier::new(&store, &target)
         .apply_tree(&root_tree_id)
         .unwrap();
     let peak = BIG_PEAK.load(Ordering::SeqCst);
 
-    // Whole-file buffering would hold every chunk at once (>= TOTAL) plus
-    // store-read transients. Streaming must stay well under the file size.
+    
+    
     const LIMIT: usize = 30 * 1024 * 1024;
     println!(
         "T-09 memory gate: file {TOTAL} bytes, peak big-block allocation during apply {peak} \
@@ -173,8 +173,8 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
          (limit {LIMIT}, file {TOTAL}); this smells like whole-file buffering"
     );
 
-    // Content fidelity at scale: compare against the regenerated stream block
-    // by block instead of materializing a second 33 MiB expected buffer.
+    
+    
     let mut written = std::fs::File::open(target.join("big.bin")).unwrap();
     let mut expect = vec![0u8; BLOCK];
     let mut got = vec![0u8; BLOCK];

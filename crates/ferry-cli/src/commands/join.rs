@@ -50,8 +50,8 @@ pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
             )
         })?;
 
-    // One ritual, transport chosen internally: a 6-char code dials the
-    // rendezvous; a payload path/`FERRY1:` envelope rides the file exchange.
+    
+    
     let ritual = ferry_folder::pairing::PairingRitual::with_shared(
         home,
         identity.clone(),

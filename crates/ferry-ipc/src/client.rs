@@ -1,22 +1,22 @@
-//! Persistent multiplexed client connection to the Ferry daemon IPC socket.
-//!
-//! `DaemonClient` owns ONE long-lived connection (Unix domain socket or
-//! Windows named pipe, existing newline-delimited JSON framing) and serves
-//! every frontend call over it:
-//!
-//! - **Persistence** — the socket is connected once, lazily, and reused for
-//!   all requests. The per-method connect/teardown cycles of the old adapter
-//!   are gone.
-//! - **Multiplexing** — concurrent callers pipeline commands through a single
-//!   writer task; the reader task correlates responses to waiters FIFO (the
-//!   daemon answers commands strictly in arrival order) and fans all push
-//!   events (`StateChanged`, `TransferProgress`, `ConflictRecorded`, ...) out
-//!   to every `subscribe()` consumer. The wire protocol bytes are unchanged.
-//! - **Reconnect** — if the connection drops, waiters fail with the
-//!   `daemon-unreachable` error code, a background supervisor reconnects with
-//!   exponential backoff, and every subsequent call also retries on demand.
-//!   When the daemon returns, the same client resumes without rebuilding any
-//!   adapter.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,34 +27,37 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 use crate::backend::{
-    BoxFuture, InventoryDomain, OpError, StatusDomain, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
+    BoxFuture, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary, PinStopSummary,
+    SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiEvent, UiEventStream,
+    DAEMON_UNREACHABLE,
 };
 use crate::error::IpcError;
 use crate::framing::{IpcReceiver, IpcSender};
+use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{ClientCommand, ConflictEntry, DaemonMessage, EngineSnapshot};
 use crate::{validate_path, FolderRecord, ListDirectoryResponse};
 
-/// Background reconnect poll interval between exhausted retry rounds.
+
 const SUPERVISOR_POLL: Duration = Duration::from_millis(500);
-/// Push-event broadcast capacity per client.
+
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
-/// Retry schedule for (re)connecting to the daemon socket.
+
 #[derive(Debug, Clone, Copy)]
 pub struct ReconnectPolicy {
-    /// Connect attempts per `call` before failing with `daemon-unreachable`.
+    
     pub attempts: u32,
-    /// Delay before the second attempt; doubles each retry, capped at `max_delay`.
+    
     pub base_delay: Duration,
-    /// Upper bound for the exponential backoff.
+    
     pub max_delay: Duration,
 }
 
 impl Default for ReconnectPolicy {
     fn default() -> Self {
-        // Two attempts with a short gap: keeps offline fallback snappy (the
-        // AutoBackend routes to in-process on `daemon-unreachable`) while the
-        // background supervisor handles longer daemon restarts.
+        
+        
+        
         Self {
             attempts: 2,
             base_delay: Duration::from_millis(50),
@@ -63,10 +66,10 @@ impl Default for ReconnectPolicy {
     }
 }
 
-/// A live connection generation: command queue into the writer task, a
-/// `(command, waiter)` mirror queue into the reader task (registered before
-/// the bytes are written so response classification never races), plus a
-/// closed flag for liveness checks.
+
+
+
+
 #[derive(Clone)]
 struct LiveConn {
     cmd_tx: mpsc::Sender<Outbound>,
@@ -79,8 +82,8 @@ struct Outbound {
     command: ClientCommand,
 }
 
-/// One in-flight request as seen by the reader: which command it was (for
-/// response classification) and where to deliver the reply.
+
+
 struct Pending {
     command: ClientCommand,
     reply: oneshot::Sender<Result<DaemonMessage, OpError>>,
@@ -91,14 +94,14 @@ struct Inner {
     policy: ReconnectPolicy,
     conn: Mutex<Option<LiveConn>>,
     event_tx: broadcast::Sender<UiEvent>,
-    /// Bumped on every connect and connection loss; wakes the supervisor.
+    
     conn_gen: watch::Sender<u64>,
     supervisor_started: AtomicBool,
 }
 
-/// Frontend-side client for the daemon IPC socket: one persistent, multiplexed
-/// connection with auto-reconnect and push-event fanout. Cheap to clone; all
-/// clones share the same connection.
+
+
+
 #[derive(Clone)]
 pub struct DaemonClient {
     inner: Arc<Inner>,
@@ -151,13 +154,13 @@ async fn platform_connect(path: &Path) -> Result<ConnHalves, IpcError> {
 }
 
 impl DaemonClient {
-    /// Create a client targeting the daemon socket at `socket_path`.
+    
     #[must_use]
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self::with_policy(socket_path, ReconnectPolicy::default())
     }
 
-    /// Create a client with an explicit [`ReconnectPolicy`].
+    
     #[must_use]
     pub fn with_policy(socket_path: impl Into<PathBuf>, policy: ReconnectPolicy) -> Self {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -174,26 +177,26 @@ impl DaemonClient {
         }
     }
 
-    /// The daemon socket path this client connects to.
+    
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.inner.socket_path
     }
 
-    /// Subscribe to daemon push events (snapshots, progress, conflicts).
+    
     pub fn subscribe(&self) -> broadcast::Receiver<UiEvent> {
         self.inner.event_tx.subscribe()
     }
 
-    /// Send one command over the persistent connection and await its
-    /// correlated response. Reconnects (with backoff) if the connection is
-    /// down. Push events interleaved on the wire are never returned here;
-    /// they surface through [`DaemonClient::subscribe`].
+    
+    
+    
+    
     pub async fn call(&self, command: ClientCommand) -> Result<DaemonMessage, OpError> {
         let conn = self.ensure_connected().await?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        // Register the pending request (with its command identity) BEFORE the
-        // command bytes go out, so the reader can classify the response.
+        
+        
         let pending = Pending {
             command: command.clone(),
             reply: reply_tx,
@@ -215,8 +218,8 @@ impl DaemonClient {
         }
     }
 
-    /// Subscribe to push events, ensuring a connection exists first so the
-    /// stream carries the initial snapshot.
+    
+    
     pub async fn event_stream(&self) -> Result<UiEventStream, OpError> {
         self.ensure_connected().await?;
         Ok(UiEventStream::new(self.inner.event_tx.subscribe()))
@@ -227,8 +230,8 @@ impl DaemonClient {
         guard.clone().filter(|c| !*c.closed.borrow())
     }
 
-    /// Return a healthy connection, reconnecting with the policy's backoff
-    /// schedule when the previous one is gone.
+    
+    
     async fn ensure_connected(&self) -> Result<LiveConn, OpError> {
         let policy = self.inner.policy;
         let mut delay = policy.base_delay;
@@ -261,10 +264,10 @@ impl DaemonClient {
         let (sender, mut receiver) = platform_connect(&self.inner.socket_path)
             .await
             .map_err(unreachable_err)?;
-        // The daemon sends its initial snapshot as the very first message on
-        // every connection, before any command can be written. Consume it
-        // in-line and fan it out as a push event so FIFO response matching
-        // below only ever sees true command responses.
+        
+        
+        
+        
         match receiver.recv_message().await {
             Ok(Some(msg)) => {
                 if let Some(event) = push_event_of(&msg) {
@@ -309,10 +312,10 @@ impl DaemonClient {
         let _ = self.inner.conn_gen.send(gen.wrapping_add(1));
     }
 
-    /// Spawn the once-per-client background supervisor that restores the
-    /// connection (with backoff) after a loss, so event streams resume
-    /// without any caller action. Holds only a `Weak` reference: it exits
-    /// when the last client handle is dropped.
+    
+    
+    
+    
     fn spawn_supervisor(&self) {
         if self.inner.supervisor_started.swap(true, Ordering::SeqCst) {
             return;
@@ -354,7 +357,7 @@ impl DaemonClient {
     }
 }
 
-/// Serialize outbound commands onto the socket in caller order.
+
 async fn writer_task<W: AsyncWrite + Unpin + Send + 'static>(
     mut sender: IpcSender<W>,
     mut cmd_rx: mpsc::Receiver<Outbound>,
@@ -366,12 +369,12 @@ async fn writer_task<W: AsyncWrite + Unpin + Send + 'static>(
     }
 }
 
-/// Read every wire message: push events fan out to subscribers; response
-/// messages are matched to their pending requests FIFO (the daemon answers
-/// commands strictly in arrival order over one connection). Each pending
-/// request carries its command identity, so a `Snapshot` is only treated as a
-/// response when `GetStatus` is actually at the front of the queue — lag
-/// resyncs and other snapshots stay push events.
+
+
+
+
+
+
 async fn reader_task<R: AsyncRead + Unpin + Send + 'static>(
     mut receiver: IpcReceiver<R>,
     mut pending_rx: mpsc::Receiver<Pending>,
@@ -382,9 +385,9 @@ async fn reader_task<R: AsyncRead + Unpin + Send + 'static>(
 ) {
     let mut queue: std::collections::VecDeque<Pending> = std::collections::VecDeque::new();
     while let Ok(Some(msg)) = receiver.recv_message().await {
-        // Drain every request registered so far; registration happens before
-        // the command bytes are written, so a response never outruns its
-        // pending entry.
+        
+        
+        
         while let Ok(pending) = pending_rx.try_recv() {
             queue.push_back(pending);
         }
@@ -416,7 +419,7 @@ fn route_message(
     queue: &mut std::collections::VecDeque<Pending>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) {
-    // Pure push messages always broadcast.
+    
     let pure_push = matches!(
         &msg,
         DaemonMessage::StateChanged { .. }
@@ -429,9 +432,9 @@ fn route_message(
         }
         return;
     }
-    // A Snapshot is only a command response when a GetStatus is pending;
-    // otherwise it is a lag-resync push. Errors always answer the front
-    // request (the daemon sends them only as command responses).
+    
+    
+    
     let snapshot_for_other = matches!(msg, DaemonMessage::Snapshot(_))
         && !queue
             .front()
@@ -447,8 +450,8 @@ fn route_message(
             let _ = pending.reply.send(Ok(msg));
         }
         None => {
-            // Response with no pending request: nothing registered it (e.g.
-            // the caller went away); surface it as an event if possible.
+            
+            
             if let Some(event) = push_event_of(&msg) {
                 let _ = event_tx.send(event);
             }
@@ -456,7 +459,7 @@ fn route_message(
     }
 }
 
-/// Map a wire message onto its push-event form, if it has one.
+
 fn push_event_of(msg: &DaemonMessage) -> Option<UiEvent> {
     match msg {
         DaemonMessage::StateChanged {
@@ -570,7 +573,7 @@ impl InventoryDomain for DaemonClient {
         path: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
         Box::pin(async move {
-            // Boundary validation without disk I/O — shared guard from ferry-folder.
+            
             let validated = validate_path(path)?;
             match self
                 .call(ClientCommand::ListDirectory {
@@ -624,6 +627,164 @@ impl InventoryDomain for DaemonClient {
                 .await?
             {
                 DaemonMessage::FolderRemoved { .. } | DaemonMessage::Ack { .. } => Ok(()),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+}
+
+impl SessionDomain for DaemonClient {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client
+                .call(ClientCommand::StartPin {
+                    paths: paths.clone(),
+                    duration_hours: hours,
+                })
+                .await?
+            {
+                DaemonMessage::Ack { command, message } => Ok(PinRecord {
+                    folder: String::new(),
+                    paths,
+                    status: command,
+                    expires_at: None,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "stop existing pin"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::ReleasePin).await? {
+                DaemonMessage::Ack { command, message } => Ok(PinStopSummary {
+                    folder: String::new(),
+                    status: command,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn release_pin(&self) -> BoxFuture<'_, Result<PinReleaseSummary, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client.call(ClientCommand::ReleasePin).await? {
+                DaemonMessage::Ack { command, message } => Ok(PinReleaseSummary {
+                    folder: String::new(),
+                    released_changes: 0,
+                    status: command,
+                    message,
+                }),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        _i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+        
+        
+        
+        let dir = folder.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "share_initiate for {} requires in-process or daemon ritual",
+                    dir.display()
+                ),
+                "use AutoBackend with fallback or run ferry share",
+            ))
+        })
+    }
+
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
+        let dir = folder.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "share_status for {} requires in-process or daemon ritual",
+                    dir.display()
+                ),
+                "use AutoBackend with fallback or run ferry share",
+            ))
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        
+        let folder = dir.unwrap_or_else(|| PathBuf::from("."));
+        Box::pin(async move {
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "pair_accept {code_or_payload} for {} requires in-process ritual",
+                    folder.display()
+                ),
+                "use AutoBackend with fallback or run ferry pair",
+            ))
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client
+                .call(ClientCommand::CreatePairingSession { req })
+                .await?
+            {
+                DaemonMessage::PairingCreated { response } => Ok(response),
+                DaemonMessage::Error { code, message } => {
+                    Err(OpError::new(code, message, "check daemon"))
+                }
+                other => Err(unexpected_response(&other)),
+            }
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            match client
+                .call(ClientCommand::JoinPairingSession { req })
+                .await?
+            {
+                DaemonMessage::PairingJoined { result } => Ok(result),
                 DaemonMessage::Error { code, message } => {
                     Err(OpError::new(code, message, "check daemon"))
                 }

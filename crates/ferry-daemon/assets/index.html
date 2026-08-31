@@ -8,12 +8,12 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Ambient depth lights -->
+  
   <div class="ambient-glow glow-1" aria-hidden="true"></div>
   <div class="ambient-glow glow-2" aria-hidden="true"></div>
 
   <div class="app-shell">
-    <!-- Quiet Minimal Header -->
+    
     <header class="app-header">
       <div class="header-brand">
         <span class="brand-name">ferry</span>
@@ -57,12 +57,12 @@
       </div>
     </header>
 
-    <!-- Main Glass Window (Single Unified Plane - No Box-in-Box Nesting) -->
+    
     <main class="glass-main" id="main-card">
-      <!-- Status/Error Banner -->
+      
       <div id="status-error" class="banner banner-error" style="display: none; margin: 16px 32px 0;" role="alert"></div>
 
-      <!-- Hero Section -->
+      
       <section class="hero-stage">
         <div class="hero-status-line">
           <div id="hero-beacon" class="hero-beacon state-synced">
@@ -75,7 +75,7 @@
 
         <p id="hero-sub" class="hero-sub">All folders match across peers. Continuous cryptographic verification active.</p>
 
-        <!-- Primary Action Row -->
+        
         <div class="hero-actions">
           <button id="btn-sync" class="btn btn-primary" title="Trigger Instant Sync (Space)" type="button">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -102,13 +102,13 @@
           <button id="btn-add-folder" class="btn btn-ghost" type="button">+ Add Folder</button>
         </div>
 
-        <!-- Sync Progress Bar (Reveals smoothly during sync) -->
+        
         <div class="sync-track" id="sync-track">
           <div class="sync-bar"></div>
         </div>
       </section>
 
-      <!-- Seamless Hairline Telemetry Bar (No Boxes) -->
+      
       <section class="telemetry-strip" aria-label="Sync telemetry">
         <div class="telemetry-item">
           <span class="telemetry-label">Root Hash</span>
@@ -136,10 +136,10 @@
         </div>
       </section>
 
-      <!-- 2-Column Quiet Flow (Devices & Activity - Free of Nested Boxes) -->
+      
       <section class="content-flow">
         
-        <!-- Connected Devices List -->
+        
         <div class="flow-column">
           <div class="section-heading">
             <h2 class="section-title">Connected Devices</h2>
@@ -153,11 +153,11 @@
           </div>
 
           <div id="fleet-list" class="flow-list">
-            <!-- Dynamically populated rows -->
+            
           </div>
         </div>
 
-        <!-- Live Activity Stream -->
+        
         <div class="flow-column">
           <div class="section-heading">
             <h2 class="section-title">Activity</h2>
@@ -165,7 +165,7 @@
           </div>
 
           <div id="activity-feed" class="flow-list activity-scroll" role="feed" aria-live="polite">
-            <!-- Dynamically populated rows -->
+            
           </div>
         </div>
 
@@ -174,7 +174,7 @@
     </main>
   </div>
 
-  <!-- Origin-Aware Minimal Pair Modal -->
+  
   <div id="pair-modal" class="modal-backdrop" aria-hidden="true">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pair-modal-title">
       <div class="modal-header">
@@ -218,7 +218,7 @@
     </div>
   </div>
 
-  <!-- Folder Picker Modal -->
+  
   <div id="folder-picker-modal" class="modal-backdrop" aria-hidden="true">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="picker-modal-title" style="max-width: 560px; max-height: 80vh;">
       <div class="modal-header">
@@ -244,7 +244,7 @@
     </div>
   </div>
 
-  <!-- Token Authentication Modal -->
+  
   <div id="token-modal" class="modal-backdrop" aria-hidden="true">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
       <div class="modal-header">

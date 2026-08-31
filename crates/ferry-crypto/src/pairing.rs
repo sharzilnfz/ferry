@@ -1,50 +1,50 @@
-//! The pairing ritual: offer payload, short codes, QR content, and the
-//! HMAC-confirmed handshake (ticket T-007 scope per `docs/store-format.md`:
-//! "Pairing, QR codes, short codes ... are T-007's").
-//!
-//! # Flow
-//!
-//! ```text
-//! initiator                              responder
-//! ---------                              ---------
-//! PairingOffer::create(folder, me)
-//!   -> offer bytes  ==QR/scan==>         PairingOffer::parse(bytes)
-//!   -> short_code(hints)  ==typed==>     verify_short_code(code, bytes)
-//!                                        respond(offer, identity)
-//!                       <==response==   PairingResponse { pub, mac }
-//! verify_response(offer, response)
-//! complete_pairing(offer, response, fmk)
-//!   -> wrapped keys for BOTH devices     unwrap_folder_key(wrapped, ...)
-//! ```
-//!
-//! The one-time secret rides inside the scanned payload itself: the QR /
-//! in-person exchange IS the authorization channel. Network transport of the
-//! offer without that channel proves nothing and wraps nothing — the FMK is
-//! only ever wrapped AFTER the responder's HMAC (keyed by the one-time
-//! secret) confirms possession. A passive network observer therefore sees no
-//! keyable material at any point.
-//!
-//! # Short-code construction (v1)
-//!
-//! ```text
-//! data     = hints (u16 LE) || BLAKE3(offer_bytes)[0..8]
-//! checksum = CRC-32/IEEE(data) truncated to its HIGH 16 bits
-//! code     = base32(data) grouped 4-4-4-4
-//!            + "-" + base32_padded(checksum BE)  ->  XXXX-XXXX-XXXX-XXXX-XXXX
-//! ```
-//!
-//! Alphabet is [`crate::base32`]'s canonical set (`0/O/1/I` absent). The
-//! CRC-16-truncation was chosen over a BLAKE3 prefix because the threat here
-//! is typos, not adversaries — authenticity is the MAC's job — and a CRC's
-//! burst-error detection is exactly the typo model, reproducible by an
-//! independent implementation from this comment alone. Any single-symbol
-//! substitution anywhere in the 20 symbols fails either the checksum or the
-//! embedded payload hash; decoders never guess substitutions for lookalike
-//! characters.
-//!
-//! Transport hints are advisory metadata about connectivity (see
-//! [`TransportHints`]); they ride the code so both humans see identical
-//! context while comparing screens.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use crate::base32::{self, Base32Error};
 use crate::crc32::crc32;
@@ -62,17 +62,17 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// Magic opening every serialized pairing offer: "FRPO".
+
 pub const OFFER_MAGIC: [u8; 4] = *b"FRPO";
-/// Magic opening every serialized pairing response: "FRPR".
+
 pub const RESPONSE_MAGIC: [u8; 4] = *b"FRPR";
-/// Wire format version written by v1 implementations.
+
 pub const FORMAT_VERSION: u8 = 1;
-/// Serialized offer size: magic+version+folder+pubs+secret+timestamp.
+
 pub const OFFER_LEN: usize = 4 + 1 + 16 + 32 + 32 + 8;
-/// Serialized response size.
+
 pub const RESPONSE_LEN: usize = 4 + 1 + 32 + 32 + 8;
-/// Domain-separation prefix for the confirmation transcript.
+
 const TRANSCRIPT_INFO: &[u8] = b"ferry/v1/pairing/confirm";
 
 #[derive(Debug, Error)]
@@ -103,17 +103,17 @@ pub enum GrantError {
     Auth,
     #[error("offer bytes truncated: need {need}, have {have}")]
     OfferTruncated { need: usize, have: usize },
-    /// HKDF-expand can only fail on absurd output lengths and AEAD seal
-    /// cannot fail without streaming or padding; both are infallible for
-    /// these inputs but their APIs return Result, so they land here.
+    
+    
+    
     #[error("internal crypto failure (unreachable for these inputs)")]
     Internal,
 }
 
-/// Bounds-checked cursor over a wire message. Every field read goes through
-/// [`Reader::take`], which refuses to run past the end of the buffer, so no
-/// offset arithmetic depends on a caller having length-checked first — the
-/// invariant lives in code instead of in the reader's head.
+
+
+
+
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -140,15 +140,15 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Advisory connectivity flags displayed alongside / carried by the short
-/// code. Bit semantics for v1:
-///
-/// - bit 0 `RELAY_OFFERED`: initiator is willing to use a relay if direct
-///   connection fails.
-/// - bit 1 `DIRECT_LAN`: initiator believes it is reachable on the LAN.
-/// - bits 2..15 reserved, MUST be zero when encoding; ignored when decoding.
-///
-/// Hints NEVER affect security decisions; they only pre-fill UI state.
+
+
+
+
+
+
+
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TransportHints(pub u16);
 
@@ -164,11 +164,11 @@ impl TransportHints {
     }
 }
 
-/// A pairing invitation created by the folder-owning device.
-///
-/// `secret` is the one-time pairing secret; it serializes into the QR
-/// payload (the out-of-band channel) but must never travel over the sync
-/// transport. Zeroized on drop; `Debug` shows nothing sensitive.
+
+
+
+
+
 pub struct PairingOffer {
     pub folder_id: [u8; 16],
     pub initiator_pub: DeviceId,
@@ -187,12 +187,12 @@ impl std::fmt::Debug for PairingOffer {
 }
 
 impl PairingOffer {
-    /// Fresh offer with a CSPRNG one-time secret.
+    
     pub fn create(folder_id: [u8; 16], initiator: &DeviceIdentity, now_sec: i64) -> Self {
         Self::create_with_rng(folder_id, initiator, now_sec, rand::rngs::OsRng)
     }
 
-    /// Deterministic variant for tests and pinned vectors.
+    
     pub fn create_with_rng(
         folder_id: [u8; 16],
         initiator: &DeviceIdentity,
@@ -209,12 +209,12 @@ impl PairingOffer {
         }
     }
 
-    /// The one-time secret. Handled with care: it authorizes pairing.
+    
     pub fn one_time_secret(&self) -> &[u8; 32] {
         &self.secret
     }
 
-    /// Serialize the exact bytes the QR encodes (layout in crate docs).
+    
     pub fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(OFFER_LEN);
         out.extend_from_slice(&OFFER_MAGIC);
@@ -227,7 +227,7 @@ impl PairingOffer {
         out
     }
 
-    /// Parse scanned bytes. Unknown magic/version/truncation are hard errors.
+    
     pub fn parse(bytes: &[u8]) -> Result<Self, PairingError> {
         if bytes.len() != OFFER_LEN {
             return Err(PairingError::Truncated {
@@ -256,27 +256,27 @@ impl PairingOffer {
         })
     }
 
-    /// The human-typed confirmation code for these offer bytes.
+    
     pub fn short_code(&self, hints: TransportHints) -> String {
         short_code_for(&self.serialize(), hints)
     }
 
-    /// Bytes to feed to the QR renderer (identical to [`Self::serialize`] —
-    /// there is deliberately no second framing layer to drift).
+    
+    
     pub fn qr_content(&self) -> Vec<u8> {
         self.serialize()
     }
 
-    /// Render a QR symbol matrix over the offer bytes. Rendering PNG/SVG is
-    /// out of scope (T-009 UX); callers get the crate's matrix type.
+    
+    
     pub fn qr_code(&self) -> Result<qrcode::QrCode, qrcode::types::QrError> {
         qrcode::QrCode::new(self.qr_content())
     }
 }
 
-/// The responder's answer: its device public key plus an HMAC over the
-/// transcript, keyed by the one-time secret — proof of possession without
-/// retransmitting the secret through anything but the already-scanned bytes.
+
+
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingResponse {
     pub responder_pub: DeviceId,
@@ -295,9 +295,9 @@ impl std::fmt::Debug for PairingResponse {
 }
 
 impl PairingResponse {
-    /// Compute the confirmation MAC over the full transcript:
-    /// `HMAC-SHA256(key = one_time_secret,
-    ///              data = TRANSCRIPT_INFO || offer_bytes || responder_pub)`.
+    
+    
+    
     pub fn compute_mac(
         offer_bytes: &[u8],
         one_time_secret: &[u8; 32],
@@ -345,17 +345,17 @@ impl PairingResponse {
         })
     }
 
-    /// Verify against the offer this response answers. The MAC comparison is
-    /// constant-time (`subtle::ConstantTimeEq`), so a failed check leaks
-    /// nothing about how many leading MAC bytes happened to agree.
+    
+    
+    
     pub fn verify(&self, offer: &PairingOffer, offer_bytes: &[u8]) -> Result<(), PairingError> {
         let expect = Self::compute_mac(offer_bytes, offer.one_time_secret(), &self.responder_pub);
         if bool::from(expect.ct_ne(&self.mac)) {
             return Err(PairingError::MacMismatch);
         }
-        // The transcript binds the offer bytes themselves, so the parsed
-        // fields must agree with what was MACed (defensive: parse/serialize
-        // round-trip could otherwise diverge).
+        
+        
+        
         if offer.serialize() != offer_bytes {
             return Err(PairingError::MacMismatch);
         }
@@ -363,7 +363,7 @@ impl PairingResponse {
     }
 }
 
-/// Responder-side step: build the answer to an offer under our identity.
+
 pub fn respond(offer: &PairingOffer, responder: &DeviceIdentity, now_sec: i64) -> PairingResponse {
     let offer_bytes = offer.serialize();
     PairingResponse {
@@ -377,20 +377,20 @@ pub fn respond(offer: &PairingOffer, responder: &DeviceIdentity, now_sec: i64) -
     }
 }
 
-/// Everything the initiator needs after a confirmed handshake.
+
 #[derive(Debug)]
 pub struct CompletedPairing {
-    /// The peer we just paired with (their X25519 public key).
+    
     pub peer_pub: DeviceId,
-    /// FMK wrapped to OUR device public key (store locally like any wrap).
+    
     pub wrapped_for_self: [u8; WRAPPED_LEN],
-    /// FMK wrapped to the PEER's public key; send over transport (T-008).
+    
     pub wrapped_for_peer: [u8; WRAPPED_LEN],
 }
 
-/// Initiator-side completion: verify the response, then wrap the FMK to both
-/// devices. This is the ONLY place an FMK ever gets wrapped during pairing —
-/// before this point an intercepted offer yields nothing to decrypt.
+
+
+
 pub fn complete_pairing(
     offer: &PairingOffer,
     offer_bytes: &[u8],
@@ -408,24 +408,24 @@ pub fn complete_pairing(
     })
 }
 
-// --- pair-grant handoff (initiator -> acceptor sealed envelope) ---
 
-/// Domain-separation info for the pair-grant sealing key.
+
+
 const GRANT_INFO: &[u8] = b"ferry/v1/pair-grant";
-/// HKDF salt for the pair-grant sealing key.
+
 const GRANT_SALT: &[u8] = b"ferry/v1/pair-grant-salt";
-/// Magic opening every sealed pair-grant record: "FRGR".
+
 pub const GRANT_MAGIC: [u8; 4] = *b"FRGR";
-/// Sealed pair-grant format version written by v1 implementations.
+
 pub const GRANT_VERSION: u8 = 1;
-/// RFC 8439 nonce length.
+
 const GRANT_NONCE_LEN: usize = 12;
 
-/// Derive the pair-grant sealing key from an offer's one-time secret:
-/// `HKDF-SHA-256(ikm = one_time_secret, salt = GRANT_SALT)` expanded to
-/// 32 bytes with `GRANT_INFO`. `Result` is part of the contract so callers
-/// never see a panic path; the internal length check cannot fail for a
-/// 32-byte OKM.
+
+
+
+
+
 pub fn derive_pair_grant_key(one_time_secret: &[u8]) -> Result<[u8; 32], GrantError> {
     let hk = Hkdf::<Sha256>::new(Some(GRANT_SALT), one_time_secret);
     let mut okm = [0u8; 32];
@@ -434,8 +434,8 @@ pub fn derive_pair_grant_key(one_time_secret: &[u8]) -> Result<[u8; 32], GrantEr
     Ok(okm)
 }
 
-/// The one-time secret's fixed window inside serialized offer bytes (v1
-/// layout, offsets pinned in [`crate`]'s docs).
+
+
 fn offer_one_time_secret(offer_bytes: &[u8]) -> Result<&[u8], GrantError> {
     offer_bytes.get(53..85).ok_or(GrantError::OfferTruncated {
         need: 85,
@@ -444,22 +444,22 @@ fn offer_one_time_secret(offer_bytes: &[u8]) -> Result<&[u8], GrantError> {
 }
 
 fn grant_cipher(key: &[u8; 32]) -> ChaCha20Poly1305 {
-    // Scoped import: hmac::Mac also exposes new_from_slice-adjacent names,
-    // and a function-local `use` keeps the two crypto stacks from colliding
-    // at the top of this module.
+    
+    
+    
     use chacha20poly1305::aead::KeyInit;
     ChaCha20Poly1305::new(key.into())
 }
 
-/// Seal an opaque grant body under a key derived from the offer's one-time
-/// secret, producing the full v1 wire record:
-///
-/// ```text
-/// "FRGR" || version(1) || nonce(12) || AEAD ciphertext
-/// ```
-///
-/// with the ENTIRE offer bytes bound as AAD. The nonce is fresh CSPRNG
-/// output per seal.
+
+
+
+
+
+
+
+
+
 pub fn seal_pair_grant(offer_bytes: &[u8], body: &[u8]) -> Result<Vec<u8>, GrantError> {
     let secret = offer_one_time_secret(offer_bytes)?;
     let key = derive_pair_grant_key(secret)?;
@@ -484,10 +484,10 @@ pub fn seal_pair_grant(offer_bytes: &[u8], body: &[u8]) -> Result<Vec<u8>, Grant
     Ok(out)
 }
 
-/// Open a sealed pair-grant record: checks the framing, derives the key from
-/// the offer bytes' embedded secret, authenticates (the whole offer file is
-/// AAD), and returns the body plaintext. Any tampering with EITHER file, or
-/// any attempt to replay a grant against a different offer, fails here.
+
+
+
+
 pub fn open_pair_grant(offer_bytes: &[u8], raw: &[u8]) -> Result<Vec<u8>, GrantError> {
     const HEADER_LEN: usize = 4 + 1 + GRANT_NONCE_LEN;
     if raw.len() < HEADER_LEN || raw[..4] != GRANT_MAGIC || raw[4] != GRANT_VERSION {
@@ -510,7 +510,7 @@ pub fn open_pair_grant(offer_bytes: &[u8], raw: &[u8]) -> Result<Vec<u8>, GrantE
         .map_err(|_| GrantError::Auth)
 }
 
-// --- short codes ---
+
 
 fn code_payload(offer_bytes: &[u8], hints: TransportHints) -> ([u8; 10], u16) {
     let digest = blake3::hash(offer_bytes);
@@ -521,12 +521,12 @@ fn code_payload(offer_bytes: &[u8], hints: TransportHints) -> ([u8; 10], u16) {
     (data, (crc >> 16) as u16)
 }
 
-/// Encode the human short code for `offer_bytes` (format in module docs).
+
 pub fn short_code_for(offer_bytes: &[u8], hints: TransportHints) -> String {
     let (data, check) = code_payload(offer_bytes, hints);
-    let main = base32::encode(&data); // 16 symbols
+    let main = base32::encode(&data); 
     let check_be = check.to_be_bytes();
-    let tail = base32::encode(&check_be); // 4 symbols (2 pad bits)
+    let tail = base32::encode(&check_be); 
     format!(
         "{}-{}-{}-{}-{}",
         &main[0..4],
@@ -537,17 +537,17 @@ pub fn short_code_for(offer_bytes: &[u8], hints: TransportHints) -> String {
     )
 }
 
-/// A short code whose checksum verified; carries the decoded hints so the
-/// UI can show connection intent, and re-exposes the hash prefix match
-/// decision to tests.
+
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedCode {
     pub hints: TransportHints,
 }
 
-/// Decode + verify a typed short code against candidate offer bytes:
-/// alphabet-checked, checksum-checked, THEN hash-matched. Any single-symbol
-/// typo fails loudly with a targeted error.
+
+
+
 pub fn verify_short_code(code: &str, offer_bytes: &[u8]) -> Result<VerifiedCode, PairingError> {
     let cleaned: String = code.chars().filter(|c| *c != '-' && *c != ' ').collect();
     if cleaned.len() != 20 {
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(bytes[4], 1);
         assert_eq!(&bytes[5..21], &[3u8; 16]);
         assert_eq!(&bytes[21..53], &alice().device_id()[..]);
-        // One-time secret came from the fixed RNG pattern.
+        
         assert_eq!(&bytes[53..85], &(0u8..=0x1f).collect::<Vec<u8>>()[..]);
         assert_eq!(&bytes[85..], &1_700_000_000i64.to_le_bytes());
     }
@@ -637,7 +637,7 @@ mod tests {
             PairingOffer::parse(&evil),
             Err(PairingError::Truncated { need: 93, have: 92 })
         ));
-        // Random junk is not secretly valid.
+        
         assert!(PairingOffer::parse(&[7u8; 93]).is_err());
     }
 
@@ -677,7 +677,7 @@ mod tests {
 
         for pos in 0..symbols.len() {
             let original = symbols[pos].1;
-            // Substitute a DIFFERENT canonical symbol at this position.
+            
             for sub in ALPHABET_TEST {
                 if *sub == original {
                     continue;
@@ -693,11 +693,11 @@ mod tests {
                     ),
                     "typo '{original}'->'{sub}' gave {err:?}"
                 );
-                break; // one substitution per position suffices
+                break; 
             }
         }
 
-        // Lookalikes are refused with the targeted char error, not guessed.
+        
         for bad in ['0', '1', 'I', 'O'] {
             let mut typed: Vec<char> = code.chars().collect();
             typed[0] = bad;
@@ -707,7 +707,7 @@ mod tests {
             ));
         }
 
-        // Wrong length and separators-in-random-places still work.
+        
         assert!(verify_short_code("ABCD", &bytes).is_err());
         assert!(verify_short_code(&code.replace('-', ""), &bytes).is_ok());
     }
@@ -721,9 +721,9 @@ mod tests {
     fn code_binds_to_its_exact_payload() {
         let (_offer, bytes) = test_offer();
         let code = short_code_for(&bytes, TransportHints::default());
-        // Same payload, different byte somewhere: hash mismatch.
+        
         let mut other = bytes.clone();
-        other[70] ^= 1; // inside the secret region
+        other[70] ^= 1; 
         assert!(matches!(
             verify_short_code(&code, &other),
             Err(PairingError::CodeHashMismatch)
@@ -732,8 +732,8 @@ mod tests {
 
     #[test]
     fn mac_verify_match_passes_and_single_bit_flip_fails() {
-        // Acceptance for T-03's constant-time compare: matching MAC passes,
-        // any single flipped MAC bit fails, with no panic path.
+        
+        
         let (offer, offer_bytes) = test_offer();
         let responder = DeviceIdentity::generate();
         let resp = respond(&offer, &responder, 1_700_000_050);
@@ -758,28 +758,28 @@ mod tests {
         let resp = respond(&offer, &responder, 1_700_000_100);
         resp.verify(&offer, &offer_bytes).unwrap();
 
-        // Tampered responder key: MAC no longer matches.
+        
         let mut evil = resp.clone();
         evil.responder_pub[0] ^= 1;
         assert!(matches!(
             evil.verify(&offer, &offer_bytes),
             Err(PairingError::MacMismatch)
         ));
-        // Tampered MAC field.
+        
         let mut evil = resp.clone();
         evil.mac[31] ^= 1;
         assert!(matches!(
             evil.verify(&offer, &offer_bytes),
             Err(PairingError::MacMismatch)
         ));
-        // Different offer entirely (wrong folder): mismatch.
+        
         let mut evil_bytes = offer_bytes.clone();
         evil_bytes[5] ^= 1;
         assert!(matches!(
             resp.verify(&offer, &evil_bytes),
             Err(PairingError::MacMismatch)
         ));
-        // Response serialization round-trip keeps verification green.
+        
         let rt = PairingResponse::parse(&resp.serialize()).unwrap();
         rt.verify(&offer, &offer_bytes).unwrap();
     }
@@ -806,10 +806,10 @@ mod tests {
         let (offer, bytes) = test_offer();
         assert_eq!(offer.qr_content(), bytes);
         let qr = offer.qr_code().unwrap();
-        // Binary-mode QR over 93 bytes lands well within version bounds;
-        // just prove the matrix exists and is non-degenerate.
+        
+        
         assert!(qr.width() >= 21);
-        // The module matrix: width x width cells, non-degenerate.
+        
         let colors = qr.to_colors();
         assert_eq!(colors.len(), qr.width() * qr.width());
         assert!(colors.contains(&qrcode::Color::Dark));
@@ -824,24 +824,24 @@ mod tests {
         let sealed = seal_pair_grant(&offer_bytes, body).unwrap();
         assert_eq!(&sealed[..4], &GRANT_MAGIC, "FRGR magic");
         assert_eq!(sealed[4], GRANT_VERSION);
-        // Framing is fixed: magic+version+nonce+body+16-byte tag.
+        
         assert_eq!(sealed.len(), 4 + 1 + 12 + body.len() + 16);
         assert_eq!(
             open_pair_grant(&offer_bytes, &sealed).unwrap(),
             body.as_slice()
         );
 
-        // A different offer cannot open this grant (AAD + key binding).
-        // test_offer() is deterministic, so mutate these bytes rather than
-        // minting another one.
+        
+        
+        
         let mut other_bytes = offer_bytes.clone();
-        other_bytes[70] ^= 1; // inside the one-time secret region
+        other_bytes[70] ^= 1; 
         assert!(matches!(
             open_pair_grant(&other_bytes, &sealed),
             Err(GrantError::Auth)
         ));
 
-        // Every flipped byte in nonce or ciphertext fails authentication.
+        
         for idx in [5usize, 12, sealed.len() - 1] {
             let mut evil = sealed.clone();
             evil[idx] ^= 0x80;
@@ -851,7 +851,7 @@ mod tests {
             ));
         }
 
-        // Truncated / wrong framing is Malformed, not Auth.
+        
         assert!(matches!(
             open_pair_grant(&offer_bytes, &sealed[..16]),
             Err(GrantError::Malformed { .. })
@@ -863,8 +863,8 @@ mod tests {
             Err(GrantError::Malformed { .. })
         ));
 
-        // Derivation is deterministic per secret, and distinct secrets
-        // diverge.
+        
+        
         let k1 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
         let k2 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
         assert_eq!(k1, k2);
@@ -882,7 +882,7 @@ mod tests {
         let offer_bytes = offer.serialize();
         let b = crate::identity::load_or_create(responder_dir.path()).unwrap();
 
-        // Human step on the responder side:
+        
         let code = offer.short_code(TransportHints(TransportHints::DIRECT_LAN));
         let verified = verify_short_code(&code, &offer_bytes).unwrap();
         assert_eq!(verified.hints, TransportHints(TransportHints::DIRECT_LAN));

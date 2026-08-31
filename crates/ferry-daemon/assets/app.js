@@ -1,13 +1,11 @@
 "use strict";
 
-/* ==========================================================================
-   FERRY · FLUID GLASS ENGINE & REAL-TIME API CLIENT
-   ========================================================================== */
+
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// ---- State Variables ------------------------------------------------------
+
 let currentState = "synced";
 let lastStatus = null;
 let lastManifestId = null;
@@ -21,7 +19,7 @@ let sseReconnectTimer = null;
 let pollTimer = null;
 let sharePollTimer = null;
 
-// ---- HTML Escaping --------------------------------------------------------
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
@@ -965,6 +963,16 @@ async function doRegisterFolder(force) {
     await loadStatus();
     return doc;
   } catch (err) {
+    if (err && (err.code === "not-initialized" || err.code === "not_initialized")) {
+      if (warn) {
+        warn.style.display = "block";
+        warn.textContent = (err.error || "Not an initialized Ferry folder") +
+          " — " + (err.hint || "run `ferry init` or `ferry pair` first");
+      }
+      playHapticFeedback("alert");
+      addActivity("Folder register blocked: not initialized");
+      return;
+    }
     if (err && (err.code === "secrets-found" || err.code === "secrets_found")) {
       if (warn) {
         warn.style.display = "block";

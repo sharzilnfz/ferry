@@ -1,8 +1,8 @@
-//! `ferry sync`: single-shot exchange rounds until both sides agree.
-//!
-//! Exit contract (per ticket): 0 when converged, 1 when the timeout hit
-//! first ("best-effort"). Runs the unified `SyncEngine` against the configured
-//! peer until agreement is settled.
+
+
+
+
+
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -78,26 +78,28 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
         opportunistic_every: 1,
         bind_addr: None,
         connect_to: Some(peer),
-        expected_peer_id: None,
+        allow_trust_on_first_use: false,
         pin_state_dir: Some(opened.state_dir()),
         quiet: true,
     };
 
     let transport = Arc::new(ferry_sync::TcpTransport);
-    let mut engine = SyncEngine::new(cfg, transport).map_err(|e| {
-        CliError::new(
-            "engine-init",
-            e.to_string(),
-            "check folder permissions and network configuration",
-        )
-    })?;
-    // Sessions must speak with the REAL device identity (T-14/T-18): peers
-    // seed their allow-lists from CONFIG_HEAD `device_pub` entries, so the
-    // handshake id has to be that same key — the tag-derived skeleton
-    // identity would be denied as unknown.
+    let mut engine =
+        SyncEngine::with_store(cfg, transport, Arc::clone(&opened.store)).map_err(|e| {
+            CliError::new(
+                "engine-init",
+                e.to_string(),
+                "check folder permissions and network configuration",
+            )
+        })?;
+    
+    
+    
+    
     if let Ok(identity) = crate::home::load_device_identity() {
         engine.set_identity(identity);
     }
+    engine.set_ignore_policy(opened.ignore_policy());
 
     let handle = engine.start();
     let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);

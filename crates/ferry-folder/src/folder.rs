@@ -1,21 +1,21 @@
-//! Per-folder state: everything under `<folder>/.ferry/`.
-//!
-//! Layout (extends `docs/store-format.md` "Folder layout" with the files
-//! frontends own; the store itself only manages packs/index/tmp):
-//!
-//! ```text
-//! <folder>/.ferry/
-//!     config            # CONFIG_HEAD container (spec): folder_id + wrapped FMK entries
-//!     settings.json     # per-folder settings: ignore config layers (schema in docs/cli-json.md)
-//!     packs/ index/ tmp/  # the store
-//!     peers/<hex>.agreed  # ferry-sync-engine last-agreed records (state_dir = .ferry)
-//!     conflicts.jsonl     # ferry-sync-engine structured conflict report
-//! ```
-//!
-//! Opening a folder follows the spec bootstrap sequence: parse `CONFIG_HEAD`,
-//! unwrap the FMK with this device's identity, open the store, locate the
-//! polynomial blob through the index. The device identity is a parameter —
-//! this crate never reads `FERRY_HOME` or any other process environment.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,33 +23,33 @@ use std::sync::Arc;
 use ferry_crypto::config_head::{parse_config_head, write_config_head, WrappedKeyEntry};
 use ferry_crypto::folder_key::{generate_fmk, unwrap_folder_key, wrap_folder_key, Fmk};
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
-use ferry_store::crypto::PassthroughCipher;
+use ferry_crypto::pack_cipher::ChaChaCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CodeInto, FolderError, FolderResult};
 
-/// Name of the `CONFIG_HEAD` file inside `.ferry/` (spec-fixed).
+
 pub const CONFIG_FILE: &str = "config";
-/// Settings file inside `.ferry/`.
+
 pub const SETTINGS_FILE: &str = "settings.json";
-/// The store directory name (spec-fixed).
+
 pub const DOT_DIR: &str = ".ferry";
 
-/// Current `format_version` for [`Settings`]. Bumping invalidates old
-/// files loudly rather than guessing.
+
+
 pub const SETTINGS_FORMAT_VERSION: u32 = 1;
 
-/// Per-folder settings (`<folder>/.ferry/settings.json`).
-///
-/// This is the persisted form of [`ferry_ignore::IgnoreConfig`] plus the
-/// folder id. Field order in the struct is the serialized field order;
-/// serde keeps it stable.
+
+
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     pub format_version: u32,
-    /// Folder id, lowercase hex (32 chars).
+    
     pub folder_id: String,
     #[serde(default)]
     pub honor_gitignore: bool,
@@ -60,7 +60,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The ignore layer this contributes to rule compilation.
+    
     pub fn ignore_config(&self) -> ferry_ignore::IgnoreConfig {
         ferry_ignore::IgnoreConfig {
             honor_gitignore: self.honor_gitignore,
@@ -74,11 +74,23 @@ pub fn dot_dir(folder: &Path) -> PathBuf {
     folder.join(DOT_DIR)
 }
 
+
+
+
+
+
+
+
+pub fn is_initialized(root: &Path) -> bool {
+    let dot = root.join(DOT_DIR);
+    dot.is_dir() && dot.join(CONFIG_FILE).is_file()
+}
+
 pub fn state_dir(folder: &Path) -> PathBuf {
     dot_dir(folder)
 }
 
-/// Compile the folder's effective ignore rules from its settings on disk.
+
 pub fn load_rules(folder: &Path, settings: &Settings) -> FolderResult<ferry_ignore::FerryIgnore> {
     ferry_ignore::FerryIgnore::new(folder, &settings.ignore_config()).code(
         "ignore-rules",
@@ -86,11 +98,33 @@ pub fn load_rules(folder: &Path, settings: &Settings) -> FolderResult<ferry_igno
     )
 }
 
-/// Create a brand-new synced folder at `root`. Fails when `.ferry` already
-/// exists — never silently re-initialize trust material.
-///
-/// Writes: `.ferry/{packs,index,tmp}` via the store, the `CONFIG_HEAD` with
-/// the FMK wrapped to this device, and the encrypted polynomial record.
+
+pub fn load_ignore_policy(folder: &Path) -> FolderResult<ferry_ignore::FerryIgnore> {
+    let settings_path = dot_dir(folder).join(SETTINGS_FILE);
+    let cfg = if settings_path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(settings) = serde_json::from_str::<Settings>(&content) {
+                settings.ignore_config()
+            } else {
+                ferry_ignore::IgnoreConfig::default()
+            }
+        } else {
+            ferry_ignore::IgnoreConfig::default()
+        }
+    } else {
+        ferry_ignore::IgnoreConfig::default()
+    };
+    ferry_ignore::FerryIgnore::new(folder, &cfg).code(
+        "ignore-rules",
+        "fix or remove the offending line in ferry.ignore / .ferry/settings.json",
+    )
+}
+
+
+
+
+
+
 pub fn create_folder(
     root: &Path,
     identity: &DeviceIdentity,
@@ -98,9 +132,9 @@ pub fn create_folder(
     poly: u64,
 ) -> FolderResult<(Store, Fmk)> {
     let fmk = generate_fmk();
-    // Store::create uses a non-recursive mkdir for `.ferry`; ensure parents.
+    
     std::fs::create_dir_all(root).code("io", "check the path and permissions")?;
-    let store = Store::create(root, fmk, Box::new(PassthroughCipher))
+    let store = Store::create(root, fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
     store
@@ -119,9 +153,9 @@ pub fn create_folder(
     Ok((store, fmk))
 }
 
-/// Adopt an EXISTING folder key material into a fresh local store (the
-/// pairing-accept path): like [`create_folder`] but with a caller-supplied
-/// FMK and only our own wrap written to `CONFIG_HEAD`.
+
+
+
 pub fn adopt_folder(
     root: &Path,
     identity: &DeviceIdentity,
@@ -130,7 +164,7 @@ pub fn adopt_folder(
     poly: u64,
 ) -> FolderResult<Store> {
     std::fs::create_dir_all(root).code("io", "check the path and permissions")?;
-    let store = Store::create(root, *fmk, Box::new(PassthroughCipher))
+    let store = Store::create(root, *fmk, Box::new(ChaChaCipher))
         .code("store", "is this path writable? does .ferry already exist?")
         .map_err(bad_store_hint)?;
     store
@@ -149,8 +183,8 @@ pub fn adopt_folder(
 }
 
 fn bad_store_hint(e: FolderError) -> FolderError {
-    // The dominant failure is `.ferry` already existing; everything else
-    // keeps its message but still gets a useful hint.
+    
+    
     if e.message.contains("exists") {
         return FolderError::new(
             "already-initialized",
@@ -166,17 +200,18 @@ fn write_config_file(root: &Path, bytes: &[u8]) -> FolderResult<()> {
     std::fs::write(&path, bytes).code("io", format!("could not write {}", path.display()))
 }
 
-/// Everything needed to work inside one opened folder.
+
 pub struct OpenFolder {
     pub root: PathBuf,
     pub settings: Settings,
     pub folder_id: [u8; 16],
     pub poly: u64,
     pub store: Arc<Store>,
+    pub rules: Arc<ferry_ignore::FerryIgnore>,
 }
 
 impl OpenFolder {
-    /// Absolute-ish display path (as given).
+    
     pub fn path(&self) -> &Path {
         &self.root
     }
@@ -184,12 +219,20 @@ impl OpenFolder {
     pub fn state_dir(&self) -> PathBuf {
         state_dir(&self.root)
     }
+
+    pub fn rules(&self) -> Arc<ferry_ignore::FerryIgnore> {
+        Arc::clone(&self.rules)
+    }
+
+    pub fn ignore_policy(&self) -> Arc<dyn ferry_scan::IgnorePolicy> {
+        Arc::clone(&self.rules) as Arc<dyn ferry_scan::IgnorePolicy>
+    }
 }
 
-/// Open an initialized folder: settings → `CONFIG_HEAD` → unwrap FMK → store
-/// → polynomial. The device identity must be loaded by the caller (CLI:
-/// `FERRY_HOME`; daemon: its own held key) — this crate assumes nothing
-/// about where identities live.
+
+
+
+
 pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenFolder> {
     let dot = dot_dir(root);
     if !dot.is_dir() {
@@ -239,7 +282,7 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
         )
     })?;
 
-    // Bootstrap step 1+2: parse CONFIG_HEAD, unwrap the FMK for THIS device.
+    
     let head_bytes = std::fs::read(dot.join(CONFIG_FILE)).code(
         "not-a-folder",
         "run `ferry init` there first, or pass the folder path explicitly",
@@ -268,9 +311,10 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
         "your device.key may have changed; restore it or re-pair the folder",
     )?;
 
-    // Bootstrap steps 3+: open the store, locate the polynomial blob.
+    
     let store = Arc::new(open_store(root, *fmk)?);
     let poly = find_polynomial(&store)?;
+    let rules = Arc::new(load_rules(root, &settings)?);
 
     Ok(OpenFolder {
         root: root.to_path_buf(),
@@ -278,11 +322,58 @@ pub fn open_folder(root: &Path, identity: &DeviceIdentity) -> FolderResult<OpenF
         folder_id: head.folder_id,
         poly,
         store,
+        rules,
     })
 }
 
+
+
+
+
+
+#[cfg(any(test, feature = "test-util"))]
+pub fn open_or_create_test_store(
+    root: &Path,
+    identity: &DeviceIdentity,
+) -> FolderResult<Arc<Store>> {
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    if dot_dir(root).is_dir() {
+        return Ok(open_folder(root, identity)?.store);
+    }
+    
+    
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&root, &mut hasher);
+    let seed = std::hash::Hasher::finish(&hasher);
+    let mut folder_id = [0u8; 16];
+    folder_id[..8].copy_from_slice(&seed.to_le_bytes());
+    folder_id[8..].copy_from_slice(&seed.to_be_bytes());
+    let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(seed));
+
+    let (store, _fmk) = create_folder(root, identity, folder_id, poly)?;
+    save_settings(
+        root,
+        &Settings {
+            format_version: SETTINGS_FORMAT_VERSION,
+            folder_id: hex(&folder_id),
+            honor_gitignore: false,
+            presets: Vec::new(),
+            overrides: Vec::new(),
+        },
+    )?;
+    
+    
+    store.flush().code("store", "is this path writable?")?;
+    store
+        .write_index_snapshot()
+        .code("store", "is this path writable?")?;
+    Ok(Arc::new(store))
+}
+
 fn open_store(root: &Path, fmk: Fmk) -> FolderResult<Store> {
-    Store::open(root, fmk, Box::new(PassthroughCipher)).map_err(|e| match e {
+    Store::open(root, fmk, Box::new(ChaChaCipher)).map_err(|e| match e {
         StoreError::Io(io) => FolderError::new(
             "not-a-folder",
             format!("cannot open store under {}: {io}", root.display()),
@@ -296,7 +387,7 @@ fn open_store(root: &Path, fmk: Fmk) -> FolderResult<Store> {
     })
 }
 
-/// Find the polynomial record through the index (bootstrap step 3).
+
 pub fn find_polynomial(store: &Store) -> FolderResult<u64> {
     let entries = store.index_entries().code("store", "index unreadable")?;
     let ids: Vec<&BlobId> = entries
@@ -322,9 +413,9 @@ pub fn find_polynomial(store: &Store) -> FolderResult<u64> {
     }
 }
 
-/// A fresh folder's default `ferry.ignore`: comments only. The compiled
-/// defaults live in code (ferry-ignore `DEFAULT_RULES`); the file documents
-/// how to override them.
+
+
+
 pub const DEFAULT_FERRY_IGNORE: &str = "\
 # ferry.ignore — what Ferry syncs in this folder (gitignore syntax).
 #
@@ -340,7 +431,7 @@ pub const DEFAULT_FERRY_IGNORE: &str = "\
 #   *.tsbuildinfo
 ";
 
-/// Write the default rule file unless one already exists.
+
 pub fn write_default_ignore_if_absent(root: &Path) -> FolderResult<bool> {
     let path = root.join("ferry.ignore");
     if path.exists() {
@@ -351,7 +442,7 @@ pub fn write_default_ignore_if_absent(root: &Path) -> FolderResult<bool> {
     Ok(true)
 }
 
-/// Persist settings atomically enough for v0 (temp + rename).
+
 pub fn save_settings(root: &Path, settings: &Settings) -> FolderResult<()> {
     let final_path = dot_dir(root).join(SETTINGS_FILE);
     let tmp = dot_dir(root).join(format!("{SETTINGS_FILE}.tmp"));
@@ -362,12 +453,26 @@ pub fn save_settings(root: &Path, settings: &Settings) -> FolderResult<()> {
     Ok(())
 }
 
-/// First 8 hex of a device id — display-only shorthand.
+
+pub fn load_settings(root: &Path) -> FolderResult<Settings> {
+    let settings_path = dot_dir(root).join(SETTINGS_FILE);
+    let content = std::fs::read_to_string(&settings_path)
+        .code("io", format!("could not read {}", settings_path.display()))?;
+    serde_json::from_str(&content).code(
+        "settings-corrupt",
+        format!(
+            "restore or delete {} and re-run setup",
+            settings_path.display()
+        ),
+    )
+}
+
+
 pub fn short_device(dev: &[u8; 32]) -> String {
     hex(dev)[..8].to_string()
 }
 
-/// Read this folder's `CONFIG_HEAD` entry for our device and unwrap the FMK.
+
 pub(crate) fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> FolderResult<Fmk> {
     let head_bytes = std::fs::read(dot_dir(&opened.root).join(CONFIG_FILE)).code(
         "config-corrupt",
@@ -395,8 +500,8 @@ pub(crate) fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> 
     Ok(fmk)
 }
 
-/// Append one wrapped-key entry to the folder's `CONFIG_HEAD` (idempotent per
-/// recipient device).
+
+
 pub(crate) fn append_wrap_entry_for(
     root: &Path,
     folder_id: [u8; 16],
@@ -407,12 +512,12 @@ pub(crate) fn append_wrap_entry_for(
     let bytes = std::fs::read(&path).code("config-corrupt", "missing key envelope")?;
     let head = parse_config_head(&bytes).code("config-corrupt", "restore from backup")?;
     if head.entries.iter().any(|e| e.device_pub == *recipient) {
-        return Ok(()); // already authorized
+        return Ok(()); 
     }
     let mut entries: Vec<_> = head.entries.clone();
     entries.push(WrappedKeyEntry::new(*recipient, *wrapped));
     let updated = write_config_head(&folder_id, &entries);
-    // Temp + rename so a crash cannot truncate the trust record.
+    
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, &updated).code("io", format!("cannot write {}", tmp.display()))?;
     std::fs::rename(&tmp, &path).code("io", format!("cannot finalize {}", path.display()))?;

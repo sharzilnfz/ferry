@@ -1,5 +1,5 @@
-//! Shared fixture: isolated `FERRY_HOME` per test, serialized across threads
-//! because command functions read the process env internally.
+
+
 
 pub struct Env {
     _home: tempfile::TempDir,
@@ -10,8 +10,8 @@ pub struct Env {
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Env {
-    /// Acquire the env lock for the whole test body and point `FERRY_HOME` at
-    /// a fresh temp dir.
+    
+    
     pub fn new(_label: &str) -> Env {
         let guard =
             std::sync::Mutex::lock(&ENV_LOCK).unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -29,10 +29,10 @@ impl Env {
         self._work.path().to_path_buf()
     }
 
-    /// Point `FERRY_HOME` somewhere else (second simulated device). Caller
-    /// keeps the original Env alive so the lock is held throughout.
+    
+    
     #[allow(dead_code)]
-    #[allow(clippy::unused_self)] // method shape keeps fixture call sites uniform
+    #[allow(clippy::unused_self)] 
     pub fn switch_home_to(&self, dir: &std::path::Path) {
         std::env::set_var("FERRY_HOME", dir);
     }
@@ -60,9 +60,12 @@ impl RunningDaemon {
         cfg.pin_state_dir = Some(opened.state_dir());
         cfg.poll_interval = std::time::Duration::from_millis(50);
 
-        let mut engine =
-            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
-                .expect("engine init");
+        let mut engine = ferry_sync::SyncEngine::with_store(
+            cfg,
+            std::sync::Arc::new(ferry_sync::TcpTransport),
+            std::sync::Arc::clone(&opened.store),
+        )
+        .expect("engine init");
         engine.set_identity(identity.clone());
         let handle = engine.start();
 
@@ -101,9 +104,12 @@ impl RunningDaemon {
         cfg.pin_state_dir = Some(opened.state_dir());
         cfg.poll_interval = std::time::Duration::from_millis(50);
 
-        let mut engine =
-            ferry_sync::SyncEngine::new(cfg, std::sync::Arc::new(ferry_sync::TcpTransport))
-                .expect("engine init");
+        let mut engine = ferry_sync::SyncEngine::with_store(
+            cfg,
+            std::sync::Arc::new(ferry_sync::TcpTransport),
+            std::sync::Arc::clone(&opened.store),
+        )
+        .expect("engine init");
         engine.set_identity(identity.clone());
         let handle = engine.start();
 

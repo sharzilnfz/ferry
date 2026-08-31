@@ -1,16 +1,16 @@
-//! Shared daemon state and engine snapshot generation.
+
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::{DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView};
-use ferry_pin::{HeldSummary, PinError, PinManager, PinRecord};
+use ferry_sync_engine::pin::{HeldSummary, PinError, PinManager, PinRecord};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
-/// Shared runtime state of the daemon, accessible by IPC handlers and background watchers.
+
 pub struct DaemonState {
     handle: EngineHandle,
     store_dir: PathBuf,
@@ -22,7 +22,7 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    /// Create a new `DaemonState`.
+    
     pub fn new(
         handle: EngineHandle,
         store_dir: PathBuf,
@@ -75,13 +75,13 @@ impl DaemonState {
         &self.broadcast_tx
     }
 
-    /// Broadcast a daemon message to all connected IPC clients.
+    
     pub fn broadcast(&self, msg: DaemonMessage) {
-        // Send ignores SendError when there are no active subscribers.
+        
         let _ = self.broadcast_tx.send(msg);
     }
 
-    /// Generate an `EngineSnapshot` capturing the current state of the folder and engine.
+    
     pub fn snapshot(&self) -> EngineSnapshot {
         let manifest = self.handle.current_manifest_id();
         let manifest_id_hex = manifest.map(|m| hex_str(&m));
@@ -155,7 +155,7 @@ impl DaemonState {
         }
     }
 
-    /// Start a session pin on the specified paths with an optional duration in hours.
+    
     pub fn start_pin(
         &self,
         paths: Vec<String>,
@@ -178,17 +178,17 @@ impl DaemonState {
         )
     }
 
-    /// Release an active session pin.
+    
     pub fn release_pin(&self) -> Result<bool, PinError> {
         PinManager::new(self.state_dir()).stop_session()
     }
 
-    /// Trigger an audit-grade filesystem rescan.
+    
     pub fn trigger_scan(&self) {
         self.handle.trigger_scan();
     }
 
-    /// List recorded conflicts.
+    
     pub fn list_conflicts(
         &self,
     ) -> Result<Vec<ferry_sync_engine::ConflictEntry>, ferry_sync_engine::LogError> {

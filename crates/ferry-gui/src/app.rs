@@ -1,4 +1,4 @@
-//! Main `GuiApp` implementation for Ferry Desktop.
+
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,15 +12,17 @@ use ferry_ipc::backend::{PinRecord, ShareOffer, ShareStatus, UiBackend, UiEvent}
 use ferry_ipc::protocol::{ConflictEntry, EngineSnapshot, TransferDirection};
 
 use crate::activity::{render_activity_stream, ActivityEntry};
-use crate::beacon::{status_beacon_ui, BeaconState};
+use crate::beacon::{beacon_color, beacon_label, status_beacon_ui};
 use crate::fleet::render_fleet_table;
+use ferry_platform::SyncState;
+pub use ferry_platform::format_bytes;
 use crate::modals::{
     render_conflicts_modal, render_pair_modal, render_pin_modal, render_share_modal,
 };
 use crate::telemetry::render_telemetry_hairline;
 use crate::theme::{colors, Theme};
 
-/// User actions sent asynchronously to the backend worker task.
+
 pub enum BackendAction {
     TriggerScan,
     StartPin {
@@ -42,7 +44,7 @@ pub enum BackendAction {
     },
 }
 
-/// Active chunk or file transfer state.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuiTransferState {
     pub bytes_transferred: u64,
@@ -54,25 +56,10 @@ pub struct GuiTransferState {
     pub direction: Option<TransferDirection>,
 }
 
-/// Format bytes into human-readable representation.
-#[must_use]
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
 
-    if bytes < KB {
-        format!("{bytes} B")
-    } else if bytes < MB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else if bytes < GB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    }
-}
 
-/// The Ferry Desktop GUI Application struct implementing `eframe::App`.
+
+
 pub struct GuiApp {
     pub backend: Arc<dyn UiBackend>,
     pub snapshot: Option<EngineSnapshot>,
@@ -104,7 +91,7 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    /// Construct a headless instance for testing and headless verification.
+    
     #[must_use]
     pub fn new_headless(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -134,7 +121,7 @@ impl GuiApp {
         }
     }
 
-    /// Construct a fully wired `GuiApp` with asynchronous worker tasks.
+    
     #[must_use]
     pub fn new(
         backend: Arc<dyn UiBackend>,
@@ -144,7 +131,7 @@ impl GuiApp {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = tokio::sync::mpsc::unbounded_channel::<BackendAction>();
 
-        // 1. Initial queries
+        
         let b_clone = backend.clone();
         let ev_tx_clone = event_tx.clone();
         let ctx_clone = ctx.clone();
@@ -166,7 +153,7 @@ impl GuiApp {
             }
         });
 
-        // 2. Real-time push event listener
+        
         let b_events = backend.clone();
         let ev_tx_stream = event_tx.clone();
         let ctx_stream = ctx.clone();
@@ -181,7 +168,7 @@ impl GuiApp {
             }
         });
 
-        // 3. User action processor
+        
         let b_actions = backend.clone();
         let ev_tx_actions = event_tx.clone();
         let ctx_actions = ctx.clone();
@@ -268,22 +255,29 @@ impl GuiApp {
                         }
                     }
                     BackendAction::RegisterFolder { path } => {
-                        match b_actions.register_folder(path.clone()).await {
-                            Ok(record) => {
-                                let _ = ev_tx_actions.send(UiEvent::Error {
-                                    code: "folder_registered".to_string(),
-                                    message: record.path.display().to_string(),
-                                });
-                                if let Ok(snap) = b_actions.get_status().await {
-                                    let _ = ev_tx_actions.send(UiEvent::State(snap));
+                        if ferry_folder::is_initialized(&path) {
+                            match b_actions.register_folder(path.clone()).await {
+                                Ok(record) => {
+                                    let _ = ev_tx_actions.send(UiEvent::FolderRegistered {
+                                        path: record.path.display().to_string(),
+                                    });
+                                    if let Ok(snap) = b_actions.get_status().await {
+                                        let _ = ev_tx_actions.send(UiEvent::State(snap));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = ev_tx_actions.send(UiEvent::Error {
+                                        code: e.code,
+                                        message: e.message,
+                                    });
                                 }
                             }
-                            Err(e) => {
-                                let _ = ev_tx_actions.send(UiEvent::Error {
-                                    code: e.code,
-                                    message: e.message,
-                                });
-                            }
+                        } else {
+                            let err = ferry_folder::FolderError::not_initialized(&path);
+                            let _ = ev_tx_actions.send(UiEvent::Error {
+                                code: err.code.to_string(),
+                                message: format!("{} — {}", err.message, err.hint),
+                            });
                         }
                     }
                 }
@@ -318,56 +312,72 @@ impl GuiApp {
         }
     }
 
-    /// Dispatch a user action to the asynchronous worker.
+    
+    
+    #[must_use]
+    pub fn new_auto(
+        socket_path: impl Into<std::path::PathBuf>,
+        folder_path: impl Into<Option<std::path::PathBuf>>,
+        ctx: egui::Context,
+        rt_handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self::new(
+            Arc::new(ferry_ipc::backend::connect_auto(socket_path, folder_path)),
+            ctx,
+            rt_handle,
+        )
+    }
+
+    
     pub fn dispatch(&self, action: BackendAction) {
         if let Some(ref tx) = self.action_tx {
             let _ = tx.send(action);
         }
     }
 
-    /// Authoritative Beacon operational state resolver.
+    
     #[must_use]
-    pub fn beacon_state(&self) -> BeaconState {
+    pub fn beacon_state(&self) -> SyncState {
         if !self.is_connected {
-            return BeaconState::Offline;
+            return SyncState::Offline;
         }
         let Some(ref snap) = self.snapshot else {
-            return BeaconState::Offline;
+            return SyncState::Offline;
         };
 
         if snap.pin.holding || snap.state.eq_ignore_ascii_case("pinned") {
-            BeaconState::Holding
+            SyncState::Pinned
         } else if snap.conflicts > 0
             || !self.conflicts.is_empty()
             || snap.state.eq_ignore_ascii_case("conflict")
         {
-            BeaconState::Conflict
+            SyncState::Conflict
         } else if snap.state.eq_ignore_ascii_case("syncing") || self.active_transfer.is_some() {
-            BeaconState::Syncing
+            SyncState::Syncing
         } else if snap.state.eq_ignore_ascii_case("synced") {
-            BeaconState::Synced
+            SyncState::Synced
         } else if snap.state.eq_ignore_ascii_case("idle") {
-            BeaconState::Idle
+            SyncState::Idle
         } else {
-            BeaconState::Offline
+            SyncState::Offline
         }
     }
 
-    /// Authoritative state badge resolver.
+    
     #[must_use]
     pub fn current_badge(&self) -> (&'static str, Color32, Color32) {
         let b_state = self.beacon_state();
-        let bg = b_state.color();
+        let bg = beacon_color(b_state);
         let fg = match b_state {
-            BeaconState::Synced => Color32::BLACK,
-            BeaconState::Idle => colors::TEXT_PRIMARY,
-            BeaconState::Offline => colors::TEXT_MUTED,
+            SyncState::Synced => Color32::BLACK,
+            SyncState::Idle => colors::TEXT_PRIMARY,
+            SyncState::Offline => colors::TEXT_MUTED,
             _ => Color32::WHITE,
         };
-        (b_state.label(), bg, fg)
+        (beacon_label(b_state), bg, fg)
     }
 
-    /// Process a typed `UiEvent` into internal UI models.
+    
     pub fn handle_event(&mut self, event: UiEvent) {
         self.is_connected = true;
         match event {
@@ -482,6 +492,12 @@ impl GuiApp {
                     });
                 }
             }
+            UiEvent::FolderRegistered { path } => {
+                let msg = format!("Folder added: {path}");
+                self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
+                self.activity_log
+                    .push(ActivityEntry::new("Folder", msg, colors::FERRY_GREEN));
+            }
             UiEvent::Error { code, message } => {
                 if code == "share_offer" {
                     if let Ok(offer) = serde_json::from_str::<ShareOffer>(&message) {
@@ -508,11 +524,6 @@ impl GuiApp {
                         message,
                         colors::FERRY_GREEN,
                     ));
-                } else if code == "folder_registered" {
-                    let msg = format!("Folder added: {message}");
-                    self.status_message = Some((msg.clone(), Instant::now(), colors::FERRY_GREEN));
-                    self.activity_log
-                        .push(ActivityEntry::new("Folder", msg, colors::FERRY_GREEN));
                 } else {
                     self.status_message = Some((
                         format!("{code}: {message}"),
@@ -529,7 +540,7 @@ impl GuiApp {
         }
     }
 
-    /// Drain incoming asynchronous events.
+    
     pub fn drain_events(&mut self) {
         let mut events = Vec::new();
         if let Some(ref mut rx) = self.event_rx {
@@ -542,10 +553,10 @@ impl GuiApp {
         }
     }
 
-    /// Process keyboard hotkeys.
+    
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
-            // Close modal with Escape
+            
             if i.key_pressed(Key::Escape) {
                 if self.show_conflicts_modal
                     || self.show_pin_modal
@@ -561,7 +572,7 @@ impl GuiApp {
                 }
             }
 
-            // Rescan 'r'
+            
             if i.key_pressed(Key::R) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.dispatch(BackendAction::TriggerScan);
                 self.status_message = Some((
@@ -576,7 +587,7 @@ impl GuiApp {
                 ));
             }
 
-            // Pin toggle 'p'
+            
             if i.key_pressed(Key::P) && !i.modifiers.command && !i.modifiers.ctrl {
                 let is_pinned = self
                     .snapshot
@@ -600,7 +611,7 @@ impl GuiApp {
                 }
             }
 
-            // Conflicts toggle 'c'
+            
             if i.key_pressed(Key::C) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.show_conflicts_modal = !self.show_conflicts_modal;
                 if self.show_conflicts_modal {
@@ -608,7 +619,7 @@ impl GuiApp {
                 }
             }
 
-            // Quit 'q'
+            
             if (i.key_pressed(Key::Q) && i.modifiers.ctrl)
                 || (i.key_pressed(Key::Q)
                     && !self.show_conflicts_modal
@@ -621,7 +632,7 @@ impl GuiApp {
         });
     }
 
-    /// Render a single frame of the GUI into the given egui context.
+    
     pub fn update_ui(&mut self, ctx: &egui::Context) {
         Theme::apply(ctx);
         self.drain_events();
@@ -634,7 +645,7 @@ impl GuiApp {
         let time = ctx.input(|i| i.time);
         let b_state = self.beacon_state();
 
-        // 1. Top Navigation & Hero Action Header
+        
         TopBottomPanel::top("top_panel")
             .frame(
                 Frame::none()
@@ -644,7 +655,7 @@ impl GuiApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    // App Logo & Status Beacon with expanding animated aura
+                    
                     ui.heading(
                         RichText::new("⛵ Ferry")
                             .strong()
@@ -654,9 +665,9 @@ impl GuiApp {
 
                     status_beacon_ui(ui, b_state, time);
 
-                    // Hero Action Buttons
+                    
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        // Select Folder (native OS dialog)
+                        
                         if ui
                             .button(
                                 RichText::new("Select Folder")
@@ -696,7 +707,7 @@ impl GuiApp {
                             }
                         }
 
-                        // Pair Device button
+                        
                         if ui
                             .button(
                                 RichText::new("+ Pair Device")
@@ -708,7 +719,7 @@ impl GuiApp {
                             self.show_pair_modal = true;
                         }
 
-                        // Share Folder button
+                        
                         if ui
                             .button(RichText::new("Share Folder").size(12.0))
                             .clicked()
@@ -716,7 +727,7 @@ impl GuiApp {
                             self.show_share_modal = true;
                         }
 
-                        // Conflicts Drawer button
+                        
                         let conf_btn_text = if self.conflicts.is_empty() {
                             "Conflicts [C]".to_string()
                         } else {
@@ -735,7 +746,7 @@ impl GuiApp {
                             self.dispatch(BackendAction::FetchConflicts);
                         }
 
-                        // Hold Edits / Release Pin toggle hero button
+                        
                         let is_pinned = self.snapshot.as_ref().is_some_and(|s| {
                             s.pin.holding || s.state.eq_ignore_ascii_case("pinned")
                         });
@@ -764,7 +775,7 @@ impl GuiApp {
                             self.show_pin_modal = true;
                         }
 
-                        // Sync Now / Rescan hero action button
+                        
                         if ui
                             .button(
                                 RichText::new("↻ Sync Now [R]")
@@ -785,7 +796,7 @@ impl GuiApp {
                 });
             });
 
-        // 2. Hairline Telemetry Strip
+        
         let mut telemetry_conflicts_clicked = false;
         TopBottomPanel::top("telemetry_panel")
             .frame(
@@ -805,7 +816,7 @@ impl GuiApp {
             self.dispatch(BackendAction::FetchConflicts);
         }
 
-        // 3. Bottom Hotkey Shortcut Footer
+        
         TopBottomPanel::bottom("bottom_panel")
             .frame(
                 Frame::none()
@@ -849,7 +860,7 @@ impl GuiApp {
                 });
             });
 
-        // 4. Central Content Area
+        
         let mut fleet_open_pair = false;
         let mut fleet_open_share = false;
         let mut clear_activity = false;
@@ -863,7 +874,7 @@ impl GuiApp {
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     if let Some(ref snap) = self.snapshot {
-                        // Folder Information Card
+                        
                         render_card(ui, "Folder Status", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Path:").color(colors::TEXT_MUTED));
@@ -890,7 +901,7 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        // Storage & Tree Metrics Grid
+                        
                         render_card(ui, "Storage & Tree Metrics", |ui| {
                             ui.columns(4, |cols| {
                                 cols[0].label(
@@ -935,7 +946,7 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        // Active Transfer Banner
+                        
                         if let Some(ref transfer) = self.active_transfer {
                             render_card(ui, "Active Transfer", |ui| {
                                 let ratio = (transfer.bytes_transferred as f32
@@ -970,7 +981,7 @@ impl GuiApp {
                             ui.add_space(12.0);
                         }
 
-                        // Connected Device Fleet Table
+                        
                         render_fleet_table(
                             ui,
                             &snap.peers,
@@ -980,7 +991,7 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        // Real-Time Activity Stream Log
+                        
                         render_activity_stream(
                             ui,
                             &self.activity_log,
@@ -1009,7 +1020,7 @@ impl GuiApp {
             self.activity_log.clear();
         }
 
-        // 5. Modals & Drawers
+        
         if self.show_conflicts_modal {
             let mut refresh_conflicts = false;
             render_conflicts_modal(ctx, &mut self.show_conflicts_modal, &self.conflicts, || {

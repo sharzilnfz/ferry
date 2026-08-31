@@ -1,10 +1,10 @@
-//! Integration tests: real notify watcher on the host OS, real debounce
-//! worker, poll fallback, and audit timer. Deterministic policy/walker logic
-//! lives in unit tests; these cover the wiring end to end.
-//!
-//! Timing discipline: every wait is a deadline-bounded retry loop (5 s cap),
-//! never a bare sleep assertion, so slow machines pass without inflating
-//! happy-path latency.
+
+
+
+
+
+
+
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,8 +23,8 @@ fn fmk() -> [u8; 32] {
 }
 
 fn poly() -> ferry_store::chunker::ValidatedPoly {
-    // A fixed-seed polynomial keeps this test independent of global RNG
-    // state; irreducibility correctness is ferry-store's own concern.
+    
+    
     ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(42))
 }
 
@@ -57,10 +57,11 @@ fn fast_cfg() -> ScanConfig {
         quiet_window: Duration::from_millis(150),
         audit_interval: Duration::from_hours(1),
         poll_interval: Duration::from_millis(100),
+        parent_manifest_id: None,
     }
 }
 
-/// Wait until `f` returns Some; panics after `deadline`.
+
 fn wait_until<T>(deadline: Instant, mut f: impl FnMut() -> Option<T>) -> T {
     loop {
         if let Some(v) = f() {
@@ -94,7 +95,7 @@ fn watched_rename_of_subdir_recovers_correct_state() {
     let engine = ScanEngine::watch(env.root.clone(), handle_for(&store)).unwrap();
     let baseline = engine.current().unwrap();
 
-    // Rename a watched subdir with contents behind the running watcher.
+    
     std::fs::rename(env.root.join("sub"), env.root.join("renamed")).unwrap();
     write(&env.root.join("renamed/after.txt"), b"added during rename");
 
@@ -130,13 +131,13 @@ fn overflow_injection_triggers_full_rescan_and_repairs_arbitrary_drift() {
     .unwrap();
     let baseline = engine.current().unwrap();
 
-    // Drift that produces NO watcher events we can rely on in CI timing:
-    // delete + create + content change all at once.
+    
+    
     std::fs::remove_file(env.root.join("a.txt")).unwrap();
     write(&env.root.join("d/b.txt"), b"two-changed");
     write(&env.root.join("new.txt"), b"brand new");
 
-    // Simulate kernel queue overflow exactly as the platform glue would.
+    
     engine.debug_inject_signal(WatchSignal::Overflow {
         reason: "test-injected IN_Q_OVERFLOW".into(),
     });
@@ -163,18 +164,18 @@ fn poll_fallback_converges_when_watch_is_unavailable() {
     )
     .unwrap();
 
-    // Declare the subtree unwatchable through the normal signal path
-    // (what ENOSPC during watch registration produces).
+    
+    
     engine.debug_inject_signal(WatchSignal::Unwatchable {
         subtree: vec!["unwatchable".to_string()],
         reason: "test-injected ENOSPC".into(),
     });
 
-    // Mutate ONLY the polled subtree. On a live watcher the native events
-    // may win the race (platform-dependent), so the honest assertion here is
-    // CONVERGENCE: whichever path fires, the manifest must match disk. The
-    // poller's own mismatch detection is covered deterministically by
-    // engine unit tests over stat_sweep.
+    
+    
+    
+    
+    
     let before = engine.current().unwrap();
     write(&env.root.join("unwatchable/y.txt"), b"polled change");
 
@@ -194,6 +195,7 @@ fn audit_timer_detects_silent_same_length_rewrite() {
         quiet_window: Duration::from_millis(50),
         audit_interval: Duration::from_millis(250),
         poll_interval: Duration::from_millis(100),
+        parent_manifest_id: None,
     };
     let engine = ScanEngine::watch_with(
         env.root.clone(),
@@ -204,15 +206,15 @@ fn audit_timer_detects_silent_same_length_rewrite() {
     .unwrap();
     let baseline = engine.current().unwrap();
 
-    // Same length, mtime restored: invisible to stat-based short-circuits.
+    
     std::fs::write(env.root.join("vault.bin"), [9u8; 256]).unwrap();
     set_mtime(&env.root.join("vault.bin"));
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    // On a live watcher the write itself produces events (platform race);
-    // what we assert is that the audit TIMER runs full-hash passes and that
-    // drift is repaired. The "incremental misses it" half is proven
-    // deterministically in walk.rs unit tests.
+    
+    
+    
+    
     let cur = wait_until(deadline, || {
         let c = engine.current()?;
         (c.root_tree_id != baseline.root_tree_id).then_some(c)
@@ -233,10 +235,10 @@ fn audit_timer_detects_silent_same_length_rewrite() {
 fn burst_of_writes_coalesces_and_subscribers_are_notified() {
     let (env, store) = env("burst");
     write(&env.root.join("seed.txt"), b"seed");
-    // Poll-free config: this test targets EVENT-path coalescing. Under
-    // CI load the poller can fire mid-burst and legitimately publish an
-    // intermediate snapshot, which would surface here as an extra update
-    // and flake the count below on scheduler speed, not semantics.
+    
+    
+    
+    
     let cfg = ScanConfig {
         poll_interval: Duration::from_hours(1),
         ..fast_cfg()
@@ -273,21 +275,21 @@ fn burst_of_writes_coalesces_and_subscribers_are_notified() {
         }
         None
     });
-    // 30 writes must coalesce to a handful of events, never one per
-    // file. Bounded rather than exactly 1: if the OS deschedules this
-    // thread past the quiet window mid-burst, the remaining writes form
-    // a second legitimate batch — a scheduler artifact, not a semantics
-    // failure.
+    
+    
+    
+    
+    
     assert!(
         updates <= 3,
         "a single burst must coalesce into few update events, got {updates}"
     );
 
-    // And the final state matches disk truth.
+    
     let cur = engine.current().unwrap();
     assert_eq!(cur.root_tree_id, scratch_root(&store, &env.root));
 
-    // Zero-change rescan hashes nothing.
+    
     let run = engine.scan_once().unwrap();
     assert_eq!(run.stats.bytes_chunked, 0);
 }
@@ -327,7 +329,7 @@ fn incremental_pass_matches_scratch_after_event_driven_mutations() {
     assert_ne!(cs, empty);
 }
 
-// --- tiny local helpers (tests/ cannot use crate-internal testutil) ---
+
 
 fn write(path: &std::path::Path, bytes: &[u8]) {
     if let Some(p) = path.parent() {

@@ -1,5 +1,5 @@
-//! Live process end-to-end verification tests covering all acceptance criteria
-//! from .scratch/live-verification-fixes/issues/09-e2e-live-process-and-browser-verification.md.
+
+
 
 mod common;
 
@@ -95,12 +95,12 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     let a = TestDevice::new("conflict-a");
     let b = TestDevice::new("conflict-b");
 
-    // 1. Init on device A + create initial file
+    
     let out = a.command(&["init"]).output().expect("init a");
     assert!(out.status.success());
     fs::write(a.tree.join("shared.txt"), b"initial base line\n").unwrap();
 
-    // 2. Pairing
+    
     let mut pair_a = a
         .command(&["pair", "--timeout-secs", "30"])
         .stdout(Stdio::null())
@@ -130,7 +130,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     );
     assert!(wait_for_child(&mut pair_a, 30), "pair a failed to finish");
 
-    // 3. Start daemons: A listens, B dials
+    
     let mut daemon_a_cmd = a.command(&["daemon", "--listen", "127.0.0.1:0"]);
     daemon_a_cmd.stdout(Stdio::piped()).stderr(Stdio::null());
     let mut daemon_a = ProcDaemon(daemon_a_cmd.spawn().expect("daemon A"));
@@ -145,7 +145,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     );
     let _ = &mut daemon_b;
 
-    // 4. Wait for initial agreement
+    
     let shared_b = b.tree.join("shared.txt");
     let deadline = Instant::now() + Duration::from_secs(20);
     while !shared_b.exists() {
@@ -157,7 +157,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         "initial base line\n"
     );
 
-    // Wait for agreement status to settle
+    
     let agree_deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
@@ -177,7 +177,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    // 5. Concurrently edit shared.txt on both sides while UNPINNED
+    
     fs::write(a.tree.join("shared.txt"), b"mod from device A (newer)\n").unwrap();
     std::thread::sleep(Duration::from_millis(100));
     fs::write(
@@ -186,7 +186,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     )
     .unwrap();
 
-    // Give daemons time to exchange, reconcile, and quarantine the loser
+    
     let reconcile_deadline = Instant::now() + Duration::from_secs(20);
     let mut quarantined = false;
     while Instant::now() < reconcile_deadline {
@@ -210,7 +210,7 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    // Also check conflicts list via CLI
+    
     let conflicts_out_a = a
         .command(&["conflicts", "list", "--json"])
         .output()
@@ -242,21 +242,21 @@ fn test_cli_pin_hours_persists_across_cli_invocations() {
     let proj = env.work().join("pin_proj");
     fs::create_dir_all(&proj).unwrap();
 
-    commands::init::run(&proj, "init").expect("init proj");
+    commands::init::run(&proj).expect("init proj");
     let daemon = RunningDaemon::start(&proj);
 
-    // Run pin start with --hours 8
+    
     let out = commands::pin::start(&proj, &["src/**".to_string()], 8).expect("pin start");
     assert_eq!(out.json["command"], "pin");
     assert_eq!(out.json["action"], "start");
 
-    // Verify status immediately after CLI exits
+    
     let status_out = commands::pin::status(&proj).expect("pin status");
     assert_eq!(status_out.json["state"], "active");
     assert_eq!(status_out.json["holding"], true);
     assert_eq!(status_out.json["paths"], serde_json::json!(["src/**"]));
 
-    // Verify record in .ferry/pin-state.json has expires_sec set
+    
     let state_file = proj.join(".ferry/pin-state.json");
     let content = fs::read_to_string(&state_file).expect("read pin state");
     let json_val: serde_json::Value = serde_json::from_str(&content).expect("parse pin state");
@@ -274,31 +274,31 @@ fn test_cli_ignore_external_folder_targeting() {
     let proj = env.work().join("ext_proj");
     fs::create_dir_all(&proj).unwrap();
 
-    commands::init::run(&proj, "init").expect("init ext proj");
+    commands::init::run(&proj).expect("init ext proj");
 
-    // Run ignore list specifying the external folder path
+    
     let list_out = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list");
     assert_eq!(list_out.json["command"], "ignore");
     assert_eq!(list_out.json["folder"], proj.display().to_string());
     assert!(list_out.json.get("layers").is_some());
 
-    // Apply a pattern to external folder
+    
     let add_out =
         commands::ignore_cmd::run(&proj, Some("*.log"), None, false).expect("add pattern");
     assert_eq!(add_out.json["action"], "added-line");
 
-    // Verify ferry.ignore in the external directory contains the rule
+    
     let ignore_file = proj.join("ferry.ignore");
     assert!(ignore_file.exists());
     let ignore_text = fs::read_to_string(&ignore_file).unwrap();
     assert!(ignore_text.contains("*.log"));
 
-    // Apply a preset to external folder
+    
     let preset_out =
         commands::ignore_cmd::run(&proj, None, Some("claude"), false).expect("apply preset");
     assert_eq!(preset_out.json["preset"], "claude");
 
-    // Verify listing layers includes presets
+    
     let list_after = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list after");
     assert_eq!(
         list_after.json["applied_presets"],
@@ -309,19 +309,19 @@ fn test_cli_ignore_external_folder_targeting() {
 #[test]
 #[allow(deprecated)]
 fn test_ui_events_and_token_auth_flow() {
-    use ferry_daemon::ui::backend::IpcBackend;
     use ferry_daemon::ui::server::{generate_token, DashboardServer};
+    use ferry_ipc::backend::connect_auto;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let env = Env::new("ui_events_and_auth");
     let proj = env.work().join("ui_proj");
     fs::create_dir_all(&proj).unwrap();
-    commands::init::run(&proj, "init").expect("init ui proj");
+    commands::init::run(&proj).expect("init ui proj");
 
     let token = generate_token();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&proj);
-    let backend = Arc::new(IpcBackend::new(socket_path).with_fallback(proj.clone()));
+    let backend = Arc::new(connect_auto(socket_path, proj.clone()));
     let server = DashboardServer::new(backend).with_token(token.clone());
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -335,7 +335,7 @@ fn test_ui_events_and_token_auth_flow() {
             server.serve(listener).await.unwrap();
         });
 
-        // 1. Without token, GET /api/events returns 403
+        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!("GET /api/events HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await.unwrap();
@@ -347,7 +347,7 @@ fn test_ui_events_and_token_auth_flow() {
             "Unauthenticated SSE should return 403, got {resp_str}"
         );
 
-        // 2. With token query param, GET /api/events returns 200 text/event-stream
+        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!(
             "GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
@@ -365,7 +365,7 @@ fn test_ui_events_and_token_auth_flow() {
             "Content-type should be text/event-stream"
         );
 
-        // 3. Root index.html serves with 200 without token (public SPA entry)
+        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await.unwrap();

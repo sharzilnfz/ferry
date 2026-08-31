@@ -1,10 +1,11 @@
-//! Comprehensive unit and headless render tests for `ferry-gui`.
+
 
 use std::sync::Arc;
 
 use egui::{Context, RawInput};
 use ferry_gui::activity::{render_activity_stream, ActivityEntry};
-use ferry_gui::beacon::{status_beacon_ui, BeaconState};
+use ferry_gui::beacon::{beacon_color, beacon_label, status_beacon_ui};
+use ferry_platform::SyncState;
 use ferry_gui::fleet::render_fleet_table;
 use ferry_gui::modals::{
     generate_ascii_qr, render_conflicts_modal, render_pair_modal, render_pin_modal,
@@ -12,7 +13,7 @@ use ferry_gui::modals::{
 };
 use ferry_gui::telemetry::{format_short_hex, render_telemetry_hairline};
 use ferry_gui::theme::{colors, Theme};
-use ferry_gui::{format_bytes, GuiApp};
+use ferry_gui::{format_bytes, BackendAction, GuiApp};
 use ferry_ipc::backend::{FakeBackend, ShareOffer, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, ScanStatsView, TransferDirection,
@@ -50,28 +51,28 @@ fn test_format_short_hex() {
 
 #[test]
 fn test_beacon_states_and_pulses() {
-    assert_eq!(BeaconState::Synced.color(), colors::FERRY_GREEN);
-    assert_eq!(BeaconState::Syncing.color(), colors::BLUE_SYNCING);
-    assert_eq!(BeaconState::Holding.color(), colors::PURPLE_PINNED);
-    assert_eq!(BeaconState::Conflict.color(), colors::RED_CONFLICT);
-    assert_eq!(BeaconState::Offline.color(), colors::GRAY_OFFLINE);
+    assert_eq!(beacon_color(SyncState::Synced), colors::FERRY_GREEN);
+    assert_eq!(beacon_color(SyncState::Syncing), colors::BLUE_SYNCING);
+    assert_eq!(beacon_color(SyncState::Pinned), colors::PURPLE_PINNED);
+    assert_eq!(beacon_color(SyncState::Conflict), colors::RED_CONFLICT);
+    assert_eq!(beacon_color(SyncState::Offline), colors::GRAY_OFFLINE);
 
-    assert_eq!(BeaconState::Synced.label(), "SYNCED");
-    assert_eq!(BeaconState::Syncing.label(), "SYNCING");
-    assert_eq!(BeaconState::Holding.label(), "HOLDING");
-    assert_eq!(BeaconState::Conflict.label(), "CONFLICT");
+    assert_eq!(beacon_label(SyncState::Synced), "SYNCED");
+    assert_eq!(beacon_label(SyncState::Syncing), "SYNCING");
+    assert_eq!(beacon_label(SyncState::Pinned), "PINNED");
+    assert_eq!(beacon_label(SyncState::Conflict), "CONFLICT");
 
-    assert!(BeaconState::Syncing.pulse_speed() > BeaconState::Synced.pulse_speed());
-    assert!(BeaconState::Conflict.pulse_speed() > BeaconState::Holding.pulse_speed());
+    assert!(SyncState::Syncing.pulse_speed() > SyncState::Synced.pulse_speed());
+    assert!(SyncState::Conflict.pulse_speed() > SyncState::Pinned.pulse_speed());
 
-    // Headless UI render
+    
     let ctx = Context::default();
     let _ = ctx.run(RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            status_beacon_ui(ui, BeaconState::Synced, 1.23);
-            status_beacon_ui(ui, BeaconState::Syncing, 2.34);
-            status_beacon_ui(ui, BeaconState::Holding, 3.45);
-            status_beacon_ui(ui, BeaconState::Conflict, 4.56);
+            status_beacon_ui(ui, SyncState::Synced, 1.23);
+            status_beacon_ui(ui, SyncState::Syncing, 2.34);
+            status_beacon_ui(ui, SyncState::Pinned, 3.45);
+            status_beacon_ui(ui, SyncState::Conflict, 4.56);
         });
     });
 }
@@ -151,7 +152,7 @@ fn test_qr_generation() {
 fn test_modals_render() {
     let ctx = Context::default();
 
-    // 1. Conflicts modal
+    
     let mut show_conflicts = true;
     let conflicts = vec![ConflictEntry {
         ts: "2026-08-28T03:10:00Z".to_string(),
@@ -175,7 +176,7 @@ fn test_modals_render() {
         render_conflicts_modal(ctx, &mut show_conflicts, &conflicts, || {});
     });
 
-    // 2. Share modal with warnings
+    
     let mut show_share = true;
     let warnings = vec![".env: line 1 [Private Key]".to_string()];
     let mut override_secrets = false;
@@ -191,7 +192,7 @@ fn test_modals_render() {
         );
     });
 
-    // 3. Share modal with active offer
+    
     let offer = ShareOffer {
         folder: "/test/folder".to_string(),
         token: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX".to_string(),
@@ -214,14 +215,14 @@ fn test_modals_render() {
         );
     });
 
-    // 4. Pair modal
+    
     let mut show_pair = true;
     let mut pair_input = "/tmp/pair-offer.ferry-pair".to_string();
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_pair_modal(ctx, &mut show_pair, &mut pair_input, |_| {});
     });
 
-    // 5. Pin modal
+    
     let mut show_pin = true;
     let mut pin_input = "src/**".to_string();
     let _ = ctx.run(RawInput::default(), |ctx| {
@@ -234,23 +235,23 @@ fn test_gui_app_full_lifecycle() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    // 1. Initial State
+    
     assert_eq!(app.current_badge().0, "OFFLINE");
-    assert_eq!(app.beacon_state(), BeaconState::Offline);
+    assert_eq!(app.beacon_state(), SyncState::Offline);
 
-    // 2. Receive Snapshot
+    
     let mut snap = EngineSnapshot::new("/test/folder", "folder123", "device456", "synced");
     snap.scanned = ScanStatsView::new(100, 20, 0, 10_000_000);
     snap.peers.push(PeerStatusView::new("peer-1", "online"));
     app.handle_event(UiEvent::State(snap));
 
     assert_eq!(app.current_badge().0, "SYNCED");
-    assert_eq!(app.beacon_state(), BeaconState::Synced);
+    assert_eq!(app.beacon_state(), SyncState::Synced);
     assert_eq!(app.snapshot.as_ref().unwrap().folder, "/test/folder");
     assert_eq!(app.snapshot.as_ref().unwrap().scanned.files, 100);
     assert_eq!(app.activity_log.len(), 1);
 
-    // 3. Receive Transfer Progress
+    
     app.handle_event(UiEvent::TransferProgress {
         bytes_transferred: 5_000_000,
         total_bytes: 10_000_000,
@@ -262,10 +263,10 @@ fn test_gui_app_full_lifecycle() {
     });
 
     assert_eq!(app.current_badge().0, "SYNCING");
-    assert_eq!(app.beacon_state(), BeaconState::Syncing);
+    assert_eq!(app.beacon_state(), SyncState::Syncing);
     assert!(app.active_transfer.is_some());
 
-    // 4. Receive Conflict
+    
     app.handle_event(UiEvent::ConflictRecorded {
         path: "src/main.rs".to_string(),
         conflict_path: "src/main.rs.ferry-conflict.peer1-1787574890".to_string(),
@@ -274,12 +275,265 @@ fn test_gui_app_full_lifecycle() {
     });
 
     assert_eq!(app.current_badge().0, "CONFLICT");
-    assert_eq!(app.beacon_state(), BeaconState::Conflict);
+    assert_eq!(app.beacon_state(), SyncState::Conflict);
     assert_eq!(app.conflicts.len(), 1);
 
-    // 5. Test Full Frame Update in Headless egui Context
+    
+    app.handle_event(UiEvent::FolderRegistered {
+        path: "/test/registered/folder".to_string(),
+    });
+    assert!(app
+        .status_message
+        .as_ref()
+        .is_some_and(
+            |(msg, _, color)| msg == "Folder added: /test/registered/folder"
+                && *color == colors::FERRY_GREEN
+        ));
+    assert!(app
+        .activity_log
+        .iter()
+        .any(|entry| entry.category == "Folder"
+            && entry.message == "Folder added: /test/registered/folder"
+            && entry.color == colors::FERRY_GREEN));
+
+    
     let ctx = Context::default();
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
+}
+
+async fn wait_for_status_banner(app: &mut GuiApp, needle: &str) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        app.drain_events();
+        if let Some((msg, _, _)) = &app.status_message {
+            if msg.contains(needle) {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn register_uninitialized_folder_is_blocked_with_init_banner() {
+    let fake = Arc::new(FakeBackend::new());
+    let mut app = GuiApp::new(fake, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+
+    app.dispatch(BackendAction::RegisterFolder {
+        path: dir.path().to_path_buf(),
+    });
+
+    let blocked = wait_for_status_banner(&mut app, "ferry init").await;
+    assert!(blocked, "guard banner pointing at `ferry init` must appear");
+    assert!(
+        app.status_message
+            .as_ref()
+            .is_some_and(|(m, _, _)| m.contains("not an initialized Ferry folder")),
+        "banner names the uninitialized directory"
+    );
+}
+
+#[tokio::test]
+async fn register_initialized_folder_reaches_backend_unchanged() {
+    let fake = Arc::new(FakeBackend::new());
+    let mut app = GuiApp::new(fake, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".ferry")).unwrap();
+    std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
+
+    app.dispatch(BackendAction::RegisterFolder {
+        path: dir.path().to_path_buf(),
+    });
+
+    
+    
+    let reached = wait_for_status_banner(&mut app, "not-implemented").await;
+    assert!(reached, "initialized path must reach the backend");
+    assert!(
+        !app.status_message
+            .as_ref()
+            .is_some_and(|(m, _, _)| m.contains("not an initialized Ferry folder")),
+        "initialized path must not be blocked"
+    );
+}
+
+struct SuccessRegisterBackend {
+    fake: FakeBackend,
+}
+
+impl ferry_ipc::backend::StatusDomain for SuccessRegisterBackend {
+    fn get_status(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<EngineSnapshot, ferry_ipc::backend::OpError>>
+    {
+        self.fake.get_status()
+    }
+    fn list_conflicts(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<Vec<ConflictEntry>, ferry_ipc::backend::OpError>>
+    {
+        self.fake.list_conflicts()
+    }
+    fn trigger_scan(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<(), ferry_ipc::backend::OpError>> {
+        self.fake.trigger_scan()
+    }
+    fn subscribe_events(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::UiEventStream, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.subscribe_events()
+    }
+}
+
+impl ferry_ipc::backend::InventoryDomain for SuccessRegisterBackend {
+    fn list_directory(
+        &self,
+        path: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::ListDirectoryResponse, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.list_directory(path)
+    }
+    fn list_folders(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<Vec<ferry_ipc::FolderRecord>, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.list_folders()
+    }
+    fn register_folder(
+        &self,
+        path: std::path::PathBuf,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::FolderRecord, ferry_ipc::backend::OpError>,
+    > {
+        Box::pin(async move {
+            Ok(ferry_ipc::FolderRecord {
+                folder_id: "0123456789abcdef0123456789abcdef".to_string(),
+                path,
+                added_at: "2026-08-30T12:00:00Z".to_string(),
+            })
+        })
+    }
+    fn remove_folder(
+        &self,
+        folder_id: String,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<(), ferry_ipc::backend::OpError>> {
+        self.fake.remove_folder(folder_id)
+    }
+}
+
+impl ferry_ipc::backend::SessionDomain for SuccessRegisterBackend {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinRecord, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.start_pin(paths, hours)
+    }
+    fn stop_pin(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinStopSummary, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.stop_pin()
+    }
+    fn release_pin(
+        &self,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::PinReleaseSummary, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.release_pin()
+    }
+    fn share_initiate(
+        &self,
+        folder: Option<std::path::PathBuf>,
+        i_know: bool,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::ShareOffer, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.share_initiate(folder, i_know)
+    }
+    fn share_status(
+        &self,
+        folder: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::backend::ShareStatus, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.share_status(folder)
+    }
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<std::path::PathBuf>,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::PairResult, ferry_ipc::backend::OpError>>
+    {
+        self.fake.pair_accept(code_or_payload, dir)
+    }
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::CreatePairingRequest,
+    ) -> ferry_ipc::backend::BoxFuture<
+        '_,
+        Result<ferry_ipc::CreatePairingResponse, ferry_ipc::backend::OpError>,
+    > {
+        self.fake.create_pairing_session(req)
+    }
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::JoinPairingRequest,
+    ) -> ferry_ipc::backend::BoxFuture<'_, Result<ferry_ipc::PairResult, ferry_ipc::backend::OpError>>
+    {
+        self.fake.join_pairing_session(req)
+    }
+}
+
+#[tokio::test]
+async fn register_initialized_folder_success_emits_typed_folder_registered_event() {
+    let mock = Arc::new(SuccessRegisterBackend {
+        fake: FakeBackend::new(),
+    });
+    let mut app = GuiApp::new(mock, Context::default(), tokio::runtime::Handle::current());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".ferry")).unwrap();
+    std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
+
+    let target_path = dir.path().to_path_buf();
+    app.dispatch(BackendAction::RegisterFolder {
+        path: target_path.clone(),
+    });
+
+    let success_message = format!("Folder added: {}", target_path.display());
+    let reached = wait_for_status_banner(&mut app, &success_message).await;
+    assert!(
+        reached,
+        "successful registration must show Folder added banner"
+    );
+    assert_eq!(app.status_message.as_ref().unwrap().2, colors::FERRY_GREEN);
+    assert!(app
+        .activity_log
+        .iter()
+        .any(|entry| entry.category == "Folder"
+            && entry.message == success_message
+            && entry.color == colors::FERRY_GREEN));
 }

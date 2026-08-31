@@ -1,13 +1,13 @@
-//! Real-time activity stream log widget for Ferry GUI.
-//!
-//! Provides a chronological feed of sync engine events (scans, chunk transfers,
-//! session pins, conflicts, errors) with auto-scroll and clear capabilities.
+
+
+
+
 
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke};
 
 use crate::theme::colors;
 
-/// A structured entry in the real-time activity stream.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityEntry {
     pub timestamp: String,
@@ -34,7 +34,7 @@ impl ActivityEntry {
     }
 }
 
-/// Render the real-time activity stream widget card.
+
 pub fn render_activity_stream(
     ui: &mut egui::Ui,
     activity_log: &[ActivityEntry],
@@ -95,14 +95,14 @@ pub fn render_activity_stream(
                         } else {
                             for entry in activity_log {
                                 ui.horizontal(|ui| {
-                                    // Timestamp
+                                    
                                     ui.monospace(
                                         RichText::new(&entry.timestamp)
                                             .color(colors::TEXT_MUTED)
                                             .size(11.0),
                                     );
 
-                                    // Category badge
+                                    
                                     let cat_text = format!("[{}]", entry.category);
                                     ui.monospace(
                                         RichText::new(cat_text)
@@ -111,7 +111,7 @@ pub fn render_activity_stream(
                                             .size(11.0),
                                     );
 
-                                    // Message
+                                    
                                     ui.label(
                                         RichText::new(&entry.message)
                                             .color(colors::TEXT_PRIMARY)

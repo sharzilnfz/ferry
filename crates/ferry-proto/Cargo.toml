@@ -17,6 +17,7 @@ zeroize.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
 tempfile.workspace = true
 unicode-normalization.workspace = true
 

@@ -23,7 +23,7 @@ pub const INDEX_HTML: &[u8] = include_bytes!("../../assets/index.html");
 pub const STYLE_CSS: &[u8] = include_bytes!("../../assets/style.css");
 pub const APP_JS: &[u8] = include_bytes!("../../assets/app.js");
 
-/// Unified Axum HTTP server for the Ferry web dashboard.
+
 #[derive(Clone)]
 pub struct DashboardServer {
     backend: Arc<dyn UiBackend>,
@@ -33,7 +33,7 @@ pub struct DashboardServer {
 }
 
 impl DashboardServer {
-    /// Create a new dashboard server backed by a `UiBackend`.
+    
     #[must_use]
     pub fn new(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -44,40 +44,40 @@ impl DashboardServer {
         }
     }
 
-    /// Configure a one-time bearer token required for all `/api/*` endpoints.
+    
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
     }
 
-    /// Configure automatic server shutdown after a duration of inactivity.
+    
     #[must_use]
     pub fn with_inactivity_timeout(mut self, timeout: Duration) -> Self {
         self.inactivity_timeout = Some(timeout);
         self
     }
 
-    /// Return the configured token, if any.
+    
     #[must_use]
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
 
-    /// Return the reference to the underlying backend.
+    
     #[must_use]
     pub fn backend(&self) -> &Arc<dyn UiBackend> {
         &self.backend
     }
 
-    /// Record activity timestamp (called automatically by middleware on every request).
+    
     pub fn record_activity(&self) {
         if let Ok(mut last) = self.last_activity.lock() {
             *last = Instant::now();
         }
     }
 
-    /// How long the server has been idle since the last request.
+    
     #[must_use]
     pub fn idle_duration(&self) -> Duration {
         self.last_activity
@@ -86,7 +86,7 @@ impl DashboardServer {
             .unwrap_or_default()
     }
 
-    /// Construct the complete Axum router.
+    
     pub fn router(&self) -> Router {
         Router::new()
             .route("/", get(serve_index))
@@ -104,6 +104,7 @@ impl DashboardServer {
             .route("/api/pin/start", post(api_pin_start))
             .route("/api/pin/stop", post(api_pin_stop))
             .route("/api/pin/release", post(api_pin_release))
+            .route("/api/registry/register", post(api_registry_register))
             .route("/api/fs/ls", get(api_fs_ls))
             .route("/api/events", get(api_events))
             .fallback(fallback)
@@ -114,7 +115,7 @@ impl DashboardServer {
             .with_state(self.clone())
     }
 
-    /// Bind and spawn the server on a dedicated thread with its own tokio runtime.
+    
     pub fn spawn(self, addr: SocketAddr) -> Result<(), String> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -134,7 +135,7 @@ impl DashboardServer {
         Ok(())
     }
 
-    /// Serve on a pre-bound `TcpListener` until inactivity timeout or external shutdown.
+    
     pub async fn serve(self, listener: tokio::net::TcpListener) -> Result<(), std::io::Error> {
         if let Some(timeout) = self.inactivity_timeout {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -164,7 +165,7 @@ impl DashboardServer {
         }
     }
 
-    /// Serve on a pre-bound `TcpListener` with a caller-supplied graceful shutdown signal.
+    
     pub async fn serve_with_graceful_shutdown<F>(
         self,
         listener: tokio::net::TcpListener,
@@ -180,11 +181,11 @@ impl DashboardServer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Token authentication & activity middleware
-// ---------------------------------------------------------------------------
 
-/// Generate a secure 32-character random hex token (16 random bytes).
+
+
+
+
 #[must_use]
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 16];
@@ -192,7 +193,7 @@ pub fn generate_token() -> String {
     ferry_store::format::hex(&bytes)
 }
 
-/// Constant-time token verification using `subtle::ConstantTimeEq`.
+
 #[must_use]
 pub fn is_token_valid(expected: &str, provided: Option<&str>) -> bool {
     let Some(prov) = provided else {
@@ -205,7 +206,7 @@ pub fn is_token_valid(expected: &str, provided: Option<&str>) -> bool {
     expected.as_bytes().ct_eq(prov.as_bytes()).into()
 }
 
-/// Extract authentication token from `Authorization: Bearer <token>` header or `?token=<token>` query param.
+
 #[must_use]
 pub fn extract_token(req: &axum::extract::Request) -> Option<String> {
     if let Some(auth_val) = req.headers().get(axum::http::header::AUTHORIZATION) {
@@ -259,9 +260,9 @@ async fn auth_and_activity_middleware(
     next.run(req).await
 }
 
-// ---------------------------------------------------------------------------
-// Static asset handlers
-// ---------------------------------------------------------------------------
+
+
+
 
 #[must_use]
 pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
@@ -302,9 +303,9 @@ async fn fallback(uri: Uri) -> Response {
     }
 }
 
-// ---------------------------------------------------------------------------
-// API route handlers
-// ---------------------------------------------------------------------------
+
+
+
 
 fn bad_body(rejection: JsonRejection) -> ApiError {
     ApiError::new(
@@ -407,8 +408,8 @@ async fn api_pair_accept(
     payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(bad_body)?;
-    // The unified contract takes either form in one field; keep accepting
-    // the older `payload_path` key for existing dashboard clients.
+    
+    
     let code_or_payload = body
         .get("code_or_payload")
         .or_else(|| body.get("payload_path"))
@@ -520,6 +521,34 @@ async fn api_pin_start(
     })))
 }
 
+#[derive(serde::Deserialize)]
+struct RegisterFolderBody {
+    path: PathBuf,
+    #[serde(default)]
+    #[allow(unused)]
+    force: bool,
+}
+
+
+
+async fn api_registry_register(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<RegisterFolderBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(req) = payload.map_err(bad_body)?;
+    if !ferry_folder::is_initialized(&req.path) {
+        let err = ferry_folder::FolderError::not_initialized(&req.path);
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            err.code,
+            err.message,
+            err.hint,
+        ));
+    }
+    let record = server.backend.register_folder(req.path).await?;
+    Ok(Json(json!({ "folder": record })))
+}
+
 async fn api_pin_stop(
     State(server): State<DashboardServer>,
     payload: Result<Json<Value>, JsonRejection>,
@@ -552,59 +581,18 @@ async fn api_pin_release(
 }
 
 fn percent_decode_query_value(input: &str) -> Result<String, ApiError> {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hi = chars.next().ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            let lo = chars.next().ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            let hex = format!("{hi}{lo}");
-            let byte = u8::from_str_radix(&hex, 16).map_err(|_| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            if byte == 0 {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "path contains null byte",
-                    "use absolute path",
-                ));
-            }
-            out.push(byte as char);
-        } else if c == '+' {
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
-    }
-    Ok(out)
-}
-
-async fn api_fs_ls(
-    State(server): State<DashboardServer>,
-    req: axum::extract::Request,
-) -> Result<Json<Value>, ApiError> {
-    let raw_query = req.uri().query().unwrap_or("").to_string();
-    if raw_query.to_ascii_lowercase().contains("%00") {
+    let replaced = input.replace('+', " ");
+    let decoded = percent_encoding::percent_decode_str(&replaced)
+        .decode_utf8()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-path",
+                "invalid percent encoding in path",
+                "use absolute path",
+            )
+        })?;
+    if decoded.contains(' ') {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "bad-path",
@@ -612,6 +600,14 @@ async fn api_fs_ls(
             "use absolute path",
         ));
     }
+    Ok(decoded.into_owned())
+}
+
+async fn api_fs_ls(
+    State(server): State<DashboardServer>,
+    req: axum::extract::Request,
+) -> Result<Json<Value>, ApiError> {
+    let raw_query = req.uri().query().unwrap_or("").to_string();
     let mut decoded_path: Option<String> = None;
     let mut found_path = false;
     for pair in raw_query.split('&') {
@@ -625,22 +621,6 @@ async fn api_fs_ls(
         if k_dec == "path" {
             found_path = true;
             let v_dec = percent_decode_query_value(v_raw)?;
-            if v_dec.contains('\0') {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "path contains null byte",
-                    "use absolute path",
-                ));
-            }
-            if v_raw.to_ascii_lowercase().contains("%2e") && v_dec.contains("..") {
-                return Err(ApiError::new(
-                    StatusCode::FORBIDDEN,
-                    "path-traversal",
-                    format!("path {v_dec} escapes allowed root"),
-                    "path escapes allowed root",
-                ));
-            }
             if v_dec.is_empty() {
                 decoded_path = None;
             } else {
@@ -654,25 +634,6 @@ async fn api_fs_ls(
     } else {
         None
     };
-    if let Some(ref p) = path_opt {
-        let s = p.to_string_lossy().to_string();
-        if s.contains('\0') {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad-path",
-                "path contains null byte",
-                "use absolute path",
-            ));
-        }
-        if s.contains("//") {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad-path",
-                format!("path {s} contains //"),
-                "use single slashes",
-            ));
-        }
-    }
     let resp = server.backend.list_directory(path_opt).await.map_err(|e| {
         let status = match e.code.as_str() {
             "path-traversal" => StatusCode::FORBIDDEN,
@@ -693,7 +654,7 @@ async fn api_events(
     let (tx, rx) = tokio::sync::mpsc::channel(16);
 
     tokio::spawn(async move {
-        // 1. Send initial status snapshot on connection
+        
         if let Ok(snap) = server.backend.get_status().await {
             let doc = snapshot_to_status_doc(&snap);
             let s = serde_json::to_string(&doc).unwrap_or_default();
@@ -706,7 +667,7 @@ async fn api_events(
             }
         }
 
-        // 2. Stream events from backend push stream with zero polling (0.0% idle CPU)
+        
         if let Ok(mut stream) = server.backend.subscribe_events().await {
             while let Ok(event) = stream.recv().await {
                 if tx.is_closed() {
@@ -769,6 +730,14 @@ async fn api_events(
                         })
                         .to_string(),
                     ),
+                    UiEvent::FolderRegistered { path } => {
+                        Event::default().event("folder_registered").data(
+                            json!({
+                                "path": path,
+                            })
+                            .to_string(),
+                        )
+                    }
                     UiEvent::Error { code, message } => Event::default().event("error").data(
                         json!({
                             "code": code,
@@ -872,12 +841,12 @@ mod tests {
             server.serve(listener).await.unwrap();
         });
 
-        // 1. Missing token -> 403
+        
         let (status, body, _) = send_http(addr, "GET", "/api/status", &[], None).await;
         assert_eq!(status, 403);
         assert_eq!(body["code"], "forbidden");
 
-        // 2. Wrong token -> 403
+        
         let (status, body, _) = send_http(
             addr,
             "GET",
@@ -889,7 +858,7 @@ mod tests {
         assert_eq!(status, 403);
         assert_eq!(body["code"], "forbidden");
 
-        // 3. Valid Bearer token header -> 200
+        
         let auth_hdr = format!("Bearer {token}");
         let (status, body, _) = send_http(
             addr,
@@ -902,7 +871,7 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body["command"], "status");
 
-        // 4. Valid query param token -> 200
+        
         let query_path = format!("/api/status?token={token}");
         let (status, body, _) = send_http(addr, "GET", &query_path, &[], None).await;
         assert_eq!(status, 200);

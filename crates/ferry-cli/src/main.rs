@@ -1,9 +1,9 @@
 #![allow(warnings, clippy::all, clippy::pedantic)]
-//! `ferry` — entry point. Dispatch, render, exit codes.
-//!
-//! Contract: stdout carries exactly one human document OR (with --json) one
-//! JSON document; progress and diagnostics go to stderr. Errors print a
-//! structured document to stderr and exit nonzero.
+
+
+
+
+
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ fn report_error(e: &CliError, json_mode: bool) {
         }
         let _ = writeln!(lock, "{doc}");
     } else {
-        let _ = writeln!(lock, "{}", out::error_text(e.code, &e.message, &e.hint));
+        let _ = writeln!(lock, "{}", out::error_text(&e.code, &e.message, &e.hint));
     }
 }
 
@@ -101,7 +101,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
                     test: false,
                 });
             }
-            // Fallback to default picker (gui->web->tui) if no feature matches
+            
             return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
                 folder: None,
                 gui: false,
@@ -117,9 +117,8 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
     match cmd {
         Command::Init { path } => {
             let p: PathBuf = path.clone().unwrap_or_else(|| PathBuf::from("."));
-            ferry_cli::commands::init::run(&p, "init")
+            ferry_cli::commands::init::run(&p)
         }
-        Command::Add { path } => ferry_cli::commands::init::run(path, "add"),
         Command::Pair {
             accept,
             dir,
@@ -222,19 +221,24 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             }
         },
         Command::Daemon {
+            action,
             folders,
             listen,
             peer_url,
             transport,
             interval_secs,
-        } => ferry_cli::commands::daemon::run(ferry_cli::commands::daemon::DaemonArgs {
-            folders,
-            listen: listen.as_deref(),
-            peer_url: peer_url.as_deref(),
-            transport,
-            interval_secs: *interval_secs,
-            json: cli.json,
-        }),
+        } => match action {
+            Some(ferry_cli::cli::DaemonAction::Stop) => ferry_cli::commands::daemon::stop(),
+            Some(ferry_cli::cli::DaemonAction::Status) => ferry_cli::commands::daemon::status(),
+            None => ferry_cli::commands::daemon::run(ferry_cli::commands::daemon::DaemonArgs {
+                folders,
+                listen: listen.as_deref(),
+                peer_url: peer_url.as_deref(),
+                transport,
+                interval_secs: *interval_secs,
+                json: cli.json,
+            }),
+        },
         Command::Sync {
             folder,
             peer_url,

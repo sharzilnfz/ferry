@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ferry-store = { path = "../ferry-store" }
+ferry-crypto = { path = "../ferry-crypto" }
 notify = "8"
 blake3.workspace = true
 thiserror.workspace = true
@@ -13,6 +14,8 @@ unicode-normalization.workspace = true
 ferry-platform.workspace = true
 
 [dev-dependencies]
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
+ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
 tempfile.workspace = true
 rand.workspace = true
 

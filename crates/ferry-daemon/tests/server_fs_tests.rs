@@ -58,7 +58,83 @@ fn make_entry(name: &str, parent: &str, is_dir: bool) -> DirectoryEntry {
         is_symlink: false,
         is_git_repo: false,
         is_already_synced: false,
+        is_initialized: false,
     }
+}
+
+async fn spawn_server_with_token() -> (SocketAddr, String, tokio::task::JoinHandle<()>) {
+    let fake = Arc::new(FakeBackend::new());
+    let token = generate_token();
+    let server = DashboardServer::new(fake).with_token(&token);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let h = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
+    (addr, token, h)
+}
+
+#[tokio::test]
+async fn registry_register_rejects_uninitialized_path_with_init_hint() {
+    let (addr, token, h) = spawn_server_with_token().await;
+    let auth = format!("Bearer {token}");
+    let dir = tempfile::tempdir().unwrap();
+    let body = serde_json::json!({ "path": dir.path().display().to_string() }).to_string();
+
+    let (status, doc, _) = send_http(
+        addr,
+        "POST",
+        "/api/registry/register",
+        &[("Authorization", &auth)],
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 409);
+    assert_eq!(doc["code"], "not-initialized");
+    assert!(doc["hint"].as_str().unwrap().contains("ferry init"));
+    assert!(doc["hint"].as_str().unwrap().contains("ferry pair"));
+
+    h.abort();
+}
+
+#[tokio::test]
+async fn registry_register_delegates_initialized_path_to_backend() {
+    let (addr, token, h) = spawn_server_with_token().await;
+    let auth = format!("Bearer {token}");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".ferry")).unwrap();
+    std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
+    let body = serde_json::json!({ "path": dir.path().display().to_string() }).to_string();
+
+    
+    
+    
+    let (status, doc, _) = send_http(
+        addr,
+        "POST",
+        "/api/registry/register",
+        &[("Authorization", &auth)],
+        Some(&body),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(doc["code"], "not-found");
+    assert_eq!(doc["error"], "not-implemented");
+
+    h.abort();
+}
+
+#[tokio::test]
+async fn registry_register_requires_auth() {
+    let (addr, _token, h) = spawn_server_with_token().await;
+    let body = serde_json::json!({ "path": "/tmp" }).to_string();
+
+    let (status, doc, _) =
+        send_http(addr, "POST", "/api/registry/register", &[], Some(&body)).await;
+    assert_eq!(status, 403);
+    assert_eq!(doc["code"], "forbidden");
+
+    h.abort();
 }
 
 #[tokio::test]

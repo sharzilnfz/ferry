@@ -1,17 +1,17 @@
-//! Snapshot test scenarios verifying UI edge cases and boundary conditions.
-//!
-//! Tests:
-//! 1. Complex & asymmetric conflicts (nested paths, subsecond mtimes, deletion kinds)
-//! 2. Multi-peer held pins with wildcard glob patterns
-//! 3. Active transfers with boundary values (0-byte, 100GB, missing optional fields)
-//! 4. Secret scan warning detection, red warning modal rendering, and user override flow
+
+
+
+
+
+
+
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Context, RawInput};
-use ferry_gui::beacon::BeaconState;
+use ferry_platform::SyncState;
 use ferry_gui::format_bytes;
 use ferry_gui::modals::render_share_modal;
 use ferry_gui::theme::Theme;
@@ -24,7 +24,7 @@ fn test_edge_case_asymmetric_conflicts() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    // Conflict with deep path, asymmetric nano timestamps, and deletion conflict
+    
     let deep_conflict = ConflictEntry {
         ts: "2026-08-28T03:25:00.123456789Z".to_string(),
         folder_id: "deep-repo-root".to_string(),
@@ -51,7 +51,7 @@ fn test_edge_case_asymmetric_conflicts() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    // Verify modal renders without clipping or panic
+    
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
@@ -93,8 +93,8 @@ fn test_edge_case_held_pins_and_multi_peer_holds() {
 
     app.handle_event(UiEvent::State(snap));
 
-    assert_eq!(app.beacon_state(), BeaconState::Holding);
-    assert_eq!(app.current_badge().0, "HOLDING");
+    assert_eq!(app.beacon_state(), SyncState::Pinned);
+    assert_eq!(app.current_badge().0, "PINNED");
     assert_eq!(app.snapshot.as_ref().unwrap().held_changes, 42);
     assert_eq!(app.snapshot.as_ref().unwrap().pin.paths.len(), 3);
     assert_eq!(app.snapshot.as_ref().unwrap().held_by_peer.len(), 2);
@@ -110,7 +110,7 @@ fn test_edge_case_held_pins_and_multi_peer_holds() {
 
 #[test]
 fn test_edge_case_active_transfers_boundary_values() {
-    // 1. Zero total bytes edge case
+    
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
     app.handle_event(UiEvent::State(EngineSnapshot::new(
@@ -130,7 +130,7 @@ fn test_edge_case_active_transfers_boundary_values() {
         direction: None,
     });
 
-    assert_eq!(app.beacon_state(), BeaconState::Syncing);
+    assert_eq!(app.beacon_state(), SyncState::Syncing);
     let transfer = app.active_transfer.as_ref().unwrap();
     assert_eq!(transfer.bytes_transferred, 0);
     assert_eq!(transfer.total_bytes, 0);
@@ -141,7 +141,7 @@ fn test_edge_case_active_transfers_boundary_values() {
         app.update_ui(ctx);
     });
 
-    // 2. 120 GB massive transfer edge case
+    
     assert_eq!(format_bytes(120 * 1024 * 1024 * 1024), "120.00 GB");
 
     app.handle_event(UiEvent::TransferProgress {
@@ -168,7 +168,7 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake.clone());
 
-    // Populate detected secrets in folder
+    
     let warnings = vec![
         ".env: line 4 [AWS Access Key ID]".to_string(),
         "id_ed25519: line 1 [Private SSH Key]".to_string(),
@@ -182,7 +182,7 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    // Initial render: override checkbox is unchecked
+    
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_share_modal(
             ctx,
@@ -197,7 +197,7 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     assert!(!app.share_override_secrets);
     assert!(app.active_share.is_none());
 
-    // User acknowledges risk and checks override
+    
     app.share_override_secrets = true;
 
     let offer = fake
@@ -211,7 +211,7 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
 
     app.active_share = Some(offer.clone());
 
-    // Render modal with active offer
+    
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_share_modal(
             ctx,

@@ -1,6 +1,6 @@
-//! Test fixtures shared by unit tests in this crate: two-device setups with
-//! real stores, trees, and snapshots. Integration tests (tests/) carry their
-//! own copies because this module is cfg(test)-only.
+
+
+
 
 #![cfg(test)]
 
@@ -55,10 +55,10 @@ pub fn set_mtime(path: &Path, sec: i64, nsec: u32) {
     .unwrap();
 }
 
-/// Directories need a read-only handle for futimens on unix. Windows
-/// cannot open directory handles for time writes at all (`SetFileTime`
-/// needs `FILE_FLAG_BACKUP_SEMANTICS`, which std does not expose), so the
-/// windows branch goes through filetime like ferry-store's fixture.
+
+
+
+
 pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
     #[cfg(unix)]
     {
@@ -78,7 +78,7 @@ pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
 }
 
 pub struct Device {
-    /// Holds the temp dir open for the whole test; never read directly.
+    
     #[allow(dead_code)]
     pub dir: tempfile::TempDir,
     pub store: Store,
@@ -91,7 +91,7 @@ pub struct Device {
 }
 
 impl Device {
-    /// A device rooted in its own temp dir: `store/`, `tree/`, `state/`.
+    
     pub fn new(tag: u8, device_id: [u8; 32], poly: ferry_store::chunker::ValidatedPoly) -> Device {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
@@ -121,7 +121,7 @@ impl Device {
     }
 }
 
-/// Simulate the transport: copy blobs from one store to another.
+
 pub fn transfer(
     from: &Store,
     to: &Store,
@@ -135,8 +135,8 @@ pub fn transfer(
     }
 }
 
-/// Copy a manifest and its whole tree-node closure between stores
-/// (metadata-first exchange).
+
+
 pub fn transfer_manifest(
     from: &Store,
     to: &Store,

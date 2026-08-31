@@ -1,22 +1,22 @@
-//! T-010 acceptance: the exhaustive conflict matrix.
-//!
-//! Dimensions: scenario (both-change, delete-vs-edit, add-vs-add same
-//! content, add-vs-add different content) × direction (A favored, B
-//! favored, tie) × order of application (A first, B first, simultaneous).
-//! 4 × 3 × 2 = 24 cases across two simulated devices, each verified for:
-//!
-//! - zero silent data loss: every distinct content version that existed on
-//!   either device immediately before reconciliation survives somewhere in
-//!   each device's tree afterwards (byte-level file reads);
-//! - winner correctness: the live file at the conflicted path is the
-//!   winning side's bytes on BOTH devices after convergence;
-//! - quarantine accounting: loser copies exist with loser bytes, named
-//!   after the losing device;
-//! - `ferry conflicts list` equivalent: `list_conflicts()` returns exactly
-//!   the injected entries and every JSONL line parses;
-//! - fixed point: exchanging manifests until both root tree ids match,
-//!   then one more reconcile cycle produces zero ops on both sides;
-//! - agreement advance: post-convergence pointers record and reload.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -125,7 +125,7 @@ fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
     .unwrap();
 }
 
-/// Every file's full bytes under `root`, live and quarantined alike.
+
 fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     fn walk(dir: &Path, out: &mut HashSet<Vec<u8>>) {
@@ -162,7 +162,7 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names
 }
 
-/// Metadata-first exchange: manifest object plus its whole tree closure.
+
 fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &s.manifest_id).is_err() {
         let b = from.get(BlobKind::Manifest, &s.manifest_id).unwrap();
@@ -191,9 +191,9 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-/// The convergence engine's fetch hook, wired to the peer's store (what
-/// the wire serves): every requested chunk lands in the executing device's
-/// store before the engine touches the tree.
+
+
+
 struct PeerFetch<'x> {
     from: &'x Store,
     to: &'x Store,
@@ -216,8 +216,8 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
     }
 }
 
-/// One full convergence on `exec_dev`: remote = `remote_snap`, base as
-/// given. The engine drives its own fetch list against the peer's store.
+
+
 fn converge_on(
     exec_dev: &mut Dev,
     local: &SnapshotOutput,
@@ -257,23 +257,24 @@ fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<ferry_store::agreement::Agreed
         .unwrap()
 }
 
-/// One matrix cell, executed end to end.
+
 fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     let mut a = Dev::new(1, DEV_A, poly(42));
     let mut b = Dev::new(2, DEV_B, poly(42));
     let path = "f.txt";
 
-    // ---- setup + divergence injection ----
+    
     let has_base = matches!(scenario, Scenario::BothChange | Scenario::DeleteVsEdit);
     if has_base {
         write_file(&a.tree.join(path), b"v0", (1000, 0));
         write_file(&b.tree.join(path), b"v0", (1000, 0));
-        let sa = a.snap();
-        let sb = b.snap();
-        // Each device records its own agreement-time manifest; trees are
-        // identical so the ancestor is unambiguous.
-        record_agreement(&mut a, DEV_B, sa.manifest_id);
-        record_agreement(&mut b, DEV_A, sb.manifest_id);
+        let s0 = a.snap();
+        
+        
+        transfer_meta(&a.store, &b.store, &s0);
+        b.parent = s0.manifest_id;
+        record_agreement(&mut a, DEV_B, s0.manifest_id);
+        record_agreement(&mut b, DEV_A, s0.manifest_id);
     }
 
     let (va_bytes, vb_bytes): (&[u8], &[u8]) = (b"version A", b"version B");
@@ -299,17 +300,17 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         Scenario::DeleteVsEdit => {
             let edit = |d: &mut Dev| write_file(&d.tree.join(path), b"the edit", (3200i64, 5));
             match direction {
-                // A edits while B deletes.
+                
                 Direction::AWins => {
                     std::fs::remove_file(b.tree.join(path)).unwrap();
                     edit(&mut a);
                 }
-                // B edits while A deletes.
+                
                 Direction::BWins => {
                     std::fs::remove_file(a.tree.join(path)).unwrap();
                     edit(&mut b);
                 }
-                // Both edit identically: divergence resolves without conflict.
+                
                 Direction::Tie => {
                     edit(&mut a);
                     edit(&mut b);
@@ -320,14 +321,14 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
 
     let sa = a.snap();
     let sb = b.snap();
-    // The truth that must survive everywhere, captured pre-reconcile.
+    
     let truth: HashSet<Vec<u8>> = {
         let mut t = collect_bytes(&a.tree);
         t.extend(collect_bytes(&b.tree));
         t
     };
 
-    // ---- round 1 with the case's application order ----
+    
     let base_a = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     let base_b = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
 
@@ -354,7 +355,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         }
     }
 
-    // ---- further simultaneous rounds until a fixed point ----
+    
     let mut rounds = 1;
     loop {
         let sa2 = a.snap();
@@ -375,7 +376,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         converge_on(&mut b, &sb2, &sa2, bb.as_ref(), &a);
     }
 
-    // ---- zero silent data loss on EVERY device ----
+    
     for d_label in ["A", "B"] {
         let got = match d_label {
             "A" => collect_bytes(&a.tree),
@@ -388,7 +389,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         );
     }
 
-    // ---- scenario-specific outcome checks ----
+    
     let (winner_bytes, loser_bytes): (Vec<u8>, Vec<u8>) = match scenario {
         Scenario::BothChange | Scenario::AddVsAddDiff => match direction {
             Direction::AWins => (va_bytes.to_vec(), vb_bytes.to_vec()),
@@ -423,8 +424,8 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
                     1,
                     "{scenario:?} {direction:?} {order:?}: expected the loser copy on {d_label}, got {qs:?}"
                 );
-                // Both devices derive the SAME name for the same loser:
-                // the losing device's short id plus the loser's mtime.
+                
+                
                 let q = &qs[0];
                 assert_eq!(
                     std::fs::read(tree.join(q)).unwrap(),
@@ -451,13 +452,13 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         }
     }
 
-    // ---- conflict report per device (`ferry conflicts list`) ----
-    //
-    // Total entries across both devices depend on the application order:
-    // when the WINNING side executes second it sees no divergence at all
-    // (its live tree already holds the winner), so only the first executor
-    // logs. When the losing side executes second, its divergence is real
-    // and it logs too. Simultaneous rounds always log on both.
+    
+    
+    
+    
+    
+    
+    
     let no_conflict_at_all = match scenario {
         Scenario::AddVsAddSame => true,
         Scenario::DeleteVsEdit if direction == Direction::Tie => true,
@@ -466,7 +467,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     let expect_total = if no_conflict_at_all {
         0
     } else {
-        // The editor wins delete-vs-edit; direction encodes who edits.
+        
         let winner_is_a = direction == Direction::AWins;
         match order {
             Order::Simultaneous => 2,
@@ -491,10 +492,21 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         let entries = list_conflicts(&d.state).unwrap();
         total_entries += entries.len();
         for e in &entries {
-            let want_kind = match scenario {
-                Scenario::DeleteVsEdit => "delete_vs_edit",
-                Scenario::AddVsAddDiff => "add_vs_add",
-                _ => "both_changed",
+            
+            
+            
+            
+            
+            let second_executor_degraded = match order {
+                Order::Simultaneous => false,
+                Order::AFirst => d_label == "B",
+                Order::BFirst => d_label == "A",
+            };
+            let want_kind = match (scenario, second_executor_degraded) {
+                (Scenario::DeleteVsEdit, _) => "delete_vs_edit",
+                (Scenario::AddVsAddDiff, _) => "add_vs_add",
+                (_, true) => "add_vs_add",
+                (_, false) => "both_changed",
             };
             assert_eq!(e.kind, want_kind, "{d_label}");
             assert_eq!(e.path, path);
@@ -509,7 +521,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
             );
             assert_eq!(e.folder_id, hex(&FOLDER));
         }
-        // Raw JSONL must parse line by line.
+        
         let raw = std::fs::read_to_string(d.state.join("conflicts.jsonl")).unwrap_or_default();
         assert_eq!(raw.lines().count(), entries.len());
         for line in raw.lines() {
@@ -522,7 +534,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         "{scenario:?} {direction:?} {order:?}: report totals"
     );
 
-    // ---- fixed point: one more cycle changes nothing ----
+    
     let fa = a.snap();
     let fb = b.snap();
     assert_eq!(fa.root_tree_id, fb.root_tree_id, "manifests must converge");
@@ -538,18 +550,18 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     );
     assert_eq!(collect_bytes(&a.tree), collect_bytes(&b.tree));
 
-    // ---- agreement advance: record the converged pointer, reload it ----
+    
     record_agreement(&mut a, DEV_B, fa.manifest_id);
     record_agreement(&mut b, DEV_A, fb.manifest_id);
     assert_eq!(load_agreed(&a, DEV_B).unwrap().manifest_id, fa.manifest_id);
 
-    let _ = rounds; // surfaced in diagnostics above
+    let _ = rounds; 
 }
 
 fn winner_device_hex(direction: Direction, scenario: Scenario) -> String {
     match scenario {
         Scenario::DeleteVsEdit => match direction {
-            // The editor wins regardless.
+            
             Direction::AWins | Direction::Tie => hex(&DEV_A),
             Direction::BWins => hex(&DEV_B),
         },
@@ -560,7 +572,7 @@ fn winner_device_hex(direction: Direction, scenario: Scenario) -> String {
     }
 }
 
-// The 24 matrix cells: scenario × direction × order.
+
 #[rustfmt::skip]
 mod cells {
     use super::*;

@@ -1,30 +1,30 @@
-//! T-012 acceptance, verbatim from the ticket:
-//!
-//!   "adversarial fixture tree (unicode names, case-only rename, deep
-//!    nesting past 260 chars, symlink chains) syncs correctly or fails
-//!    loudly with an actionable message on every OS."
-//!
-//! Two assertions over ONE generated fixture:
-//!
-//! 1. `round_trips_through_snapshot_materialize` — snapshot → materialize →
-//!    resnapshot must reproduce the identical root tree id (names, exec
-//!    bits, file/dir/symlink mtimes all preserved; the symlink-mtime piece
-//!    is T-012's deferred-T-005 landing). Then a case-only rename
-//!    (`Rename-Me.txt` → `rename-me.TXT`) must propagate through a second
-//!    round trip: old spelling gone, new spelling present, ids equal again.
-//! 2. `reconciliation_conflict_inside_fixture` — two devices hold copies of
-//!    the fixture, both edit the NFD-spelled unicode file, reconcile with A
-//!    favored: winner bytes live everywhere, loser quarantined under an
-//!    NFC-consistent name carrying the loser's short id, both devices
-//!    converge to one root id, and a further cycle plans zero operations.
-//!
-//! Platform notes:
-//! - The deep branch (>260 chars total) is created through
-//!   `ferry_platform::extend_path`, so Windows runners can build it
-//!   regardless of the host's `LongPathsEnabled` registry state.
-//! - Symlinks are probe-gated (`symlink_creation_works`): hosts that forbid
-//!   creating them skip the chain rather than fail setup; the pure policy
-//!   tests cover the refused cases everywhere.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -42,9 +42,9 @@ const DEV_A: [u8; 32] = [0xA1; 32];
 const DEV_B: [u8; 32] = [0xB2; 32];
 const NOW: (i64, u32) = (1_787_574_896, 0);
 
-/// NFD spelling (e + combining acute) as it lands ON DISK.
+
 const UNICODE_FILE: &str = "rapport-anne\u{301}e.md";
-const UNICODE_DIR: &str = "\u{1f980}-proj\u{65}\u{301}ct"; // 🦀 + decomposed é
+const UNICODE_DIR: &str = "\u{1f980}-proj\u{65}\u{301}ct"; 
 const UNICODE_NOTE: &str = "notes-caf\u{65}\u{301}.txt";
 const CASE_FILE_BEFORE: &str = "Rename-Me.txt";
 const CASE_FILE_AFTER: &str = "rename-me.TXT";
@@ -89,11 +89,11 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
     }
     #[cfg(windows)]
     {
-        // std set_times through a read handle cannot stamp directories
-        // here: SetFileTime requires FILE_WRITE_ATTRIBUTES on the handle,
-        // which GENERIC_READ (+ even FILE_FLAG_BACKUP_SEMANTICS) does not
-        // carry. filetime opens the directory with the right access —
-        // same approach as ferry-store's and ferry-materialize's fixtures.
+        
+        
+        
+        
+        
         filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
     }
     #[cfg(not(any(unix, windows)))]
@@ -102,7 +102,7 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
     }
 }
 
-/// Probe once per process: may this host create symlinks at all?
+
 fn symlink_creation_works(root: &Path) -> bool {
     use std::sync::OnceLock;
     static PROBE: OnceLock<bool> = OnceLock::new();
@@ -130,8 +130,8 @@ fn symlink_creation_works(root: &Path) -> bool {
     })
 }
 
-/// Create one directory level, applying the long-path prefix rule so the
-/// >260-char branch builds even without host opt-in (Windows).
+
+
 fn mkdir_deep(cumulative: &Path) {
     let effective = ferry_platform::extend_path(cumulative);
     if effective.exists() {
@@ -139,7 +139,7 @@ fn mkdir_deep(cumulative: &Path) {
     }
     std::fs::create_dir(&effective)
         .or_else(|e| {
-            // Some platforms need the parent chain first; recurse manually.
+            
             if let Some(parent) = effective.parent() {
                 if !parent.as_os_str().is_empty() && !parent.exists() {
                     mkdir_deep(parent);
@@ -151,12 +151,12 @@ fn mkdir_deep(cumulative: &Path) {
         .unwrap();
 }
 
-/// Build the adversarial fixture. Deterministic bytes and mtimes so both
-/// devices' copies are byte-identical manifests.
+
+
 fn build_fixture(root: &Path) {
     std::fs::create_dir_all(root).unwrap();
 
-    // 1. Unicode names (NFD spellings on disk where possible).
+    
     write_file(
         &root.join(UNICODE_DIR).join(UNICODE_NOTE),
         "caf\u{e9} notes inside an emoji dir\n".as_bytes(),
@@ -168,7 +168,7 @@ fn build_fixture(root: &Path) {
         (1_700_000_200, 20),
     );
 
-    // 2. Deep nesting: total path comfortably past 260 chars.
+    
     let mut deep = root.to_path_buf();
     for i in 0..14 {
         deep.push(format!("level-{i:02}-aaaaaaaaaaaaaaaaaaaaaaaaaa"));
@@ -180,24 +180,24 @@ fn build_fixture(root: &Path) {
         (1_700_000_300, 30),
     );
 
-    // 3. Case-rename subject.
+    
     write_file(
         &root.join(CASE_FILE_BEFORE),
         b"case me\n",
         (1_700_000_400, 40),
     );
 
-    // 4. Symlink chain (probe-gated): z_link_a -> z_link_b -> z_link_c ->
-    //    the unicode note. Every hop is relative and internal, i.e. policy-
-    //    clean per T-012.
+    
+    
+    
     if symlink_creation_works(root) {
         write_file(
             &root.join("z_link_c"),
             b"chain target\n",
             (1_700_000_500, 50),
         );
-        // Repoint z_link_c at the unicode note by making IT the real file...
-        // simpler: c is a link too. Order matters: deepest first.
+        
+        
         std::fs::remove_file(root.join("z_link_c")).unwrap();
         write_file(
             &root.join("real-note.txt"),
@@ -207,10 +207,10 @@ fn build_fixture(root: &Path) {
         make_link("real-note.txt", &root.join("z_link_c"));
         make_link("z_link_c", &root.join("z_link_b"));
         make_link("z_link_b", &root.join("z_link_a"));
-        // Deterministic link mtimes: without stamping, each device's links
-        // carry their creation wall-clock and reconciliation sees eternal
-        // metadata drift on the chain (this bit us in testing — link times
-        // are manifest content per docs/store-format.md).
+        
+        
+        
+        
         for (i, name) in ["z_link_c", "z_link_b", "z_link_a"].iter().enumerate() {
             let _ = ferry_materialize::set_symlink_times(
                 &root.join(name),
@@ -220,7 +220,7 @@ fn build_fixture(root: &Path) {
         }
     }
 
-    // Dir mtimes deepest-first so snapshots are deterministic.
+    
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
@@ -241,7 +241,7 @@ fn make_link(target: &str, at: &Path) {
     std::os::windows::fs::symlink_file(target, at).unwrap();
 }
 
-// ---- round-trip harness ----------------------------------------------------
+
 
 struct RoundTrip {
     _dir: tempfile::TempDir,
@@ -305,7 +305,7 @@ fn identity(at: (i64, u32)) -> SnapshotIdentity {
     }
 }
 
-// ---- reconciliation harness (mirrors matrix.rs, one scenario) ---------------
+
 
 struct Dev {
     _dir: tempfile::TempDir,
@@ -378,8 +378,8 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-/// The convergence engine's fetch hook, wired to the peer's store (what
-/// the wire serves).
+
+
 struct PeerFetch<'x> {
     from: &'x Store,
     to: &'x Store,
@@ -402,7 +402,7 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
     }
 }
 
-/// One full convergence on `exec_dev` through the engine seam.
+
 fn converge_on(
     exec_dev: &mut Dev,
     local: &SnapshotOutput,
@@ -481,10 +481,10 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names
 }
 
-// ---- the two acceptance tests ----------------------------------------------
 
-/// Exact-spelling directory membership: `Path::exists()` folds case on
-/// macOS/Windows, which would defeat case-rename assertions.
+
+
+
 fn has_exact_entry(dir: &Path, name: &str) -> bool {
     std::fs::read_dir(dir)
         .unwrap()
@@ -508,8 +508,8 @@ fn round_trips_through_snapshot_materialize() {
          symlink chains, all mtimes)"
     );
 
-    // Case-only rename propagates: same inode on folding hosts, delete+add
-    // elsewhere; either way only the new spelling survives.
+    
+    
     std::fs::rename(
         rt.source.join(CASE_FILE_BEFORE),
         rt.source.join(CASE_FILE_AFTER),
@@ -517,12 +517,12 @@ fn round_trips_through_snapshot_materialize() {
     .expect("case-only rename must work on the host FS");
     let s3 = rt.snap_source();
 
-    // Guarded application of a case-only rename REFUSES LOUDLY on folding
-    // hosts: the base expectation says the new spelling is absent, while
-    // live disk holds its folded twin. That is the designed safety net —
-    // nothing is modified, and a fresh scan makes the next guarded cycle
-    // clean. Assert the loud refusal, then show the unguarded apply
-    // converges exactly.
+    
+    
+    
+    
+    
+    
     let guarded = Applier::new(&rt.store, &rt.target)
         .overwrite(ferry_materialize::Overwrite::Expect {
             expected: s2.manifest.clone(),
@@ -548,8 +548,8 @@ fn round_trips_through_snapshot_materialize() {
         );
     }
 
-    // Unguarded application converges exactly: removals execute before
-    // upserts, and the fold-shadowed write is forced (never a Skip).
+    
+    
     Applier::new(&rt.store, &rt.target)
         .apply_manifest(&s3.manifest)
         .expect("unguarded rename propagation must succeed");
@@ -571,7 +571,7 @@ fn round_trips_through_snapshot_materialize() {
     );
     assert!(has_exact_entry(&rt.target, CASE_FILE_AFTER));
 
-    // Deep branch really is past MAX_PATH (the point of the fixture).
+    
     let mut probe = rt.source.clone();
     for i in 0..14 {
         probe.push(format!("level-{i:02}-aaaaaaaaaaaaaaaaaaaaaaaaaa"));
@@ -583,8 +583,8 @@ fn round_trips_through_snapshot_materialize() {
     assert!(
         total >= ferry_platform::MAX_PATH
             || cfg!(target_os = "macos") && {
-                // On macOS the temp base can keep totals below the cap; the
-                // component count is what the fixture controls.
+                
+                
                 probe.components().count() > 15
             },
         "fixture deep branch must stress path limits ({total} chars)"
@@ -596,13 +596,13 @@ fn reconciliation_conflict_inside_fixture() {
     let mut a = Dev::new(1, DEV_A);
     let mut b = Dev::new(2, DEV_B);
 
-    // Identical starting trees -> unambiguous ancestor.
+    
     let sa0 = a.snap();
     let sb0 = b.snap();
     record_agreement(&mut a, DEV_B, sa0.manifest_id);
     record_agreement(&mut b, DEV_A, sb0.manifest_id);
 
-    // Diverge on the NFD-spelled unicode file, A favored by mtime.
+    
     write_file(&a.tree.join(UNICODE_FILE), b"version A\n", (3_000, 700));
     write_file(&b.tree.join(UNICODE_FILE), b"version B\n", (2_900, 500));
 
@@ -615,7 +615,7 @@ fn reconciliation_conflict_inside_fixture() {
     let sa = a.snap();
     let sb = b.snap();
 
-    // One full exchange round, A first.
+    
     let base_a = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     transfer_meta(&b.store, &a.store, &sb);
     converge_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
@@ -624,7 +624,7 @@ fn reconciliation_conflict_inside_fixture() {
     transfer_meta(&a.store, &b.store, &sa2);
     converge_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
 
-    // Converge.
+    
     let mut rounds = 1;
     loop {
         let sa3 = a.snap();
@@ -642,14 +642,14 @@ fn reconciliation_conflict_inside_fixture() {
         converge_on(&mut b, &sb3, &sa3, bb.as_ref(), &a);
     }
 
-    // Zero silent data loss on every device.
+    
     for (label, tree) in [("A", &a.tree), ("B", &b.tree)] {
         let got = collect_bytes(tree);
         let missing: Vec<Vec<u8>> = truth.difference(&got).cloned().collect();
         assert!(missing.is_empty(), "device {label} LOST {missing:?}");
     }
 
-    // Winner correctness: the NFC-composed path carries A's bytes on BOTH.
+    
     assert_eq!(
         std::fs::read(a.tree.join(UNICODE_FILE)).unwrap(),
         b"version A\n"
@@ -659,8 +659,8 @@ fn reconciliation_conflict_inside_fixture() {
         b"version A\n"
     );
 
-    // Quarantine accounting: loser copy exists on B under a name carrying
-    // B's short id, NFC-consistent (decomposed input, composed output).
+    
+    
     let qs = quarantine_names(&b.tree);
     assert_eq!(qs.len(), 1, "exactly the loser copy, got {qs:?}");
     assert!(qs[0].contains("b2b2b2b2"), "loser short id: {}", qs[0]);
@@ -670,7 +670,7 @@ fn reconciliation_conflict_inside_fixture() {
         qs[0]
     );
 
-    // Fixed point: another full cycle plans no materialize/quarantine ops.
+    
     let sa4 = a.snap();
     let sb4 = b.snap();
     transfer_meta(&a.store, &b.store, &sa4);

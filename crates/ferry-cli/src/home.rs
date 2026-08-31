@@ -1,26 +1,26 @@
-//! Where Ferry keeps per-device state, and the `FERRY_HOME` contract.
-//!
-//! `FERRY_HOME` (env var) overrides the default `~/.ferry` for ALL
-//! per-device state. This is what lets two simulated devices coexist on
-//! one machine (scripts/quickstart-e2e.sh): each gets its own home dir,
-//! therefore its own identity, therefore its own trust domain.
-//!
-//! Layout under the home:
-//!
-//! ```text
-//! <home>/identity/device.key   # X25519 identity (ferry-crypto)
-//! ```
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::path::PathBuf;
 
 use crate::error::{CliError, CliResult, CodeInto};
 
-/// Resolve the device home: `$FERRY_HOME` when set (non-empty), else
-/// `$HOME/.ferry`. Empty-string `FERRY_HOME` is treated as unset so a stray
-/// `FERRY_HOME= cargo test` behaves like production.
-///
-/// When HOME is unset (native Windows shells have no HOME), fall back to
-/// USERPROFILE so the same `.ferry` layout lands under the user profile.
+
+
+
+
+
+
 pub fn ferry_home() -> CliResult<PathBuf> {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
         let p = PathBuf::from(&v);
@@ -42,15 +42,15 @@ pub fn ferry_home() -> CliResult<PathBuf> {
     Ok(home.join(".ferry"))
 }
 
-/// Directory holding `device.key`.
+
 pub fn identity_root(home: &std::path::Path) -> PathBuf {
     home.join("identity")
 }
 
-/// Load (creating on first use) the device identity keypair.
-///
-/// Returns `None` only when even the home directory cannot be resolved; key
-/// read/write failures surface to the caller as errors.
+
+
+
+
 pub fn load_device_identity() -> CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = ferry_home()?;
     ferry_crypto::identity::load_or_create(&identity_root(&home))
@@ -63,9 +63,9 @@ mod tests {
 
     #[test]
     fn ferry_home_env_overrides_home_join() {
-        // Safety: tests mutate process env; guard with a mutex if this ever
-        // runs in parallel with other env tests (cargo runs them on one
-        // thread per binary by default).
+        
+        
+        
         let saved = std::env::var_os("FERRY_HOME");
         std::env::remove_var("FERRY_HOME");
         let fallback = ferry_home().unwrap();
@@ -74,7 +74,7 @@ mod tests {
         std::env::set_var("FERRY_HOME", "/tmp/fh-override");
         assert_eq!(ferry_home().unwrap(), PathBuf::from("/tmp/fh-override"));
 
-        // Empty counts as unset.
+        
         std::env::set_var("FERRY_HOME", "");
         let again = ferry_home().unwrap();
         assert!(again.ends_with(".ferry"), "{again:?}");

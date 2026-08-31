@@ -1,7 +1,7 @@
-//! Core `UiBackend` trait and typed domain models for all Ferry frontends.
-//!
-//! Provides the single unified seam powering the Headless CLI, Terminal TUI,
-//! Web SPA Dashboard, and Native Pure-Rust Desktop GUI.
+
+
+
+
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -16,7 +16,8 @@ use tokio_stream::Stream;
 use std::collections::HashMap;
 
 use ferry_folder::inventory::{
-    sort_entries, validate_path, DirectoryEntry, FolderRecord, ListDirectoryResponse,
+    ferry_home, sort_entries, validate_path, DirectoryEntry, FolderInventory, FolderRecord,
+    ListDirectoryResponse,
 };
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
@@ -24,20 +25,20 @@ use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDire
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Error code used when the daemon socket cannot be reached or the persistent
-/// connection drops. `AutoBackend` routes on exactly this code to fall back to
-/// the in-process adapter; daemon-originated domain errors never trigger it.
+
+
+
 pub const DAEMON_UNREACHABLE: &str = "daemon-unreachable";
 
-/// Coded folder-inventory failures flow into the frontend error taxonomy
-/// unchanged (same `code`/`message`/`hint` discipline).
+
+
 impl From<ferry_folder::FolderError> for OpError {
     fn from(e: ferry_folder::FolderError) -> Self {
         Self::new(e.code, e.message, e.hint)
     }
 }
 
-/// Domain error taxonomy with error codes, human messages, and actionable hints.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[error("{code}: {message}")]
 pub struct OpError {
@@ -84,8 +85,8 @@ impl OpError {
         Self::new("bad-request", message, hint)
     }
 
-    /// True when the error is a transport-level failure (daemon unreachable),
-    /// as opposed to a domain error reported by the daemon or local logic.
+    
+    
     #[must_use]
     pub fn is_transport(&self) -> bool {
         self.code == DAEMON_UNREACHABLE
@@ -102,7 +103,7 @@ impl From<std::io::Error> for OpError {
     }
 }
 
-/// Result of starting a session pin.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinRecord {
     pub folder: String,
@@ -114,7 +115,7 @@ pub struct PinRecord {
     pub message: Option<String>,
 }
 
-/// Result of stopping an active pin without releasing held changes.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinStopSummary {
     pub folder: String,
@@ -123,7 +124,7 @@ pub struct PinStopSummary {
     pub message: Option<String>,
 }
 
-/// Result of releasing an active pin and reconciling held changes.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinReleaseSummary {
     pub folder: String,
@@ -133,7 +134,7 @@ pub struct PinReleaseSummary {
     pub message: Option<String>,
 }
 
-/// Pairing offer generated when initiating a share.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareOffer {
     pub folder: String,
@@ -148,7 +149,7 @@ pub struct ShareOffer {
     pub secret_warnings: Vec<String>,
 }
 
-/// Active share status of a folder.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareStatus {
     pub folder: String,
@@ -160,7 +161,7 @@ pub struct ShareStatus {
     pub offer: Option<ShareOffer>,
 }
 
-/// Result of accepting an incoming pairing payload.
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairResult {
     pub folder_id: String,
@@ -171,7 +172,7 @@ pub struct PairResult {
     pub message: Option<String>,
 }
 
-/// Real-time asynchronous push events emitted by `UiBackend`.
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum UiEvent {
@@ -206,6 +207,9 @@ pub enum UiEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quarantined_as: Option<String>,
     },
+    FolderRegistered {
+        path: String,
+    },
     Error {
         code: String,
         message: String,
@@ -214,7 +218,7 @@ pub enum UiEvent {
 
 use tokio_stream::wrappers::BroadcastStream;
 
-/// Stream of `UiEvent` items backed by a broadcast receiver.
+
 pub struct UiEventStream {
     inner: BroadcastStream<UiEvent>,
 }
@@ -254,8 +258,8 @@ impl Stream for UiEventStream {
     }
 }
 
-/// Status and telemetry domain: engine snapshots, conflict listings, manual
-/// rescans, and the push-event stream.
+
+
 pub trait StatusDomain: Send + Sync + 'static {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>>;
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>>;
@@ -263,8 +267,8 @@ pub trait StatusDomain: Send + Sync + 'static {
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
 }
 
-/// Folder inventory domain: directory inspection and `$FERRY_HOME` registry
-/// operations.
+
+
 pub trait InventoryDomain: Send + Sync + 'static {
     fn list_directory(
         &self,
@@ -275,8 +279,8 @@ pub trait InventoryDomain: Send + Sync + 'static {
     fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>>;
 }
 
-/// Session domain: pairing and pinning lifecycle (pins, share offers, pair
-/// acceptance, and rendezvous pairing sessions).
+
+
 pub trait SessionDomain: Send + Sync + 'static {
     fn start_pin(
         &self,
@@ -291,9 +295,9 @@ pub trait SessionDomain: Send + Sync + 'static {
         i_know: bool,
     ) -> BoxFuture<'_, Result<ShareOffer, OpError>>;
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>>;
-    /// Accept an incoming pairing offer given EITHER form: a 6-character
-    /// code or a `.ferry-pair` payload file path / `FERRY1:` envelope. The
-    /// backend picks the transport; callers never branch.
+    
+    
+    
     fn pair_accept(
         &self,
         code_or_payload: String,
@@ -309,21 +313,23 @@ pub trait SessionDomain: Send + Sync + 'static {
     ) -> BoxFuture<'_, Result<PairResult, OpError>>;
 }
 
-/// The unified asynchronous UI backend contract: the three cohesive session
-/// domains (`status`, `inventory`, `session`) composed into one seam. Every
-/// frontend consumes `Arc<dyn UiBackend>`; every adapter implements the three
-/// domain traits and gets this seam for free.
+
+
+
+
 pub trait UiBackend: StatusDomain + InventoryDomain + SessionDomain {}
 
 impl<T: StatusDomain + InventoryDomain + SessionDomain> UiBackend for T {}
 
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone)]
 struct InMemPairingSession {
     folder_id: String,
     expires_at: std::time::SystemTime,
 }
 
-/// In-memory fake backend for deterministic testing across frontends.
+
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Clone)]
 pub struct FakeBackend {
     snapshot: Arc<RwLock<EngineSnapshot>>,
@@ -335,12 +341,14 @@ pub struct FakeBackend {
     pairing_sessions: Arc<std::sync::Mutex<HashMap<String, InMemPairingSession>>>,
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl Default for FakeBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl FakeBackend {
     #[must_use]
     pub fn new() -> Self {
@@ -361,7 +369,7 @@ impl FakeBackend {
         }
     }
 
-    /// Test helper: force a pairing code to be expired.
+    
     pub fn expire_pairing_code(&self, code: &str) {
         let key = code.to_ascii_uppercase();
         if let Ok(mut m) = self.pairing_sessions.lock() {
@@ -371,12 +379,12 @@ impl FakeBackend {
         }
     }
 
-    /// Insert or replace the in-memory directory tree used by `list_directory`.
+    
     pub async fn set_fs_fixture(&self, fixture: HashMap<PathBuf, Vec<DirectoryEntry>>) {
         *self.fs_fixture.write().await = fixture;
     }
 
-    /// Insert entries for a single directory into the in-memory fixture.
+    
     pub async fn insert_fs_dir(&self, dir: PathBuf, entries: Vec<DirectoryEntry>) {
         self.fs_fixture.write().await.insert(dir, entries);
     }
@@ -408,6 +416,7 @@ impl FakeBackend {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl StatusDomain for FakeBackend {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
         let snap = Arc::clone(&self.snapshot);
@@ -436,6 +445,7 @@ impl StatusDomain for FakeBackend {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl SessionDomain for FakeBackend {
     fn start_pin(
         &self,
@@ -591,7 +601,7 @@ impl SessionDomain for FakeBackend {
     ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
         let sessions = Arc::clone(&self.pairing_sessions);
         Box::pin(async move {
-            // Validate folder_id shape (32 hex chars, like the unified ritual)
+            
             let folder_id = req.folder_id.clone();
             if folder_id.len() < 32 {
                 return Err(OpError::new(
@@ -661,7 +671,7 @@ impl SessionDomain for FakeBackend {
                     }
                 }
             };
-            // No file at $FERRY_HOME/pair-* is ever touched here — in-memory rendezvous only.
+            
             Ok(PairResult {
                 folder_id: sess.folder_id,
                 device_id: "peer-device-id".to_string(),
@@ -673,6 +683,7 @@ impl SessionDomain for FakeBackend {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl InventoryDomain for FakeBackend {
     fn list_directory(
         &self,
@@ -682,7 +693,7 @@ impl InventoryDomain for FakeBackend {
         Box::pin(async move {
             let validated = validate_path(path)?;
             let map = fixture.read().await;
-            // Preserve wave 0 stub for tests that never configure a fixture.
+            
             if map.is_empty() && !map.contains_key(&validated) {
                 return Err(OpError::not_found("not-implemented", "wave 0 stub"));
             }
@@ -711,5 +722,419 @@ impl InventoryDomain for FakeBackend {
 
     fn remove_folder(&self, _folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
         Box::pin(async { Err(OpError::not_found("not-implemented", "wave 0 stub")) })
+    }
+}
+
+
+
+
+
+#[derive(Clone)]
+pub struct AutoBackend {
+    client: crate::client::DaemonClient,
+    folder_path: Option<PathBuf>,
+    fallback: Option<Arc<dyn UiBackend>>,
+}
+
+impl std::fmt::Debug for AutoBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AutoBackend")
+            .field("client", &self.client)
+            .field("folder_path", &self.folder_path)
+            .finish()
+    }
+}
+
+impl AutoBackend {
+    #[must_use]
+    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        Self {
+            client: crate::client::DaemonClient::new(socket_path),
+            folder_path: None,
+            fallback: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_client(client: crate::client::DaemonClient) -> Self {
+        Self {
+            client,
+            folder_path: None,
+            fallback: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_fallback(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.folder_path = Some(folder.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_fallback_backend(mut self, fallback: Arc<dyn UiBackend>) -> Self {
+        self.fallback = Some(fallback);
+        self
+    }
+
+    #[must_use]
+    pub fn client(&self) -> &crate::client::DaemonClient {
+        &self.client
+    }
+
+    #[must_use]
+    pub fn folder_path(&self) -> Option<&PathBuf> {
+        self.folder_path.as_ref()
+    }
+}
+
+
+#[must_use]
+pub fn connect_auto(
+    socket_path: impl Into<PathBuf>,
+    folder_path: impl Into<Option<PathBuf>>,
+) -> AutoBackend {
+    let mut auto = AutoBackend::new(socket_path);
+    if let Some(folder) = folder_path.into() {
+        auto = auto.with_fallback(folder);
+    }
+    auto
+}
+
+async fn transport_fallback<T>(
+    result: Result<T, OpError>,
+    fallback: Option<Arc<dyn UiBackend>>,
+    make_fallback: impl FnOnce(Arc<dyn UiBackend>) -> BoxFuture<'static, Result<T, OpError>>,
+    make_default: impl FnOnce(OpError) -> BoxFuture<'static, Result<T, OpError>>,
+) -> Result<T, OpError>
+{
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e.is_transport() || e.code == "not-supported" => {
+            if let Some(fb) = fallback {
+                make_fallback(fb).await
+            } else {
+                make_default(e).await
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+impl StatusDomain for AutoBackend {
+    fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        let folder_path = self.folder_path.clone();
+        Box::pin(async move {
+            let res = client.get_status().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.get_status().await }),
+                |_| {
+                    let folder_path = folder_path.clone();
+                    Box::pin(async move {
+                        let folder_str = folder_path.map_or_else(|| ".".to_string(), |p| p.display().to_string());
+                        Ok(EngineSnapshot::new(folder_str, "", "", "offline"))
+                    })
+                },
+            )
+            .await
+        })
+    }
+
+    fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.list_conflicts().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_conflicts().await }),
+                |_| Box::pin(async move { Ok(Vec::new()) }),
+            )
+            .await
+        })
+    }
+
+    fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.trigger_scan().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.trigger_scan().await }),
+                |_| Box::pin(async move { Ok(()) }),
+            )
+            .await
+        })
+    }
+
+    fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.subscribe_events().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.subscribe_events().await }),
+                |_| Box::pin(async move {
+                    let (_tx, rx) = broadcast::channel(16);
+                    Ok(UiEventStream::new(rx))
+                }),
+            )
+            .await
+        })
+    }
+}
+
+impl InventoryDomain for AutoBackend {
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.list_directory(path.clone()).await;
+            let path2 = path.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_directory(path.clone()).await }),
+                move |_| {
+                    let path = path2.clone();
+                    Box::pin(async move {
+                        let validated = validate_path(path)?;
+                        let validated_clone = validated.clone();
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home())
+                                .inspect_dir(Some(validated_clone))
+                                .map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| OpError::new("internal", e.to_string(), "inspect worker failed"))?
+                    })
+                },
+            )
+            .await
+        })
+    }
+
+    fn list_folders(&self) -> BoxFuture<'_, Result<Vec<FolderRecord>, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.list_folders().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_folders().await }),
+                |_| Box::pin(async move {
+                    tokio::task::spawn_blocking(|| {
+                        FolderInventory::new(&ferry_home()).list().map_err(OpError::from)
+                    })
+                    .await
+                    .map_err(|e| OpError::new("internal", e.to_string(), "list worker failed"))?
+                }),
+            )
+            .await
+        })
+    }
+
+    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<FolderRecord, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let p = path.clone();
+            let res = client.register_folder(p).await;
+            let path2 = path.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.register_folder(path.clone()).await }),
+                move |_| {
+                    let c = path2.clone();
+                    Box::pin(async move {
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home()).register(&c).map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| OpError::new("internal", e.to_string(), "register worker failed"))?
+                    })
+                },
+            )
+            .await
+        })
+    }
+
+    fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let fid = folder_id.clone();
+            let res = client.remove_folder(fid).await;
+            let fid2 = folder_id.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.remove_folder(folder_id.clone()).await }),
+                move |_| {
+                    let c = fid2.clone();
+                    Box::pin(async move {
+                        tokio::task::spawn_blocking(move || {
+                            FolderInventory::new(&ferry_home()).unregister(&c).map_err(OpError::from)
+                        })
+                        .await
+                        .map_err(|e| OpError::new("internal", e.to_string(), "remove worker failed"))?
+                    })
+                },
+            )
+            .await
+        })
+    }
+}
+
+impl SessionDomain for AutoBackend {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.start_pin(paths.clone(), hours).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.start_pin(paths.clone(), hours).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.stop_pin().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.stop_pin().await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn release_pin(&self) -> BoxFuture<'_, Result<PinReleaseSummary, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.release_pin().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.release_pin().await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.share_initiate(folder.clone(), i_know).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.share_initiate(folder.clone(), i_know).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.share_status(folder.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.share_status(folder.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.pair_accept(code_or_payload.clone(), dir.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.pair_accept(code_or_payload.clone(), dir.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn create_pairing_session(
+        &self,
+        req: CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<CreatePairingResponse, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.create_pairing_session(req.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.create_pairing_session(req.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
+    }
+
+    fn join_pairing_session(
+        &self,
+        req: JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.join_pairing_session(req.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.join_pairing_session(req.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
+        })
     }
 }

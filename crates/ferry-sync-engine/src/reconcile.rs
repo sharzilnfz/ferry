@@ -1,42 +1,43 @@
-//! The three-way reconciliation decision core (ADR-0004).
-//!
-//! Inputs are three manifests — local current, remote current, last-agreed
-//! base (None = initial sync, empty-tree base) — all readable through one
-//! store. Output is the internal [`ActionPlan`] the [`crate::converge`]
-//! engine executes in one transactional step. This module never touches the
-//! live filesystem, and the plan type is crate-private: callers see only
-//! [`crate::converge::ConvergenceResult`].
-//!
-//! Per-path decision table (states are `Option<EntryState>`; "changed"
-//! means differs from base):
-//!
-//! | base→local | base→remote | decision |
-//! |---|---|---|
-//! | unchanged | unchanged | nothing |
-//! | changed | unchanged | local wins; winner chunks go on the send list |
-//! | unchanged | changed | apply remote locally |
-//! | changed | changed identically | nothing (already converged) |
-//! | metadata-only change | metadata-only change | deterministic winner (newer mtime, device tiebreak); silent, no conflict file |
-//! | deleted | edited | edit resurrects live; report entry |
-//! | edited | deleted | mirror of the above |
-//! | deleted | deleted | stays deleted |
-//! | changed differently | changed differently | CONFLICT: newer mtime wins, exact ties go to the higher manifest device id; loser quarantined |
-//!
-//! Directory paths never rule on themselves: both sides being dirs is
-//! settled by their individually-enumerated children, so disjoint additions
-//! union cleanly.
-//!
-//! Deletions never destroy locally-winning content: when a path below a
-//! remotely-deleted directory wins its own conflict (or is quarantined), the
-//! ancestor removal is suppressed and the manifest exchange carries the
-//! resurrection instead.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferry_store::diff::{diff_roots, CompPath, EntryKind, EntryState};
 use ferry_store::format::{BlobId, BlobKind};
 use ferry_store::manifest::{
-    parse_tree_node, serialize_tree_node, EntryPayload, ManifestError, RootManifest, TreeNode,
+    parse_manifest, parse_tree_node, serialize_manifest, serialize_tree_node, EntryPayload,
+    ManifestError, RootManifest, TreeNode,
 };
 use ferry_store::store::{Store, StoreError};
 use thiserror::Error;
@@ -59,20 +60,20 @@ pub enum ReconcileError {
     StructuralConflict { ancestor: String, path: String },
 }
 
-/// What made a divergent path a conflict.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConflictKind {
-    /// Both sides changed the same path differently from base.
+    
     BothChanged,
-    /// One side deleted, the other edited; the edit resurrects.
+    
     DeleteVsEdit,
-    /// No base existed and the sides added different content.
+    
     AddVsAdd,
 }
 
-/// One planned transition for one path: from `base` (None = absent in the
-/// ancestor) to `result` (None = delete). The convergence engine folds
-/// these into a single change set for the applier.
+
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MaterializeOp {
     pub(crate) path: CompPath,
@@ -80,19 +81,19 @@ pub(crate) struct MaterializeOp {
     pub(crate) result: Option<EntryState>,
 }
 
-/// Where a loser copy's bytes come from.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LoserContent {
-    /// The local live FILE is the loser: read its bytes before any
-    /// overwrite, verifying them region-by-region against the chunk list
-    /// the local manifest declares. A mismatch surfaces as `Diverged`
-    /// before anything is written anywhere.
+    
+    
+    
+    
     LiveLocal { expected_chunks: Vec<(BlobId, u64)> },
-    /// The local live SYMLINK is the loser: recreate it from the target the
-    /// local manifest declares after checking the live link still matches.
+    
+    
     LiveLocalSymlink { expected_target: String },
-    /// The remote side is the loser: reassemble from blobs already in the
-    /// store (fetched with the plan's `fetch` list when local lacks them).
+    
+    
     FromStore {
         kind: ferry_store::diff::EntryKind,
         exec: bool,
@@ -103,72 +104,72 @@ pub(crate) enum LoserContent {
     },
 }
 
-/// Save one losing version as `path.ferry-conflict.<loser-device>-<ts>`
-/// next to the winner.
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QuarantineOp {
     pub(crate) path: CompPath,
-    /// The loser device whose short id names the file.
+    
     pub(crate) loser_device: [u8; 32],
-    /// The loser entry's mtime (names the file AND stamps the copy).
+    
     pub(crate) loser_mtime_sec: i64,
     pub(crate) loser_mtime_nsec: u32,
-    /// Exec bit of the loser entry (files only).
+    
     pub(crate) exec: bool,
     pub(crate) content: LoserContent,
 }
 
-/// One conflict destined for the structured report.
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlannedConflict {
     pub(crate) path: CompPath,
     pub(crate) kind: ConflictKind,
     pub(crate) winner: Side,
     pub(crate) loser: Side,
-    /// Full device ids for the report line.
+    
     pub(crate) winner_device: [u8; 32],
     pub(crate) loser_device: [u8; 32],
-    /// Winner entry mtime; always present (a resurrection winner is an
-    /// existing entry).
+    
+    
     pub(crate) winner_mtime_sec: i64,
     pub(crate) winner_mtime_nsec: u32,
-    /// Loser mtime; None means the loser is a deletion.
+    
     pub(crate) loser_mtime_sec: Option<i64>,
     pub(crate) loser_mtime_nsec: Option<u32>,
 }
 
-/// Everything one reconcile cycle decided. Crate-private: the convergence
-/// engine is the only consumer, and callers never see this shape.
+
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ActionPlan {
-    /// Ordered per-path transitions toward the merged result, executed via
-    /// the ferry-materialize applier guarded against the LOCAL manifest.
+    
+    
     pub(crate) materialize: Vec<MaterializeOp>,
-    /// Loser copies to write before any overwrite happens.
+    
     pub(crate) quarantine: Vec<QuarantineOp>,
-    /// Data chunks this device must SEND so the peer converges: chunks the
-    /// merged result references that the remote manifest does not.
+    
+    
     pub(crate) send: Vec<(BlobId, u64)>,
-    /// Data chunks to FETCH before executing: chunks the plan references
-    /// that the local store may lack (remote-origin winners). Computed as
-    /// "not referenced anywhere in the local manifest"; fetching these from
-    /// the peer first makes execution self-sufficient.
+    
+    
+    
+    
     pub(crate) fetch: Vec<(BlobId, u64)>,
     pub(crate) conflicts: Vec<PlannedConflict>,
 }
 
-/// One reconcile computation.
+
 pub(crate) struct ReconcileInput<'a> {
-    /// Store holding both sides' metadata blobs (the transport puts received
-    /// manifests and tree nodes here) plus data chunks.
+    
+    
     pub(crate) store: &'a Store,
     pub(crate) local: &'a RootManifest,
     pub(crate) remote: &'a RootManifest,
-    /// Last-agreed ancestor; `None` means initial sync against an empty tree.
+    
     pub(crate) base: Option<&'a RootManifest>,
 }
 
-/// What one side's diff says about one path.
+
 #[derive(Clone, Debug, Default)]
 struct SideView {
     base: Option<EntryState>,
@@ -199,8 +200,8 @@ fn index_change_set(cs: &ferry_store::diff::ChangeSet) -> ViewMap {
     map
 }
 
-/// True when both sides carry the same bytes (chunk sequence for files,
-/// target for symlinks); kind must match.
+
+
 fn same_content(l: &EntryState, r: &EntryState) -> bool {
     l.kind == r.kind
         && match l.kind {
@@ -209,8 +210,8 @@ fn same_content(l: &EntryState, r: &EntryState) -> bool {
         }
 }
 
-/// Newer mtime wins; exact ties go to the higher manifest device id. The
-/// comparison is symmetric, so both devices pick the same winner.
+
+
 fn pick_winner(
     l: &EntryState,
     r: &EntryState,
@@ -235,18 +236,18 @@ fn pick_winner(
 
 enum Decision {
     Nothing,
-    /// Silent remote win (including metadata-only resolution).
+    
     ApplyRemote,
-    /// Silent local win (nothing to do locally; content goes on the send list).
+    
     KeepLocal,
-    /// Real divergence; `winner` keeps its bytes live at the path.
+    
     Conflict {
         kind: ConflictKind,
         winner: Side,
     },
 }
 
-/// Every chunk id referenced by any file in a manifest's trees.
+
 fn manifest_chunk_refs(store: &Store, root: &BlobId) -> Result<BTreeSet<BlobId>, ReconcileError> {
     let mut seen_trees: BTreeSet<BlobId> = BTreeSet::new();
     let mut out = BTreeSet::new();
@@ -277,7 +278,59 @@ fn collect_chunks(state: &EntryState, out: &mut BTreeMap<BlobId, u64>) {
     }
 }
 
-/// Run one reconciliation and produce the internal execution plan.
+
+enum SafeBase<'a> {
+    
+    Proven(&'a RootManifest),
+    
+    
+    
+    
+    Empty,
+}
+
+
+
+fn is_ancestor(store: &Store, ancestor: &BlobId, of: &RootManifest) -> bool {
+    if *blake3::hash(&serialize_manifest(of)).as_bytes() == *ancestor {
+        return true;
+    }
+    let mut curr_parent = of.parent_manifest_id;
+    let mut depth = 0;
+    while curr_parent != [0u8; 32] && depth < 256 {
+        if curr_parent == *ancestor {
+            return true;
+        }
+        match store.get(BlobKind::Manifest, &curr_parent) {
+            Ok(bytes) => match parse_manifest(&bytes) {
+                Ok(m) => curr_parent = m.parent_manifest_id,
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        }
+        depth += 1;
+    }
+    false
+}
+
+fn resolve_safe_base<'a>(
+    store: &Store,
+    local: &'a RootManifest,
+    remote: &'a RootManifest,
+    base: Option<&'a RootManifest>,
+) -> SafeBase<'a> {
+    let Some(b) = base else {
+        return SafeBase::Empty;
+    };
+    let base_id = *blake3::hash(&serialize_manifest(b)).as_bytes();
+    if is_ancestor(store, &base_id, local) && is_ancestor(store, &base_id, remote) {
+        SafeBase::Proven(b)
+    } else {
+        SafeBase::Empty
+    }
+}
+
+
 pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError> {
     let ReconcileInput {
         store,
@@ -286,13 +339,19 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         base,
     } = input;
 
-    // Base root: the agreed manifest's tree, or the empty tree for initial
-    // sync (add-vs-add treats the empty tree as the ancestor).
+    
+    
+    
+    let safe_base = resolve_safe_base(store, local, remote, base);
+
     let empty_root = store.put_meta(
         BlobKind::TreeNode,
         &serialize_tree_node(&TreeNode::default()),
     )?;
-    let base_root = base.map_or(empty_root, |m| m.root_tree_id);
+    let base_root = match safe_base {
+        SafeBase::Proven(m) => m.root_tree_id,
+        SafeBase::Empty => empty_root,
+    };
 
     let local_view = index_change_set(&diff_roots(store, &base_root, &local.root_tree_id)?);
     let remote_view = index_change_set(&diff_roots(store, &base_root, &remote.root_tree_id)?);
@@ -315,8 +374,8 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             .expect("every key comes from at least one view")
             .0
             .clone();
-        // A side whose diff is silent about a path HOLDS THE BASE STATE
-        // there — silence means unchanged, never deleted.
+        
+        
         let (b, l, r) = match (lv, rv) {
             (Some((_, lv)), Some((_, rv))) => (
                 lv.base.clone().or_else(|| rv.base.clone()),
@@ -337,14 +396,14 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             (false, true) => Decision::ApplyRemote,
             (true, true) => {
                 if l == r {
-                    // Both changed identically: converge silently.
+                    
                     Decision::Nothing
                 } else {
                     match (&l, &r) {
                         (Some(ls), Some(rs)) => {
                             if same_content(ls, rs) {
-                                // Metadata-only divergence (mtime/exec):
-                                // deterministic and silent, no bytes at risk.
+                                
+                                
                                 if pick_winner(ls, rs, &local.device_id, &remote.device_id)
                                     == Side::Local
                                 {
@@ -353,12 +412,12 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                                     Decision::ApplyRemote
                                 }
                             } else if ls.kind == EntryKind::Dir && rs.kind == EntryKind::Dir {
-                                // Two directories: children decide themselves.
+                                
                                 Decision::Nothing
                             } else {
                                 let kind = if l.is_none() || r.is_none() {
-                                    // Exactly one side is a deletion; the
-                                    // other necessarily differs from base.
+                                    
+                                    
                                     ConflictKind::DeleteVsEdit
                                 } else if b.is_none() {
                                     ConflictKind::AddVsAdd
@@ -366,7 +425,7 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                                     ConflictKind::BothChanged
                                 };
                                 let winner = match kind {
-                                    // The edit always beats the deletion.
+                                    
                                     ConflictKind::DeleteVsEdit => {
                                         if l.is_some() {
                                             Side::Local
@@ -380,8 +439,8 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                             }
                         }
                         _ => {
-                            // One side deleted, the other edited (both-deleted
-                            // was caught by l == r).
+                            
+                            
                             Decision::Conflict {
                                 kind: ConflictKind::DeleteVsEdit,
                                 winner: if l.is_some() {
@@ -457,11 +516,11 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                         });
                     }
                 }
-                // Quarantine the loser's bytes when the loser HAS bytes.
+                
                 if let Some(loser_state) = lost {
                     if loser_state.kind == EntryKind::Dir {
-                        // Refusing to quarantine a whole subtree; nothing
-                        // will be mutated because the plan aborts here.
+                        
+                        
                         return Err(ReconcileError::StructuralConflict {
                             ancestor: join(&path),
                             path: join(&path),
@@ -481,8 +540,8 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                             (local.device_id, content)
                         }
                         Side::Remote => {
-                            // The remote loser copy is rebuilt from blobs we
-                            // may not have yet; ride the fetch list.
+                            
+                            
                             for (id, len) in &loser_state.chunks {
                                 fetch_cand.insert(*id, *len);
                             }
@@ -513,8 +572,8 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         decided.push((key.clone(), decision, l, r));
     }
 
-    // Subtract what the peer provably has from the send list, and what the
-    // local manifest provably references from the fetch list.
+    
+    
     let remote_refs = manifest_chunk_refs(store, &remote.root_tree_id)?;
     let local_refs = manifest_chunk_refs(store, &local.root_tree_id)?;
     let send: BTreeMap<BlobId, u64> = send_cand
@@ -526,12 +585,12 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         .filter(|(id, _)| !local_refs.contains(id))
         .collect();
 
-    // --- structural passes ---------------------------------------------------
-    //
-    // Final live state per decided path: what survives at each conflicting
-    // location once this plan runs. Descendants may not be touched
-    // independently when an ancestor ends up deleted or occupied by
-    // something that is not a directory.
+    
+    
+    
+    
+    
+    
     let mut final_state: BTreeMap<String, Option<&EntryState>> = BTreeMap::new();
     for (key, d, l, r) in &decided {
         let s = match d {
@@ -552,10 +611,10 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         .map(|op| join(&op.path))
         .collect();
 
-    // Paths whose content survives locally against the pure merged result:
-    // local-side conflict winners, quarantine destinations, and silent
-    // local keeps that carry content. Ancestor removals above these are
-    // suppressed so a remote teardown cannot eat a resurrection.
+    
+    
+    
+    
     let mut survivors: Vec<CompPath> = Vec::new();
     for q in &quarantine {
         survivors.push(q.path.clone());
@@ -567,7 +626,7 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
     }
     for (key, d, l, _) in &decided {
         if matches!(d, Decision::KeepLocal) && l.is_some() {
-            // Reconstruct the stored components from the views.
+            
             if let Some((p, _)) = local_view.get(key).or_else(|| remote_view.get(key)) {
                 survivors.push(p.clone());
             }
@@ -587,11 +646,11 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         materialize.retain(|op| !(op.result.is_none() && suppressed.contains(&join(&op.path))));
     }
 
-    // Remaining checks: an upsert or quarantine file may not land beneath an
-    // ancestor this cycle leaves deleted or non-directory. Deleted-ancestor
-    // cases are repairable when the deletion was local-only and the base
-    // state there was a directory: synthesize a mkdir so the resurrection
-    // has somewhere to land. Non-directory ancestors abort loudly.
+    
+    
+    
+    
+    
     let targets: Vec<CompPath> = materialize
         .iter()
         .filter(|op| op.result.is_some())
@@ -607,7 +666,7 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             }
             match final_state.get(&anc_key) {
                 Some(None) => {
-                    // Locally deleted, stayed deleted. Rebuild from base.
+                    
                     let base_state = local_view
                         .get(&anc_key)
                         .and_then(|(_, v)| v.base.clone())
@@ -664,8 +723,8 @@ mod tests {
     const DEV_A: [u8; 32] = [0xA1; 32];
     const DEV_B: [u8; 32] = [0xB2; 32];
 
-    /// Two devices, each with one snapshot of their (possibly different)
-    /// trees. Returns devices plus both snapshots.
+    
+    
     struct Pair {
         a: Device,
         b: Device,
@@ -681,7 +740,7 @@ mod tests {
         build_b(&b.tree);
         let sa = a.snapshot();
         let sb = b.snapshot();
-        // Metadata-first exchange.
+        
         transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
         transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
         Pair { a, b, sa, sb }
@@ -706,7 +765,7 @@ mod tests {
         let plan = plan_on_a(&p);
         assert!(plan.conflicts.is_empty());
         assert!(plan.quarantine.is_empty());
-        // Union semantics: A applies B's new file locally and sends its own.
+        
         assert_eq!(plan.materialize.len(), 1);
         assert_eq!(
             join(&plan.materialize[0].path),
@@ -753,7 +812,7 @@ mod tests {
         );
         let plan = plan_on_a(&p);
         assert!(plan.conflicts.is_empty() && plan.quarantine.is_empty());
-        // B is newer; A applies B's mtime silently.
+        
         assert_eq!(plan.materialize.len(), 1);
         assert_eq!(plan.materialize[0].result.as_ref().unwrap().mtime_sec, 20);
     }
@@ -796,7 +855,7 @@ mod tests {
             "tie: DEV_B is the higher device id"
         );
 
-        // Mirror view on A must agree — the rule is symmetric.
+        
         let mirrored = reconcile(ReconcileInput {
             store: &p.b.store,
             local: &p.sb.manifest,
@@ -813,12 +872,15 @@ mod tests {
 
     #[test]
     fn delete_vs_edit_resurrects_the_edit() {
-        // Shared base first, then A edits while B deletes.
+        
         let mut p = pair(
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
         );
         let base = p.sa.manifest.clone();
+        
+        
+        p.b.parent = p.sa.manifest_id;
 
         write_file(&p.a.tree.join("f.txt"), b"the edit", false, (60, 0));
         std::fs::remove_file(p.b.tree.join("f.txt")).unwrap();
@@ -855,6 +917,7 @@ mod tests {
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
         );
         let base = p.sa.manifest.clone();
+        p.b.parent = p.sa.manifest_id;
 
         std::fs::remove_file(p.a.tree.join("f.txt")).unwrap();
         write_file(&p.b.tree.join("f.txt"), b"edited elsewhere", false, (70, 0));
@@ -894,11 +957,12 @@ mod tests {
         );
         let _ = &p.sa;
         let base = p.sa.manifest.clone();
+        p.b.parent = p.sa.manifest_id;
 
-        // A replaces the whole directory with a file of the same name.
+        
         std::fs::remove_dir_all(p.a.tree.join("d")).unwrap();
         write_file(&p.a.tree.join("d"), b"now a file", false, (80, 0));
-        // B edits inside it.
+        
         write_file(
             &p.b.tree.join("d/inner.txt"),
             b"edited inner",

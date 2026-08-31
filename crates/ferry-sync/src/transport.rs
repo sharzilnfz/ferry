@@ -1,58 +1,58 @@
-//! Transport seam (M0): byte-frame pipes between two daemons.
-//!
-//! The trait boundary is the deliverable; `TcpTransport` is the deliberately
-//! ugly throwaway implementation — plain blocking localhost TCP, 4-byte
-//! little-endian length-prefixed frames, no encryption, no compression, no
-//! resume. T-009 replaces the implementation; the engine never sees sockets.
-//!
-//! Frame limit guards against a hostile or buggy peer allocating us to
-//! death. 512 MiB comfortably exceeds the largest legal pack (16 MiB seal
-//! target plus overhead).
+
+
+
+
+
+
+
+
+
+
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-/// Hard cap on one frame's payload.
+
 pub const MAX_FRAME_BYTES: u32 = 512 * 1024 * 1024;
 
-/// An opaque 32-byte peer identity (the wire-level device public key / endpoint identity per ADR-0003).
+
 pub type PeerId = [u8; 32];
 
 pub trait Transport: Send + Sync {
-    /// Open an outgoing connection to `addr`.
+    
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>>;
-    /// Bind a listener on `addr` (`:0` picks a free port;
-    /// [`Listener::local_addr`] reports the choice).
+    
+    
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>>;
 
-    /// Dial a peer by identity. Default implementation maps the peer id to an address.
+    
     fn dial_peer(&self, peer: &PeerId) -> io::Result<Box<dyn Connection>> {
         self.dial(peer_id_to_addr(peer))
     }
 }
 
 pub trait Listener: Send + Sync {
-    /// The bound address, after port resolution.
+    
     fn local_addr(&self) -> io::Result<SocketAddr>;
-    /// Block until a peer connects. Errors are per-accept; callers keep
-    /// accepting until shutdown.
+    
+    
     fn accept(&self) -> io::Result<Box<dyn Connection>>;
-    /// Explicitly close the listener to unblock pending `accept()` calls cleanly.
+    
     fn close(&self) -> io::Result<()> {
         Ok(())
     }
 }
 
 pub trait Connection: Send {
-    /// Send exactly one length-prefixed frame.
+    
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()>;
-    /// Receive exactly one frame payload. `Err(UnexpectedEof)` at a frame
-    /// boundary means the peer closed cleanly.
+    
+    
     fn recv_frame(&mut self) -> io::Result<Vec<u8>>;
 }
 
-/// Convert a `SocketAddr` into an opaque `PeerId` representation for transport routing.
+
 pub fn addr_to_peer_id(addr: &SocketAddr) -> PeerId {
     let mut out = [0u8; 32];
     match addr {
@@ -68,20 +68,26 @@ pub fn addr_to_peer_id(addr: &SocketAddr) -> PeerId {
     out
 }
 
-/// Convert an opaque `PeerId` back into a `SocketAddr` if it encodes one.
+
 pub fn peer_id_to_addr(peer: &PeerId) -> SocketAddr {
     let ip = std::net::Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
     let port = u16::from_be_bytes([peer[4], peer[5]]);
     SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
 }
 
-/// The M0 throwaway: std-only TCP with hand-rolled framing.
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TcpTransport;
 
 impl Transport for TcpTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>> {
-        Ok(Box::new(TcpConn(TcpStream::connect(addr)?)))
+        let stream = TcpStream::connect(addr)?;
+        
+        
+        
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+        Ok(Box::new(TcpConn(stream)))
     }
 
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>> {
@@ -98,6 +104,8 @@ impl Listener for TcpLst {
 
     fn accept(&self) -> io::Result<Box<dyn Connection>> {
         let (stream, _) = self.0.accept()?;
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         Ok(Box::new(TcpConn(stream)))
     }
 
@@ -139,8 +147,8 @@ impl<T: ?Sized + Listener + Send + Sync> Listener for Arc<T> {
 
 struct TcpConn(TcpStream);
 
-/// Treat a boxed connection like a connection itself, so protocol code can
-/// pass `&mut Box<dyn Connection>` where `&mut dyn Connection` is expected.
+
+
 impl Connection for Box<dyn Connection> {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         (**self).send_frame(payload)
@@ -204,7 +212,7 @@ mod tests {
             let b = c.recv_frame().unwrap();
             c.send_frame(&b).unwrap();
             c.send_frame(&a).unwrap();
-            // Peer closes; next read is a clean EOF error.
+            
             assert!(c.recv_frame().is_err());
         });
         let mut cli = TcpTransport.dial(addr).unwrap();
@@ -212,7 +220,7 @@ mod tests {
         cli.send_frame(&[]).unwrap();
         assert_eq!(cli.recv_frame().unwrap(), b"");
         assert_eq!(cli.recv_frame().unwrap(), b"first");
-        drop(cli); // closes the socket
+        drop(cli); 
         server.join().unwrap();
     }
 
@@ -225,7 +233,7 @@ mod tests {
             let err = c.recv_frame().unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         });
-        // Raw client bypasses the trait to emit a hostile prefix.
+        
         let mut raw = std::net::TcpStream::connect(addr).unwrap();
         raw.write_all(&(u32::MAX - 1).to_le_bytes()).unwrap();
         server.join().unwrap();
@@ -233,7 +241,7 @@ mod tests {
 
     #[test]
     fn dial_refuses_unreachable_addresses_promptly() {
-        // Port 1 on loopback is closed by default; connect must error.
+        
         let res = TcpTransport.dial("127.0.0.1:1".parse().unwrap());
         match res {
             Err(e) => assert!(matches!(e.kind(), io::ErrorKind::ConnectionRefused)),
