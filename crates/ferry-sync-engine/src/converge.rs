@@ -57,6 +57,8 @@ use ferry_store::manifest::{serialize_manifest, RootManifest};
 use ferry_store::store::{Store, StoreError};
 use thiserror::Error;
 
+use crate::held::{HeldChunk, HeldEntry, HeldLedger};
+use crate::pin::PinStore;
 use crate::reconcile::{
     reconcile, ActionPlan, ConflictKind, LoserContent, QuarantineOp, ReconcileError, ReconcileInput,
 };
@@ -295,11 +297,45 @@ impl<'a> ConvergenceEngine<'a> {
         
         let state_dir = self.state_dir.unwrap_or_else(|| self.store.store_dir());
         let (plan, held) = match &self.hold {
-            HoldConfig::Custom(gate) => gate_plan(plan, gate.as_ref(), self.store, local)?,
+            HoldConfig::Custom(gate) => gate_plan(plan, gate.as_ref())?,
             HoldConfig::Disabled => (plan, Vec::new()),
             HoldConfig::Auto => {
-                if let Some(matcher) = crate::hold::hold_matcher(state_dir)? {
-                    gate_plan(plan, |p| matcher.matches(p), self.store, local)?
+                let rec = PinStore::new(state_dir).load()?;
+                if let Some(rec) = rec {
+                    if rec.holding() {
+                        let gate: Box<dyn Fn(&[String]) -> bool> = if rec.paths.iter().any(|p| p == "*") {
+                            Box::new(|_: &[String]| true)
+                        } else {
+                            let mut builder = ignore::gitignore::GitignoreBuilder::new("");
+                            for line in &rec.paths {
+                                builder.add_line(None, line).map_err(|e| crate::pin_error::PinError::BadPattern {
+                                    line: line.clone(),
+                                    reason: e.to_string(),
+                                })?;
+                            }
+                            let gi = builder.build().map_err(|e| crate::pin_error::PinError::BadPattern {
+                                line: rec.paths.join(", "),
+                                reason: e.to_string(),
+                            })?;
+                            let patterns = rec.paths.clone();
+                            Box::new(move |rel: &[String]| {
+                                if matches!(
+                                    gi.matched_path_or_any_parents(std::path::Path::new(&rel.join("/")), false),
+                                    ignore::Match::Ignore(_)
+                                ) {
+                                    return true;
+                                }
+                                let joined = rel.join("/");
+                                patterns.iter().any(|pat| {
+                                    let clean_pat = pat.trim_start_matches('/');
+                                    clean_pat.starts_with(&format!("{joined}/"))
+                                })
+                            })
+                        };
+                        gate_plan(plan, gate.as_ref())?
+                    } else {
+                        (plan, Vec::new())
+                    }
                 } else {
                     (plan, Vec::new())
                 }
@@ -433,7 +469,49 @@ impl<'a> ConvergenceEngine<'a> {
             let remote_bytes = serialize_manifest(remote);
             let remote_id = *blake3::hash(&remote_bytes).as_bytes();
             let remote_hex = hex(&remote_id);
-            crate::hold::record_held(state_dir, &peer_hex, &remote_hex, &held, self.now)?;
+            let entries: Vec<HeldEntry> = held
+                .iter()
+                .map(|h| HeldEntry {
+                    held_sec: self.now.0,
+                    held_nsec: self.now.1,
+                    path: h.path.clone(),
+                    device_id: peer_hex.clone(),
+                    remote_manifest_id: remote_hex.clone(),
+                    chunks: h
+                        .chunks
+                        .iter()
+                        .map(|(id, len)| HeldChunk {
+                            id: hex(id),
+                            len: *len,
+                        })
+                        .collect(),
+                    decision: match h.decision {
+                        HeldDecision::RemoteApply => "remote_apply".to_string(),
+                        HeldDecision::RemoteDelete => "remote_delete".to_string(),
+                        HeldDecision::Conflict { .. } => "conflict".to_string(),
+                    },
+                    conflict_winner: match h.decision {
+                        HeldDecision::Conflict {
+                            winner: Some(Side::Local),
+                        } => Some("local".to_string()),
+                        HeldDecision::Conflict {
+                            winner: Some(Side::Remote),
+                        } => Some("remote".to_string()),
+                        _ => None,
+                    },
+                })
+                .collect();
+            let ledger = HeldLedger::new(state_dir);
+            let known: BTreeSet<(String, String)> = ledger
+                .load_peer(&peer_hex)?
+                .into_iter()
+                .map(|e| (e.path, e.remote_manifest_id))
+                .collect();
+            let fresh: Vec<HeldEntry> = entries
+                .into_iter()
+                .filter(|e| !known.contains(&(e.path.clone(), e.remote_manifest_id.clone())))
+                .collect();
+            ledger.append(&peer_hex, &fresh)?;
         }
 
         
@@ -496,8 +574,6 @@ pub fn converge(
 fn gate_plan(
     plan: ActionPlan,
     holds: impl Fn(&[String]) -> bool,
-    store: &Store,
-    local: &RootManifest,
 ) -> Result<(ActionPlan, Vec<HeldPath>), ConvergenceError> {
     let held_mat: Vec<bool> = plan.materialize.iter().map(|op| holds(&op.path)).collect();
     let held_qtn: Vec<bool> = plan.quarantine.iter().map(|op| holds(&op.path)).collect();
@@ -559,16 +635,60 @@ fn gate_plan(
         }
     }
 
-    
-    let refs = chunk_path_map(store, local)?;
-    let withheld = |id: &BlobId| -> bool {
-        refs.get(id)
-            .is_some_and(|paths| !paths.is_empty() && paths.iter().all(|p| held_keys.contains(p)))
-    };
+    let mut held = Vec::new();
+    for key in &held_keys {
+        let mat = plan
+            .materialize
+            .iter()
+            .zip(&held_mat)
+            .find(|(op, h)| **h && join_path(&op.path) == *key)
+            .map(|(op, _)| op);
+        let qtn = plan
+            .quarantine
+            .iter()
+            .zip(&held_qtn)
+            .find(|(op, h)| **h && join_path(&op.path) == *key)
+            .map(|(op, _)| op);
+        let con = plan
+            .conflicts
+            .iter()
+            .zip(&held_con)
+            .find(|(c, h)| **h && join_path(&c.path) == *key)
+            .map(|(c, _)| c);
+
+        let decision = match con {
+            Some(c) => HeldDecision::Conflict {
+                winner: Some(c.winner),
+            },
+            None => match mat.map(|m| &m.result) {
+                Some(Some(_)) => HeldDecision::RemoteApply,
+                Some(None) => HeldDecision::RemoteDelete,
+                None => HeldDecision::Conflict { winner: None },
+            },
+        };
+
+        let mut chunks: Vec<(BlobId, u64)> = Vec::new();
+        match mat.and_then(|m| m.result.as_ref()) {
+            Some(state) => chunks.extend(state.chunks.iter().copied()),
+            None => {
+                if let Some(LoserContent::FromStore { chunks: cs, .. }) = qtn.map(|q| &q.content) {
+                    chunks.extend(cs.iter().copied());
+                }
+            }
+        }
+
+        held.push(HeldPath {
+            path: key.clone(),
+            decision,
+            chunks,
+        });
+    }
+
+    let held_chunk_ids: BTreeSet<BlobId> = held.iter().flat_map(|h| h.chunks.iter().map(|(id, _)| *id)).collect();
     let send: Vec<(BlobId, u64)> = plan
         .send
         .iter()
-        .filter(|(id, _)| !withheld(id))
+        .filter(|(id, _)| !held_chunk_ids.contains(id))
         .copied()
         .collect();
 
@@ -598,62 +718,6 @@ fn gate_plan(
             .collect(),
     };
 
-    
-    
-    let mut held = Vec::new();
-    for key in &held_keys {
-        let mat = plan
-            .materialize
-            .iter()
-            .zip(&held_mat)
-            .find(|(op, h)| **h && join_path(&op.path) == *key)
-            .map(|(op, _)| op);
-        let qtn = plan
-            .quarantine
-            .iter()
-            .zip(&held_qtn)
-            .find(|(op, h)| **h && join_path(&op.path) == *key)
-            .map(|(op, _)| op);
-        let con = plan
-            .conflicts
-            .iter()
-            .zip(&held_con)
-            .find(|(c, h)| **h && join_path(&c.path) == *key)
-            .map(|(c, _)| c);
-
-        let decision = match con {
-            Some(c) => HeldDecision::Conflict {
-                winner: Some(c.winner),
-            },
-            None => match mat.map(|m| &m.result) {
-                Some(Some(_)) => HeldDecision::RemoteApply,
-                Some(None) => HeldDecision::RemoteDelete,
-                
-                
-                None => HeldDecision::Conflict { winner: None },
-            },
-        };
-
-        
-        
-        
-        let mut chunks: Vec<(BlobId, u64)> = Vec::new();
-        match mat.and_then(|m| m.result.as_ref()) {
-            Some(state) => chunks.extend(state.chunks.iter().copied()),
-            None => {
-                if let Some(LoserContent::FromStore { chunks: cs, .. }) = qtn.map(|q| &q.content) {
-                    chunks.extend(cs.iter().copied());
-                }
-            }
-        }
-
-        held.push(HeldPath {
-            path: key.clone(),
-            decision,
-            chunks,
-        });
-    }
-
     Ok((apply, held))
 }
 
@@ -663,41 +727,6 @@ fn nests(prefix: &str, whole: &str) -> bool {
         && whole.starts_with(prefix)
         && whole[prefix.len()..].starts_with('/')
 }
-
-
-
-fn chunk_path_map(
-    store: &Store,
-    manifest: &RootManifest,
-) -> Result<BTreeMap<BlobId, BTreeSet<String>>, ConvergenceError> {
-    use ferry_store::manifest::{parse_tree_node, EntryPayload};
-    let mut out: BTreeMap<BlobId, BTreeSet<String>> = BTreeMap::new();
-    
-    let mut work: Vec<(BlobId, Vec<String>)> = vec![(manifest.root_tree_id, Vec::new())];
-    while let Some((tree_id, prefix)) = work.pop() {
-        let bytes = store.get(BlobKind::TreeNode, &tree_id)?;
-        let node = parse_tree_node(&bytes)?;
-        for e in node.entries {
-            let mut path = prefix.clone();
-            path.push(e.name);
-            match e.payload {
-                EntryPayload::File { chunks, .. } => {
-                    let joined = join_path(&path);
-                    for (id, _) in chunks {
-                        out.entry(id).or_default().insert(joined.clone());
-                    }
-                }
-                EntryPayload::Dir { child_tree_id } => work.push((child_tree_id, path)),
-                EntryPayload::Symlink { .. } => {}
-            }
-        }
-    }
-    Ok(out)
-}
-
-
-
-
 
 fn kind_str(k: ConflictKind) -> &'static str {
     match k {
@@ -1549,13 +1578,9 @@ mod tests {
             result: Some(st(Vec::new())),
         });
 
-        let err = gate_plan(
-            plan,
-            |p| p.last().is_some_and(|c| c == "inner.rs"),
-            &store,
-            &local,
-        )
-        .unwrap_err();
+        let err = gate_plan(plan, |p| p.last().is_some_and(|c| c == "inner.rs"))
+            .unwrap_err();
+        let _ = (&store, &local);
         match err {
             ConvergenceError::StructuralSplit { pinned, other } => {
                 assert_eq!(pinned, "src/inner.rs");

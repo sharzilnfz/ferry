@@ -6,7 +6,6 @@ use ferry_store::store::Store;
 use serde::{Deserialize, Serialize};
 
 use crate::held::{distinct_paths, HeldEntry, HeldLedger};
-use crate::matcher::PathMatcher;
 use crate::pin::{PinRecord, PinStore, PIN_FORMAT_VERSION};
 use crate::pin::release::ReleasePeerPlan;
 use crate::pin_error::PinError;
@@ -169,7 +168,7 @@ impl PinManager {
             paths
         };
 
-        PathMatcher::new(&scope)?;
+        validate_pin_patterns(&scope)?;
 
         let (sec, nsec) = ferry_platform::now_unix();
         let expires_sec = duration_secs.map(|d| sec + d as i64);
@@ -470,4 +469,24 @@ mod tests {
         assert_eq!(rec.expires_sec, Some(rec.started_sec + 3600));
         assert!(mgr.is_holding().unwrap());
     }
+}
+
+fn validate_pin_patterns(patterns: &[String]) -> Result<(), PinError> {
+    if patterns.iter().any(|p| p == "*") {
+        return Ok(());
+    }
+    let mut builder = ignore::gitignore::GitignoreBuilder::new("");
+    for line in patterns {
+        builder
+            .add_line(None, line)
+            .map_err(|e| PinError::BadPattern {
+                line: line.clone(),
+                reason: e.to_string(),
+            })?;
+    }
+    builder.build().map_err(|e| PinError::BadPattern {
+        line: patterns.join(", "),
+        reason: e.to_string(),
+    })?;
+    Ok(())
 }

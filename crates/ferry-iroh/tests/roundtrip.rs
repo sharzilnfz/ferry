@@ -14,7 +14,11 @@ fn test_transport(seed_byte: u8) -> IrohTransport {
     seed[0] = seed_byte;
     seed[1] = seed_byte;
     rand::thread_rng().fill_bytes(&mut seed[2..]);
-    IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
+    IrohTransport::new(IrohConfig {
+        secret: Some(seed),
+        ..Default::default()
+    })
+    .expect("transport builds")
 }
 
 fn test_transport_with_routes(seed_byte: u8, routes: ferry_iroh::RouteTable) -> IrohTransport {
@@ -22,12 +26,11 @@ fn test_transport_with_routes(seed_byte: u8, routes: ferry_iroh::RouteTable) -> 
     seed[0] = seed_byte;
     seed[1] = seed_byte;
     rand::thread_rng().fill_bytes(&mut seed[2..]);
-    IrohTransport::new(
-        IrohConfig::builder()
-            .secret(seed)
-            .routes(routes)
-            .build(),
-    )
+    IrohTransport::new(IrohConfig {
+        secret: Some(seed),
+        routes: Some(routes),
+        ..Default::default()
+    })
     .expect("transport builds")
 }
 
@@ -123,13 +126,12 @@ fn wrong_key_dial_fails_cleanly_typed() {
         },
     );
 
-    let short_timeout = IrohTransport::new(
-        IrohConfig::builder()
-            .secret([9u8; 32])
-            .dial_timeout(Duration::from_secs(2))
-            .routes(shared)
-            .build(),
-    )
+    let short_timeout = IrohTransport::new(IrohConfig {
+        secret: Some([9u8; 32]),
+        dial_timeout: Duration::from_secs(2),
+        routes: Some(shared),
+        ..Default::default()
+    })
     .unwrap();
     let err = short_timeout
         .dial(alias)

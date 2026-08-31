@@ -66,8 +66,7 @@ const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
 
-const MAX_BFS_ROUNDS: usize = 64;
-
+const BUDGET: usize = 64;
 
 type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
@@ -457,7 +456,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         let mut rounds = 0usize;
         while !queue.is_empty() {
             rounds += 1;
-            if rounds > MAX_BFS_ROUNDS {
+            if rounds > BUDGET {
                 return Err(ProtoError::MissingItems(queue.len()).into());
             }
             let batch = std::mem::take(&mut queue);

@@ -69,9 +69,10 @@ pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
             use rand::RngCore;
             let mut seed_a = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut seed_a);
-            let t = ferry_iroh::IrohTransport::new(
-                ferry_iroh::IrohConfig::builder().secret(seed_a).build(),
-            )
+            let t = ferry_iroh::IrohTransport::new(ferry_iroh::IrohConfig {
+                secret: Some(seed_a),
+                ..Default::default()
+            })
             .expect("iroh transport builds");
             Arc::new(t)
         }

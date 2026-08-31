@@ -82,16 +82,12 @@ impl DialFailure {
 }
 
 struct Inner {
-    rt: Mutex<Option<Runtime>>,
     rt_handle: Handle,
     ep: Endpoint,
     my_id: EndpointId,
     dial_timeout: Duration,
     closed: AtomicBool,
     observations: Mutex<HashMap<[u8; 32], Arc<PathObservation>>>,
-    
-    
-    
     relay_urls: Vec<iroh::RelayUrl>,
     routes: RouteTable,
 }
@@ -131,24 +127,6 @@ impl Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::SeqCst);
-        if let Ok(mut g) = self.rt.lock() {
-            if let Some(rt) = g.take() {
-                let ep = self.ep.clone();
-                let handle = rt.handle().clone();
-                let close_and_shutdown = move || {
-                    handle.block_on(async move {
-                        let _ = tokio::time::timeout(Duration::from_millis(200), ep.close()).await;
-                    });
-                    rt.shutdown_timeout(Duration::from_millis(500));
-                };
-
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    let _ = std::thread::spawn(close_and_shutdown).join();
-                } else {
-                    close_and_shutdown();
-                }
-            }
-        }
     }
 }
 
@@ -171,8 +149,18 @@ impl std::fmt::Debug for IrohTransport {
 }
 
 impl IrohTransport {
-    
     pub fn new(cfg: IrohConfig) -> io::Result<Self> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
+        let handle = rt.handle().clone();
+        std::mem::forget(rt);
+        Self::new_with_handle(cfg, handle)
+    }
+
+    pub fn new_with_handle(cfg: IrohConfig, handle: Handle) -> io::Result<Self> {
         let seed = cfg.resolve_secret().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -187,25 +175,15 @@ impl IrohTransport {
         };
         let routes = cfg.routes.clone().unwrap_or_default();
 
-        let (rt, ep) = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(|e| io::Error::other(format!("tokio runtime: {e}")))?;
-
-            let ep = rt.block_on(build_endpoint(&cfg, seed))?;
-            Ok::<_, io::Error>((rt, ep))
-        })
-        .join()
-        .map_err(|_| io::Error::other("thread panicked building iroh transport"))??;
+        let ep = {
+            let cfg = cfg.clone();
+            block_on(&handle, async move { build_endpoint(&cfg, seed).await })?
+        };
         let my_id = ep.id();
-        let rt_handle = rt.handle().clone();
 
         Ok(IrohTransport {
             inner: Arc::new(Inner {
-                rt: Mutex::new(Some(rt)),
-                rt_handle,
+                rt_handle: handle,
                 ep,
                 my_id,
                 dial_timeout,
@@ -652,7 +630,11 @@ mod tests {
         seed[0] = seed_byte;
         seed[1] = seed_byte;
         rand::thread_rng().fill_bytes(&mut seed[2..]);
-        IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
+        IrohTransport::new(IrohConfig {
+            secret: Some(seed),
+            ..Default::default()
+        })
+        .expect("transport builds")
     }
 
     fn test_transport_with_routes(seed_byte: u8, routes: RouteTable) -> IrohTransport {
@@ -660,8 +642,12 @@ mod tests {
         seed[0] = seed_byte;
         seed[1] = seed_byte;
         rand::thread_rng().fill_bytes(&mut seed[2..]);
-        IrohTransport::new(IrohConfig::builder().secret(seed).routes(routes).build())
-            .expect("transport builds")
+        IrohTransport::new(IrohConfig {
+            secret: Some(seed),
+            routes: Some(routes),
+            ..Default::default()
+        })
+        .expect("transport builds")
     }
 
     #[test]

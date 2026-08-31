@@ -84,56 +84,39 @@ impl FolderEngine {
         existing_record: Option<FolderRecord>,
         restart_count: u32,
     ) -> Result<Self, SupervisorError> {
-        let opened = ferry_folder::folder::open_folder(folder_path, identity).map_err(|e| {
-            SupervisorError {
-                code: e.code.to_string(),
-                message: e.to_string(),
-            }
-        })?;
-        let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
-            SupervisorError {
-                code: "poly-invalid".to_string(),
-                message: format!("invalid chunker polynomial in store: {e}"),
-            }
-        })?;
-        let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
-        let tag = format!("ferry-{}", &folder_id_hex[..8.min(folder_id_hex.len())]);
-
-        let opportunistic_every = options.opportunistic_every.unwrap_or(50);
-        let poll_interval = options
-            .poll_interval
-            .unwrap_or_else(|| Duration::from_millis(200));
-
-        let cfg = EngineConfig {
-            tag,
-            store_dir: opened.root.clone(),
-            tree_dir: opened.root.clone(),
-            poly,
-            folder_id: opened.folder_id,
-            poll_interval,
-            opportunistic_every,
-            bind_addr: options.bind_addr,
-            connect_to: options.connect_to,
-            allow_trust_on_first_use: false,
-            pin_state_dir: Some(opened.state_dir()),
-            quiet: true,
-        };
-        let mut engine =
-            SyncEngine::with_store(cfg, Arc::clone(&transport), Arc::clone(&opened.store))
-                .map_err(|e| SupervisorError {
+        let (handle_raw, opened_record, folder_id_bytes) =
+            ferry_sync::SyncEngine::open_watched_folder(
+                folder_path,
+                identity,
+                Arc::clone(&transport),
+                options.bind_addr,
+                options.connect_to,
+                options.poll_interval,
+                options.opportunistic_every,
+            )
+            .map_err(|e| {
+                let msg = e.to_string();
+                if let Some((code, rest)) = msg.split_once(": ") {
+                    if !code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                        return SupervisorError {
+                            code: code.to_string(),
+                            message: rest.to_string(),
+                        };
+                    }
+                }
+                SupervisorError {
                     code: "bind".to_string(),
-                    message: e.to_string(),
-                })?;
-        engine.set_identity(identity.clone());
-        engine.set_ignore_policy(opened.ignore_policy());
-        let handle = Arc::new(engine.start());
+                    message: msg,
+                }
+            })?;
+        let handle = Arc::new(handle_raw);
 
         let record = existing_record.unwrap_or_else(|| {
             let (secs, _) = ferry_platform::time::now_unix();
             let added_at = ferry_platform::time::fmt_rfc3339(secs);
             FolderRecord {
-                folder_id: folder_id_hex,
-                path: opened.root,
+                folder_id: opened_record.folder_id.clone(),
+                path: opened_record.path.clone(),
                 added_at,
             }
         });
@@ -147,7 +130,7 @@ impl FolderEngine {
         Ok(Self {
             record,
             handle,
-            folder_id_bytes: opened.folder_id,
+            folder_id_bytes,
             restart_count,
             next_restart_at: None,
             identity: identity.clone(),

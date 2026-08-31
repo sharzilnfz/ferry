@@ -243,7 +243,8 @@ type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
-const MAX_BFS_ROUNDS: usize = 64;
+const BUDGET: usize = 262_144;
+const MAX_BFS_ROUNDS: usize = BUDGET;
 
 
 
@@ -256,13 +257,13 @@ const MAX_BFS_ROUNDS: usize = 64;
 
 
 
-pub(crate) const MAX_ADVERT_ROWS_TOTAL: usize = 262_144;
+pub(crate) const MAX_ADVERT_ROWS_TOTAL: usize = BUDGET;
 
 
 
 
 
-const MAX_BATCHES_PER_ROUND: usize = 1_024;
+const MAX_BATCHES_PER_ROUND: usize = BUDGET;
 
 
 

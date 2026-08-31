@@ -44,11 +44,10 @@ impl Supervisor {
         let (transport, iroh_transport): (
             Arc<dyn ferry_sync::Transport>,
             Option<Arc<ferry_iroh::IrohTransport>>,
-        ) = match ferry_iroh::IrohTransport::new(
-            ferry_iroh::IrohConfig::builder()
-                .device_identity(&identity)
-                .build(),
-        ) {
+        ) = match ferry_iroh::IrohTransport::new(ferry_iroh::IrohConfig {
+            device_identity: Some(identity.clone()),
+            ..Default::default()
+        }) {
             Ok(t) => {
                 let arc = Arc::new(t);
                 (arc.clone(), Some(arc))
