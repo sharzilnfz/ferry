@@ -243,6 +243,8 @@ type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
+// Single budget capping BFS rounds, advert rows, and batches per round; the
+// three former limits converged to the same value, so one constant avoids drift.
 const BUDGET: usize = 262_144;
 const MAX_BFS_ROUNDS: usize = BUDGET;
 

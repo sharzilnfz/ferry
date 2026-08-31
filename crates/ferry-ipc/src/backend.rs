@@ -321,7 +321,7 @@ pub trait UiBackend: StatusDomain + InventoryDomain + SessionDomain {}
 
 impl<T: StatusDomain + InventoryDomain + SessionDomain> UiBackend for T {}
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone)]
 struct InMemPairingSession {
     folder_id: String,
@@ -329,7 +329,7 @@ struct InMemPairingSession {
 }
 
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Clone)]
 pub struct FakeBackend {
     snapshot: Arc<RwLock<EngineSnapshot>>,
@@ -341,14 +341,14 @@ pub struct FakeBackend {
     pairing_sessions: Arc<std::sync::Mutex<HashMap<String, InMemPairingSession>>>,
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 impl Default for FakeBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 impl FakeBackend {
     #[must_use]
     pub fn new() -> Self {
@@ -416,7 +416,7 @@ impl FakeBackend {
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 impl StatusDomain for FakeBackend {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
         let snap = Arc::clone(&self.snapshot);
@@ -445,7 +445,7 @@ impl StatusDomain for FakeBackend {
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 impl SessionDomain for FakeBackend {
     fn start_pin(
         &self,
@@ -683,7 +683,7 @@ impl SessionDomain for FakeBackend {
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 impl InventoryDomain for FakeBackend {
     fn list_directory(
         &self,

@@ -17,7 +17,7 @@ pub use backend::{
     PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain,
     UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
 };
-#[cfg(any(test, debug_assertions, feature = "test-util"))]
+#[cfg(any(test, feature = "test-util"))]
 pub use backend::FakeBackend;
 pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;
