@@ -7,7 +7,7 @@ use std::time::Duration;
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_daemon::ipc::spawn_ipc_server;
 use ferry_daemon::state::DaemonState;
-use ferry_daemon::ui::backend::AutoBackend;
+use ferry_daemon::ui::backend::{FolderBackend, FsStateSource};
 use ferry_folder::folder::{create_folder, save_settings, Settings, SETTINGS_FORMAT_VERSION};
 use ferry_ipc::backend::{SessionDomain, StatusDomain};
 use ferry_ipc::client::DaemonClient;
@@ -78,9 +78,11 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
     let rig = TestRig::new();
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&rig.tree_dir);
 
-    let backend = AutoBackend::new(socket_path.clone())
+    let fs_src = FsStateSource::new(rig.tree_dir.clone()).with_identity(rig.identity.clone());
+    let fb = FolderBackend::from_source(fs_src);
+    let backend = ferry_ipc::backend::AutoBackend::new(socket_path.clone())
         .with_fallback(rig.tree_dir.clone())
-        .with_identity(rig.identity.clone());
+        .with_fallback_backend(Arc::new(fb));
 
     
     let offline_snap = backend

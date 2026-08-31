@@ -81,8 +81,10 @@ impl UiServerState {
 #[cfg(feature = "web-ui")]
 pub fn router(state: Arc<UiServerState>) -> Router {
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&state.folder);
-    let backend =
-        ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(state.folder.clone());
+    let fs_back = ferry_daemon::ui::fs_backend(state.folder.clone());
+    let backend = ferry_daemon::ui::AutoBackend::new(socket_path)
+        .with_fallback(state.folder.clone())
+        .with_fallback_backend(Arc::new(fs_back));
     let server = DashboardServer::new(Arc::new(backend))
         .with_token(&state.token)
         .with_inactivity_timeout(INACTIVITY_TIMEOUT);
@@ -236,7 +238,10 @@ fn run_web_mode(
         );
 
         let socket_path = ferry_ipc::paths::socket_path_for_dir(&folder_owned);
-        let backend = ferry_daemon::ui::AutoBackend::new(socket_path).with_fallback(folder_owned);
+        let fs_back = ferry_daemon::ui::fs_backend(folder_owned.clone());
+        let backend = ferry_daemon::ui::AutoBackend::new(socket_path)
+            .with_fallback(folder_owned)
+            .with_fallback_backend(Arc::new(fs_back));
         let server = DashboardServer::new(Arc::new(backend))
             .with_token(token.clone())
             .with_inactivity_timeout(INACTIVITY_TIMEOUT);

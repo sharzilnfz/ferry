@@ -793,25 +793,46 @@ pub fn connect_auto(
     auto
 }
 
+async fn transport_fallback<T>(
+    result: Result<T, OpError>,
+    fallback: Option<Arc<dyn UiBackend>>,
+    make_fallback: impl FnOnce(Arc<dyn UiBackend>) -> BoxFuture<'static, Result<T, OpError>>,
+    make_default: impl FnOnce(OpError) -> BoxFuture<'static, Result<T, OpError>>,
+) -> Result<T, OpError>
+{
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e.is_transport() || e.code == "not-supported" => {
+            if let Some(fb) = fallback {
+                make_fallback(fb).await
+            } else {
+                make_default(e).await
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 impl StatusDomain for AutoBackend {
     fn get_status(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>> {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         let folder_path = self.folder_path.clone();
         Box::pin(async move {
-            match client.get_status().await {
-                Ok(snap) => Ok(snap),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.get_status().await
-                    } else {
-                        let folder_str = folder_path
-                            .map_or_else(|| ".".to_string(), |p| p.display().to_string());
+            let res = client.get_status().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.get_status().await }),
+                |_| {
+                    let folder_path = folder_path.clone();
+                    Box::pin(async move {
+                        let folder_str = folder_path.map_or_else(|| ".".to_string(), |p| p.display().to_string());
                         Ok(EngineSnapshot::new(folder_str, "", "", "offline"))
-                    }
-                }
-                Err(e) => Err(e),
-            }
+                    })
+                },
+            )
+            .await
         })
     }
 
@@ -819,17 +840,14 @@ impl StatusDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.list_conflicts().await {
-                Ok(list) => Ok(list),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.list_conflicts().await
-                    } else {
-                        Ok(Vec::new())
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.list_conflicts().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_conflicts().await }),
+                |_| Box::pin(async move { Ok(Vec::new()) }),
+            )
+            .await
         })
     }
 
@@ -837,17 +855,14 @@ impl StatusDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.trigger_scan().await {
-                Ok(()) => Ok(()),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.trigger_scan().await
-                    } else {
-                        Ok(())
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.trigger_scan().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.trigger_scan().await }),
+                |_| Box::pin(async move { Ok(()) }),
+            )
+            .await
         })
     }
 
@@ -855,18 +870,17 @@ impl StatusDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.subscribe_events().await {
-                Ok(stream) => Ok(stream),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.subscribe_events().await
-                    } else {
-                        let (_tx, rx) = broadcast::channel(16);
-                        Ok(UiEventStream::new(rx))
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.subscribe_events().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.subscribe_events().await }),
+                |_| Box::pin(async move {
+                    let (_tx, rx) = broadcast::channel(16);
+                    Ok(UiEventStream::new(rx))
+                }),
+            )
+            .await
         })
     }
 }
@@ -879,12 +893,15 @@ impl InventoryDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.list_directory(path.clone()).await {
-                Ok(resp) => Ok(resp),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.list_directory(path).await
-                    } else {
+            let res = client.list_directory(path.clone()).await;
+            let path2 = path.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_directory(path.clone()).await }),
+                move |_| {
+                    let path = path2.clone();
+                    Box::pin(async move {
                         let validated = validate_path(path)?;
                         let validated_clone = validated.clone();
                         tokio::task::spawn_blocking(move || {
@@ -893,13 +910,11 @@ impl InventoryDomain for AutoBackend {
                                 .map_err(OpError::from)
                         })
                         .await
-                        .map_err(|e| {
-                            OpError::new("internal", e.to_string(), "inspect worker failed")
-                        })?
-                    }
-                }
-                Err(e) => Err(e),
-            }
+                        .map_err(|e| OpError::new("internal", e.to_string(), "inspect worker failed"))?
+                    })
+                },
+            )
+            .await
         })
     }
 
@@ -907,25 +922,20 @@ impl InventoryDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.list_folders().await {
-                Ok(folders) => Ok(folders),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.list_folders().await
-                    } else {
-                        tokio::task::spawn_blocking(|| {
-                            FolderInventory::new(&ferry_home())
-                                .list()
-                                .map_err(OpError::from)
-                        })
-                        .await
-                        .map_err(|e| {
-                            OpError::new("internal", e.to_string(), "list worker failed")
-                        })?
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.list_folders().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_folders().await }),
+                |_| Box::pin(async move {
+                    tokio::task::spawn_blocking(|| {
+                        FolderInventory::new(&ferry_home()).list().map_err(OpError::from)
+                    })
+                    .await
+                    .map_err(|e| OpError::new("internal", e.to_string(), "list worker failed"))?
+                }),
+            )
+            .await
         })
     }
 
@@ -933,25 +943,25 @@ impl InventoryDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.register_folder(path.clone()).await {
-                Ok(record) => Ok(record),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.register_folder(path).await
-                    } else {
+            let p = path.clone();
+            let res = client.register_folder(p).await;
+            let path2 = path.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.register_folder(path.clone()).await }),
+                move |_| {
+                    let c = path2.clone();
+                    Box::pin(async move {
                         tokio::task::spawn_blocking(move || {
-                            FolderInventory::new(&ferry_home())
-                                .register(&path)
-                                .map_err(OpError::from)
+                            FolderInventory::new(&ferry_home()).register(&c).map_err(OpError::from)
                         })
                         .await
-                        .map_err(|e| {
-                            OpError::new("internal", e.to_string(), "register worker failed")
-                        })?
-                    }
-                }
-                Err(e) => Err(e),
-            }
+                        .map_err(|e| OpError::new("internal", e.to_string(), "register worker failed"))?
+                    })
+                },
+            )
+            .await
         })
     }
 
@@ -959,25 +969,25 @@ impl InventoryDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.remove_folder(folder_id.clone()).await {
-                Ok(()) => Ok(()),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.remove_folder(folder_id).await
-                    } else {
+            let fid = folder_id.clone();
+            let res = client.remove_folder(fid).await;
+            let fid2 = folder_id.clone();
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.remove_folder(folder_id.clone()).await }),
+                move |_| {
+                    let c = fid2.clone();
+                    Box::pin(async move {
                         tokio::task::spawn_blocking(move || {
-                            FolderInventory::new(&ferry_home())
-                                .unregister(&folder_id)
-                                .map_err(OpError::from)
+                            FolderInventory::new(&ferry_home()).unregister(&c).map_err(OpError::from)
                         })
                         .await
-                        .map_err(|e| {
-                            OpError::new("internal", e.to_string(), "remove worker failed")
-                        })?
-                    }
-                }
-                Err(e) => Err(e),
-            }
+                        .map_err(|e| OpError::new("internal", e.to_string(), "remove worker failed"))?
+                    })
+                },
+            )
+            .await
         })
     }
 }
@@ -991,17 +1001,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.start_pin(paths.clone(), hours).await {
-                Ok(pin) => Ok(pin),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.start_pin(paths, hours).await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.start_pin(paths.clone(), hours).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.start_pin(paths.clone(), hours).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1009,17 +1016,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.stop_pin().await {
-                Ok(summary) => Ok(summary),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.stop_pin().await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.stop_pin().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.stop_pin().await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1027,17 +1031,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.release_pin().await {
-                Ok(summary) => Ok(summary),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.release_pin().await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.release_pin().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.release_pin().await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1049,31 +1050,29 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.share_initiate(folder.clone(), i_know).await {
-                Ok(offer) => Ok(offer),
-                Err(e) if e.is_transport() || e.code == "not-supported" => {
-                    if let Some(fb) = fallback {
-                        fb.share_initiate(folder, i_know).await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.share_initiate(folder.clone(), i_know).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.share_initiate(folder.clone(), i_know).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
-        let fallback = self.fallback.clone();
         let client = self.client.clone();
+        let fallback = self.fallback.clone();
         Box::pin(async move {
-            
-            
-            
-            if let Some(fb) = fallback.as_ref() {
-                return fb.share_status(folder).await;
-            }
-            client.share_status(folder).await
+            let res = client.share_status(folder.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.share_status(folder.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1085,20 +1084,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client
-                .pair_accept(code_or_payload.clone(), dir.clone())
-                .await
-            {
-                Ok(res) => Ok(res),
-                Err(e) if e.is_transport() || e.code == "not-supported" => {
-                    if let Some(fb) = fallback {
-                        fb.pair_accept(code_or_payload, dir).await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.pair_accept(code_or_payload.clone(), dir.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.pair_accept(code_or_payload.clone(), dir.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1109,17 +1102,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.create_pairing_session(req.clone()).await {
-                Ok(resp) => Ok(resp),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.create_pairing_session(req).await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.create_pairing_session(req.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.create_pairing_session(req.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 
@@ -1130,17 +1120,14 @@ impl SessionDomain for AutoBackend {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {
-            match client.join_pairing_session(req.clone()).await {
-                Ok(res) => Ok(res),
-                Err(e) if e.is_transport() => {
-                    if let Some(fb) = fallback {
-                        fb.join_pairing_session(req).await
-                    } else {
-                        Err(e)
-                    }
-                }
-                Err(e) => Err(e),
-            }
+            let res = client.join_pairing_session(req.clone()).await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.join_pairing_session(req.clone()).await }),
+                |e| Box::pin(async move { Err(e) }),
+            )
+            .await
         })
     }
 }
