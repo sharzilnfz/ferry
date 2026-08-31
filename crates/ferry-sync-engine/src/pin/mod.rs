@@ -1,27 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -29,52 +5,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::pin_error::{io_at, PinError};
 
+pub mod manager;
+pub mod release;
+
+pub use manager::{HeldSummary, PinManager, ReleasePeerResult, ReleaseSummary};
+pub use release::{release_peer, ReleasePeerPlan};
 
 pub const PIN_FORMAT_VERSION: u32 = 1;
-
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinRecord {
     pub format_version: u32,
-    
     pub device_id: String,
-    
     pub pid: u32,
     pub started_sec: i64,
     pub started_nsec: u32,
-    
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_sec: Option<i64>,
-    
     pub paths: Vec<String>,
-    
     pub released: bool,
-    
-    
-    
     #[serde(default)]
     pub base_agreements: BTreeMap<String, String>,
-    
-    
-    
-    
-    
     #[serde(default)]
     pub proc_start_token: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Liveness {
-    
     Alive,
-    
     Stale,
 }
 
 impl PinRecord {
     pub fn liveness(&self) -> Liveness {
         if self.pid == 0 {
-            return Liveness::Alive; 
+            return Liveness::Alive;
         }
         match self.proc_start_token {
             Some(stamped) => match ferry_platform::process_start_token(self.pid) {
@@ -88,8 +53,6 @@ impl PinRecord {
         }
     }
 
-    
-    
     pub fn holding(&self) -> bool {
         if self.released {
             return false;
@@ -105,7 +68,7 @@ impl PinRecord {
 
 fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
-        return true; 
+        return true;
     }
     #[cfg(unix)]
     {
@@ -143,7 +106,6 @@ fn pid_alive(pid: u32) -> bool {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub struct PinStore {
     path: PathBuf,
@@ -152,7 +114,6 @@ pub struct PinStore {
 impl PinStore {
     pub const FILE_NAME: &str = "pin-state.json";
 
-    
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         PinStore {
             path: state_dir.into().join(Self::FILE_NAME),
@@ -163,8 +124,6 @@ impl PinStore {
         &self.path
     }
 
-    
-    
     pub fn load(&self) -> Result<Option<PinRecord>, PinError> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -187,7 +146,6 @@ impl PinStore {
         Ok(Some(rec))
     }
 
-    
     pub fn start(&self, rec: &PinRecord) -> Result<(), PinError> {
         if let Some(existing) = self.load()? {
             if existing.holding() {
@@ -213,7 +171,6 @@ impl PinStore {
         Ok(())
     }
 
-    
     pub fn mark_released(&self) -> Result<bool, PinError> {
         let Some(mut rec) = self.load()? else {
             return Ok(false);
