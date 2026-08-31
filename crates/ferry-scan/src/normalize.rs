@@ -1,16 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 
 use blake3::Hasher;
@@ -21,8 +8,6 @@ use ferry_store::store::Store;
 use ferry_store::{BlobId, BlobKind};
 
 use crate::error::ScanError;
-
-
 
 pub fn canonical_tree_id(store: &Store, tree_id: &BlobId) -> Result<BlobId, ScanError> {
     let mut memo = HashMap::new();
@@ -73,8 +58,6 @@ fn strip_entry(e: &TreeEntry) -> TreeEntry {
         },
     }
 }
-
-
 
 pub fn equivalent_modulo_mtime(store: &Store, a: &BlobId, b: &BlobId) -> Result<bool, ScanError> {
     Ok(canonical_tree_id(store, a)? == canonical_tree_id(store, b)?)
@@ -132,8 +115,7 @@ mod tests {
         let tc = snap(&store, &c, 3);
 
         assert!(!equivalent_modulo_mtime(&store, &ta, &tb).unwrap());
-        
-        
+
         if cfg!(unix) {
             assert!(
                 !equivalent_modulo_mtime(&store, &ta, &tc).unwrap(),

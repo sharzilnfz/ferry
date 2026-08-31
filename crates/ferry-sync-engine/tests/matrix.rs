@@ -1,23 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -125,7 +105,6 @@ fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
     .unwrap();
 }
 
-
 fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     fn walk(dir: &Path, out: &mut HashSet<Vec<u8>>) {
@@ -162,7 +141,6 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names
 }
 
-
 fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &s.manifest_id).is_err() {
         let b = from.get(BlobKind::Manifest, &s.manifest_id).unwrap();
@@ -191,9 +169,6 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-
-
-
 struct PeerFetch<'x> {
     from: &'x Store,
     to: &'x Store,
@@ -215,8 +190,6 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
         Ok(())
     }
 }
-
-
 
 fn converge_on(
     exec_dev: &mut Dev,
@@ -257,20 +230,17 @@ fn load_agreed(d: &Dev, peer: [u8; 32]) -> Option<ferry_store::agreement::Agreed
         .unwrap()
 }
 
-
 fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     let mut a = Dev::new(1, DEV_A, poly(42));
     let mut b = Dev::new(2, DEV_B, poly(42));
     let path = "f.txt";
 
-    
     let has_base = matches!(scenario, Scenario::BothChange | Scenario::DeleteVsEdit);
     if has_base {
         write_file(&a.tree.join(path), b"v0", (1000, 0));
         write_file(&b.tree.join(path), b"v0", (1000, 0));
         let s0 = a.snap();
-        
-        
+
         transfer_meta(&a.store, &b.store, &s0);
         b.parent = s0.manifest_id;
         record_agreement(&mut a, DEV_B, s0.manifest_id);
@@ -300,17 +270,16 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         Scenario::DeleteVsEdit => {
             let edit = |d: &mut Dev| write_file(&d.tree.join(path), b"the edit", (3200i64, 5));
             match direction {
-                
                 Direction::AWins => {
                     std::fs::remove_file(b.tree.join(path)).unwrap();
                     edit(&mut a);
                 }
-                
+
                 Direction::BWins => {
                     std::fs::remove_file(a.tree.join(path)).unwrap();
                     edit(&mut b);
                 }
-                
+
                 Direction::Tie => {
                     edit(&mut a);
                     edit(&mut b);
@@ -321,14 +290,13 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
 
     let sa = a.snap();
     let sb = b.snap();
-    
+
     let truth: HashSet<Vec<u8>> = {
         let mut t = collect_bytes(&a.tree);
         t.extend(collect_bytes(&b.tree));
         t
     };
 
-    
     let base_a = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     let base_b = load_base_object(&b, load_agreed(&b, DEV_A).map(|r| r.manifest_id));
 
@@ -355,7 +323,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         }
     }
 
-    
     let mut rounds = 1;
     loop {
         let sa2 = a.snap();
@@ -376,7 +343,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         converge_on(&mut b, &sb2, &sa2, bb.as_ref(), &a);
     }
 
-    
     for d_label in ["A", "B"] {
         let got = match d_label {
             "A" => collect_bytes(&a.tree),
@@ -389,7 +355,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         );
     }
 
-    
     let (winner_bytes, loser_bytes): (Vec<u8>, Vec<u8>) = match scenario {
         Scenario::BothChange | Scenario::AddVsAddDiff => match direction {
             Direction::AWins => (va_bytes.to_vec(), vb_bytes.to_vec()),
@@ -424,8 +389,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
                     1,
                     "{scenario:?} {direction:?} {order:?}: expected the loser copy on {d_label}, got {qs:?}"
                 );
-                
-                
+
                 let q = &qs[0];
                 assert_eq!(
                     std::fs::read(tree.join(q)).unwrap(),
@@ -452,13 +416,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
     let no_conflict_at_all = match scenario {
         Scenario::AddVsAddSame => true,
         Scenario::DeleteVsEdit if direction == Direction::Tie => true,
@@ -467,7 +424,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     let expect_total = if no_conflict_at_all {
         0
     } else {
-        
         let winner_is_a = direction == Direction::AWins;
         match order {
             Order::Simultaneous => 2,
@@ -492,11 +448,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         let entries = list_conflicts(&d.state).unwrap();
         total_entries += entries.len();
         for e in &entries {
-            
-            
-            
-            
-            
             let second_executor_degraded = match order {
                 Order::Simultaneous => false,
                 Order::AFirst => d_label == "B",
@@ -521,7 +472,7 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
             );
             assert_eq!(e.folder_id, hex(&FOLDER));
         }
-        
+
         let raw = std::fs::read_to_string(d.state.join("conflicts.jsonl")).unwrap_or_default();
         assert_eq!(raw.lines().count(), entries.len());
         for line in raw.lines() {
@@ -534,7 +485,6 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
         "{scenario:?} {direction:?} {order:?}: report totals"
     );
 
-    
     let fa = a.snap();
     let fb = b.snap();
     assert_eq!(fa.root_tree_id, fb.root_tree_id, "manifests must converge");
@@ -550,18 +500,16 @@ fn run_case(scenario: Scenario, direction: Direction, order: Order) {
     );
     assert_eq!(collect_bytes(&a.tree), collect_bytes(&b.tree));
 
-    
     record_agreement(&mut a, DEV_B, fa.manifest_id);
     record_agreement(&mut b, DEV_A, fb.manifest_id);
     assert_eq!(load_agreed(&a, DEV_B).unwrap().manifest_id, fa.manifest_id);
 
-    let _ = rounds; 
+    let _ = rounds;
 }
 
 fn winner_device_hex(direction: Direction, scenario: Scenario) -> String {
     match scenario {
         Scenario::DeleteVsEdit => match direction {
-            
             Direction::AWins | Direction::Tie => hex(&DEV_A),
             Direction::BWins => hex(&DEV_B),
         },
@@ -571,7 +519,6 @@ fn winner_device_hex(direction: Direction, scenario: Scenario) -> String {
         },
     }
 }
-
 
 #[rustfmt::skip]
 mod cells {

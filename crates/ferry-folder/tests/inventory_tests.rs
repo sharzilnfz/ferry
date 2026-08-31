@@ -1,7 +1,3 @@
-
-
-
-
 use std::path::PathBuf;
 use std::thread;
 
@@ -10,10 +6,6 @@ use ferry_folder::inventory::{validate_path, FolderInventory};
 fn tmp_home() -> tempfile::TempDir {
     tempfile::tempdir().expect("tempdir")
 }
-
-
-
-
 
 #[test]
 fn register_persists_and_lists_sorted() {
@@ -74,13 +66,8 @@ fn register_rejects_relative_missing_and_file_paths() {
     let err = inv.register(file.path()).unwrap_err();
     assert_eq!(err.code, "bad-path");
 
-    
     assert!(inv.list().unwrap().is_empty());
 }
-
-
-
-
 
 #[test]
 fn register_rejects_child_inside_registered_parent() {
@@ -125,10 +112,6 @@ fn register_allows_siblings() {
     assert_eq!(inv.list().unwrap().len(), 2);
 }
 
-
-
-
-
 #[test]
 fn unregister_removes_then_not_found() {
     let home = tmp_home();
@@ -145,10 +128,6 @@ fn unregister_removes_then_not_found() {
     let err = inv.unregister("nonexistent").unwrap_err();
     assert_eq!(err.code, "not-found");
 }
-
-
-
-
 
 #[test]
 fn atomic_persistence_concurrent_registers_all_land() {
@@ -184,8 +163,6 @@ fn atomic_persistence_concurrent_registers_all_land() {
 
 #[test]
 fn atomic_persistence_interrupted_write_keeps_old_registry() {
-    
-    
     let home = tmp_home();
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
@@ -194,8 +171,6 @@ fn atomic_persistence_interrupted_write_keeps_old_registry() {
 
     let folders_path = home.path().join("folders.toml");
 
-    
-    
     let inv2 = FolderInventory::new(home.path());
     let rec_b = inv2.register(dir_b.path()).unwrap();
     let new_content = std::fs::read_to_string(&folders_path).unwrap();
@@ -213,7 +188,6 @@ fn atomic_persistence_interrupted_write_keeps_old_registry() {
         tmp.flush().unwrap();
     }
 
-    
     let loaded = FolderInventory::new(home.path()).list().unwrap();
     assert_eq!(loaded.len(), 2);
     assert!(loaded.iter().any(|r| r.folder_id == rec_a.folder_id));
@@ -234,10 +208,6 @@ fn save_creates_missing_home_dir() {
     FolderInventory::new(&home).register(dir.path()).unwrap();
     assert!(home.join("folders.toml").exists());
 }
-
-
-
-
 
 fn write_registry(home: &std::path::Path, content: &str) {
     std::fs::create_dir_all(home).unwrap();
@@ -352,10 +322,6 @@ fn load_empty_when_missing() {
     assert!(FolderInventory::new(home.path()).list().unwrap().is_empty());
 }
 
-
-
-
-
 #[test]
 fn inspect_dir_classifies_entries_in_one_pass() {
     let home = tmp_home();
@@ -378,8 +344,7 @@ fn inspect_dir_classifies_entries_in_one_pass() {
     assert_eq!(resp.absolute_path, root.path());
 
     let names: Vec<&str> = resp.entries.iter().map(|e| e.name.as_str()).collect();
-    
-    
+
     assert_eq!(names, vec!["a_dir", "l_link", "z_dir", "m_file.txt"]);
 
     let a = &resp.entries[0];
@@ -402,7 +367,6 @@ fn inspect_dir_classifies_entries_in_one_pass() {
     assert!(!f.is_dir);
     assert!(!f.is_git_repo);
 
-    
     std::fs::create_dir(synced.join("sub")).unwrap();
     let inner = inv.inspect_dir(Some(synced.clone())).unwrap();
     let sub = inner.entries.iter().find(|e| e.name == "sub").unwrap();
@@ -415,20 +379,17 @@ fn inspect_dir_defaults_and_errors() {
     let home = tmp_home();
     let inv = FolderInventory::new(home.path());
 
-    
     let file = tempfile::NamedTempFile::new().unwrap();
     let err = inv
         .inspect_dir(Some(file.path().to_path_buf()))
         .unwrap_err();
     assert_eq!(err.code, "not-a-directory");
 
-    
     let err = inv
         .inspect_dir(Some(PathBuf::from("/tmp/ferry-inspect-nope-xyz")))
         .unwrap_err();
     assert_eq!(err.code, "not-found");
 
-    
     let err = inv
         .inspect_dir(Some(PathBuf::from("/tmp/../etc/passwd")))
         .unwrap_err();
@@ -438,7 +399,6 @@ fn inspect_dir_defaults_and_errors() {
 
 #[test]
 fn inspect_dir_survives_corrupt_registry() {
-    
     let home = tmp_home();
     write_registry(home.path(), "%%% garbage toml [[[ ");
     let root = tempfile::tempdir().unwrap();
@@ -484,10 +444,6 @@ fn inspect_dir_carries_initialization_verdict_per_entry() {
     assert!(initialized("ready"));
     assert!(!initialized("f.txt"), "files are never initialized");
 }
-
-
-
-
 
 #[test]
 fn validate_path_guards() {

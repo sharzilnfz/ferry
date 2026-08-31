@@ -1,5 +1,3 @@
-
-
 use std::path::Path;
 
 use rand::rngs::StdRng;
@@ -40,8 +38,6 @@ pub fn run(path: &Path) -> CliResult<Output> {
         },
     )?;
 
-    
-    
     let mut seed = [0u8; 32];
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut seed);
@@ -61,9 +57,6 @@ pub fn run(path: &Path) -> CliResult<Output> {
     save_settings(path, &settings)?;
     let ignore_written = write_default_ignore_if_absent(path)?;
 
-    
-    
-    
     store.flush().map_err(|e| {
         CliError::new(
             "store",
@@ -109,7 +102,6 @@ fn next_step() -> String {
          Or run `ferry --help` for the full five-minute walkthrough."
         .to_string()
 }
-
 
 pub fn display_path(p: &Path) -> String {
     if p.as_os_str().is_empty() {

@@ -1,15 +1,8 @@
-
-
-
-
-
-
 mod common;
 
 use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
-
 
 fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
     match v {
@@ -22,8 +15,7 @@ fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
         }
         Value::Array(items) => {
             out.push(format!("{path}[]"));
-            
-            
+
             if let Some(first) = items.first() {
                 schema(first, &format!("{path}[0]"), out);
             }
@@ -54,7 +46,6 @@ fn schema_of(v: &Value) -> String {
     lines.join("\n") + "\n"
 }
 
-
 fn assert_matches_expected(name: &str, actual: &str) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expected");
     let file = dir.join(format!("{name}.schema.txt"));
@@ -70,9 +61,7 @@ fn assert_matches_expected(name: &str, actual: &str) {
             file.display()
         )
     });
-    
-    
-    
+
     let expected = expected.replace("\r\n", "\n");
     assert_eq!(expected, actual, "JSON schema for {name} drifted");
 }
@@ -153,8 +142,6 @@ fn store_gc_document_schema_is_stable() {
     let proj = env.work().join("proj");
     commands::init::run(&proj).unwrap();
 
-    
-    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     opened
         .store
@@ -174,7 +161,6 @@ fn store_gc_document_schema_is_stable() {
     assert!(!dry.json["garbage_packs"].as_array().unwrap().is_empty());
     assert_matches_expected("store-gc-dry", &schema_of(&dry.json));
 
-    
     let real = commands::store::run(commands::store::GcArgs {
         folder: &proj,
         dry_run: false,
@@ -197,12 +183,9 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     let started = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_matches_expected("pin-start", &schema_of(&started.json));
 
-    
     let status = commands::pin::status(&proj).unwrap();
     assert_eq!(status.json["state"], "active");
 
-    
-    
     let opened = ferry_cli::folder::open_folder(&proj).unwrap();
     let scan = ferry_cli::commands::status::scan_now(&opened).unwrap();
     let mid = opened
@@ -212,8 +195,7 @@ fn pin_documents_are_stable_across_the_lifecycle() {
             &scan.manifest_bytes,
         )
         .unwrap();
-    
-    
+
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
     let state_dir = ferry_cli::folder::state_dir(&proj);

@@ -1,8 +1,3 @@
-
-
-
-
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,20 +6,18 @@ use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::backend::OpError;
 use ferry_platform::{DaemonLock, DaemonLockError};
 
-
 #[derive(Debug)]
 pub enum DeviceDaemonError {
-    
     AlreadyRunning { pid: Option<u32> },
-    
+
     Lock(std::io::Error),
-    
+
     Register { path: PathBuf, error: Box<OpError> },
-    
+
     Spawn { code: String, message: String },
-    
+
     Runtime(std::io::Error),
-    
+
     Ipc(String),
 }
 
@@ -50,9 +43,6 @@ impl std::fmt::Display for DeviceDaemonError {
 }
 
 impl std::error::Error for DeviceDaemonError {}
-
-
-
 
 pub fn run(
     home: &Path,
@@ -151,7 +141,6 @@ pub fn run(
     Ok(())
 }
 
-
 pub struct AdHocDaemonArgs {
     pub folders: Vec<PathBuf>,
     pub listen_addr: Option<std::net::SocketAddr>,
@@ -159,8 +148,6 @@ pub struct AdHocDaemonArgs {
     pub transport: String,
     pub interval_secs: u64,
 }
-
-
 
 pub fn run_adhoc(
     home: &Path,

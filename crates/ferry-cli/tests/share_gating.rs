@@ -1,6 +1,3 @@
-
-
-
 mod common;
 
 use common::Env;
@@ -41,15 +38,12 @@ fn share_refuses_and_redacts_until_i_know() {
 
     assert!(!proj.join(".ferry/pair-offer.ferry-pair").exists());
 
-    
-    
-    
     match commands::share::run(&proj, true, 1) {
         Ok(out) => {
             assert_eq!(out.json["command"], "share");
             assert!(out.json["code"].is_string(), "share code present");
             assert!(out.json["folder_id"].is_string());
-            
+
             assert!(
                 !proj.join(".ferry/pair-offer.ferry-pair").exists()
                     || proj.join(".ferry/pair-offer.ferry-pair").exists()
@@ -73,8 +67,6 @@ fn share_clean_folder_emits_payload_without_gate() {
     commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("README.md"), b"clean").unwrap();
 
-    
-    
     let res = commands::share::run(&proj, false, 1);
     match res {
         Ok(out) => {
@@ -83,11 +75,8 @@ fn share_clean_folder_emits_payload_without_gate() {
             assert!(out.json["code"].is_string());
             assert!(out.json["expires_at"].is_string());
             assert_eq!(out.json["folder_id"].as_str().unwrap().len(), 32);
-            
-            
         }
         Err(e) => {
-            
             assert_eq!(e.code, "pair-timeout");
         }
     }

@@ -1,19 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,18 +10,12 @@ use crate::config::IgnoreConfig;
 use crate::defaults::DEFAULT_RULES;
 use crate::error::IgnoreError;
 
-
-
 pub fn is_quarantine_name(name: &str) -> bool {
     name.contains(".ferry-conflict.")
 }
 
-
-
-
 const FERRY_RULE_FILE: &str = "ferry.ignore";
 const GIT_RULE_FILE: &str = ".gitignore";
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V {
@@ -46,30 +24,20 @@ enum V {
     No,
 }
 
-
-
 #[derive(Debug)]
 pub struct FerryIgnore {
     root: PathBuf,
     cfg: IgnoreConfig,
-    
-    
+
     chain: Gitignore,
-    
-    
+
     skipped_lines: AtomicUsize,
-    
-    
-    
+
     dirs: RwLock<HashMap<Vec<String>, Option<Gitignore>>>,
 }
 
 impl FerryIgnore {
-    
-    
-    
     pub fn new(root: &Path, cfg: &IgnoreConfig) -> Result<Self, IgnoreError> {
-        
         for id in &cfg.presets {
             if crate::presets::Preset::builtin(id).is_none() {
                 return Err(IgnoreError::UnknownPreset(id.clone()));
@@ -131,31 +99,15 @@ impl FerryIgnore {
         })
     }
 
-    
     pub fn skipped_lines(&self) -> usize {
         self.skipped_lines.load(Ordering::Relaxed)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn decided(&self, rel: &[String], is_dir: bool) -> bool {
         if rel.is_empty() || rel.last().is_some_and(|n| is_quarantine_name(n)) {
             return false;
         }
-        
-        
-        
+
         let normalized;
         let rel = if rel.iter().any(|c| !unicode_normalization::is_nfc(c)) {
             normalized = rel
@@ -169,14 +121,9 @@ impl FerryIgnore {
         let mut excluded_parent = false;
         let mut final_ignored = false;
         for depth in 1..=rel.len() {
-            
-            
             let dir_here = depth < rel.len() || is_dir;
             let mut v = Self::match_layer(&self.chain, &rel[..depth], dir_here);
-            
-            
-            
-            
+
             for j in 1..depth {
                 if let Some(Some(gi)) = self.dir_overlay(&rel[..j]) {
                     let vv = Self::match_layer(&gi, &rel[j..depth], dir_here);
@@ -186,8 +133,6 @@ impl FerryIgnore {
                 }
             }
             if depth < rel.len() {
-                
-                
                 if v == V::Ign {
                     excluded_parent = true;
                 }
@@ -207,9 +152,6 @@ impl FerryIgnore {
         }
     }
 
-    
-    
-    
     fn dir_overlay(&self, dir: &[String]) -> Option<Option<Gitignore>> {
         if let Some(cached) = self.dirs.read().expect("dirs lock").get(dir) {
             return Some(cached.clone());
@@ -256,9 +198,6 @@ impl FerryIgnore {
     }
 }
 
-
-
-
 fn compile_line(builder: &mut GitignoreBuilder, skipped: &mut usize, line: &str) -> bool {
     let trimmed = line.trim_end();
     if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -274,13 +213,9 @@ fn compile_line(builder: &mut GitignoreBuilder, skipped: &mut usize, line: &str)
     }
 }
 
-
-
 fn readable(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
-
-
 
 fn read_rule_file(path: &Path) -> Option<Result<String, std::io::Error>> {
     match std::fs::read_to_string(path) {
@@ -291,8 +226,6 @@ fn read_rule_file(path: &Path) -> Option<Result<String, std::io::Error>> {
 }
 
 impl ferry_scan::IgnorePolicy for FerryIgnore {
-    
-    
     fn ignored(&self, rel: &[String], kind: ferry_scan::EntryKind) -> bool {
         self.decided(rel, kind == ferry_scan::EntryKind::Dir)
     }
@@ -303,8 +236,6 @@ mod tests {
     use super::*;
     use crate::config::IgnoreConfig;
 
-    
-    
     fn tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
@@ -331,7 +262,7 @@ mod tests {
     fn leading_slash_anchors_to_folder_root() {
         let (_t, root) = tree(&[("ferry.ignore", "/build\n/root.txt\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-        assert!(ig(&f, "build")); 
+        assert!(ig(&f, "build"));
         assert!(
             !ig(&f, "deep/build"),
             "anchored pattern must not match deeper"
@@ -349,10 +280,9 @@ mod tests {
             ig(&f, "sub/main.rs"),
             "slash-less patterns apply at every level"
         );
-        
-        
+
         assert!(ig(&f, "sub/mod/lib.rs"));
-        
+
         assert!(ig(&f, "foobar"));
         assert!(ig(&f, "fooxbar"));
         assert!(!ig(&f, "foo/x/bar"));
@@ -386,16 +316,16 @@ mod tests {
             "**/logs\nlogs/**\na/**/b.md\n**/temp/*.cache\n",
         )]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-        
+
         assert!(ig_dir(&f, "logs"));
         assert!(ig_dir(&f, "x/y/logs"));
-        
+
         assert!(ig(&f, "logs/a.txt"));
         assert!(ig(&f, "x/y/logs/a.txt"));
-        
+
         assert!(ig(&f, "a/b.md"));
         assert!(ig(&f, "a/m/n/b.md"));
-        
+
         assert!(ig(&f, "temp/x.cache"));
         assert!(ig(&f, "q/temp/x.cache"));
         assert!(!ig(&f, "temp/d/x.cache"));
@@ -407,7 +337,7 @@ mod tests {
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "noise.log"));
         assert!(!ig(&f, "important.log"));
-        
+
         let (_t2, root2) = tree(&[("ferry.ignore", "*.log\n!important.log\n!*.log\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(!ig(&f2, "noise.log"));
@@ -443,12 +373,10 @@ mod tests {
 
     #[test]
     fn cannot_reinclude_under_an_excluded_directory() {
-        
-        
         let (_t, root) = tree(&[("ferry.ignore", "build/\n!build/keep.txt\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "build/keep.txt"));
-        
+
         let (_t2, root2) = tree(&[("ferry.ignore", "logs\n!logs/critical.log\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f2, "logs/critical.log"));
@@ -500,8 +428,6 @@ mod tests {
 
     #[test]
     fn invalid_glob_lines_are_skipped_not_fatal() {
-        
-        
         let (_t, root) = tree(&[("ferry.ignore", "[z-a]\njunk.bin\n")]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "junk.bin"));
@@ -544,7 +470,6 @@ mod tests {
         assert!(ig(&f, ".env.local"));
         assert!(ig(&f, "deploy/.env.production"));
 
-        
         let (_t2, root2) = tree(&[("ferry.ignore", "!.env\n")]);
         let f2 = FerryIgnore::new(&root2, &IgnoreConfig::default()).unwrap();
         assert!(!ig(&f2, ".env"));
@@ -576,8 +501,6 @@ mod tests {
 
     #[test]
     fn presets_beat_ferry_ignore_but_lose_to_overrides() {
-        
-        
         let (_t, root) = tree(&[
             ("ferry.ignore", "!telemetry/\n"),
             ("telemetry/ping.json", "{}\n"),
@@ -593,7 +516,7 @@ mod tests {
             "preset (layer above ferry.ignore) wins"
         );
         assert!(!ig_dir(&f, "statsig"), "override beats preset exclusion");
-        
+
         assert!(
             !ig(&f, "projects/proj/memory/notes.md"),
             "project memory travels despite sessions exclusion nearby"
@@ -616,14 +539,9 @@ mod tests {
 
     #[test]
     fn pattern_lines_are_nfc_normalized_before_matching() {
-        
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
-        std::fs::write(
-            root.join("ferry.ignore"),
-            "cafe\u{301}.txt\n", 
-        )
-        .unwrap();
+        std::fs::write(root.join("ferry.ignore"), "cafe\u{301}.txt\n").unwrap();
 
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
         assert!(ig(&f, "caf\u{e9}.txt"), "NFD pattern must match NFC path");
@@ -633,9 +551,6 @@ mod tests {
 
     #[test]
     fn decomposed_paths_are_treated_as_one_name_against_nfc_patterns() {
-        
-        
-        
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         std::fs::write(root.join("ferry.ignore"), "rapport-ann\u{e9}e.md\n").unwrap();
@@ -664,7 +579,6 @@ mod tests {
         let (_t, root) = tree(&[]);
         assert!(FerryIgnore::new(&root, &IgnoreConfig::default()).is_ok());
 
-        
         std::fs::create_dir(root.join("ferry.ignore")).unwrap();
         let err = FerryIgnore::new(&root, &cfg_placeholder()).unwrap_err();
         assert!(matches!(err, IgnoreError::ReadRootRule { .. }));
@@ -676,37 +590,24 @@ mod tests {
 
     #[test]
     fn seam_decisions_parameterized_over_entry_kind_need_no_disk() {
-        
-        
         let (_t, root) = tree(&[
             ("ferry.ignore", "build/\ncache\n*.log\n!important.log\n"),
-            
             ("sub/ferry.ignore", "!build/\n"),
         ]);
         let f = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
 
         let cases: &[(&str, bool, bool)] = &[
-            
-            
             ("build", false, true),
             ("deep/build", false, true),
-            
             ("cache", true, true),
             ("deep/cache/x.bin", true, true),
-            
-            
             ("noise.log", true, true),
             ("important.log", false, false),
             ("deep/important.log", false, false),
-            
-            
             ("build/inner.txt", true, true),
             ("build/sub/deep.txt", true, true),
-            
             ("sub/build", false, false),
-            
             ("other/build", false, true),
-            
             ("keep.txt", false, false),
         ];
         for (path, want_file, want_dir) in cases {
@@ -724,8 +625,6 @@ mod tests {
         for (path, kind, want) in [
             ("build", EntryKind::File, false),
             ("build", EntryKind::Dir, true),
-            
-            
             ("build/inner.txt", EntryKind::File, true),
         ] {
             assert_eq!(f.ignored(&rel(path), kind), want, "{path:?} {kind:?}");
@@ -747,7 +646,7 @@ mod tests {
         use std::fmt::Write as _;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
-        
+
         let mut text = String::with_capacity(1 << 17);
         for i in 0..2500 {
             let _ = writeln!(text, "/pkg/mod{i}/");
@@ -780,7 +679,7 @@ mod tests {
             }
         }
         let elapsed = started.elapsed();
-        
+
         assert!(
             elapsed.as_millis() < 10_000,
             "3000 queries took {}ms",

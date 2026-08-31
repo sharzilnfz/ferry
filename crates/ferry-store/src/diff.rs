@@ -1,29 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::cmp::Ordering;
 
 use thiserror::Error;
@@ -41,7 +15,6 @@ pub enum DiffError {
     #[error("change-set payload corrupt: {0}")]
     Encoding(&'static str),
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntryKind {
@@ -77,18 +50,15 @@ impl EntryKind {
     }
 }
 
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryState {
     pub kind: EntryKind,
     pub exec: bool,
     pub mtime_sec: i64,
     pub mtime_nsec: u32,
-    
+
     pub chunks: Vec<(BlobId, u64)>,
-    
+
     pub target: Option<String>,
 }
 
@@ -111,10 +81,7 @@ impl EntryState {
     }
 }
 
-
-
 pub type CompPath = Vec<String>;
-
 
 pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
@@ -132,17 +99,12 @@ pub struct Removed {
     pub state: EntryState,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Modified {
     pub path: CompPath,
     pub before: EntryState,
     pub after: EntryState,
 }
-
-
-
-
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChangeSet {
@@ -171,9 +133,6 @@ impl ChangeSet {
     }
 }
 
-
-
-
 pub fn diff_manifests(
     store: &Store,
     older: &RootManifest,
@@ -184,7 +143,6 @@ pub fn diff_manifests(
     }
     diff_roots(store, &older.root_tree_id, &newer.root_tree_id)
 }
-
 
 pub fn diff_roots(
     store: &Store,
@@ -221,8 +179,6 @@ fn diff_tree_ids(
     prefix: CompPath,
     out: &mut ChangeSet,
 ) -> Result<(), DiffError> {
-    
-    
     match (older, newer) {
         (Some(a), Some(b)) if a == b => return Ok(()),
         (None, None) => return Ok(()),
@@ -246,8 +202,6 @@ fn diff_nodes(
     prefix: &[String],
     out: &mut ChangeSet,
 ) -> Result<(), DiffError> {
-    
-    
     let a: &[TreeEntry] = older.map_or(&[], |n| n.entries.as_slice());
     let b: &[TreeEntry] = newer.map_or(&[], |n| n.entries.as_slice());
     let (mut i, mut j) = (0usize, 0usize);
@@ -321,12 +275,8 @@ fn compare_entry(
     match (&ea.payload, &eb.payload) {
         (EntryPayload::Dir { child_tree_id: a }, EntryPayload::Dir { child_tree_id: b }) => {
             if a != b {
-                
-                
                 diff_tree_ids(store, Some(a), Some(b), path, out)?;
             }
-            
-            
         }
         (EntryPayload::File { chunks: ca, .. }, EntryPayload::File { chunks: cb, .. }) => {
             if ca != cb {
@@ -348,7 +298,6 @@ fn compare_entry(
         }
         (EntryPayload::Symlink { target: a }, EntryPayload::Symlink { target: b }) => {
             if a != b {
-                
                 out.content_modified.push(Modified {
                     path,
                     before: EntryState::of(ea),
@@ -363,8 +312,6 @@ fn compare_entry(
             }
         }
         _ => {
-            
-            
             out.type_changed.push(Modified {
                 path,
                 before: EntryState::of(ea),
@@ -374,13 +321,6 @@ fn compare_entry(
     }
     Ok(())
 }
-
-
-
-
-
-
-
 
 const CHANGESET_MAGIC: [u8; 4] = *b"FCS1";
 
@@ -459,7 +399,6 @@ fn parse_path(r: &mut Reader<'_>) -> Result<CompPath, DiffError> {
     Ok(out)
 }
 
-
 pub fn serialize_change_set(cs: &ChangeSet) -> Vec<u8> {
     let mut sorted = cs.clone();
     sorted.sort_all();
@@ -492,7 +431,6 @@ pub fn serialize_change_set(cs: &ChangeSet) -> Vec<u8> {
     }
     out
 }
-
 
 pub fn parse_change_set(bytes: &[u8]) -> Result<ChangeSet, DiffError> {
     let bad = || DiffError::Encoding("framing");
@@ -575,7 +513,6 @@ mod tests {
             .unwrap()
     }
 
-    
     fn disk_path(tree: &std::path::Path, parts: &[String]) -> std::path::PathBuf {
         let mut pb = tree.to_path_buf();
         for c in parts {
@@ -648,7 +585,7 @@ mod tests {
         let cs = diff_roots(&store, &older_id, &newer_id).unwrap();
 
         assert!(cs.added.is_empty() && cs.removed.is_empty());
-        
+
         assert_eq!(
             paths_of(&cs.content_modified, |m| &m.path),
             [
@@ -669,7 +606,6 @@ mod tests {
             [["tf".to_string()].as_slice(), ["ts".to_string()].as_slice(),]
         );
 
-        
         let ex = cs
             .metadata_modified
             .iter()
@@ -678,7 +614,6 @@ mod tests {
         assert_eq!(ex.before.chunks, ex.after.chunks);
         assert!(!ex.before.exec && ex.after.exec);
 
-        
         let sy = cs
             .content_modified
             .iter()
@@ -687,7 +622,6 @@ mod tests {
         assert_eq!(sy.before.target.as_deref(), Some("t1"));
         assert_eq!(sy.after.target.as_deref(), Some("t2"));
 
-        
         let tf = cs.type_changed.iter().find(|m| m.path == ["tf"]).unwrap();
         assert_eq!(tf.before.kind, EntryKind::File);
         assert_eq!(tf.after.kind, EntryKind::Dir);
@@ -712,14 +646,11 @@ mod tests {
         };
         assert!(diff_manifests(&store, &base, &base).unwrap().is_empty());
 
-        
-        
         let mut other = base.clone();
         other.created_sec = 999;
         other.parent_manifest_id = [7; 32];
         assert!(diff_manifests(&store, &base, &other).unwrap().is_empty());
 
-        
         let mut changed_tree = TreeNode {
             entries: vec![one_file("x", false, 1, 2, 3, 4)],
         };
@@ -733,16 +664,9 @@ mod tests {
         );
     }
 
-    
-    
-    
-    
     #[test]
     #[cfg(unix)]
     fn snapshot_mutate_resnapshot_diff_shows_exactly_the_mutations() {
-        
-        
-        
         use crate::chunker::MIN_SIZE;
 
         let (dir, store) = fresh_store();
@@ -770,16 +694,15 @@ mod tests {
         let idn = identity((10, 20));
         let s1 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
 
-        
-        std::fs::remove_file(tree.join("gone.txt")).unwrap(); 
-        std::fs::remove_dir(tree.join("olddir")).unwrap(); 
+        std::fs::remove_file(tree.join("gone.txt")).unwrap();
+        std::fs::remove_dir(tree.join("olddir")).unwrap();
         write_file(
             &tree.join("edit.txt"),
             b"version two!!",
             false,
             (mt.0 + 1, mt.1),
         );
-        
+
         let extra_len = 300_000usize;
         {
             use std::io::Write;
@@ -789,24 +712,24 @@ mod tests {
                 .unwrap();
             f.write_all(&prng(10, extra_len)).unwrap();
         }
-        
+
         let mut perm = std::fs::metadata(tree.join("script.sh"))
             .unwrap()
             .permissions();
         use std::os::unix::fs::PermissionsExt;
         perm.set_mode(0o755);
         std::fs::set_permissions(tree.join("script.sh"), perm).unwrap();
-        
+
         std::fs::remove_file(tree.join("link")).unwrap();
         std::os::unix::fs::symlink("elsewhere/b.txt", tree.join("link")).unwrap();
-        
+
         write_file(
             &tree.join("touch.txt"),
             b"same bytes",
             false,
             (mt.0 + 9, 222),
         );
-        
+
         write_file(&tree.join("added.txt"), b"new kid", false, (mt.0 + 2, 5));
         write_file(
             &tree.join("newdir/inside.txt"),
@@ -851,7 +774,6 @@ mod tests {
         );
         assert!(cs.type_changed.is_empty());
 
-        
         let every: Vec<&CompPath> = cs
             .added
             .iter()
@@ -869,7 +791,6 @@ mod tests {
             );
         }
 
-        
         let sh = cs
             .metadata_modified
             .iter()
@@ -878,7 +799,6 @@ mod tests {
         assert_eq!(sh.before.chunks, sh.after.chunks);
         assert!(!sh.before.exec && sh.after.exec);
 
-        
         let tc = cs
             .metadata_modified
             .iter()
@@ -890,9 +810,6 @@ mod tests {
             (tc.after.mtime_sec, tc.after.mtime_nsec)
         );
 
-        
-        
-        
         let big = cs
             .content_modified
             .iter()
@@ -912,8 +829,6 @@ mod tests {
         let after_bytes: u64 = after_chunks.iter().map(|c| c.1).sum();
         assert_eq!(after_bytes - before_bytes, extra_len as u64);
 
-        
-        
         let ed = cs
             .content_modified
             .iter()
@@ -927,9 +842,6 @@ mod tests {
         assert_eq!(stored, b"version two!!");
     }
 
-    
-    
-    
     #[test]
     fn diff_reads_no_file_bytes_survives_deleted_sources_and_data_packs() {
         let (dir, store) = fresh_store();
@@ -948,7 +860,6 @@ mod tests {
         );
         let s2 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
 
-        
         let packs_dir = store.packs_dir();
         let mut doomed = Vec::new();
         for e in std::fs::read_dir(&packs_dir).unwrap().flatten() {
@@ -964,13 +875,13 @@ mod tests {
 
         let m1 = parse_manifest(&store.get(BlobKind::Manifest, &s1.manifest_id).unwrap()).unwrap();
         let m2 = parse_manifest(&store.get(BlobKind::Manifest, &s2.manifest_id).unwrap()).unwrap();
-        
+
         store.write_index_snapshot().unwrap();
         drop(store);
         for name in &doomed {
             std::fs::remove_file(packs_dir.join(name)).unwrap();
         }
-        
+
         std::fs::remove_dir_all(&tree).unwrap();
 
         let fresh = Store::open(dir.path(), [0u8; 32], Box::new(PassthroughCipher)).unwrap();
@@ -1029,18 +940,13 @@ mod tests {
         let back = parse_change_set(&bytes).unwrap();
         assert_eq!(back, cs);
 
-        
         cs.added.reverse();
         assert_eq!(serialize_change_set(&cs), bytes);
 
-        
         assert!(parse_change_set(&bytes[..bytes.len() - 3]).is_err());
         assert!(parse_change_set(b"XXXXrest").is_err());
     }
 
-    
-
-    
     type FileSpec = (Vec<u8>, bool, (i64, u32));
     type BucketSet = HashSet<Vec<String>>;
 
@@ -1062,7 +968,6 @@ mod tests {
             }
         }
 
-        
         fn register_dirs(&mut self, path: &[String]) {
             for k in 1..path.len() {
                 self.dirs.insert(path[..k].to_vec());
@@ -1108,7 +1013,6 @@ mod tests {
             let path = self.files.keys().nth(i).unwrap().clone();
             match rng.gen::<u8>() % 4 {
                 0 => {
-                    
                     let bytes: Vec<u8> =
                         (0..rng.gen::<usize>() % 4000).map(|_| rng.gen()).collect();
                     let mt = (
@@ -1122,15 +1026,11 @@ mod tests {
                     slot.2 = mt;
                 }
                 1 => {
-                    
                     let (b, e, m) = self.files[&path].clone();
                     write_file(&disk_path(tree, &path), &b, !e, m);
                     self.files.get_mut(&path).unwrap().1 = !e;
                 }
                 2 => {
-                    
-                    
-                    
                     let (b, e, m) = self.files[&path].clone();
                     let mt = (m.0 + 5, (m.1 + 300) % 1_000_000_000);
                     write_file(&disk_path(tree, &path), &b, e, mt);

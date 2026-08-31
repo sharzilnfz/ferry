@@ -64,6 +64,9 @@ mod tests {
         assert_eq!(SyncState::Holding, SyncState::Pinned);
         assert_eq!(SyncState::Holding.label(), "PINNED");
         assert_eq!(SyncState::Pinned.label(), "PINNED");
-        assert_eq!(SyncState::Holding.pulse_speed(), SyncState::Pinned.pulse_speed());
+        assert_eq!(
+            SyncState::Holding.pulse_speed(),
+            SyncState::Pinned.pulse_speed()
+        );
     }
 }

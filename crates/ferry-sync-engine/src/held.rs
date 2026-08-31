@@ -1,60 +1,33 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::pin_error::{io_at, PinError};
 
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldChunk {
-    
     pub id: String,
-    
+
     pub len: u64,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldEntry {
     pub held_sec: i64,
     pub held_nsec: u32,
-    
+
     pub path: String,
-    
+
     pub device_id: String,
-    
+
     pub remote_manifest_id: String,
-    
+
     pub chunks: Vec<HeldChunk>,
-    
-    
+
     pub decision: String,
-    
+
     pub conflict_winner: Option<String>,
 }
-
 
 pub fn distinct_paths(entries: &[HeldEntry]) -> Vec<String> {
     let mut out: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
@@ -63,15 +36,12 @@ pub fn distinct_paths(entries: &[HeldEntry]) -> Vec<String> {
     out
 }
 
-
 #[derive(Clone, Debug)]
 pub struct HeldLedger {
     dir: PathBuf,
 }
 
 impl HeldLedger {
-    
-    
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         HeldLedger {
             dir: state_dir.into().join("held"),
@@ -82,9 +52,6 @@ impl HeldLedger {
         self.dir.join(format!("{peer_hex}.jsonl"))
     }
 
-    
-    
-    
     pub fn append(&self, peer_hex: &str, entries: &[HeldEntry]) -> Result<(), PinError> {
         if entries.is_empty() {
             return Ok(());
@@ -121,8 +88,6 @@ impl HeldLedger {
         Ok(())
     }
 
-    
-    
     pub fn load_peer(&self, peer_hex: &str) -> Result<Vec<HeldEntry>, PinError> {
         let path = self.path_for(peer_hex);
         let text = match std::fs::read_to_string(&path) {
@@ -141,7 +106,7 @@ impl HeldLedger {
             let parsed = serde_json::from_str::<HeldEntry>(line);
             match (parsed, i == last && torn_tail) {
                 (Ok(e), _) => out.push(e),
-                
+
                 (Err(_), true) => break,
                 (Err(e), false) => {
                     return Err(PinError::LedgerCorrupt {
@@ -155,7 +120,6 @@ impl HeldLedger {
         Ok(out)
     }
 
-    
     pub fn peers(&self) -> Result<Vec<String>, PinError> {
         let rd = match std::fs::read_dir(&self.dir) {
             Ok(rd) => rd,
@@ -173,8 +137,6 @@ impl HeldLedger {
         Ok(names)
     }
 
-    
-    
     pub fn clear_peer(&self, peer_hex: &str) -> Result<bool, PinError> {
         let path = self.path_for(peer_hex);
         match std::fs::remove_file(&path) {
@@ -184,7 +146,6 @@ impl HeldLedger {
         }
     }
 }
-
 
 pub fn ledger_path(state_dir: &Path, peer_hex: &str) -> PathBuf {
     state_dir.join("held").join(format!("{peer_hex}.jsonl"))
@@ -239,7 +200,6 @@ mod tests {
         );
         assert_eq!(ledger.peers().unwrap(), vec!["ab".to_string()]);
 
-        
         ledger
             .append("ab", &[entry_with_manifest("src/a.rs", &"c1".repeat(32))])
             .unwrap();
@@ -266,8 +226,6 @@ mod tests {
         let ledger = HeldLedger::new(dir.path());
         ledger.append("p", &[entry("a.rs"), entry("b.rs")]).unwrap();
 
-        
-        
         let path = ledger_path(dir.path(), "p");
         let full = std::fs::read_to_string(&path).unwrap();
         let first_line_end = full.find('\n').unwrap() + 1;
@@ -281,7 +239,6 @@ mod tests {
         assert_eq!(got.len(), 1, "torn tail dropped, complete line kept");
         assert_eq!(got[0].path, "a.rs");
 
-        
         std::fs::write(&path, format!("{}\n", torn.trim_end())).unwrap();
         assert!(matches!(
             ledger.load_peer("p"),

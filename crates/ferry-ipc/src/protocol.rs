@@ -1,5 +1,3 @@
-
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -9,14 +7,11 @@ use ferry_folder::inventory::{DirectoryEntry, FolderRecord};
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonMessage {
-    
     Snapshot(EngineSnapshot),
 
-    
     StateChanged {
         state: String,
         manifest_id: String,
@@ -28,7 +23,6 @@ pub enum DaemonMessage {
         stats: Option<ScanStatsView>,
     },
 
-    
     TransferProgress {
         bytes_transferred: u64,
         total_bytes: u64,
@@ -43,7 +37,6 @@ pub enum DaemonMessage {
         direction: Option<TransferDirection>,
     },
 
-    
     ConflictRecorded {
         path: String,
         conflict_path: String,
@@ -52,49 +45,50 @@ pub enum DaemonMessage {
         quarantined_as: Option<String>,
     },
 
-    
     Ack {
         command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
 
-    
     Pong,
 
-    
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
 
-    
     DirectoryListing {
         entries: Vec<DirectoryEntry>,
         absolute_path: PathBuf,
     },
 
-    
-    FolderList { folders: Vec<FolderRecord> },
+    FolderList {
+        folders: Vec<FolderRecord>,
+    },
 
-    
-    FolderRegistered { folder: FolderRecord },
+    FolderRegistered {
+        folder: FolderRecord,
+    },
 
-    
-    FolderRemoved { folder_id: String },
+    FolderRemoved {
+        folder_id: String,
+    },
 
-    
-    PairingCreated { response: CreatePairingResponse },
+    PairingCreated {
+        response: CreatePairingResponse,
+    },
 
-    
-    PairingJoined { result: crate::backend::PairResult },
+    PairingJoined {
+        result: crate::backend::PairResult,
+    },
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum ClientCommand {
-    
     GetStatus,
 
-    
     StartPin {
         #[serde(default)]
         paths: Vec<String>,
@@ -102,40 +96,37 @@ pub enum ClientCommand {
         duration_hours: Option<u64>,
     },
 
-    
     ReleasePin,
 
-    
     TriggerScan,
 
-    
     ListConflicts,
 
-    
     Ping,
 
-    
     ListDirectory {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
 
-    
     ListFolders,
 
-    
-    RegisterFolder { path: PathBuf },
+    RegisterFolder {
+        path: PathBuf,
+    },
 
-    
-    RemoveFolder { folder_id: String },
+    RemoveFolder {
+        folder_id: String,
+    },
 
-    
-    CreatePairingSession { req: CreatePairingRequest },
+    CreatePairingSession {
+        req: CreatePairingRequest,
+    },
 
-    
-    JoinPairingSession { req: JoinPairingRequest },
+    JoinPairingSession {
+        req: JoinPairingRequest,
+    },
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineSnapshot {
@@ -182,7 +173,6 @@ impl EngineSnapshot {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ScanStatsView {
     pub files: u64,
@@ -202,7 +192,6 @@ impl ScanStatsView {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PinView {
@@ -232,7 +221,6 @@ impl PinView {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerStatusView {
     pub device_id: String,
@@ -255,14 +243,12 @@ impl PeerStatusView {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
     Sending,
     Receiving,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
@@ -275,7 +261,6 @@ pub struct ConflictEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantined_as: Option<String>,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceStamp {

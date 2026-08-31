@@ -1,8 +1,3 @@
-
-
-
-
-
 mod common;
 
 use std::time::Duration;
@@ -18,10 +13,6 @@ fn corrupted_transfer_is_rejected_and_retry_still_converges() {
         tb.write_random(&format!("blobby/f{i}.bin"), 16384);
     }
 
-    
-    
-    
-    
     let hook = CorruptingTransport::new(common::default_transport());
     let b = fx.replace_b(hook.clone());
 
@@ -33,11 +24,10 @@ fn corrupted_transfer_is_rejected_and_retry_still_converges() {
             fx.a.stats(),
             b.stats()
         );
-        
+
         if hook.fired()
             && b.stats().rejected_items >= 1
             && b.stats().sessions_failed >= 1
-            
             && fx.converged()
             && common::trees_identical(&fx.tree_a(), &fx.tree_b())
         {
@@ -51,8 +41,6 @@ fn corrupted_transfer_is_rejected_and_retry_still_converges() {
 
 #[test]
 fn pack_name_verification_rejects_tampered_bytes_directly() {
-    
-    
     use ferry_sync::{IngestError, SyncEngine};
 
     let dir = tempfile::tempdir().unwrap();
@@ -73,7 +61,6 @@ fn pack_name_verification_rejects_tampered_bytes_directly() {
     let err = SyncEngine::ingest_pack_bytes_for_test(&store, &fake_name, &real).unwrap_err();
     assert!(matches!(err, IngestError::NameMismatch { .. }), "{err}");
 
-    
     let packs = std::fs::read_dir(cfg.store_dir.join(".ferry/packs"))
         .unwrap()
         .count();

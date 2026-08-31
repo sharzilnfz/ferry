@@ -1,5 +1,3 @@
-
-
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -12,11 +10,9 @@ use crate::activity_log::LogLevel;
 use crate::picker::PickerState;
 use crate::state::{SyncState, TuiState};
 
-
 pub fn render(state: &TuiState, frame: &mut Frame) {
     let area = frame.area();
 
-    
     if area.width < 40 || area.height < 12 {
         let warning = Paragraph::new("Terminal too small for Ferry TUI\n(Minimum size: 40x12)")
             .alignment(Alignment::Center)
@@ -25,11 +21,6 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
         return;
     }
 
-    
-    
-    
-    
-    
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -49,7 +40,6 @@ pub fn render(state: &TuiState, frame: &mut Frame) {
         render_conflicts_modal(state, frame, area);
     }
 }
-
 
 fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
@@ -97,7 +87,6 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     let badge_span = Span::styled(format!(" {badge_text} "), badge_style);
 
-    
     let folder_left = vec![
         Span::styled(" Folder: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(&state.folder, Style::default().fg(Color::White)),
@@ -106,9 +95,8 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
         Span::styled(")", Style::default().fg(Color::DarkGray)),
     ];
 
-    
     let left_len: usize = folder_left.iter().map(|s| s.content.len()).sum();
-    let badge_len = badge_text.len() + 2; 
+    let badge_len = badge_text.len() + 2;
     let total_w = inner_area.width as usize;
     let pad_len = total_w.saturating_sub(left_len + badge_len);
 
@@ -118,7 +106,6 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     }
     line1_spans.push(badge_span);
 
-    
     let short_device = truncate_str(&state.device_id, 32);
     let short_manifest = truncate_str(&state.cached_manifest_line, 32);
     let line2_spans = vec![
@@ -136,31 +123,22 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, inner_area);
 }
 
-
 fn render_main_body(state: &TuiState, frame: &mut Frame, area: Rect) {
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(55), 
-            Constraint::Percentage(45), 
-        ])
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(area);
 
     render_storage_and_progress(state, frame, main_chunks[0]);
     render_peers_table(state, frame, main_chunks[1]);
 }
 
-
 fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) {
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5),    
-            Constraint::Length(3), 
-        ])
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
         .split(area);
 
-    
     let storage_block = Block::default().borders(Borders::ALL).title(Span::styled(
         " Storage & Sync State ",
         Style::default().add_modifier(Modifier::BOLD),
@@ -230,7 +208,6 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
     let storage_paragraph = Paragraph::new(metrics_lines);
     frame.render_widget(storage_paragraph, inner_storage);
 
-    
     let gauge_style = if state.active_transfer.is_some() {
         Style::default().fg(Color::Cyan).bg(Color::DarkGray)
     } else {
@@ -249,7 +226,6 @@ fn render_storage_and_progress(state: &TuiState, frame: &mut Frame, area: Rect) 
 
     frame.render_widget(gauge, left_chunks[1]);
 }
-
 
 fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     let title = format!(" Connected Peers ({}) ", state.peers.len());
@@ -311,7 +287,6 @@ fn render_peers_table(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(table, area);
 }
 
-
 fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
         " Recent Activity ",
@@ -355,7 +330,6 @@ fn render_activity_log(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(list, inner_area);
 }
 
-
 fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
     let hotkey_style = Style::default()
         .fg(Color::Yellow)
@@ -376,7 +350,6 @@ fn render_footer(_state: &TuiState, frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(spans));
     frame.render_widget(footer, area);
 }
-
 
 fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     let modal_area = centered_rect(75, 70, area);
@@ -446,7 +419,6 @@ fn render_conflicts_modal(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(list, inner_area);
 }
 
-
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -467,7 +439,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-
 #[must_use]
 pub fn truncate_str(s: &str, max_len: usize) -> &str {
     if s.len() <= max_len {
@@ -476,7 +447,6 @@ pub fn truncate_str(s: &str, max_len: usize) -> &str {
         &s[..max_len]
     }
 }
-
 
 pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let modal_area = centered_rect(75, 70, area);
@@ -524,14 +494,13 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), 
-            Constraint::Length(1), 
-            Constraint::Min(3),    
-            Constraint::Length(1), 
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
         ])
         .split(inner);
 
-    
     let breadcrumb = Paragraph::new(Line::from(vec![
         Span::styled(" Path: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(picker.breadcrumbs(), Style::default().fg(Color::White)),
@@ -539,7 +508,6 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(breadcrumb, chunks[0]);
 
-    
     let filter_text = if picker.filter.is_empty() {
         Span::styled(
             " Filter: (type to filter)",
@@ -554,10 +522,8 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let filter_para = Paragraph::new(Line::from(vec![filter_text]));
     frame.render_widget(filter_para, chunks[1]);
 
-    
     let mut items: Vec<ListItem> = Vec::new();
 
-    
     let show_parent = picker.filter.is_empty();
     if show_parent {
         let parent_label = if picker.current_path.parent().is_some() {
@@ -574,7 +540,6 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
 
     let visible = picker.visible_entries();
     for (idx, entry) in visible.iter().enumerate() {
-        
         let _ = idx;
         let icon = if entry.is_symlink {
             "🔗"
@@ -604,7 +569,7 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::DIM),
             );
         }
-        
+
         let effective_cursor = picker.cursor;
         let row_idx = if show_parent { idx + 1 } else { idx };
         let is_selected = row_idx == effective_cursor;
@@ -643,7 +608,6 @@ pub fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
         frame.render_widget(list, chunks[2]);
     }
 
-    
     let hint_line = if let Some(ref h) = picker.hint {
         Paragraph::new(Line::from(vec![Span::styled(
             h.clone(),

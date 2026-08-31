@@ -83,7 +83,10 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
             }
             if let Some(pos) = l.find("Share code:") {
                 let code = l[pos + 11..].trim();
-                let clean: String = code.chars().take_while(|c| c.is_alphanumeric() || *c == '-').collect();
+                let clean: String = code
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '-')
+                    .collect();
                 if clean.len() >= 6 {
                     pairing_code = clean;
                     break;
@@ -92,7 +95,10 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
         }
     }
 
-    assert!(!pairing_code.is_empty(), "Failed to get pairing code from share output");
+    assert!(
+        !pairing_code.is_empty(),
+        "Failed to get pairing code from share output"
+    );
     let _sharer_guard = ProcSharer(share_child);
 
     // 3. Device B joins in a separate process using the network rendezvous code
@@ -112,15 +118,29 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
     assert!(dev_b.tree.join(".ferry/config").is_file());
 
     // 5. Verify both CONFIG_HEAD files contain mutual wraps
-    let id_a = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(dev_a.home.path())).unwrap();
-    let id_b = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(dev_b.home.path())).unwrap();
+    let id_a =
+        ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(dev_a.home.path()))
+            .unwrap();
+    let id_b =
+        ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(dev_b.home.path()))
+            .unwrap();
 
     let cfg_b_bytes = std::fs::read(dev_b.tree.join(".ferry/config")).unwrap();
     let head_b = ferry_crypto::config_head::parse_config_head(&cfg_b_bytes).unwrap();
-    assert_eq!(head_b.entries.len(), 2, "Device B CONFIG_HEAD must contain 2 entries");
+    assert_eq!(
+        head_b.entries.len(),
+        2,
+        "Device B CONFIG_HEAD must contain 2 entries"
+    );
     let pubs_b: Vec<_> = head_b.entries.iter().map(|e| e.device_pub).collect();
-    assert!(pubs_b.contains(id_a.public()), "Device B must contain Device A wrap");
-    assert!(pubs_b.contains(id_b.public()), "Device B must contain Device B wrap");
+    assert!(
+        pubs_b.contains(id_a.public()),
+        "Device B must contain Device A wrap"
+    );
+    assert!(
+        pubs_b.contains(id_b.public()),
+        "Device B must contain Device B wrap"
+    );
 
     // Give Device A a moment to finish committing its CONFIG_HEAD update
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -137,7 +157,10 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert!(a_has_mutual_wrap, "Device A CONFIG_HEAD must contain Device B wrap");
+    assert!(
+        a_has_mutual_wrap,
+        "Device A CONFIG_HEAD must contain Device B wrap"
+    );
 
     // 6. Verify subsequent synchronization / folder authorization on both sides
     let open_a = ferry_folder::folder::open_folder(&dev_a.tree, &id_a).expect("Device A can open");
@@ -146,7 +169,11 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
 
     let fmk_a = ferry_folder::folder::unwrap_own_fmk(&open_a, &id_a).expect("unwrap A FMK");
     let fmk_b = ferry_folder::folder::unwrap_own_fmk(&open_b, &id_b).expect("unwrap B FMK");
-    assert_eq!(&fmk_a[..], &fmk_b[..], "FMK must match across paired devices");
+    assert_eq!(
+        &fmk_a[..],
+        &fmk_b[..],
+        "FMK must match across paired devices"
+    );
 
     // 7. Verify that trying to join again with the same consumed code is refused
     let dev_c = TestDevice::new("joiner2");
@@ -154,7 +181,10 @@ fn test_cross_process_network_rendezvous_pairing_and_mutual_key_wraps() {
         .command(&["join", &pairing_code, dev_c.tree.to_str().unwrap()])
         .output()
         .expect("ferry join should run");
-    assert!(!join2_output.status.success(), "Reusing a consumed code must fail");
+    assert!(
+        !join2_output.status.success(),
+        "Reusing a consumed code must fail"
+    );
 }
 
 #[test]

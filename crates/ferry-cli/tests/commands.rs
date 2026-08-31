@@ -1,17 +1,12 @@
-
-
-
 use std::path::Path;
 
 use ferry_cli::commands;
 use ferry_cli::folder::{self, Settings, SETTINGS_FORMAT_VERSION};
 
-
 struct Env {
     _home: tempfile::TempDir,
     _work: tempfile::TempDir,
-    
-    
+
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -46,16 +41,14 @@ fn init_creates_store_config_settings_and_ignore_file() {
     let folder_id = out.json["folder_id"].as_str().unwrap();
     assert_eq!(folder_id.len(), 32);
 
-    
     assert!(proj.join(".ferry/config").is_file());
     assert!(proj.join(".ferry/packs").is_dir());
     assert!(proj.join(".ferry/index").is_dir());
     assert!(proj.join(".ferry/settings.json").is_file());
-    
+
     assert!(proj.join("ferry.ignore").is_file());
     assert!(out.human.contains("ferry pair"));
 
-    
     let head = ferry_crypto::config_head::parse_config_head(
         &std::fs::read(proj.join(".ferry/config")).unwrap(),
     )
@@ -79,8 +72,7 @@ fn init_creates_second_folder_under_same_identity() {
     let other = work.join("other");
     let out = commands::init::run(&other).unwrap();
     assert_eq!(out.json["command"], "init");
-    
-    
+
     assert!(home.join("identity/device.key").is_file());
 }
 
@@ -100,7 +92,7 @@ fn status_reports_scan_manifest_and_empty_peers_conflicts() {
 
     assert_eq!(doc["command"], "status");
     assert_eq!(doc["manifest_id"].as_str().unwrap().len(), 64);
-    
+
     assert_eq!(doc["scanned"]["files"], 2);
     assert!(doc["pending_changes"].is_null(), "no agreement yet");
     assert_eq!(doc["conflicts"], 0);
@@ -147,17 +139,14 @@ fn ignore_append_preset_and_layered_listing() {
     let proj = work.join("proj");
     commands::init::run(&proj).unwrap();
 
-    
     let out = commands::ignore_cmd::run(&proj, Some("*.log"), None, false).unwrap();
     assert_eq!(out.json["action"], "added-line");
     let text = std::fs::read_to_string(proj.join("ferry.ignore")).unwrap();
     assert!(text.lines().any(|l| l == "*.log"));
 
-    
     let err = commands::ignore_cmd::run(&proj, Some("[z-a]"), None, false).unwrap_err();
     assert_eq!(err.code, "bad-pattern");
 
-    
     let out = commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
     assert_eq!(out.json["action"], "applied-preset");
     let out2 = commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
@@ -165,11 +154,9 @@ fn ignore_append_preset_and_layered_listing() {
     let settings = read_settings(&proj);
     assert_eq!(settings.presets, vec!["claude".to_string()]);
 
-    
     let err = commands::ignore_cmd::run(&proj, None, Some("nope"), false).unwrap_err();
     assert_eq!(err.code, "unknown-preset");
 
-    
     let out = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
     let layers = out.json["layers"].as_array().unwrap();
     let names: Vec<&str> = layers.iter().map(|l| l["name"].as_str().unwrap()).collect();
@@ -184,10 +171,9 @@ fn ignore_append_preset_and_layered_listing() {
     let preset_lines = layers[2]["lines"].as_array().unwrap();
     assert!(preset_lines.iter().any(|l| l == "!CLAUDE.md"));
     assert!(preset_lines.iter().any(|l| l == "**/*.log"));
-    
+
     let rules = folder::load_rules(&proj, &settings).unwrap();
-    
-    
+
     assert!(rules.decided(&["app.log".to_string()], false));
 }
 
@@ -197,7 +183,6 @@ fn ignore_targets_explicit_folder_and_external_directory() {
     let proj = work.join("external_proj");
     commands::init::run(&proj).unwrap();
 
-    
     let out = commands::ignore_cmd::run(&proj, Some("temp/"), None, false).unwrap();
     assert_eq!(out.json["action"], "added-line");
     assert_eq!(out.json["folder"], proj.display().to_string());
@@ -205,12 +190,10 @@ fn ignore_targets_explicit_folder_and_external_directory() {
     let text = std::fs::read_to_string(proj.join("ferry.ignore")).unwrap();
     assert!(text.contains("temp/"));
 
-    
     let out_preset = commands::ignore_cmd::run(&proj, None, Some("claude"), false).unwrap();
     assert_eq!(out_preset.json["action"], "applied-preset");
     assert_eq!(out_preset.json["folder"], proj.display().to_string());
 
-    
     let out_list = commands::ignore_cmd::run(&proj, None, None, true).unwrap();
     assert_eq!(out_list.json["action"], "list");
     assert_eq!(out_list.json["folder"], proj.display().to_string());

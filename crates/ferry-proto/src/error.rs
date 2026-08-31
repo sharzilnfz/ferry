@@ -1,28 +1,19 @@
-
-
-
-
-
-
-
 use crate::version::ProtocolVersion;
 use thiserror::Error;
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ByeReason {
-    
     Normal = 0,
-    
+
     VersionIncompatible = 1,
-    
+
     ProtocolViolation = 2,
-    
+
     AuthFailed = 3,
-    
+
     ResourceLimit = 4,
-    
+
     Internal = 5,
 }
 

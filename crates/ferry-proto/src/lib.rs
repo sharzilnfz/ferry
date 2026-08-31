@@ -1,46 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub mod codec;
 pub mod engine;
 pub mod error;
@@ -58,9 +15,5 @@ pub use ferry_crypto::identity::DeviceId;
 pub use secure::SecureSession;
 pub use stream::{duplex_pair, ByteStream};
 pub use version::ProtocolVersion;
-
-
-
-
 
 pub const WIRE_MAGIC: [u8; 4] = *b"FRW1";

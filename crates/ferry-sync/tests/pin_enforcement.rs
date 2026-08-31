@@ -1,27 +1,14 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 mod common;
 
 use std::time::{Duration, Instant};
 
 use rand::SeedableRng;
 
-use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
 use ferry_sync::format::{hex, unhex};
 use ferry_sync::{engine, DEFAULT_FOLDER_ID};
+use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 
 use common::{timeout_from_env, EngineFixture};
 
@@ -47,7 +34,6 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let b_dev = *engine::device_identity_for_tag(TAG_B).device_id();
     let read = |root: &std::path::Path, rel: &str| std::fs::read_to_string(root.join(rel));
 
-    
     std::fs::create_dir_all(fx.tree_a().join("docs")).unwrap();
     std::fs::write(fx.tree_a().join("notes.txt"), b"v1").unwrap();
     std::fs::write(fx.tree_a().join("docs/other.txt"), b"d1").unwrap();
@@ -68,7 +54,6 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let mut bases = std::collections::BTreeMap::new();
     bases.insert(b_hex.clone(), hex(&agreed.manifest_id));
 
-    
     let (sec, nsec) = ferry_platform_time();
     PinStore::new(&a_ferry)
         .start(&PinRecord {
@@ -81,32 +66,27 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
             paths: vec!["notes.txt".to_string()],
             released: false,
             base_agreements: bases.clone(),
-            proc_start_token: None, 
+            proc_start_token: None,
         })
         .expect("pin starts");
     let rec = PinStore::new(&a_ferry).load().unwrap().expect("record");
     assert!(rec.holding(), "the engine's own pin must count as active");
 
-    
     std::fs::write(fx.tree_b().join("notes.txt"), b"v2").unwrap();
     std::fs::write(fx.tree_b().join("docs/other.txt"), b"d2").unwrap();
 
-    
     wait_until("unpinned doc flows while pinned", || {
         read(&fx.tree_a(), "docs/other.txt").is_ok_and(|v| v == "d2")
     });
-    
+
     assert_eq!(
         read(&fx.tree_a(), "notes.txt").unwrap(),
         "v1",
         "pinned peer edit must not touch the tree"
     );
 
-    
-    
     let ledger = HeldLedger::new(&a_ferry);
-    
-    
+
     wait_until("held decision surfaced for notes.txt", || {
         ledger
             .load_peer(&b_hex)
@@ -136,9 +116,6 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         "held remote manifest must be stored in the content-addressed blob store during hold"
     );
 
-    
-    
-    
     let mut seen = std::collections::BTreeSet::new();
     for e in ledger.load_peer(&b_hex).unwrap() {
         assert!(
@@ -149,10 +126,8 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         );
     }
 
-    
     PinStore::new(&a_ferry).mark_released().unwrap();
 
-    
     std::fs::write(fx.tree_b().join("docs/other.txt"), b"d4").unwrap();
     {
         let deadline = Instant::now() + timeout_from_env();
@@ -184,10 +159,6 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         }
     }
 
-    
-    
-    
-    
     let opened = ferry_folder::folder::open_folder(
         &fx._dir.path().join("a/store"),
         &engine::device_identity_for_tag(TAG_A),
@@ -243,7 +214,6 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     fx.b.shutdown();
     fx.a.shutdown();
 }
-
 
 fn ferry_platform_time() -> (i64, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};

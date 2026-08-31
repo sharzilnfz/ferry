@@ -1,19 +1,13 @@
-
-
 use crate::framing::IpcConnection;
-
 
 pub type InMemoryStream = tokio::io::DuplexStream;
 
-
 pub type InMemoryConnection = IpcConnection<InMemoryStream>;
-
 
 #[must_use]
 pub fn create_in_memory_pair() -> (InMemoryConnection, InMemoryConnection) {
     create_in_memory_pair_with_buffer_size(65536)
 }
-
 
 #[must_use]
 pub fn create_in_memory_pair_with_buffer_size(
@@ -31,15 +25,12 @@ pub mod unix {
     use crate::error::IpcError;
     use crate::framing::IpcConnection;
 
-    
     pub struct IpcServer {
         listener: UnixListener,
         socket_path: PathBuf,
     }
 
     impl IpcServer {
-        
-        
         pub fn bind(path: impl AsRef<Path>) -> Result<Self, IpcError> {
             let path = path.as_ref();
             if let Some(parent) = path.parent() {
@@ -55,19 +46,16 @@ pub mod unix {
             })
         }
 
-        
         pub async fn accept(&self) -> Result<IpcConnection<UnixStream>, IpcError> {
             let (stream, _addr) = self.listener.accept().await?;
             Ok(IpcConnection::new(stream))
         }
 
-        
         #[must_use]
         pub fn socket_path(&self) -> &Path {
             &self.socket_path
         }
 
-        
         pub fn close(&self) {
             let _ = std::fs::remove_file(&self.socket_path);
         }
@@ -79,11 +67,9 @@ pub mod unix {
         }
     }
 
-    
     pub struct IpcClient;
 
     impl IpcClient {
-        
         pub async fn connect(
             path: impl AsRef<Path>,
         ) -> Result<IpcConnection<UnixStream>, IpcError> {
@@ -104,14 +90,12 @@ pub mod windows {
     use crate::error::IpcError;
     use crate::framing::IpcConnection;
 
-    
     pub struct IpcServer {
         pipe_name: String,
         server: Mutex<Option<NamedPipeServer>>,
     }
 
     impl IpcServer {
-        
         pub fn bind(path: impl AsRef<Path>) -> Result<Self, IpcError> {
             let pipe_name = path.as_ref().to_string_lossy().to_string();
             let server = ServerOptions::new()
@@ -123,7 +107,6 @@ pub mod windows {
             })
         }
 
-        
         pub async fn accept(&self) -> Result<IpcConnection<NamedPipeServer>, IpcError> {
             let current_server = {
                 let mut guard = self
@@ -137,7 +120,6 @@ pub mod windows {
 
             current_server.connect().await?;
 
-            
             let next_server = ServerOptions::new().create(&self.pipe_name)?;
             {
                 let mut guard = self
@@ -150,21 +132,17 @@ pub mod windows {
             Ok(IpcConnection::new(current_server))
         }
 
-        
         #[must_use]
         pub fn pipe_name(&self) -> &str {
             &self.pipe_name
         }
 
-        
         pub fn close(&self) {}
     }
 
-    
     pub struct IpcClient;
 
     impl IpcClient {
-        
         pub async fn connect(
             path: impl AsRef<Path>,
         ) -> Result<IpcConnection<NamedPipeClient>, IpcError> {

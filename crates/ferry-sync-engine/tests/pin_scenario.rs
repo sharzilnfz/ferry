@@ -1,32 +1,12 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
+use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 use ferry_sync_engine::report::list_conflicts;
 use ferry_sync_engine::{ConvergenceEngine, ConvergenceError};
 use rand::SeedableRng;
@@ -35,10 +15,6 @@ const DEV_A: [u8; 32] = [0xA1; 32];
 const DEV_B: [u8; 32] = [0xB2; 32];
 const FOLDER: [u8; 16] = [7; 16];
 const NOW: (i64, u32) = (1_787_574_896, 0);
-
-
-
-
 
 struct Dev {
     _dir: tempfile::TempDir,
@@ -109,7 +85,6 @@ fn write_file(path: &Path, bytes: &[u8], mt: (i64, u32)) {
     .unwrap();
 }
 
-
 fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     let mut out = HashSet::new();
     fn walk(dir: &Path, out: &mut HashSet<Vec<u8>>) {
@@ -125,7 +100,6 @@ fn collect_bytes(root: &Path) -> HashSet<Vec<u8>> {
     walk(root, &mut out);
     out
 }
-
 
 fn quarantine_names(root: &Path) -> Vec<String> {
     let mut names = Vec::new();
@@ -146,8 +120,6 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names.sort();
     names
 }
-
-
 
 fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &s.manifest_id).is_err() {
@@ -171,10 +143,6 @@ fn transfer_meta(from: &Store, to: &Store, s: &SnapshotOutput) {
         }
     }
 }
-
-
-
-
 
 fn transfer_chunks(from: &Store, to: &Store, ids: &[(BlobId, u64)]) {
     for (id, _) in ids {
@@ -217,10 +185,6 @@ fn unhex_32(s: &str) -> Option<[u8; 32]> {
     ferry_store::format::unhex::<32>(s)
 }
 
-
-
-
-
 struct PeerFetch<'x> {
     from: &'x ferry_store::store::Store,
     to: &'x ferry_store::store::Store,
@@ -233,16 +197,11 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
     }
 }
 
-
-
-
-
 #[test]
 fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     let mut a = Dev::new(1, DEV_A, poly(42));
     let mut b = Dev::new(2, DEV_B, poly(42));
 
-    
     for (rel, mt) in [
         ("src/a.rs", 1000),
         ("src/b.rs", 1000),
@@ -256,11 +215,10 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     let sa_base = a.snap();
     transfer_meta(&a.store, &b.store, &sa_base);
     b.parent = sa_base.manifest_id;
-    
+
     record_agreement(&a, DEV_B, sa_base.manifest_id);
     record_agreement(&b, DEV_A, sa_base.manifest_id);
 
-    
     let base_hex = hex(&sa_base.manifest_id);
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), base_hex);
@@ -270,42 +228,31 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         .start(&PinRecord {
             format_version: PIN_FORMAT_VERSION,
             device_id: hex(&DEV_A),
-            pid: std::process::id(), 
+            pid: std::process::id(),
             started_sec: NOW.0,
             started_nsec: NOW.1,
             expires_sec: None,
             paths: vec!["src/**".into()],
             released: false,
             base_agreements: base_agreements.clone(),
-            proc_start_token: None, 
+            proc_start_token: None,
         })
         .unwrap();
     assert!(pin_store.load().unwrap().expect("recorded").holding());
 
-    
-    
-    
     write_file(&a.tree.join("src/a.rs"), b"A-version-a", (3000, 0));
     write_file(&a.tree.join("src/b.rs"), b"A-version-b", (3000, 0));
     write_file(&a.tree.join("src/c.rs"), b"A-version-c", (2500, 0));
 
-    
-    
     write_file(&b.tree.join("src/a.rs"), b"B-version-a", (2900, 0));
     write_file(&b.tree.join("src/b.rs"), b"B-version-b", (2950, 0));
     write_file(&b.tree.join("src/c.rs"), b"B-version-c", (3000, 0));
     write_file(&b.tree.join("docs/d1.txt"), b"B-docs-1", (2800, 0));
     write_file(&b.tree.join("docs/d2.txt"), b"B-docs-2", (2850, 0));
 
-    let sa2 = a.snap(); 
+    let sa2 = a.snap();
     let sb = b.snap();
 
-    
-    
-    
-    
-    
-    
     transfer_meta(&b.store, &a.store, &sb);
     let remote = ferry_store::manifest::parse_manifest(
         &a.store.get(BlobKind::Manifest, &sb.manifest_id).unwrap(),
@@ -317,7 +264,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         from: &b.store,
         to: &a.store,
     };
-    
+
     let result = ConvergenceEngine::new(&a.store, &a.tree)
         .state_dir(&a.state)
         .at(NOW)
@@ -329,7 +276,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         )
         .unwrap();
 
-    
     let held_paths: Vec<String> = result.held.iter().map(|h| h.path.clone()).collect();
     assert_eq!(
         held_paths,
@@ -344,8 +290,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         assert!(!h.chunks.is_empty(), "held edits carry their blob refs");
     }
 
-    
-    
     assert_eq!(
         result.quarantined.len(),
         0,
@@ -358,7 +302,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert_eq!(read_tree_file(&a.tree, "src/b.rs"), b"A-version-b");
     assert_eq!(read_tree_file(&a.tree, "src/c.rs"), b"A-version-c");
 
-    
     let ledger = HeldLedger::new(&a.state);
     assert_eq!(ledger.peers().unwrap(), vec![peer_hex.clone()]);
     let entries = ledger.load_peer(&peer_hex).unwrap();
@@ -373,8 +316,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         "status surface sees exactly the held set"
     );
 
-    
-    let sa3 = a.snap(); 
+    let sa3 = a.snap();
     let base_hex = base_agreements.get(&peer_hex).unwrap();
     let base_bytes = a
         .store
@@ -396,14 +338,11 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert_eq!(rp.held_entries, 3);
     assert_eq!(rp.held_paths, held_paths);
 
-    
-    
     let mut truth = collect_bytes(&a.tree);
     truth.extend(collect_bytes(&b.tree));
 
     let stats = &rp.result;
 
-    
     assert_eq!(read_tree_file(&a.tree, "src/a.rs"), b"A-version-a");
     assert_eq!(read_tree_file(&a.tree, "src/b.rs"), b"A-version-b");
     assert_eq!(read_tree_file(&a.tree, "src/c.rs"), b"B-version-c");
@@ -413,7 +352,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         "every both-changed path reports explicitly"
     );
 
-    
     let qnames = quarantine_names(&a.tree);
     assert_eq!(qnames.len(), 3, "{qnames:?}");
     let qbytes: HashSet<Vec<u8>> = qnames
@@ -434,10 +372,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         );
     }
 
-    
-    
-    
-    
     let after = collect_bytes(&a.tree);
     for v in &truth {
         assert!(
@@ -447,8 +381,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         );
     }
 
-    
-    
     let log = list_conflicts(&a.state).unwrap();
     assert_eq!(log.len(), 3);
     let by_path: BTreeMap<&str, &ferry_sync_engine::ConflictEntry> =
@@ -462,7 +394,6 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         assert!(e.quarantined_as.is_some());
     }
 
-    
     assert!(ledger.clear_peer(&peer_hex).unwrap());
     assert!(pin_store.mark_released().unwrap());
     assert!(!pin_store.load().unwrap().unwrap().holding());
@@ -482,16 +413,10 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
     assert!(ledger.peers().unwrap().is_empty());
 }
 
-
-
-
-
 #[test]
 fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
     let mut a = Dev::new(3, DEV_A, poly(42));
 
-    
-    
     let mut child = ferry_platform::spawn_sleeper(30).expect("spawn sleeper");
     let dead = {
         child.kill().expect("kill -9 equivalent");
@@ -515,20 +440,14 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
         })
         .unwrap();
 
-    
-    
-    
     let rec = pin_store.load().unwrap().expect("still on disk");
     assert!(!rec.holding(), "a dead writer cannot hold changes");
     assert!(!rec.released);
 
-    
-    
     let local = a.snap().manifest;
     assert!(!pin_store.load().unwrap().unwrap().holding());
     let _ = local;
 
-    
     pin_store
         .start(&PinRecord {
             pid: std::process::id(),

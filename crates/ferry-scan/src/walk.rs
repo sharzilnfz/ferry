@@ -1,42 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -58,35 +19,26 @@ use crate::ignore::{EntryKind, IgnorePolicy};
 use crate::policy::{RelPath, Trigger};
 use crate::state::{CachedDir, DirCache};
 
-
-
-
-
 pub(crate) fn is_store_component(name: &str) -> bool {
     name == ferry_store::store::STORE_DIR_NAME
 }
 
-
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PassStats {
     pub trigger: Trigger,
-    
+
     pub files: usize,
     pub dirs: usize,
     pub symlinks: usize,
-    
-    
+
     pub bytes_chunked: u64,
-    
+
     pub files_rehashed: usize,
-    
+
     pub dirty_dirs: usize,
-    
-    
+
     pub duration: Duration,
 }
-
 
 #[derive(Clone, Debug)]
 pub struct ScanOutput {
@@ -96,8 +48,6 @@ pub struct ScanOutput {
     pub stats: PassStats,
     pub refused: Vec<RefusedPath>,
 }
-
-
 
 pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
     let mut out = BTreeSet::new();
@@ -112,8 +62,6 @@ pub(crate) fn close_under_ancestors(dirs: &[RelPath]) -> BTreeSet<RelPath> {
     out
 }
 
-
-
 pub(crate) struct Walker<'a> {
     store: &'a Store,
     poly: ferry_store::chunker::ValidatedPoly,
@@ -123,18 +71,14 @@ pub(crate) struct Walker<'a> {
 
     stats: PassStats,
     refused: Vec<RefusedPath>,
-    
+
     rebuilt: HashMap<RelPath, BlobId>,
-    
-    
+
     read_buf: Vec<u8>,
     chunk_scratch: Vec<u8>,
 }
 
 impl<'a> Walker<'a> {
-    
-    
-    
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run(
         store: &'a Store,
@@ -148,8 +92,6 @@ impl<'a> Walker<'a> {
         prev_root_tree_id: BlobId,
         stats_out: &mut PassStats,
     ) -> Result<Option<ScanOutput>, ScanError> {
-        
-        
         if dirty_closed.is_empty() {
             return Ok(None);
         }
@@ -177,9 +119,7 @@ impl<'a> Walker<'a> {
             if w.rebuilt.contains_key(d) {
                 continue;
             }
-            
-            
-            
+
             if d.is_empty() && !w.disk_root.is_dir() {
                 return Err(ScanError::Watch("watched root is not a directory".into()));
             }
@@ -227,9 +167,6 @@ impl<'a> Walker<'a> {
         }
     }
 
-    
-    
-    
     fn splice_absent(&mut self, rel: &RelPath) -> Result<BlobId, ScanError> {
         self.cache.remove_prefix(rel);
         let empty_bytes = serialize_tree_node(&TreeNode { entries: vec![] });
@@ -243,15 +180,11 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    
-    
     fn rebuild_dir(
         &mut self,
         rel: &RelPath,
         dirty_closed: &BTreeSet<RelPath>,
     ) -> Result<BlobId, ScanError> {
-        
-        
         if rel.last().is_some_and(|c| is_store_component(c)) {
             return self.splice_absent(rel);
         }
@@ -267,9 +200,6 @@ impl<'a> Walker<'a> {
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::NotFound
-                    
-                    
-                    
                     || e.kind() == std::io::ErrorKind::NotADirectory =>
             {
                 return self.splice_absent(rel);
@@ -278,10 +208,6 @@ impl<'a> Walker<'a> {
         }
         names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
-        
-        
-        
-        
         let old_node = self.cache.take(rel).map(|c| c.node);
         let old_entries: HashMap<&str, &TreeEntry> = old_node
             .as_ref()
@@ -295,9 +221,7 @@ impl<'a> Walker<'a> {
             if raw == b"." || raw == b".." {
                 continue;
             }
-            
-            
-            
+
             let component = match admission::admit_name(name.as_os_str()) {
                 Ok(c) => c,
                 Err(r) => {
@@ -310,7 +234,7 @@ impl<'a> Walker<'a> {
                     continue;
                 }
             };
-            
+
             if is_store_component(&component) {
                 continue;
             }
@@ -318,20 +242,14 @@ impl<'a> Walker<'a> {
             child_rel.push(component.clone());
             let child_disk = disk.join(&name);
 
-            
-            
-            
-            
-            
             let meta = match std::fs::symlink_metadata(&child_disk) {
                 Ok(m) => m,
-                
+
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(Self::io_err(&child_disk)(e)),
             };
             let ft = meta.file_type();
-            
-            
+
             let kind = if ft.is_dir() {
                 EntryKind::Dir
             } else {
@@ -341,9 +259,6 @@ impl<'a> Walker<'a> {
                 continue;
             }
 
-            
-            
-            
             let observed = if ft.is_symlink() {
                 ObservedKind::Symlink
             } else if ft.is_dir() {
@@ -400,13 +315,10 @@ impl<'a> Walker<'a> {
                     self.stats.files += 1;
 
                     let chunks = match old_entries.get(component.as_str()) {
-                        Some(prev) if reusable(prev, size, mt, exec) => {
-                            match &prev.payload {
-                                EntryPayload::File { chunks, .. } => chunks.clone(),
-                                _ => unreachable!("reusable() guarantees a File payload"),
-                            }
-                            
-                        }
+                        Some(prev) if reusable(prev, size, mt, exec) => match &prev.payload {
+                            EntryPayload::File { chunks, .. } => chunks.clone(),
+                            _ => unreachable!("reusable() guarantees a File payload"),
+                        },
                         _ => self.stream_file_chunks(&child_disk)?,
                     };
                     file_entry(&component, exec, mt.0, mt.1, chunks)
@@ -431,9 +343,6 @@ impl<'a> Walker<'a> {
             other => ScanError::Snapshot(other),
         })?;
 
-        
-        
-        
         let stale: Vec<RelPath> = self
             .cache
             .keys_under(rel)
@@ -452,15 +361,9 @@ impl<'a> Walker<'a> {
         Ok(id)
     }
 
-    
-    
-    
-    
-    
     fn stream_file_chunks(&mut self, path: &Path) -> Result<Vec<(BlobId, u64)>, ScanError> {
         let store = self.store;
-        
-        
+
         let mut chunker = ferry_store::chunker::Chunker::new(self.poly.get())?;
 
         let mut file = std::fs::File::open(path).map_err(Self::io_err(path))?;
@@ -468,8 +371,7 @@ impl<'a> Walker<'a> {
         if buf.len() != REHASH_READ_BUF {
             buf.resize(REHASH_READ_BUF, 0);
         }
-        
-        
+
         let cur: &mut Vec<u8> = &mut self.chunk_scratch;
         cur.clear();
         let mut chunks: Vec<(BlobId, u64)> = Vec::new();
@@ -481,8 +383,6 @@ impl<'a> Walker<'a> {
             }
             let mut eaten = 0usize;
             for len in chunker.feed(&buf[..n]) {
-                
-                
                 let fresh = len - cur.len();
                 cur.extend_from_slice(&buf[eaten..eaten + fresh]);
                 eaten += fresh;
@@ -506,8 +406,6 @@ impl<'a> Walker<'a> {
         Ok(chunks)
     }
 
-    
-    
     fn ensure_child(
         &mut self,
         child_rel: &RelPath,
@@ -523,7 +421,7 @@ impl<'a> Walker<'a> {
                 return Ok(cached.id);
             }
         }
-        
+
         self.rebuild_dir(child_rel, dirty_closed)
     }
 
@@ -536,11 +434,7 @@ impl<'a> Walker<'a> {
     }
 }
 
-
 const REHASH_READ_BUF: usize = 256 * 1024;
-
-
-
 
 fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     match &prev.payload {
@@ -556,9 +450,6 @@ fn reusable(prev: &TreeEntry, size: u64, mt: (i64, u32), exec: bool) -> bool {
     }
 }
 
-
-
-
 fn live_exec(perm: &std::fs::Permissions) -> bool {
     #[cfg(unix)]
     {
@@ -572,9 +463,6 @@ fn live_exec(perm: &std::fs::Permissions) -> bool {
         false
     }
 }
-
-
-
 
 fn split_mtime(t: std::time::SystemTime) -> (i64, u32) {
     ferry_platform::split_unix(t)
@@ -596,10 +484,6 @@ mod tests {
     use ferry_store::snapshot::snapshot_dir;
     use std::collections::BTreeSet;
 
-    
-    
-    
-    
     struct Fixture {
         _tmp: tempfile::TempDir,
         _store_dir: tempfile::TempDir,
@@ -631,8 +515,6 @@ mod tests {
             fx
         }
 
-        
-        
         fn full_scan(&mut self) -> BlobId {
             let mut fresh = DirCache::new();
             let mut closed = BTreeSet::new();
@@ -658,7 +540,6 @@ mod tests {
             self.prev_root_tree_id
         }
 
-        
         fn full_scan_with_ledger(&mut self) -> Vec<ferry_store::snapshot::RefusedPath> {
             let mut fresh = DirCache::new();
             let mut closed = BTreeSet::new();
@@ -708,7 +589,6 @@ mod tests {
                 .expect("pass must produce a changed manifest")
         }
 
-        
         fn scratch_root_id(&self) -> BlobId {
             snapshot_dir(&self.store, self.poly, &self.root, &identity((3, 0)))
                 .unwrap()
@@ -742,10 +622,6 @@ mod tests {
         write_file(&fx.root.join("moved/x.txt"), b"mover", false, (15, 0));
         fx.full_scan();
 
-        
-        
-        
-        
         write_file(
             &fx.root.join("nested/new.txt"),
             b"fresh bytes",
@@ -762,8 +638,6 @@ mod tests {
         std::fs::rename(fx.root.join("moved"), fx.root.join("relocated")).unwrap();
         write_file(&fx.root.join("sub/a.txt"), b"a", true, (13, 0));
 
-        
-        
         let dirty = vec![
             p(&["nested"]),
             p(&["nested", "new.txt"]),
@@ -775,21 +649,16 @@ mod tests {
         ];
         let out = fx.incremental_expect(&dirty);
 
-        
         assert_eq!(
             out.root_tree_id,
             fx.scratch_root_id(),
             "incremental splice must reproduce a from-scratch snapshot"
         );
 
-        
-        
-        
         let inc_diff = fx.diff_since_baseline(out.root_tree_id);
         let scratch_diff = fx.diff_since_baseline(fx.scratch_root_id());
         assert_eq!(inc_diff, scratch_diff);
-        
-        
+
         assert_eq!(inc_diff.added.len(), 4);
         let added_paths: Vec<_> = inc_diff.added.iter().map(|a| a.path.clone()).collect();
         assert_eq!(
@@ -812,9 +681,7 @@ mod tests {
         );
         assert_eq!(inc_diff.content_modified.len(), 1, "{inc_diff:?}");
         assert_eq!(inc_diff.content_modified[0].path, p(&["mod.txt"]));
-        
-        
-        
+
         let expect_meta = usize::from(cfg!(unix));
         assert_eq!(inc_diff.metadata_modified.len(), expect_meta);
         if cfg!(unix) {
@@ -829,8 +696,6 @@ mod tests {
         write_file(&fx.root.join("d/y.bin"), &prng(2, 8192), true, (2, 0));
         fx.full_scan();
 
-        
-        
         let mut stats = PassStats::default();
         let closed = close_under_ancestors(&[p(&[])]);
         let out = Walker::run(
@@ -863,13 +728,11 @@ mod tests {
         fx.full_scan();
         let baseline = fx.prev_root_tree_id;
 
-        
         let mut evil = original.clone();
         evil[0] ^= 0xff;
         evil[512] ^= 0x55;
         write_file(&victim, &evil, false, (100, 500));
 
-        
         let mut stats = PassStats::default();
         let closed = close_under_ancestors(&[p(&[])]);
         let out = Walker::run(
@@ -889,8 +752,6 @@ mod tests {
         assert_eq!(stats.bytes_chunked, 0);
         assert_eq!(fx.diff_since_baseline(baseline), ChangeSet::default());
 
-        
-        
         let audited = fx.full_scan();
         assert_ne!(audited, baseline, "audit must catch the drift");
         let cs = diff_roots(&fx.store, &baseline, &audited).unwrap();
@@ -916,7 +777,6 @@ mod tests {
         write_file(&fx.root.join("secrets/key.pem"), b"hidden", false, (2, 0));
         fx.full_scan();
 
-        
         write_file(&fx.root.join("open.txt"), b"visible v2", false, (3, 0));
         write_file(&fx.root.join("secrets/key.pem"), b"rotated", false, (4, 0));
 
@@ -937,9 +797,6 @@ mod tests {
         .unwrap()
         .expect("open.txt changed");
 
-        
-        
-        
         let cs = fx.diff_since_baseline(out.root_tree_id);
         assert_eq!(cs.content_modified.len(), 1);
         assert_eq!(cs.content_modified[0].path, p(&["open.txt"]));
@@ -967,13 +824,12 @@ mod tests {
         assert_eq!(out.root_tree_id, fx.scratch_root_id());
         assert!(
             fx.cache.node(&p(&["doomed"])).is_none() || {
-                
                 let node = &fx.cache.node(&p(&["doomed"])).unwrap().node;
                 node.entries.is_empty()
             }
         );
         assert!(fx.cache.node(&p(&["doomed", "deep"])).is_none());
-        
+
         let cs = fx.diff_since_baseline(out.root_tree_id);
         assert_eq!(cs.removed.len(), 3);
         assert_eq!(
@@ -993,7 +849,7 @@ mod tests {
     #[test]
     fn store_directory_is_structurally_excluded() {
         let mut fx = Fixture::new("t7");
-        
+
         write_file(
             &fx.root.join(".ferry/packs/x.pack"),
             b"pack bytes",
@@ -1018,7 +874,6 @@ mod tests {
         assert!(none.is_none(), "store-only content must not move the tree");
         assert_eq!(stats.bytes_chunked, 0);
 
-        
         write_file(&fx.root.join("real.txt"), b"user content", false, (2, 0));
         let out = fx.incremental_expect(&[p(&["real.txt"])]);
         assert_eq!(out.stats.bytes_chunked, "user content".len() as u64);
@@ -1033,9 +888,6 @@ mod tests {
         assert!(!root_node.entries.iter().any(|e| e.name == ".ferry"));
         assert!(root_node.entries.iter().any(|e| e.name == "real.txt"));
 
-        
-        
-        
         write_file(
             &fx.root.join(".ferry/packs/x.pack"),
             b"more pack bytes!",
@@ -1062,13 +914,9 @@ mod tests {
 
     #[test]
     fn t12_policy_refusals_match_scratch_oracle_incrementally() {
-        
-        
-        
         let mut fx = Fixture::new("t12policy");
         write_file(&fx.root.join("keep.txt"), b"k", false, (1, 0));
-        
-        
+
         #[cfg(unix)]
         write_file(&fx.root.join("aux.txt"), b"reserved", false, (2, 0));
         #[cfg(unix)]
@@ -1079,10 +927,7 @@ mod tests {
         let first = fx.full_scan_with_ledger();
 
         use ferry_store::snapshot::RefusalReason;
-        
-        
-        
-        
+
         assert_eq!(
             first
                 .iter()
@@ -1094,8 +939,6 @@ mod tests {
             .iter()
             .any(|r| r.reason == RefusalReason::AbsoluteSymlinkTarget));
 
-        
-        
         write_file(&fx.root.join("keep.txt"), b"k2", false, (3, 0));
         let out = fx.incremental_expect(&[p(&[])]);
         let root = ferry_store::manifest::parse_tree_node(
@@ -1117,11 +960,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn adversarial_entries_produce_identical_trees_and_ledgers_in_both_walkers() {
-        
-        
-        
-        
-        
         use std::os::unix::ffi::OsStrExt;
 
         let mut fx = Fixture::new("t11adv");
@@ -1135,8 +973,7 @@ mod tests {
             .status()
             .unwrap()
             .success());
-        
-        
+
         let non_utf8 = std::ffi::OsStr::from_bytes(b"na\xffme");
         let name_refused = std::fs::write(sub.join(non_utf8), b"y").is_ok();
 
@@ -1202,7 +1039,6 @@ mod tests {
         }
         fx.full_scan();
 
-        
         let mut seed: u64 = 0xC0FFEE;
         let mut next = move || {
             seed = seed
@@ -1254,7 +1090,6 @@ mod tests {
                 }
             }
 
-            
             let batch: Vec<RelPath> = std::mem::take(&mut all_dirty).into_iter().collect();
             let closed = close_under_ancestors(&batch);
             let mut stats = PassStats::default();

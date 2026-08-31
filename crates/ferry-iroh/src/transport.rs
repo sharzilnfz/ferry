@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
@@ -28,38 +19,28 @@ use crate::config::{IrohConfig, RelaySetting};
 use crate::directory::{Route, RouteTable};
 use crate::FERRY_ALPN;
 
-
-
-
-
-
 #[derive(Debug, Default)]
 pub struct PathObservation {
-    
     pub selected_relay_seen: AtomicBool,
-    
+
     pub selected_ip_seen: AtomicBool,
 }
 
 impl PathObservation {
-    
     pub fn relay_only_so_far(&self) -> bool {
         self.selected_relay_seen.load(Ordering::SeqCst)
             && !self.selected_ip_seen.load(Ordering::SeqCst)
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialFailure {
-    
     NoRoute(SocketAddr),
-    
+
     SelfDial,
-    
+
     Timeout,
-    
+
     Connect(String),
 }
 
@@ -130,8 +111,6 @@ impl Drop for Inner {
     }
 }
 
-
-
 #[derive(Clone)]
 pub struct IrohTransport {
     inner: Arc<Inner>,
@@ -200,18 +179,14 @@ impl IrohTransport {
         })
     }
 
-    
     pub fn routes(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    
     pub fn route_table(&self) -> &RouteTable {
         &self.inner.routes
     }
 
-    
-    
     pub fn with_route(&self, key: SocketAddr, endpoint_id: [u8; 32]) -> &Self {
         let route = Route {
             endpoint_id,
@@ -221,18 +196,14 @@ impl IrohTransport {
         self
     }
 
-    
-    
     pub fn register_peer(&self, endpoint_id: [u8; 32]) -> SocketAddr {
         self.inner.routes.register_peer(endpoint_id, Vec::new())
     }
 
-    
     pub fn endpoint_id(&self) -> [u8; 32] {
         *self.inner.my_id.as_bytes()
     }
 
-    
     pub fn dial_peer(&self, endpoint_id: &[u8; 32]) -> Result<Box<dyn DynConnection>, DialFailure> {
         let hints = self
             .inner
@@ -243,9 +214,6 @@ impl IrohTransport {
         self.dial_endpoint(*endpoint_id, hints)
     }
 
-    
-    
-    
     pub fn dial_endpoint(
         &self,
         endpoint_id: [u8; 32],
@@ -263,15 +231,11 @@ impl IrohTransport {
         for h in hints {
             addr.addrs.insert(TransportAddr::Ip(h));
         }
-        
-        
-        
-        
+
         for url in &self.inner.relay_urls {
             addr.addrs.insert(TransportAddr::Relay(url.clone()));
         }
-        
-        
+
         let ep = self.inner.ep.clone();
         let budget = self.inner.dial_timeout;
         let opened = block_on(self.inner.rt_handle(), async move {
@@ -310,8 +274,6 @@ impl IrohTransport {
         }))
     }
 
-    
-    
     pub fn path_observation(&self, endpoint_id: &[u8; 32]) -> Option<Arc<PathObservation>> {
         self.inner
             .observations
@@ -321,7 +283,6 @@ impl IrohTransport {
             .cloned()
     }
 
-    
     pub fn shutdown(&self) {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return;
@@ -332,7 +293,6 @@ impl IrohTransport {
         });
     }
 }
-
 
 fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
     let mut out = Vec::new();
@@ -354,7 +314,6 @@ fn direct_hints(ep: &Endpoint) -> Vec<SocketAddr> {
 
 impl Drop for IrohTransport {
     fn drop(&mut self) {
-        
         if Arc::strong_count(&self.inner) == 1 && !self.inner.closed.load(Ordering::SeqCst) {
             self.shutdown();
         }
@@ -387,8 +346,6 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
     }
 
     if cfg.force_relay {
-        
-        
         builder = builder.clear_ip_transports();
     }
 
@@ -401,9 +358,6 @@ async fn build_endpoint(cfg: &IrohConfig, seed: [u8; 32]) -> io::Result<Endpoint
 fn spawn_path_sampler(handle: &Handle, conn: &IrohConn, obs: Arc<PathObservation>) {
     let conn = conn.clone();
     handle.spawn(async move {
-        
-        
-        
         latch_selected_paths(&conn, &obs);
         let _ = conn.closed().await;
         latch_selected_paths(&conn, &obs);
@@ -422,10 +376,6 @@ fn latch_selected_paths(conn: &IrohConn, obs: &PathObservation) {
         }
     }
 }
-
-
-
-
 
 impl Transport for IrohTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn DynConnection>> {
@@ -452,7 +402,7 @@ impl Transport for IrohTransport {
         } else {
             addr
         };
-        
+
         let route = Route {
             endpoint_id: *self.inner.my_id.as_bytes(),
             ip_hints: direct_hints(&self.inner.ep),
@@ -536,10 +486,6 @@ impl DynListener for IrohListener {
     }
 }
 
-
-
-
-
 struct FramedConnection {
     inner: Arc<Inner>,
     #[allow(dead_code)]
@@ -595,7 +541,7 @@ impl DynConnection for FramedConnection {
             let mut len_buf = [0u8; 4];
             match recv.read_exact(&mut len_buf).await {
                 Ok(()) => {}
-                
+
                 Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => {
                     return Err(io_error(
                         io::ErrorKind::UnexpectedEof,

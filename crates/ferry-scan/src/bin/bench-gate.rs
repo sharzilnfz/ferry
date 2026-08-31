@@ -1,29 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,7 +15,6 @@ const TARGET_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
 const CHANGED_COUNT: usize = 100;
 const INIT_GATE: f64 = 60.0;
 const INCR_GATE: f64 = 2.0;
-
 
 fn splitmix64(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -115,8 +88,6 @@ fn main() {
         TARGET_TOTAL_BYTES / 1024 / 1024
     );
 
-    
-    
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let bench_root = manifest_dir
         .join("../../target/bench-fixture")
@@ -127,7 +98,6 @@ fn main() {
     std::fs::create_dir_all(&fixture).unwrap();
     let fixture = fixture.canonicalize().unwrap();
 
-    
     let t_gen = Instant::now();
     let total_bytes = generate_fixture(&fixture);
     let gen_secs = t_gen.elapsed().as_secs_f64();
@@ -139,7 +109,6 @@ fn main() {
         fixture.display()
     );
 
-    
     let store = Arc::new(Store::create(&fixture, [1u8; 32], Box::new(ChaChaCipher)).unwrap());
     let handle = StoreHandle {
         store: store.clone(),
@@ -149,7 +118,6 @@ fn main() {
         device_id: [8; 32],
     };
 
-    
     let cfg = ScanConfig {
         quiet_window: Duration::from_millis(150),
         audit_interval: Duration::from_hours(1),
@@ -175,10 +143,9 @@ fn main() {
     );
     assert_eq!(baseline.stats.files, DIRS * FILES_PER_DIR);
 
-    
     let mut rng_state = 0xC10C_u64;
     let n = (DIRS * FILES_PER_DIR) as u64;
-    
+
     let mut idx: Vec<u64> = (0..n).collect();
     for i in (1..n).rev() {
         let j = splitmix64(&mut rng_state) % (i + 1);
@@ -198,13 +165,8 @@ fn main() {
     }
     assert_eq!(changed.len(), CHANGED_COUNT);
 
-    
     std::thread::sleep(Duration::from_millis(700));
 
-    
-    
-    
-    
     let _ = engine.scan_once();
     let deadline = Instant::now() + Duration::from_secs(10);
     let updated = wait_for_new_current(&engine, &baseline.manifest_id, deadline);
@@ -218,14 +180,12 @@ fn main() {
         verdict(incr_secs < INCR_GATE),
     );
 
-    
     let cs = diff_manifests(&store, &baseline.manifest, &updated.manifest).unwrap();
     let modified = cs.content_modified.len() + cs.metadata_modified.len();
     assert_eq!(cs.added.len(), 0, "{cs:?}");
     assert_eq!(cs.removed.len(), 0, "{cs:?}");
     assert_eq!(modified, CHANGED_COUNT, "mutation set must be exact");
 
-    
     let idle = engine.scan_once().unwrap();
     assert_eq!(idle.stats.bytes_chunked, 0);
 
@@ -278,7 +238,7 @@ fn generate_fixture(root: &Path) -> u64 {
         std::fs::create_dir(&dir).unwrap();
         for f in 0..FILES_PER_DIR {
             let mut seed = (d as u64) << 32 | f as u64;
-            
+
             let size = 2048 + (splitmix64(&mut seed) % 6144) as usize;
             let mut buf = vec![0u8; size];
             fill_block(&mut buf, &mut seed);

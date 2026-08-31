@@ -1,29 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use ferry_store::format::{parse_header, put_u32, write_header, FormatError, Reader, HEADER_LEN};
 use thiserror::Error;
 
 use crate::folder_key::WRAPPED_LEN;
 use crate::identity::DeviceId;
-
 
 pub const BODY_PREAMBLE_LEN: usize = 16 + 4 + 4;
 
@@ -39,11 +18,10 @@ pub enum ConfigHeadError {
     BadWrappedLen(u32),
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrappedKeyEntry {
     pub device_pub: DeviceId,
-    
+
     pub wrapped: [u8; WRAPPED_LEN],
 }
 
@@ -56,7 +34,6 @@ impl WrappedKeyEntry {
     }
 }
 
-
 pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> Vec<u8> {
     let mut out =
         Vec::with_capacity(HEADER_LEN + BODY_PREAMBLE_LEN + entries.len() * ENTRY_FIXED_LEN);
@@ -64,7 +41,7 @@ pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> V
         ferry_store::format::ContainerKind::ConfigHead,
     ));
     out.extend_from_slice(folder_id);
-    put_u32(&mut out, 0); 
+    put_u32(&mut out, 0);
     put_u32(&mut out, entries.len() as u32);
     for e in entries {
         out.extend_from_slice(&e.device_pub);
@@ -74,13 +51,11 @@ pub fn write_config_head(folder_id: &[u8; 16], entries: &[WrappedKeyEntry]) -> V
     out
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigHead {
     pub folder_id: [u8; 16],
     pub entries: Vec<WrappedKeyEntry>,
 }
-
 
 pub fn parse_config_head(bytes: &[u8]) -> Result<ConfigHead, ConfigHeadError> {
     let kind = parse_header(bytes)?;
@@ -110,8 +85,6 @@ pub fn parse_config_head(bytes: &[u8]) -> Result<ConfigHead, ConfigHeadError> {
     Ok(ConfigHead { folder_id, entries })
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,7 +99,6 @@ mod tests {
 
     #[test]
     fn hand_computed_bytes_pin_the_full_container() {
-        
         let fmk_env = unhex::<80>(ENVELOPE_A_HEX).unwrap();
         let head = write_config_head(
             &unhex::<16>(FOLDER_ID_HEX).unwrap(),
@@ -135,15 +107,15 @@ mod tests {
         assert_eq!(
             hex(&head),
             String::from(concat!(
-                "46455252",                                                         
-                "59",                               
-                "04",                               
-                "01000000",                         
-                "00112233445566778899aabbccddeeff", 
-                "00000000",                         
-                "01000000",                         
-                "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", 
-                "50000000",                         
+                "46455252",
+                "59",
+                "04",
+                "01000000",
+                "00112233445566778899aabbccddeeff",
+                "00000000",
+                "01000000",
+                "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+                "50000000",
             )) + ENVELOPE_A_HEX,
             "CONFIG_HEAD must match the spec byte-for-byte"
         );
@@ -173,51 +145,49 @@ mod tests {
             &[WrappedKeyEntry::new(unhex(ALICE_PK_HEX).unwrap(), fmk_env)],
         );
 
-        
         let mut evil = good.clone();
         evil[0] = b'X';
         assert!(matches!(
             parse_config_head(&evil),
             Err(ConfigHeadError::Format(FormatError::BadMagic))
         ));
-        
+
         let mut evil = good.clone();
         evil[5] = 0x01;
         assert!(matches!(
             parse_config_head(&evil),
             Err(ConfigHeadError::NotConfigHead(0x01))
         ));
-        
+
         let mut evil = good.clone();
         evil[6] = 2;
         assert!(matches!(
             parse_config_head(&evil),
             Err(ConfigHeadError::Format(FormatError::BadVersion(2, 1)))
         ));
-        
+
         let mut evil = good.clone();
-        evil[26] = 1; 
+        evil[26] = 1;
         assert!(matches!(
             parse_config_head(&evil),
             Err(ConfigHeadError::Format(FormatError::ReservedNonzero))
         ));
-        
+
         let evil = good[..good.len() - 1].to_vec();
         assert!(parse_config_head(&evil).is_err());
     }
 
     #[test]
     fn wrapped_len_must_be_80() {
-        
         let mut b = Vec::new();
         b.extend_from_slice(&write_header(
             ferry_store::format::ContainerKind::ConfigHead,
         ));
         b.extend_from_slice(&[0u8; 16]);
-        b.extend_from_slice(&0u32.to_le_bytes()); 
-        b.extend_from_slice(&1u32.to_le_bytes()); 
-        b.extend_from_slice(&[9u8; 32]); 
-        b.extend_from_slice(&79u32.to_le_bytes()); 
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&[9u8; 32]);
+        b.extend_from_slice(&79u32.to_le_bytes());
         b.extend_from_slice(&[0u8; 79]);
         match parse_config_head(&b) {
             Err(ConfigHeadError::BadWrappedLen(79)) => {}

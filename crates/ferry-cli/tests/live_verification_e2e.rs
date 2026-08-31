@@ -1,6 +1,3 @@
-
-
-
 mod common;
 
 use common::{Env, RunningDaemon};
@@ -95,12 +92,10 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     let a = TestDevice::new("conflict-a");
     let b = TestDevice::new("conflict-b");
 
-    
     let out = a.command(&["init"]).output().expect("init a");
     assert!(out.status.success());
     fs::write(a.tree.join("shared.txt"), b"initial base line\n").unwrap();
 
-    
     let mut pair_a = a
         .command(&["pair", "--timeout-secs", "30"])
         .stdout(Stdio::null())
@@ -130,7 +125,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     );
     assert!(wait_for_child(&mut pair_a, 30), "pair a failed to finish");
 
-    
     let mut daemon_a_cmd = a.command(&["daemon", "--listen", "127.0.0.1:0"]);
     daemon_a_cmd.stdout(Stdio::piped()).stderr(Stdio::null());
     let mut daemon_a = ProcDaemon(daemon_a_cmd.spawn().expect("daemon A"));
@@ -145,7 +139,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     );
     let _ = &mut daemon_b;
 
-    
     let shared_b = b.tree.join("shared.txt");
     let deadline = Instant::now() + Duration::from_secs(20);
     while !shared_b.exists() {
@@ -157,7 +150,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         "initial base line\n"
     );
 
-    
     let agree_deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
@@ -177,7 +169,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    
     fs::write(a.tree.join("shared.txt"), b"mod from device A (newer)\n").unwrap();
     std::thread::sleep(Duration::from_millis(100));
     fs::write(
@@ -186,7 +177,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
     )
     .unwrap();
 
-    
     let reconcile_deadline = Instant::now() + Duration::from_secs(20);
     let mut quarantined = false;
     while Instant::now() < reconcile_deadline {
@@ -210,7 +200,6 @@ fn test_unpinned_concurrent_edit_quarantines_and_logs_conflict() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    
     let conflicts_out_a = a
         .command(&["conflicts", "list", "--json"])
         .output()
@@ -245,18 +234,15 @@ fn test_cli_pin_hours_persists_across_cli_invocations() {
     commands::init::run(&proj).expect("init proj");
     let daemon = RunningDaemon::start(&proj);
 
-    
     let out = commands::pin::start(&proj, &["src/**".to_string()], 8).expect("pin start");
     assert_eq!(out.json["command"], "pin");
     assert_eq!(out.json["action"], "start");
 
-    
     let status_out = commands::pin::status(&proj).expect("pin status");
     assert_eq!(status_out.json["state"], "active");
     assert_eq!(status_out.json["holding"], true);
     assert_eq!(status_out.json["paths"], serde_json::json!(["src/**"]));
 
-    
     let state_file = proj.join(".ferry/pin-state.json");
     let content = fs::read_to_string(&state_file).expect("read pin state");
     let json_val: serde_json::Value = serde_json::from_str(&content).expect("parse pin state");
@@ -276,29 +262,24 @@ fn test_cli_ignore_external_folder_targeting() {
 
     commands::init::run(&proj).expect("init ext proj");
 
-    
     let list_out = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list");
     assert_eq!(list_out.json["command"], "ignore");
     assert_eq!(list_out.json["folder"], proj.display().to_string());
     assert!(list_out.json.get("layers").is_some());
 
-    
     let add_out =
         commands::ignore_cmd::run(&proj, Some("*.log"), None, false).expect("add pattern");
     assert_eq!(add_out.json["action"], "added-line");
 
-    
     let ignore_file = proj.join("ferry.ignore");
     assert!(ignore_file.exists());
     let ignore_text = fs::read_to_string(&ignore_file).unwrap();
     assert!(ignore_text.contains("*.log"));
 
-    
     let preset_out =
         commands::ignore_cmd::run(&proj, None, Some("claude"), false).expect("apply preset");
     assert_eq!(preset_out.json["preset"], "claude");
 
-    
     let list_after = commands::ignore_cmd::run(&proj, None, None, true).expect("ignore list after");
     assert_eq!(
         list_after.json["applied_presets"],
@@ -335,7 +316,6 @@ fn test_ui_events_and_token_auth_flow() {
             server.serve(listener).await.unwrap();
         });
 
-        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!("GET /api/events HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await.unwrap();
@@ -347,7 +327,6 @@ fn test_ui_events_and_token_auth_flow() {
             "Unauthenticated SSE should return 403, got {resp_str}"
         );
 
-        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!(
             "GET /api/events?token={token} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
@@ -365,7 +344,6 @@ fn test_ui_events_and_token_auth_flow() {
             "Content-type should be text/event-stream"
         );
 
-        
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let req = format!("GET / HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
         stream.write_all(req.as_bytes()).await.unwrap();

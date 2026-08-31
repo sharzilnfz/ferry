@@ -1,28 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceStamp {
@@ -32,9 +12,6 @@ pub struct DeviceStamp {
 }
 
 impl DeviceStamp {
-    
-    
-    
     pub(crate) fn new(device: [u8; 32], mtime: Option<(i64, u32)>) -> Self {
         DeviceStamp {
             device: ferry_store::format::hex(&device),
@@ -44,10 +21,8 @@ impl DeviceStamp {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictEntry {
-    
     pub ts: String,
     pub folder_id: String,
     pub path: String,
@@ -84,17 +59,8 @@ pub fn log_path(state_dir: &Path) -> PathBuf {
     state_dir.join("conflicts.jsonl")
 }
 
-
-
-
-
-
-
-
 pub const COMPACT_MAX_LINES: usize = 4096;
 pub const COMPACT_KEEP_LINES: usize = 1024;
-
-
 
 pub fn append_entries(state_dir: &Path, entries: &[ConflictEntry]) -> Result<(), LogError> {
     if entries.is_empty() {
@@ -141,15 +107,12 @@ fn compact_if_needed(path: &Path) -> Result<(), LogError> {
     let kept = &lines[lines.len() - COMPACT_KEEP_LINES..];
     let mut body = kept.join("\n");
     body.push('\n');
-    
-    
+
     let tmp = path.with_file_name("conflicts.jsonl.tmp.compacting");
     std::fs::write(&tmp, body.as_bytes()).map_err(|e| io_at(&tmp, e))?;
     std::fs::rename(&tmp, path).map_err(|e| io_at(path, e))?;
     Ok(())
 }
-
-
 
 pub fn list_conflicts(state_dir: &Path) -> Result<Vec<ConflictEntry>, LogError> {
     let path = log_path(state_dir);
@@ -226,7 +189,7 @@ mod tests {
             ),
         ];
         append_entries(sd, &batch).unwrap();
-        
+
         append_entries(sd, &[]).unwrap();
         assert_eq!(list_conflicts(sd).unwrap(), batch);
     }
@@ -256,7 +219,7 @@ mod tests {
     fn append_compacts_on_threshold_keeping_the_newest_entries() {
         let dir = tempfile::tempdir().unwrap();
         let sd = dir.path();
-        
+
         let path = log_path(sd);
         let mut raw = String::new();
         for i in 0..COMPACT_MAX_LINES {
@@ -268,7 +231,6 @@ mod tests {
         std::fs::create_dir_all(sd).unwrap();
         std::fs::write(&path, &raw).unwrap();
 
-        
         append_entries(sd, &[entry("newest.txt", "add_vs_add", None)]).unwrap();
 
         let listed = list_conflicts(sd).unwrap();
@@ -286,7 +248,6 @@ mod tests {
             "compaction temp is renamed away"
         );
 
-        
         append_entries(sd, &[entry("again.txt", "both_changed", None)]).unwrap();
         assert_eq!(list_conflicts(sd).unwrap().len(), COMPACT_KEEP_LINES + 1);
     }

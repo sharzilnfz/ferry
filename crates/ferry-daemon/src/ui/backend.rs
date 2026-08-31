@@ -14,9 +14,9 @@ use ferry_ipc::backend::{
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
 };
-use ferry_sync_engine::pin::{PinError, PinManager};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
+use ferry_sync_engine::pin::{PinError, PinManager};
 use serde_json::{json, Value};
 
 use super::UiState;
@@ -151,7 +151,12 @@ fn share_initiate_blocking(
     let warnings_raw = ferry_ignore::secrets::scan_for_secrets(&rules, &opened.root);
     let mut secret_warnings = Vec::new();
     for w in &warnings_raw {
-        secret_warnings.push(format!("{}: line {:?} [{}]", w.path.join("/"), w.line, w.class.label()));
+        secret_warnings.push(format!(
+            "{}: line {:?} [{}]",
+            w.path.join("/"),
+            w.line,
+            w.class.label()
+        ));
     }
     if !warnings_raw.is_empty() && !i_know {
         let warnings_val: Vec<Value> = warnings_raw
@@ -203,8 +208,8 @@ fn share_status_blocking(root: PathBuf, identity: DeviceIdentity) -> Result<Shar
             offer: None,
         });
     }
-    let bytes =
-        std::fs::read(&offer_path).map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
+    let bytes = std::fs::read(&offer_path)
+        .map_err(|e| OpError::new("io", e.to_string(), "cannot read offer"))?;
     let envelope = ferry_folder::pairing::parse_payload_envelope(&String::from_utf8_lossy(&bytes))
         .ok_or_else(|| {
             OpError::new(
@@ -299,8 +304,14 @@ fn pin_start_blocking(
 }
 
 pub trait StateSource: Send + Sync + 'static {
-    fn open_folder(&self, path: Option<PathBuf>) -> Result<ferry_folder::folder::OpenFolder, OpError>;
-    fn list_folder(&self, path: Option<PathBuf>) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>>;
+    fn open_folder(
+        &self,
+        path: Option<PathBuf>,
+    ) -> Result<ferry_folder::folder::OpenFolder, OpError>;
+    fn list_folder(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>>;
     fn pin_state(&self) -> Result<ferry_sync_engine::pin::HeldSummary, OpError>;
     fn event_stream(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
 
@@ -313,7 +324,10 @@ pub trait StateSource: Send + Sync + 'static {
     fn snapshot(&self) -> BoxFuture<'_, Result<EngineSnapshot, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>>;
-    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>>;
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>>;
     fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>>;
     fn create_pairing_session(
         &self,
@@ -360,12 +374,18 @@ impl FsStateSource {
 }
 
 impl StateSource for FsStateSource {
-    fn open_folder(&self, path: Option<PathBuf>) -> Result<ferry_folder::folder::OpenFolder, OpError> {
+    fn open_folder(
+        &self,
+        path: Option<PathBuf>,
+    ) -> Result<ferry_folder::folder::OpenFolder, OpError> {
         let root = path.unwrap_or_else(|| self.folder.clone());
         let id = self.resolved_identity();
         open_folder(&root, &id).map_err(folder_err)
     }
-    fn list_folder(&self, path: Option<PathBuf>) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+    fn list_folder(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
         Box::pin(async move {
             let validated = validate_path(path)?;
             let validated_clone = validated.clone();
@@ -379,7 +399,10 @@ impl StateSource for FsStateSource {
         })
     }
     fn pin_state(&self) -> Result<ferry_sync_engine::pin::HeldSummary, OpError> {
-        let opened = self.open_folder(None).map(|o| dot_dir(&o.root)).unwrap_or_else(|_| dot_dir(&self.folder));
+        let opened = self
+            .open_folder(None)
+            .map(|o| dot_dir(&o.root))
+            .unwrap_or_else(|_| dot_dir(&self.folder));
         PinManager::new(&opened).summary().map_err(pin_err)
     }
     fn event_stream(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
@@ -409,8 +432,14 @@ impl StateSource for FsStateSource {
                 let opened = open_folder(&folder, &identity).map_err(folder_err)?;
                 let state_dir = dot_dir(&opened.root);
                 let rules = load_rules(&opened.root, &opened.settings).map_err(folder_err)?;
-                let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly)
-                    .map_err(|e| OpError::new("poly-error", e.to_string(), "the folder polynomial record is corrupt"))?;
+                let poly =
+                    ferry_store::chunker::ValidatedPoly::try_from(opened.poly).map_err(|e| {
+                        OpError::new(
+                            "poly-error",
+                            e.to_string(),
+                            "the folder polynomial record is corrupt",
+                        )
+                    })?;
                 let handle = ferry_scan::StoreHandle {
                     store: opened.store.clone(),
                     poly,
@@ -449,7 +478,9 @@ impl StateSource for FsStateSource {
                 }
                 peers.sort_by(|a, b| a.device_id.cmp(&b.device_id));
                 let pin_summary = PinManager::new(&state_dir).summary().map_err(pin_err)?;
-                let conflicts = ferry_sync_engine::list_conflicts(&state_dir).map_err(log_err)?.len();
+                let conflicts = ferry_sync_engine::list_conflicts(&state_dir)
+                    .map_err(log_err)?
+                    .len();
                 let mut snap = EngineSnapshot::new(
                     opened.root.display().to_string(),
                     hex_str(&opened.folder_id),
@@ -458,7 +489,11 @@ impl StateSource for FsStateSource {
                 );
                 snap.manifest_id = manifest_id;
                 snap.scanned = stats;
-                snap.pin = if pin_summary.holding { PinView::active(pin_summary.paths) } else { PinView::none() };
+                snap.pin = if pin_summary.holding {
+                    PinView::active(pin_summary.paths)
+                } else {
+                    PinView::none()
+                };
                 snap.held_changes = pin_summary.total_held_paths;
                 snap.held_by_peer = pin_summary.held_by_peer.into_iter().collect();
                 snap.peers = peers;
@@ -500,11 +535,18 @@ impl StateSource for FsStateSource {
     fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
         Box::pin(async move { backend_inventory().list().map_err(OpError::from) })
     }
-    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
         Box::pin(async move { backend_inventory().register(&path).map_err(OpError::from) })
     }
     fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
-        Box::pin(async move { backend_inventory().unregister(&folder_id).map_err(OpError::from) })
+        Box::pin(async move {
+            backend_inventory()
+                .unregister(&folder_id)
+                .map_err(OpError::from)
+        })
     }
     fn create_pairing_session(
         &self,
@@ -520,7 +562,12 @@ impl StateSource for FsStateSource {
             tokio::task::spawn_blocking(move || {
                 ritual
                     .create_offer_for_folder(&req.folder_id)
-                    .map(|pending| ferry_ipc::pairing::CreatePairingResponse::new(pending.short_code, expires_rfc3339(pending.expires_at)))
+                    .map(|pending| {
+                        ferry_ipc::pairing::CreatePairingResponse::new(
+                            pending.short_code,
+                            expires_rfc3339(pending.expires_at),
+                        )
+                    })
                     .map_err(folder_err)
             })
             .await
@@ -537,7 +584,9 @@ impl StateSource for FsStateSource {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let ritual = PairingRitual::with_shared(home, identity.clone(), store);
-                let pending = ritual.accept_offer(&req.code, Some(&req.target_dir)).map_err(folder_err)?;
+                let pending = ritual
+                    .accept_offer(&req.code, Some(&req.target_dir))
+                    .map_err(folder_err)?;
                 let accepted = pending.complete(0).map_err(folder_err)?;
                 Ok(PairResult {
                     folder_id: hex_str(&accepted.folder_id),
@@ -565,11 +614,17 @@ impl EngineStateSource {
 }
 
 impl StateSource for EngineStateSource {
-    fn open_folder(&self, path: Option<PathBuf>) -> Result<ferry_folder::folder::OpenFolder, OpError> {
+    fn open_folder(
+        &self,
+        path: Option<PathBuf>,
+    ) -> Result<ferry_folder::folder::OpenFolder, OpError> {
         let root = path.as_deref().unwrap_or(self.state.tree_dir());
         open_folder(root, self.state.identity()).map_err(folder_err)
     }
-    fn list_folder(&self, _path: Option<PathBuf>) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+    fn list_folder(
+        &self,
+        _path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
         Box::pin(async {
             Err(OpError::new(
                 "not-implemented",
@@ -579,7 +634,9 @@ impl StateSource for EngineStateSource {
         })
     }
     fn pin_state(&self) -> Result<ferry_sync_engine::pin::HeldSummary, OpError> {
-        PinManager::new(self.state.state_dir()).summary().map_err(pin_err)
+        PinManager::new(self.state.state_dir())
+            .summary()
+            .map_err(pin_err)
     }
     fn event_stream(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         Box::pin(async move {
@@ -606,7 +663,11 @@ impl StateSource for EngineStateSource {
         let st = Arc::clone(&self.state);
         Box::pin(async move {
             let Some(manifest_id) = st.handle().current_manifest_id() else {
-                return Err(OpError::new("warming-up", "the engine has not completed its first poll tick", "retry shortly"));
+                return Err(OpError::new(
+                    "warming-up",
+                    "the engine has not completed its first poll tick",
+                    "retry shortly",
+                ));
             };
             let counts = st.handle().scan_counts().unwrap_or_default();
             let records = AgreementLedger::new(st.state_dir())
@@ -614,19 +675,38 @@ impl StateSource for EngineStateSource {
                 .map_err(|e| OpError::new("agreement-state", e.to_string(), "check permissions"))?;
             let mut peers = Vec::new();
             for (dev_bytes, rec) in records {
-                let mut p = PeerStatusView::new(hex_str(&dev_bytes), st.handle().peer_connectivity(&dev_bytes));
+                let mut p = PeerStatusView::new(
+                    hex_str(&dev_bytes),
+                    st.handle().peer_connectivity(&dev_bytes),
+                );
                 p.last_agreed_manifest_id = Some(hex_str(&rec.manifest_id));
                 p.agreed_at = Some(ferry_platform::time::fmt_rfc3339(rec.agreed_sec));
                 peers.push(p);
             }
             peers.sort_by(|a, b| a.device_id.cmp(&b.device_id));
             let summary = PinManager::new(st.state_dir()).summary().map_err(pin_err)?;
-            let conflicts = ferry_sync_engine::list_conflicts(&st.state_dir()).map_err(log_err)?.len();
-            let mut snap = EngineSnapshot::new(st.tree_dir().display().to_string(), hex_str(&st.folder_id()), st.device_hex(), "idle");
+            let conflicts = ferry_sync_engine::list_conflicts(&st.state_dir())
+                .map_err(log_err)?
+                .len();
+            let mut snap = EngineSnapshot::new(
+                st.tree_dir().display().to_string(),
+                hex_str(&st.folder_id()),
+                st.device_hex(),
+                "idle",
+            );
             snap.manifest_id = Some(hex_str(&manifest_id));
-            snap.scanned = ScanStatsView::new(counts.files as u64, counts.dirs as u64, counts.symlinks as u64, counts.bytes_chunked);
+            snap.scanned = ScanStatsView::new(
+                counts.files as u64,
+                counts.dirs as u64,
+                counts.symlinks as u64,
+                counts.bytes_chunked,
+            );
             snap.pending_changes = st.handle().pending_changes();
-            snap.pin = if summary.holding { PinView::active(summary.paths) } else { PinView::none() };
+            snap.pin = if summary.holding {
+                PinView::active(summary.paths)
+            } else {
+                PinView::none()
+            };
             snap.held_changes = summary.total_held_paths;
             snap.held_by_peer = summary.held_by_peer.into_iter().collect();
             snap.peers = peers;
@@ -636,7 +716,10 @@ impl StateSource for EngineStateSource {
     }
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>> {
         let st = Arc::clone(&self.state);
-        Box::pin(async move { st.handle().trigger_scan(); Ok(()) })
+        Box::pin(async move {
+            st.handle().trigger_scan();
+            Ok(())
+        })
     }
     fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
         Box::pin(async {
@@ -647,7 +730,10 @@ impl StateSource for EngineStateSource {
             ))
         })
     }
-    fn register_folder(&self, _path: PathBuf) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
+    fn register_folder(
+        &self,
+        _path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
         Box::pin(async {
             Err(OpError::new(
                 "not-implemented",
@@ -745,9 +831,11 @@ impl<S: StateSource> StatusDomain for FolderBackend<S> {
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>> {
         let state_dir = self.source.state_dir();
         Box::pin(async move {
-            let list = tokio::task::spawn_blocking(move || ferry_sync_engine::list_conflicts(&state_dir).map_err(log_err))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))??;
+            let list = tokio::task::spawn_blocking(move || {
+                ferry_sync_engine::list_conflicts(&state_dir).map_err(log_err)
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))??;
             let mut entries = Vec::new();
             for c in list {
                 entries.push(ConflictEntry {
@@ -755,8 +843,16 @@ impl<S: StateSource> StatusDomain for FolderBackend<S> {
                     folder_id: c.folder_id,
                     path: c.path,
                     kind: c.kind,
-                    winner: DeviceStamp { device: c.winner.device, mtime_sec: c.winner.mtime_sec, mtime_nsec: c.winner.mtime_nsec },
-                    loser: DeviceStamp { device: c.loser.device, mtime_sec: c.loser.mtime_sec, mtime_nsec: c.loser.mtime_nsec },
+                    winner: DeviceStamp {
+                        device: c.winner.device,
+                        mtime_sec: c.winner.mtime_sec,
+                        mtime_nsec: c.winner.mtime_nsec,
+                    },
+                    loser: DeviceStamp {
+                        device: c.loser.device,
+                        mtime_sec: c.loser.mtime_sec,
+                        mtime_nsec: c.loser.mtime_nsec,
+                    },
                     quarantined_as: c.quarantined_as,
                 });
             }
@@ -772,13 +868,19 @@ impl<S: StateSource> StatusDomain for FolderBackend<S> {
 }
 
 impl<S: StateSource> InventoryDomain for FolderBackend<S> {
-    fn list_directory(&self, path: Option<PathBuf>) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
+    fn list_directory(
+        &self,
+        path: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
         self.source.list_folder(path)
     }
     fn list_folders(&self) -> BoxFuture<'_, Result<Vec<ferry_ipc::FolderRecord>, OpError>> {
         self.source.list_folders()
     }
-    fn register_folder(&self, path: PathBuf) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
+    fn register_folder(
+        &self,
+        path: PathBuf,
+    ) -> BoxFuture<'_, Result<ferry_ipc::FolderRecord, OpError>> {
         self.source.register_folder(path)
     }
     fn remove_folder(&self, folder_id: String) -> BoxFuture<'_, Result<(), OpError>> {
@@ -787,7 +889,11 @@ impl<S: StateSource> InventoryDomain for FolderBackend<S> {
 }
 
 impl<S: StateSource> SessionDomain for FolderBackend<S> {
-    fn start_pin(&self, paths: Vec<String>, _hours: Option<u64>) -> BoxFuture<'_, Result<PinRecord, OpError>> {
+    fn start_pin(
+        &self,
+        paths: Vec<String>,
+        _hours: Option<u64>,
+    ) -> BoxFuture<'_, Result<PinRecord, OpError>> {
         let state_dir = self.source.state_dir();
         let folder = self.source.folder_root();
         let identity = self.source.identity();
@@ -799,9 +905,11 @@ impl<S: StateSource> SessionDomain for FolderBackend<S> {
                 let opened = open_folder(&folder, &identity).map_err(folder_err)?;
                 opened.folder_id
             };
-            tokio::task::spawn_blocking(move || pin_start_blocking(state_dir, folder, paths, &identity, fid))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+            tokio::task::spawn_blocking(move || {
+                pin_start_blocking(state_dir, folder, paths, &identity, fid)
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
     fn stop_pin(&self) -> BoxFuture<'_, Result<PinStopSummary, OpError>> {
@@ -811,7 +919,11 @@ impl<S: StateSource> SessionDomain for FolderBackend<S> {
             tokio::task::spawn_blocking(move || {
                 let mgr = PinManager::new(&state_dir);
                 let _ = mgr.stop_session().map_err(pin_err)?;
-                Ok(PinStopSummary { folder: folder.display().to_string(), status: "stopped".to_string(), message: Some("pin stopped".to_string()) })
+                Ok(PinStopSummary {
+                    folder: folder.display().to_string(),
+                    status: "stopped".to_string(),
+                    message: Some("pin stopped".to_string()),
+                })
             })
             .await
             .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
@@ -825,16 +937,32 @@ impl<S: StateSource> SessionDomain for FolderBackend<S> {
                 let mgr = PinManager::new(&state_dir);
                 let summary = mgr.summary().map_err(pin_err)?;
                 if summary.total_held_paths > 0 {
-                    return Err(OpError::new("not-implemented", format!("{} held changes require reconciliation", summary.total_held_paths), "run `ferry pin release` on the command line"));
+                    return Err(OpError::new(
+                        "not-implemented",
+                        format!(
+                            "{} held changes require reconciliation",
+                            summary.total_held_paths
+                        ),
+                        "run `ferry pin release` on the command line",
+                    ));
                 }
                 let _ = mgr.stop_session().map_err(pin_err)?;
-                Ok(PinReleaseSummary { folder: folder.display().to_string(), released_changes: 0, status: "released".to_string(), message: Some("pin released".to_string()) })
+                Ok(PinReleaseSummary {
+                    folder: folder.display().to_string(),
+                    released_changes: 0,
+                    status: "released".to_string(),
+                    message: Some("pin released".to_string()),
+                })
             })
             .await
             .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
-    fn share_initiate(&self, folder: Option<PathBuf>, i_know: bool) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
+    fn share_initiate(
+        &self,
+        folder: Option<PathBuf>,
+        i_know: bool,
+    ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
         let root = folder.unwrap_or_else(|| self.source.folder_root());
         let identity = self.source.identity();
         Box::pin(async move {
@@ -852,18 +980,30 @@ impl<S: StateSource> SessionDomain for FolderBackend<S> {
                 .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
-    fn pair_accept(&self, code_or_payload: String, dir: Option<PathBuf>) -> BoxFuture<'_, Result<PairResult, OpError>> {
+    fn pair_accept(
+        &self,
+        code_or_payload: String,
+        dir: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         let identity = self.source.identity();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || pair_accept_blocking(code_or_payload, dir, identity))
-                .await
-                .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
+            tokio::task::spawn_blocking(move || {
+                pair_accept_blocking(code_or_payload, dir, identity)
+            })
+            .await
+            .map_err(|e| OpError::new("internal", e.to_string(), "check worker stderr"))?
         })
     }
-    fn create_pairing_session(&self, req: ferry_ipc::pairing::CreatePairingRequest) -> BoxFuture<'_, Result<ferry_ipc::pairing::CreatePairingResponse, OpError>> {
+    fn create_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::CreatePairingRequest,
+    ) -> BoxFuture<'_, Result<ferry_ipc::pairing::CreatePairingResponse, OpError>> {
         self.source.create_pairing_session(req)
     }
-    fn join_pairing_session(&self, req: ferry_ipc::pairing::JoinPairingRequest) -> BoxFuture<'_, Result<PairResult, OpError>> {
+    fn join_pairing_session(
+        &self,
+        req: ferry_ipc::pairing::JoinPairingRequest,
+    ) -> BoxFuture<'_, Result<PairResult, OpError>> {
         self.source.join_pairing_session(req)
     }
 }

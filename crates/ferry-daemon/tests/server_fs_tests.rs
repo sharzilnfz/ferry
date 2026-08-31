@@ -106,9 +106,6 @@ async fn registry_register_delegates_initialized_path_to_backend() {
     std::fs::write(dir.path().join(".ferry").join("config"), b"head").unwrap();
     let body = serde_json::json!({ "path": dir.path().display().to_string() }).to_string();
 
-    
-    
-    
     let (status, doc, _) = send_http(
         addr,
         "POST",

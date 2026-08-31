@@ -1,16 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22,7 +9,6 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_folder() -> tempfile::TempDir {
-        
         tempfile::tempdir().unwrap()
     }
 
@@ -44,8 +30,6 @@ mod tests {
         .unwrap()
     }
 
-    
-    
     #[test]
     fn round_trip_property_bytes_to_chunks_to_blobs() {
         let folder = temp_folder();
@@ -82,7 +66,6 @@ mod tests {
                 all_chunk_ids.insert(id);
             }
 
-            
             let mut rejoined = Vec::with_capacity(data.len());
             for part in &parts {
                 let id: BlobId = *blake3::hash(part).as_bytes();
@@ -90,7 +73,6 @@ mod tests {
             }
             assert_eq!(rejoined, data, "session round trip failed at size {size}");
 
-            
             let tree = crate::manifest::TreeNode {
                 entries: vec![crate::manifest::file_entry(
                     &format!("f{i}"),
@@ -106,12 +88,9 @@ mod tests {
             let tree_bytes = crate::manifest::serialize_tree_node(&tree);
             store.put_meta(BlobKind::TreeNode, &tree_bytes).unwrap();
 
-            
-            
             store.flush().unwrap();
             store.write_index_snapshot().unwrap();
 
-            
             let reopened = reopen(folder.path());
             let mut rejoined = Vec::new();
             for part in &parts {
@@ -135,8 +114,6 @@ mod tests {
         let poly = generate_polynomial(&mut StdRng::seed_from_u64(78));
         let store = new_store(folder.path());
 
-        
-        
         let mut rng = StdRng::seed_from_u64(555);
         let base: Vec<u8> = (0..14 * 1024 * 1024)
             .map(|_| (rng.gen::<u8>() & 0x0f) | b'0')
@@ -153,7 +130,6 @@ mod tests {
             store.put_data(&base[*o..*o + l]).unwrap();
         }
 
-        
         let insert_at = 96 * 1024;
         let mut shifted = Vec::with_capacity(base.len() + 1024);
         shifted.extend_from_slice(&base[..insert_at]);
@@ -166,7 +142,6 @@ mod tests {
             .map(|(o, l)| id_of(&shifted[*o..*o + l]))
             .collect();
 
-        
         let downstream_before = &before_ids[1..];
         let downstream_after = &after_ids[1..];
         let shared: HashSet<&BlobId> = downstream_before
@@ -180,10 +155,9 @@ mod tests {
             shared.len(),
             downstream_before.len()
         );
-        
+
         assert_eq!(before_ids.last(), after_ids.last());
 
-        
         let known: HashSet<BlobId> = before_ids.iter().copied().collect();
         let new_blobs = after_ids.iter().filter(|id| !known.contains(*id)).count();
         assert!(
@@ -243,14 +217,11 @@ mod tests {
         let per_thread: Vec<Vec<(BlobKind, BlobId)>> =
             handles.into_iter().map(|h| h.join().unwrap()).collect();
 
-        
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
-        
         verify_all_pack_names(folder.path());
 
-        
         let reopened = Arc::new(reopen(folder.path()));
         let mut all_ids = Vec::new();
         for thread_ids in &per_thread {
@@ -266,7 +237,6 @@ mod tests {
         }
         assert_eq!(all_ids.len(), writers * blobs_per_writer);
 
-        
         let reader_handles: Vec<_> = (0..4)
             .map(|_| {
                 let s = Arc::clone(&reopened);
@@ -292,7 +262,6 @@ mod tests {
         store.write_index_snapshot().unwrap();
         drop(store);
 
-        
         let packs_dir = folder.path().join(".ferry/packs");
         for entry in std::fs::read_dir(&packs_dir).unwrap().flatten() {
             let mut bytes = std::fs::read(entry.path()).unwrap();
@@ -302,8 +271,6 @@ mod tests {
             }
         }
 
-        
-        
         let store = reopen(folder.path());
         let err = store.get(BlobKind::DataChunk, &id).unwrap_err();
         assert!(
@@ -314,8 +281,6 @@ mod tests {
             "{err}"
         );
 
-        
-        
         let (_, skipped) = store.rebuild_index().unwrap();
         assert_eq!(skipped.len(), 1);
     }
@@ -347,14 +312,11 @@ mod tests {
             .count()
     }
 
-    
-    
-    
     #[test]
     fn steady_state_ingest_appends_one_incremental_record_per_sealed_pack() {
         let folder = temp_folder();
         let mut store = new_store(folder.path());
-        store.set_seal_target(64 * 1024); 
+        store.set_seal_target(64 * 1024);
         let index_dir = folder.path().join(".ferry/index");
         assert_eq!(count_ferryindex(&index_dir), 0);
 
@@ -364,7 +326,7 @@ mod tests {
             let bytes: Vec<u8> = (0..80 * 1024).map(|_| rng.gen()).collect();
             let id = store.put_data(&bytes).unwrap();
             written.push((bytes, id));
-            store.flush().unwrap(); 
+            store.flush().unwrap();
         }
 
         let fmk = core::array::from_fn(|i| i as u8);
@@ -376,8 +338,6 @@ mod tests {
             "exactly one INDEX record per sealed pack"
         );
 
-        
-        
         for entry in std::fs::read_dir(&index_dir).unwrap().flatten() {
             let bytes = std::fs::read(entry.path()).unwrap();
             let rows = crate::index::open_index_container(&bytes, &fmk, &PassthroughCipher)
@@ -390,15 +350,12 @@ mod tests {
             );
         }
 
-        
         let reopened = reopen(folder.path());
         for (bytes, id) in &written {
             assert_eq!(&reopened.get(BlobKind::DataChunk, id).unwrap(), bytes);
         }
     }
 
-    
-    
     fn sealed_test_pack(seed: u8, body_len: usize) -> (BlobId, Vec<u8>, Vec<u8>) {
         let body: Vec<u8> = (0..body_len)
             .map(|i| (i as u8).wrapping_add(seed))
@@ -436,11 +393,8 @@ mod tests {
         assert_eq!(count_ferryindex(&index_dir), 0);
         store.adopt_pack(&name, &file).unwrap();
 
-        
-        
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        
         assert_eq!(pack_count(folder.path()), 1);
         assert_eq!(count_ferryindex(&index_dir), 1);
         let record = std::fs::read_dir(&index_dir)
@@ -457,18 +411,14 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pack, name);
 
-        
-        
         store.adopt_pack(&name, &file).unwrap();
         assert_eq!(pack_count(folder.path()), 1);
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        
         let (_id2, file2, _b2) = sealed_test_pack(9, 512);
         let fake = [0xEE; 32];
         let err = reopened.adopt_pack(&fake, &file2).unwrap_err();
@@ -486,20 +436,17 @@ mod tests {
             .any(|e| e.file_name().to_string_lossy().starts_with("eeee")));
     }
 
-    
-    
     #[test]
     fn large_delivered_pack_ingests_incrementally_and_reads_back() {
         let folder = temp_folder();
         let store = new_store(folder.path());
-        
+
         let (id, file, body) = sealed_test_pack(3, 8 * 1024 * 1024);
         let name = pack_name_of(&file);
 
         store.adopt_pack(&name, &file).unwrap();
         assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), body);
 
-        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), body);
@@ -514,13 +461,12 @@ mod tests {
         store.flush().unwrap();
 
         assert_eq!(store.pack_cache.len(), 0);
-        
+
         for _ in 0..5 {
             assert_eq!(store.get(BlobKind::DataChunk, &id).unwrap(), payload);
         }
         assert_eq!(store.pack_cache.len(), 1);
 
-        
         let reopened = reopen(folder.path());
         assert_eq!(reopened.pack_cache.len(), 0);
         assert_eq!(reopened.get(BlobKind::DataChunk, &id).unwrap(), payload);
@@ -536,10 +482,9 @@ mod tests {
         for _ in 0..10 {
             ids.push(store.put_data(payload).unwrap());
         }
-        
+
         assert!(ids.iter().all(|&id| id == ids[0]));
 
-        
         store.flush().unwrap();
         assert_eq!(pack_count(folder.path()), 1);
 
@@ -554,7 +499,7 @@ mod tests {
     fn index_compaction_consolidates_files_and_removes_old() {
         let folder = temp_folder();
         let mut store = new_store(folder.path());
-        store.set_seal_target(512); 
+        store.set_seal_target(512);
         let index_dir = folder.path().join(".ferry/index");
 
         let mut blobs = Vec::new();
@@ -568,15 +513,12 @@ mod tests {
         assert_eq!(count_ferryindex(&index_dir), 10);
         store.compact_index().unwrap();
 
-        
         assert_eq!(count_ferryindex(&index_dir), 1);
 
-        
         for (id, data) in &blobs {
             assert_eq!(store.get(BlobKind::DataChunk, id).unwrap(), *data);
         }
 
-        
         drop(store);
         let reopened = reopen(folder.path());
         assert_eq!(count_ferryindex(&index_dir), 1);
@@ -607,22 +549,14 @@ use crate::pack::{
 pub const STORE_DIR_NAME: &str = ".ferry";
 pub const INDEX_COMPACTION_THRESHOLD: usize = 512;
 
-
-
-
 static REBUILD_INDEX_CALLS: AtomicU64 = AtomicU64::new(0);
-
-
-
 
 static LOCK_HOLD_MAX_US: AtomicU64 = AtomicU64::new(0);
 static DEBUG_LOCKS: OnceLock<bool> = OnceLock::new();
 
-
 pub fn rebuild_index_calls() -> u64 {
     REBUILD_INDEX_CALLS.load(Ordering::Relaxed)
 }
-
 
 pub fn max_lock_hold_us() -> u64 {
     LOCK_HOLD_MAX_US.load(Ordering::Relaxed)
@@ -665,29 +599,20 @@ struct Inner {
     locations: LocationTable,
 }
 
-
 pub struct Store {
-    root: PathBuf, 
+    root: PathBuf,
     fmk: [u8; KEY_LEN],
     cipher: Box<dyn PackCipher>,
     inner: Mutex<Inner>,
-    
-    
-    
-    
+
     index_seq: Mutex<()>,
-    
-    
-    
+
     next_index: AtomicU64,
-    
-    
-    
+
     dangling_packs: Mutex<HashSet<PackId>>,
-    
+
     pack_cache: PackCache,
-    
-    
+
     seal_target: usize,
 }
 
@@ -702,7 +627,6 @@ impl Store {
         )
     }
 
-    
     pub fn create(
         folder_root: &Path,
         fmk: [u8; KEY_LEN],
@@ -729,7 +653,6 @@ impl Store {
         })
     }
 
-    
     pub fn open(
         folder_root: &Path,
         fmk: [u8; KEY_LEN],
@@ -770,30 +693,19 @@ impl Store {
         })
     }
 
-    
-    
     pub fn set_seal_target(&mut self, target: usize) {
         self.seal_target = target;
     }
 
-    
     pub fn store_dir(&self) -> &Path {
         &self.root
     }
 
-    
-    
-    
-    
-    
     pub fn index_entries(&self) -> Result<Vec<crate::index::IndexEntry>, StoreError> {
         let inner = self.lock()?;
         Ok(inner.locations.iter_sorted())
     }
 
-    
-    
-    
     pub fn put_blob(&self, kind: BlobKind, bytes: &[u8]) -> Result<BlobId, StoreError> {
         if bytes.is_empty() {
             return Err(StoreError::EmptyBlob);
@@ -824,29 +736,23 @@ impl Store {
             note_hold(start);
             sealed
         };
-        
+
         for sp in sealed.drain(..) {
             self.seal_to_disk(sp)?;
         }
         Ok(id)
     }
 
-    
     pub fn put_data(&self, bytes: &[u8]) -> Result<BlobId, StoreError> {
         self.put_blob(BlobKind::DataChunk, bytes)
     }
 
-    
     pub fn put_meta(&self, kind: BlobKind, bytes: &[u8]) -> Result<BlobId, StoreError> {
         debug_assert!(kind.is_meta(), "put_meta requires a metadata kind");
         self.put_blob(kind, bytes)
     }
 
-    
-    
-    
     pub fn get(&self, kind: BlobKind, id: &BlobId) -> Result<Vec<u8>, StoreError> {
-        
         {
             let inner = self.lock()?;
             if let Some(staged) = inner.staging.staged_bytes(kind, id) {
@@ -868,7 +774,7 @@ impl Store {
         if candidates.is_empty() {
             return Err(StoreError::NotFound { kind, id: hex(id) });
         }
-        
+
         let mut ordered: Vec<IndexEntry> = candidates;
         ordered.sort_by_key(|e| !self.pack_exists(&e.pack));
 
@@ -911,7 +817,6 @@ impl Store {
             ) {
                 Ok(pt) => return Ok(pt),
                 Err(err @ PackError::Disagreement { .. }) => {
-                    
                     return Err(StoreError::Pack(err));
                 }
                 Err(other) => last_err = Some(StoreError::Pack(other)),
@@ -920,8 +825,6 @@ impl Store {
         Err(last_err.unwrap_or(StoreError::NotFound { kind, id: hex(id) }))
     }
 
-    
-    
     pub fn flush(&self) -> Result<usize, StoreError> {
         let drained = {
             let mut inner = self.lock()?;
@@ -934,8 +837,6 @@ impl Store {
         Ok(n)
     }
 
-    
-    
     pub fn write_index_snapshot(&self) -> Result<PathBuf, StoreError> {
         let entries = {
             let inner = self.lock()?;
@@ -944,8 +845,6 @@ impl Store {
         self.append_index_file(&entries)
     }
 
-    
-    
     pub fn compact_index(&self) -> Result<PathBuf, StoreError> {
         let index_dir = self.root.join("index");
         let _seq = self.index_seq.lock().map_err(|_| StoreError::Poisoned)?;
@@ -995,11 +894,6 @@ impl Store {
         Ok(path)
     }
 
-    
-    
-    
-    
-    
     fn append_index_file(&self, entries: &[IndexEntry]) -> Result<PathBuf, StoreError> {
         let mut salt = [0u8; SALT_LEN];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
@@ -1017,9 +911,6 @@ impl Store {
         Ok(path)
     }
 
-    
-    
-    
     fn alloc_index_number(&self, index_dir: &Path) -> Result<u64, StoreError> {
         let mut n = self.next_index.load(Ordering::Relaxed);
         if n == 0 {
@@ -1029,18 +920,7 @@ impl Store {
         Ok(n)
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn adopt_pack(&self, claimed: &PackId, bytes: &[u8]) -> Result<(), StoreError> {
-        
         let found = crate::pack::pack_name_of(bytes);
         if &found != claimed {
             return Err(StoreError::Pack(PackError::NameMismatch {
@@ -1048,7 +928,7 @@ impl Store {
                 found: hex(&found),
             }));
         }
-        
+
         let ctx = crate::pack::open_pack(bytes, claimed, &self.fmk, self.cipher.as_ref())?;
         let footer = ctx.entries.clone();
 
@@ -1060,7 +940,7 @@ impl Store {
                 bytes,
             )?;
         }
-        
+
         self.note_pack_written(claimed);
         self.pack_cache.insert(VerifiedPack::from_parts(
             *claimed,
@@ -1088,10 +968,6 @@ impl Store {
         Ok(())
     }
 
-    
-    
-    
-    
     pub fn rebuild_index(&self) -> Result<(usize, Vec<String>), StoreError> {
         REBUILD_INDEX_CALLS.fetch_add(1, Ordering::Relaxed);
         let (entries, skipped) = crate::index::rebuild_entries(
@@ -1108,13 +984,10 @@ impl Store {
         Ok((count, skipped))
     }
 
-    
-    
     pub fn put_polynomial(&self, poly: u64) -> Result<BlobId, StoreError> {
         self.put_meta(BlobKind::Polynomial, &poly.to_le_bytes())
     }
 
-    
     pub fn get_polynomial(&self, id: &BlobId) -> Result<u64, StoreError> {
         let bytes = self.get(BlobKind::Polynomial, id)?;
         let arr: [u8; 8] = bytes.try_into().map_err(|_| {
@@ -1125,8 +998,6 @@ impl Store {
         Ok(u64::from_le_bytes(arr))
     }
 
-    
-
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Inner>, StoreError> {
         self.inner.lock().map_err(|_| StoreError::Poisoned)
     }
@@ -1135,9 +1006,6 @@ impl Store {
         self.root.join("packs").join(format!("{}.pack", hex(pack)))
     }
 
-    
-    
-    
     fn pack_exists(&self, pack: &PackId) -> bool {
         let mut dangling = self
             .dangling_packs
@@ -1189,13 +1057,11 @@ impl Store {
             inner.locations.merge(index_entries.iter().cloned());
             note_hold(start);
         }
-        
-        
+
         self.append_index_file(&index_entries)?;
         Ok(())
     }
 
-    
     pub(crate) fn pack_blob_list(
         &self,
         pack: &PackId,

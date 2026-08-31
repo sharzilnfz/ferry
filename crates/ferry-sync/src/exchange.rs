@@ -1,42 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -53,59 +14,42 @@ use ferry_store::store::Store;
 use crate::engine::{IngestError, SessionError};
 use crate::session::{Established, SessionIo};
 
-
 struct PullOutcome {
     held: usize,
     diverged: bool,
 }
 
-
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
 
-
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
-
 
 const BUDGET: usize = 64;
 
 type AdvertMap = BTreeMap<BlobId, IndexEntry>;
 
-
-
 pub trait ExchangeHost {
-    
     fn status(&self, line: &str);
-    
+
     fn bump_rejected(&self);
-    
+
     fn tree_root(&self) -> &Path;
-    
-    
-    
-    
+
     fn pin_state_dir(&self) -> Option<&Path> {
         None
     }
-    
+
     fn adopt(&self, bytes: &[u8], manifest: &RootManifest) -> Result<(), SessionError>;
-    
-    
-    
-    
+
     fn note_tree_mutation(&self) {}
-    
+
     fn agree(&self, peer: DeviceId, bytes: &[u8], manifest_id: BlobId) -> Result<(), SessionError>;
 }
-
-
 
 pub struct CurrentState {
     pub id: BlobId,
     pub bytes: Vec<u8>,
     pub manifest: RootManifest,
 }
-
-
 
 pub fn run_v1_session<'x, H: ExchangeHost>(
     est: &'x mut Established<'_>,
@@ -128,17 +72,8 @@ pub fn run_v1_session<'x, H: ExchangeHost>(
         peer_adverts: AdvertMap::new(),
     };
 
-    
     ex.offer_round(true)?;
 
-    
-    
-    
-    
-    
-    
-    
-    
     let my_stage = ex.pull_needed();
     let peer_stage = ex.peer_pulls_from_us();
     if initiator {
@@ -149,8 +84,6 @@ pub fn run_v1_session<'x, H: ExchangeHost>(
             ex.serve_peer_stage()?;
         }
     } else {
-        
-        
         if peer_stage {
             ex.serve_peer_stage()?;
         }
@@ -159,10 +92,8 @@ pub fn run_v1_session<'x, H: ExchangeHost>(
         }
     }
 
-    
     let peer_final = ex.offer_round(false)?;
 
-    
     if peer_final == ex.cur.id && peer_final != [0u8; 32] {
         let bytes = std::mem::take(&mut ex.cur.bytes);
         ex.host.agree(ex.est.peer, &bytes, ex.cur.id)?;
@@ -173,7 +104,6 @@ pub fn run_v1_session<'x, H: ExchangeHost>(
         ));
     }
 
-    
     let bye = Bye {
         reason: ByeReason::Normal,
     }
@@ -195,11 +125,11 @@ struct Exchange<'x, 'e, H: ExchangeHost> {
     folder_id: [u8; 16],
     max_retries: u32,
     cur: CurrentState,
-    
+
     initiator: bool,
-    
+
     peer_offer: Option<FolderOffer>,
-    
+
     peer_adverts: AdvertMap,
 }
 
@@ -215,9 +145,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
     }
 
-    
-    
-    
     fn peer_pulls_from_us(&self) -> bool {
         match &self.peer_offer {
             Some(po) => self.cur.id != [0u8; 32] && po.manifest_id != self.cur.id,
@@ -225,11 +152,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
     }
 
-    
-
-    
-    
-    
     fn offer_round(&mut self, with_adverts: bool) -> Result<BlobId, SessionError> {
         let my_offer = FolderOffer {
             folder_id: self.folder_id,
@@ -244,7 +166,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
 
         if self.initiator {
             self.send_offer(&my_offer, with_adverts)?;
-            
+
             let echoed = self.consume_echo(with_adverts)?;
             self.send_offer(&sentinel, false)?;
             loop {
@@ -257,8 +179,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             return Ok(echoed);
         }
 
-        
-        
         let mut covered_ours: Option<BlobId> = None;
         loop {
             let po = self.expect_offer()?;
@@ -266,9 +186,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
                 break;
             }
             if po.folder_id == self.folder_id {
-                
-                
-                
                 covered_ours = Some(po.manifest_id);
             }
             self.echo_announcement(po, with_adverts)?;
@@ -276,9 +193,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         let peer_final = match covered_ours {
             Some(id) => id,
             None => {
-                
-                
-                
                 self.send_offer(&my_offer, with_adverts)?;
                 self.consume_echo(with_adverts)?
             }
@@ -297,8 +211,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(())
     }
 
-    
-    
     fn consume_echo(&mut self, with_adverts: bool) -> Result<BlobId, SessionError> {
         let po = self.expect_offer()?;
         if po.folder_id != self.folder_id {
@@ -311,11 +223,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(po.manifest_id)
     }
 
-    
-    
-    
-    
-    
     fn echo_announcement(
         &mut self,
         po: FolderOffer,
@@ -361,14 +268,11 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(FolderOffer::parse(&fb.payload)?)
     }
 
-    
-    
     fn send_my_adverts(&mut self) -> Result<(), SessionError> {
         let entries = self.store.index_entries().map_err(wire_store_err)?;
         send_adverts_of(&mut self.est.io, entries)
     }
 
-    
     fn recv_advert_sequence(&mut self) -> Result<AdvertMap, SessionError> {
         let mut map = AdvertMap::new();
         loop {
@@ -383,17 +287,12 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
     }
 
-    
-
-    
-    
     fn my_pull_stage(&mut self) -> Result<(), SessionError> {
         let target = match self.peer_offer.as_ref() {
             Some(po) if po.manifest_id != [0u8; 32] => po.manifest_id,
             _ => return self.close_stage(),
         };
 
-        
         self.fetch_blobs(BlobKind::Manifest, &[target])?;
         let man_bytes = self
             .store
@@ -406,9 +305,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         let theirs_empty = man.root_tree_id == crate::empty_tree_id();
 
         if man.root_tree_id == self.cur.manifest.root_tree_id {
-            
-            
-            
             if lineage_newer(&man, &self.cur.manifest) {
                 self.status(&format!(
                     "SESSION settling equal roots on newer manifest {}",
@@ -417,7 +313,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
                 self.adopt(target, man_bytes, man)?;
             }
         } else if theirs_empty && !mine_empty {
-            
             self.status("SESSION skipping empty peer offer (bootstrap guard)");
         } else {
             let outcome = self.pull_content(&man, target)?;
@@ -439,17 +334,11 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         self.close_stage()
     }
 
-    
-    
-    
-    
-    
     fn pull_content(
         &mut self,
         man: &RootManifest,
         _remote_manifest_id: BlobId,
     ) -> Result<PullOutcome, SessionError> {
-        
         let mut queue = vec![man.root_tree_id];
         let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
         let mut rounds = 0usize;
@@ -488,11 +377,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             None => None,
         };
 
-        
-        
-        
-        
-        
         let now = crate::engine::now_parts();
         let state_dir = self
             .host
@@ -534,8 +418,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             ));
         }
 
-        
-        
         let diverged = !result.quarantined.is_empty()
             || !result.conflicts.is_empty()
             || !result.send.is_empty();
@@ -546,11 +428,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         })
     }
 
-    
-    
-    
-    
-    
     fn close_stage(&mut self) -> Result<(), SessionError> {
         self.est.io.send_frame(
             codec::MSG_REQUEST_ITEMS,
@@ -563,7 +440,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(())
     }
 
-    
     fn serve_peer_stage(&mut self) -> Result<(), SessionError> {
         loop {
             let Some(fb) = self.est.io.recv_frame()? else {
@@ -587,8 +463,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         }
     }
 
-    
-    
     fn serve_items(&mut self, r: RequestItems) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
             return Err(ProtoError::ProtocolViolation("request for unknown folder").into());
@@ -619,8 +493,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(())
     }
 
-    
-    
     fn serve_packs(&mut self, r: RequestPacks) -> Result<(), SessionError> {
         if r.folder_id != self.folder_id {
             return Err(ProtoError::ProtocolViolation("request for unknown folder").into());
@@ -643,11 +515,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         Ok(())
     }
 
-    
-
-    
-    
-    
     fn fetch_blobs(&mut self, kind: BlobKind, want: &[BlobId]) -> Result<(), SessionError> {
         fetch_blobs(
             &mut self.est.io,
@@ -660,11 +527,7 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
         )
     }
 
-    
-    
     fn adopt(&mut self, id: BlobId, bytes: Vec<u8>, man: RootManifest) -> Result<(), SessionError> {
-        
-        
         self.store
             .put_meta(BlobKind::Manifest, &bytes)
             .map_err(wire_store_err)?;
@@ -678,8 +541,6 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
     }
 }
 
-
-
 fn hex_short(b: &BlobId) -> String {
     hex(b)[..12].to_string()
 }
@@ -687,11 +548,6 @@ fn hex_short(b: &BlobId) -> String {
 fn wire_store_err(e: ferry_store::store::StoreError) -> ProtoError {
     ProtoError::Io(std::io::Error::other(e.to_string()))
 }
-
-
-
-
-
 
 struct WireFetch<'x, 'e, H: ExchangeHost> {
     io: &'x mut SessionIo<'e>,
@@ -742,9 +598,6 @@ fn session_to_convergence(e: SessionError) -> ferry_sync_engine::ConvergenceErro
     ferry_sync_engine::ConvergenceError::Fetch(e.to_string())
 }
 
-
-
-
 fn fetch_blobs<H: ExchangeHost>(
     io: &mut SessionIo<'_>,
     host: &H,
@@ -780,9 +633,6 @@ fn fetch_blobs<H: ExchangeHost>(
     }
 }
 
-
-
-
 fn read_item_batches<H: ExchangeHost>(
     io: &mut SessionIo<'_>,
     host: &H,
@@ -810,10 +660,6 @@ fn read_item_batches<H: ExchangeHost>(
     }
 }
 
-
-
-
-
 fn fetch_via_packs<H: ExchangeHost>(
     io: &mut SessionIo<'_>,
     host: &H,
@@ -832,7 +678,7 @@ fn fetch_via_packs<H: ExchangeHost>(
             by_pack.entry(e.pack).or_default().push(*id);
         }
     }
-    
+
     let packs: Vec<PackId> = by_pack
         .into_iter()
         .filter(|(_, ids)| ids.len() >= 2)
@@ -882,16 +728,10 @@ fn fetch_via_packs<H: ExchangeHost>(
         }
     }
     if landed_pack {
-        
-        
-        
-        
         store.flush().map_err(wire_store_err)?;
     }
     Ok(satisfied)
 }
-
-
 
 pub(crate) fn lineage_newer(candidate: &RootManifest, incumbent: &RootManifest) -> bool {
     let ka = (
@@ -908,10 +748,6 @@ pub(crate) fn lineage_newer(candidate: &RootManifest, incumbent: &RootManifest) 
     );
     ka > kb
 }
-
-
-
-
 
 pub fn ingest_pack_verified(
     store: &Store,
@@ -930,8 +766,6 @@ pub fn ingest_pack_verified(
         Err(other) => Err(IngestError::Other(other.to_string())),
     }
 }
-
-
 
 fn send_adverts_of(io: &mut SessionIo, entries: Vec<IndexEntry>) -> Result<(), SessionError> {
     if entries.is_empty() {

@@ -36,7 +36,6 @@ impl TestRig {
         let folder_id = [42u8; 16];
         let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::from_seed([42u8; 32]));
 
-        
         let (store, _fmk) =
             create_folder(&tree_dir, &identity, folder_id, poly).expect("create folder");
         store.flush().expect("store flush");
@@ -84,7 +83,6 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
         .with_fallback(rig.tree_dir.clone())
         .with_fallback_backend(Arc::new(fb));
 
-    
     let offline_snap = backend
         .get_status()
         .await
@@ -99,7 +97,6 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
         .expect("offline list_conflicts");
     assert!(offline_conflicts.is_empty());
 
-    
     let handle = rig.engine.start();
     let (tx, _) = tokio::sync::broadcast::channel(128);
     let daemon_state = Arc::new(DaemonState::new(
@@ -114,33 +111,27 @@ async fn test_auto_backend_offline_then_online_then_offline_transition() {
     let ipc_server =
         spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state)).expect("spawn ipc");
 
-    
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    
     let online_snap = backend
         .get_status()
         .await
         .expect("online status via DaemonClient");
     assert_eq!(online_snap.folder, rig.tree_dir.display().to_string());
 
-    
     let pin_rec = backend
         .start_pin(vec!["src/main.rs".to_string()], None)
         .await
         .expect("start pin over IPC");
     assert_eq!(pin_rec.paths, vec!["src/main.rs"]);
 
-    
     let snap_pinned = backend.get_status().await.expect("pinned status");
     assert!(snap_pinned.pin.holding);
     assert_eq!(snap_pinned.pin.paths, vec!["src/main.rs"]);
 
-    
     let release_summary = backend.release_pin().await.expect("release pin over IPC");
     assert_eq!(release_summary.status, "release_pin");
 
-    
     ipc_server.shutdown();
     handle.shutdown();
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -165,11 +156,9 @@ async fn test_daemon_client_direct() {
 
     let ipc_client = DaemonClient::new(socket_path.clone());
 
-    
     let err = ipc_client.get_status().await.unwrap_err();
     assert_eq!(err.code, "daemon-unreachable");
 
-    
     let handle = rig.engine.start();
     let (tx, _) = tokio::sync::broadcast::channel(128);
     let daemon_state = Arc::new(DaemonState::new(
@@ -186,17 +175,14 @@ async fn test_daemon_client_direct() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    
     let snap = ipc_client.get_status().await.expect("get_status over IPC");
     assert_eq!(snap.folder, rig.tree_dir.display().to_string());
 
-    
     ipc_client
         .trigger_scan()
         .await
         .expect("trigger_scan over IPC");
 
-    
     let conflicts = ipc_client
         .list_conflicts()
         .await

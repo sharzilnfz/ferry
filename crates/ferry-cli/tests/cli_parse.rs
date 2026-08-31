@@ -1,6 +1,3 @@
-
-
-
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -54,7 +51,6 @@ fn add_is_rejected() {
 
 #[test]
 fn pair_has_initiate_and_accept_forms() {
-    
     match parse(&["pair"]).command.unwrap() {
         Command::Pair {
             accept,
@@ -67,7 +63,7 @@ fn pair_has_initiate_and_accept_forms() {
         }
         other => panic!("{other:?}"),
     }
-    
+
     match parse(&["pair", "--accept", "/tmp/offer.ferry-pair", "dest"])
         .command
         .unwrap()
@@ -78,7 +74,7 @@ fn pair_has_initiate_and_accept_forms() {
         }
         other => panic!("{other:?}"),
     }
-    
+
     match parse(&["pair", "--timeout-secs", "5"]).command.unwrap() {
         Command::Pair { timeout_secs, .. } => assert_eq!(timeout_secs, 5),
         other => panic!("{other:?}"),
@@ -199,7 +195,7 @@ fn daemon_folders_listen_peer_transport_interval() {
         }
         other => panic!("{other:?}"),
     }
-    
+
     let cli = parse(&["daemon", "--peer-url", "127.0.0.1:1"]);
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
@@ -208,7 +204,7 @@ fn daemon_folders_listen_peer_transport_interval() {
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { peer_url, .. } if peer_url.as_deref() == Some("127.0.0.1:1"))
     );
-    
+
     let cli = parse(&["daemon", "--transport", "iroh"]);
     assert!(
         matches!(cli.command.as_ref().unwrap(), Command::Daemon { transport, .. } if transport == "iroh")
@@ -249,7 +245,6 @@ fn version_flag_is_wired() {
 
 #[test]
 fn pin_has_four_actions_and_repeatable_paths() {
-    
     match parse(&["pin", "start"]).command.unwrap() {
         Command::Pin {
             action:
@@ -264,14 +259,14 @@ fn pin_has_four_actions_and_repeatable_paths() {
         }
         other => panic!("{other:?}"),
     }
-    
+
     match parse(&["pin", "start", "--hours", "24"]).command.unwrap() {
         Command::Pin {
             action: ferry_cli::cli::PinAction::Start { hours, .. },
         } => assert_eq!(hours, 24),
         other => panic!("{other:?}"),
     }
-    
+
     match parse(&[
         "pin", "start", "--paths", "src/**", "--paths", "docs/*", "sub",
     ])
@@ -292,7 +287,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
         }
         other => panic!("{other:?}"),
     }
-    
+
     for args in [
         vec!["pin", "stop"],
         vec!["pin", "release"],
@@ -304,7 +299,7 @@ fn pin_has_four_actions_and_repeatable_paths() {
             "{args:?}"
         );
     }
-    
+
     assert!(Cli::try_parse_from(["ferry", "pin", "rebase"]).is_err());
 }
 

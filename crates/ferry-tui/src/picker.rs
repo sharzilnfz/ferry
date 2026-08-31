@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 use ferry_ipc::backend::{OpError, UiBackend};
 use ferry_ipc::DirectoryEntry;
 
-
-
 #[must_use]
 pub fn is_headless_env(term: &str, is_tty: bool) -> bool {
     if term == "dumb" {
@@ -40,16 +38,12 @@ pub fn is_headless() -> bool {
 }
 
 #[cfg(test)]
-pub fn set_headless_override(_v: Option<bool>) {
-    
-}
+pub fn set_headless_override(_v: Option<bool>) {}
 
 #[must_use]
 pub fn headless_error() -> OpError {
     OpError::new("no-tty", "no tty available", "pass explicit path")
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct PickerState {
@@ -274,10 +268,6 @@ impl PickerState {
         self.visible_len() == 0
     }
 
-    
-    
-    
-    
     #[must_use]
     pub fn try_select(&mut self) -> PickerSelectResult {
         let Some(entry) = self.selected_owned() else {
@@ -307,7 +297,6 @@ pub enum PickerSelectResult {
     NotInitialized(DirectoryEntry),
     Nothing,
 }
-
 
 #[must_use]
 pub fn parent_of(path: &Path) -> Option<PathBuf> {

@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,8 +15,6 @@ fn fmk() -> [u8; 32] {
 }
 
 fn poly() -> ferry_store::chunker::ValidatedPoly {
-    
-    
     ferry_store::chunker::ValidatedPoly::generate(&mut rand::rngs::StdRng::seed_from_u64(42))
 }
 
@@ -61,7 +51,6 @@ fn fast_cfg() -> ScanConfig {
     }
 }
 
-
 fn wait_until<T>(deadline: Instant, mut f: impl FnMut() -> Option<T>) -> T {
     loop {
         if let Some(v) = f() {
@@ -95,7 +84,6 @@ fn watched_rename_of_subdir_recovers_correct_state() {
     let engine = ScanEngine::watch(env.root.clone(), handle_for(&store)).unwrap();
     let baseline = engine.current().unwrap();
 
-    
     std::fs::rename(env.root.join("sub"), env.root.join("renamed")).unwrap();
     write(&env.root.join("renamed/after.txt"), b"added during rename");
 
@@ -131,13 +119,10 @@ fn overflow_injection_triggers_full_rescan_and_repairs_arbitrary_drift() {
     .unwrap();
     let baseline = engine.current().unwrap();
 
-    
-    
     std::fs::remove_file(env.root.join("a.txt")).unwrap();
     write(&env.root.join("d/b.txt"), b"two-changed");
     write(&env.root.join("new.txt"), b"brand new");
 
-    
     engine.debug_inject_signal(WatchSignal::Overflow {
         reason: "test-injected IN_Q_OVERFLOW".into(),
     });
@@ -164,18 +149,11 @@ fn poll_fallback_converges_when_watch_is_unavailable() {
     )
     .unwrap();
 
-    
-    
     engine.debug_inject_signal(WatchSignal::Unwatchable {
         subtree: vec!["unwatchable".to_string()],
         reason: "test-injected ENOSPC".into(),
     });
 
-    
-    
-    
-    
-    
     let before = engine.current().unwrap();
     write(&env.root.join("unwatchable/y.txt"), b"polled change");
 
@@ -206,15 +184,11 @@ fn audit_timer_detects_silent_same_length_rewrite() {
     .unwrap();
     let baseline = engine.current().unwrap();
 
-    
     std::fs::write(env.root.join("vault.bin"), [9u8; 256]).unwrap();
     set_mtime(&env.root.join("vault.bin"));
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    
-    
-    
-    
+
     let cur = wait_until(deadline, || {
         let c = engine.current()?;
         (c.root_tree_id != baseline.root_tree_id).then_some(c)
@@ -235,10 +209,7 @@ fn audit_timer_detects_silent_same_length_rewrite() {
 fn burst_of_writes_coalesces_and_subscribers_are_notified() {
     let (env, store) = env("burst");
     write(&env.root.join("seed.txt"), b"seed");
-    
-    
-    
-    
+
     let cfg = ScanConfig {
         poll_interval: Duration::from_hours(1),
         ..fast_cfg()
@@ -275,21 +246,15 @@ fn burst_of_writes_coalesces_and_subscribers_are_notified() {
         }
         None
     });
-    
-    
-    
-    
-    
+
     assert!(
         updates <= 3,
         "a single burst must coalesce into few update events, got {updates}"
     );
 
-    
     let cur = engine.current().unwrap();
     assert_eq!(cur.root_tree_id, scratch_root(&store, &env.root));
 
-    
     let run = engine.scan_once().unwrap();
     assert_eq!(run.stats.bytes_chunked, 0);
 }
@@ -328,8 +293,6 @@ fn incremental_pass_matches_scratch_after_event_driven_mutations() {
     let empty = ChangeSet::default();
     assert_ne!(cs, empty);
 }
-
-
 
 fn write(path: &std::path::Path, bytes: &[u8]) {
     if let Some(p) = path.parent() {

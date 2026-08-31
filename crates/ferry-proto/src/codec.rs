@@ -1,24 +1,9 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use ferry_store::format::{put_bytes, put_u16, put_u32, put_u64, put_u8, BlobId, BlobKind, Reader};
 use ferry_store::index::IndexEntry;
 
 use crate::error::{ByeReason, ProtoError};
 use crate::version::ProtocolVersion;
 use crate::WIRE_MAGIC;
-
 
 pub const MSG_HELLO: u8 = 0x01;
 pub const MSG_HELLO_ACK: u8 = 0x02;
@@ -32,17 +17,11 @@ pub const MSG_ITEM_BATCH: u8 = 0x09;
 pub const MSG_PACK_ITEM: u8 = 0x0A;
 pub const MSG_BYE: u8 = 0x0B;
 
-
-
-
-
 pub const FLAG_EXTENSION_AWARE: u64 = 1 << 0;
-
 
 pub const MAX_REQUEST_ITEMS: usize = 512;
 pub const MAX_REQUEST_PACKS: usize = 128;
 pub const MAX_BATCH_ITEMS: usize = 512;
-
 
 pub fn is_preauth_type(t: u8) -> bool {
     matches!(
@@ -50,7 +29,6 @@ pub fn is_preauth_type(t: u8) -> bool {
         MSG_HELLO | MSG_HELLO_ACK | MSG_AUTH_INIT | MSG_AUTH_CONFIRM
     )
 }
-
 
 pub const KNOWN_TYPES: &[u8] = &[
     MSG_HELLO,
@@ -65,11 +43,6 @@ pub const KNOWN_TYPES: &[u8] = &[
     MSG_PACK_ITEM,
     MSG_BYE,
 ];
-
-
-
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameBody {
@@ -116,8 +89,6 @@ fn bad(why: &'static str) -> ProtoError {
     ProtoError::ProtocolViolation(why)
 }
 
-
-
 fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
     let b = r
         .take(2)
@@ -125,21 +96,15 @@ fn rd_u16(r: &mut Reader<'_>) -> Result<u16, ProtoError> {
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
-
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hello {
-    
     pub version: ProtocolVersion,
     pub flags: u64,
-    
+
     pub eph_pub: [u8; 32],
-    
+
     pub stat_pub: ferry_crypto::identity::DeviceId,
-    
+
     pub nonce: [u8; 32],
 }
 
@@ -174,15 +139,10 @@ impl Hello {
     }
 }
 
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HelloAck {
-    
     pub version: ProtocolVersion,
-    
+
     pub agreed: ProtocolVersion,
     pub flags: u64,
     pub eph_pub: [u8; 32],
@@ -224,18 +184,13 @@ impl HelloAck {
     }
 }
 
-
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthProof {
     pub ciphertext: Vec<u8>,
 }
 
 impl AuthProof {
-    pub const CT_LEN: usize = 48; 
+    pub const CT_LEN: usize = 48;
 
     pub fn new(ciphertext: Vec<u8>) -> Result<Self, ProtoError> {
         if ciphertext.len() != Self::CT_LEN {
@@ -253,15 +208,11 @@ impl AuthProof {
     }
 }
 
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderOffer {
     pub folder_id: [u8; 16],
     pub manifest_id: BlobId,
-    
+
     pub reserved: u32,
 }
 
@@ -291,13 +242,6 @@ impl FolderOffer {
     }
 }
 
-
-
-
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexAdvert {
     pub entries: Vec<IndexEntry>,
@@ -305,7 +249,6 @@ pub struct IndexAdvert {
 }
 
 impl IndexAdvert {
-    
     pub const MAX_ROWS: usize = 2048;
 
     pub fn encode(&self) -> Vec<u8> {
@@ -334,13 +277,6 @@ impl IndexAdvert {
         }
     }
 }
-
-
-
-
-
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestItems {
@@ -386,7 +322,6 @@ impl RequestItems {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestPacks {
     pub folder_id: [u8; 16],
@@ -425,11 +360,6 @@ impl RequestPacks {
         Ok(RequestPacks { folder_id, packs })
     }
 }
-
-
-
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemBatch {
@@ -481,9 +411,6 @@ impl ItemBatch {
     }
 }
 
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackItem {
     pub pack: BlobId,
@@ -511,10 +438,6 @@ impl PackItem {
         Ok(PackItem { pack, bytes })
     }
 }
-
-
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bye {
@@ -579,16 +502,16 @@ mod tests {
         };
         assert_eq!(h.encode().len(), Hello::PAYLOAD_LEN);
         assert_eq!(h.encode().len(), 106);
-        
+
         let bytes = h.encode();
         for cut in 0..bytes.len() {
             assert!(Hello::parse(&bytes[..cut]).is_err(), "cut {cut}");
         }
-        
+
         let mut long = bytes.clone();
         long.push(0);
         assert!(Hello::parse(&long).is_err());
-        
+
         roundtrip(h, super::Hello::encode, Hello::parse);
 
         let ack = HelloAck {
@@ -616,7 +539,7 @@ mod tests {
             reserved: 0,
         };
         let mut evil = offer.encode();
-        evil[48] = 1; 
+        evil[48] = 1;
         assert!(matches!(
             FolderOffer::parse(&evil),
             Err(ProtoError::ProtocolViolation("offer reserved nonzero"))
@@ -642,7 +565,7 @@ mod tests {
             entries: entries.clone(),
             more: true,
         };
-        
+
         assert_eq!(
             &advert.encode()[..advert.encode().len() - 1],
             ferry_store::index::table_plain(&entries).as_slice()
@@ -661,7 +584,7 @@ mod tests {
             .unwrap()
             .more
         );
-        
+
         let mut evil = advert.encode();
         *evil.last_mut().unwrap() = 2;
         assert!(matches!(
@@ -677,7 +600,7 @@ mod tests {
             items: vec![(BlobKind::DataChunk, [0; 32]); MAX_REQUEST_ITEMS + 1],
         };
         assert!(big_req.encode().is_err());
-        
+
         let mut evil = Vec::new();
         put_bytes(&mut evil, &[0; 16]);
         put_u32(&mut evil, (MAX_REQUEST_ITEMS + 1) as u32);
@@ -704,7 +627,6 @@ mod tests {
         put_u32(&mut evil_p, (MAX_REQUEST_PACKS + 1) as u32);
         assert!(RequestPacks::parse(&evil_p).is_err());
 
-        
         let ok = RequestItems {
             folder_id: [7; 16],
             items: vec![(BlobKind::Manifest, [1; 32])],
@@ -728,7 +650,6 @@ mod tests {
         };
         roundtrip(batch, |b| b.encode().unwrap(), ItemBatch::parse);
 
-        
         let empty = ItemBatch {
             items: vec![(BlobKind::DataChunk, [4; 32], vec![])],
         };

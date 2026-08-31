@@ -97,7 +97,11 @@ impl FolderEngine {
             .map_err(|e| {
                 let msg = e.to_string();
                 if let Some((code, rest)) = msg.split_once(": ") {
-                    if !code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                    if !code.is_empty()
+                        && code
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
                         return SupervisorError {
                             code: code.to_string(),
                             message: rest.to_string(),
@@ -142,7 +146,6 @@ impl FolderEngine {
         })
     }
 
-    
     pub fn tick(&mut self) -> bool {
         if let Some(deadline) = self.next_restart_at {
             if std::time::Instant::now() < deadline {

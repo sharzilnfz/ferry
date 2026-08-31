@@ -1,30 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::io::{self, Read, Write};
 
 use chacha20poly1305::{
@@ -38,33 +11,17 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_proto::codec::{self, AuthProof, Bye, FrameBody, Hello, HelloAck};
 use ferry_proto::error::{ByeReason, ProtoError};
-use ferry_proto::secure::{
-    kdf_handshake, traffic_keys, transcript_hash, SessionCipher, KEY_LEN,
-};
+use ferry_proto::secure::{kdf_handshake, traffic_keys, transcript_hash, SessionCipher, KEY_LEN};
 use ferry_proto::version::{negotiate, ProtocolVersion};
-
 
 pub const MAX_FRAME_BODY: usize = ferry_proto::frame::MAX_FRAME_BODY;
 
 const NONCE_LEN: usize = 12;
 
-
-
-
-
-
-
-
-
 pub trait Link: Send {
     fn send_body(&mut self, body: &[u8]) -> Result<(), ProtoError>;
     fn recv_body(&mut self) -> Result<Vec<u8>, ProtoError>;
 }
-
-
-
-
-
 
 pub struct ConnLink<'a>(pub &'a mut dyn crate::transport::Connection);
 
@@ -79,14 +36,10 @@ impl Link for ConnLink<'_> {
     }
 }
 
-
-
 pub struct RawLink<S>(pub S);
 
 impl<S: Read + Write + Send> Link for RawLink<S> {
     fn send_body(&mut self, body: &[u8]) -> Result<(), ProtoError> {
-        
-        
         let mut frame = Vec::with_capacity(4 + body.len());
         frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
         frame.extend_from_slice(body);
@@ -115,23 +68,12 @@ impl<S: Read + Write + Send> Link for RawLink<S> {
     }
 }
 
-
-
 fn wire_image(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
     out.extend_from_slice(body);
     out
 }
-
-
-
-
-
-
-
-
-
 
 fn seal_auth(
     key: &[u8; KEY_LEN],
@@ -152,8 +94,6 @@ fn seal_auth(
     AuthProof::new(ct)
 }
 
-
-
 fn open_auth(
     key: &[u8; KEY_LEN],
     th: &[u8; 32],
@@ -173,13 +113,6 @@ fn open_auth(
     pt.try_into()
         .map_err(|_| ProtoError::Auth("auth plaintext wrong length"))
 }
-
-
-
-
-
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExpectPeer {
@@ -213,20 +146,16 @@ fn check_identity(
     }
 }
 
-
-
-
 pub struct Established<'a> {
     pub io: SessionIo<'a>,
     pub agreed_version: ProtocolVersion,
-    
+
     pub peer: DeviceId,
     pub peer_max: ProtocolVersion,
     pub peer_flags: u64,
-    
+
     pub encrypted: bool,
 }
-
 
 pub struct SessionIo<'a> {
     link: &'a mut dyn Link,
@@ -238,7 +167,6 @@ pub struct SessionIo<'a> {
 }
 
 impl SessionIo<'_> {
-    
     pub fn send_frame(&mut self, msg_type: u8, payload: Vec<u8>) -> Result<(), ProtoError> {
         let body = FrameBody::new(msg_type, self.version, payload).encode();
         match self.tx.as_mut() {
@@ -251,10 +179,6 @@ impl SessionIo<'_> {
         }
     }
 
-    
-    
-    
-    
     pub fn recv_frame(&mut self) -> Result<Option<FrameBody>, ProtoError> {
         loop {
             let raw = self.link.recv_body()?;
@@ -268,7 +192,7 @@ impl SessionIo<'_> {
                     && self.peer_max.minor() > ProtocolVersion::V1_0.minor();
                 let flagged = (self.peer_flags & !codec::FLAG_EXTENSION_AWARE) != 0;
                 if higher && flagged {
-                    continue; 
+                    continue;
                 }
                 return Err(ProtoError::UnknownMessage {
                     msg_type: fb.msg_type,
@@ -288,8 +212,6 @@ impl SessionIo<'_> {
         }
     }
 
-    
-    
     pub fn expect_frame_any(&mut self, msg_types: &[u8]) -> Result<FrameBody, ProtoError> {
         match self.recv_frame()? {
             Some(fb) if msg_types.contains(&fb.msg_type) => Ok(fb),
@@ -300,7 +222,6 @@ impl SessionIo<'_> {
         }
     }
 
-    
     pub fn recv_bye(&mut self) -> Result<(), ProtoError> {
         let fb = self.expect_frame(codec::MSG_BYE)?;
         let bye = Bye::parse(&fb.payload)?;
@@ -310,12 +231,10 @@ impl SessionIo<'_> {
         }
     }
 
-    
     pub fn send_bye(&mut self, reason: ByeReason) -> Result<(), ProtoError> {
         self.send_frame(codec::MSG_BYE, Bye { reason }.encode())
     }
 
-    
     pub fn bye_for_error(&mut self, err: &ProtoError) {
         let reason = match err {
             ProtoError::VersionIncompatible { .. } => ByeReason::VersionIncompatible,
@@ -342,18 +261,11 @@ impl core::fmt::Debug for Established<'_> {
     }
 }
 
-
-
 fn random32() -> [u8; 32] {
     let mut b = [0u8; 32];
     OsRng.fill_bytes(&mut b);
     b
 }
-
-
-
-
-
 
 pub fn establish<'a, L: Link>(
     link: &'a mut L,
@@ -362,8 +274,6 @@ pub fn establish<'a, L: Link>(
     expect: ExpectPeer,
     encryption: bool,
 ) -> Result<Established<'a>, ProtoError> {
-    
-    
     match handshake_core(link, role, identity, expect, encryption) {
         Ok(hs) => Ok(Established {
             io: SessionIo {
@@ -421,8 +331,6 @@ fn handshake_core<L: Link>(
     let our_max = ProtocolVersion::V1_0;
     let flags = codec::FLAG_EXTENSION_AWARE;
 
-    
-    
     let esk = StaticSecret::random_from_rng(OsRng);
     let my_epk = *PublicKey::from(&esk).as_bytes();
     let my_stat = *identity.device_id();
@@ -434,7 +342,6 @@ fn handshake_core<L: Link>(
         nonce: random32(),
     };
 
-    
     let (peer_hello_fb, hello_wires) = match role {
         ferry_proto::Role::Initiator => {
             let body = FrameBody::new(codec::MSG_HELLO, our_max, my_hello.encode()).encode();
@@ -504,7 +411,6 @@ fn handshake_core<L: Link>(
 
     let th_hello = transcript_hash(&[&hello_wires[0], &hello_wires[1]]);
 
-    
     fn dh(esk: &StaticSecret, peer: [u8; 32]) -> Result<[u8; 32], ProtoError> {
         let shared = esk.diffie_hellman(&PublicKey::from(peer));
         if !shared.was_contributory() {
@@ -513,7 +419,7 @@ fn handshake_core<L: Link>(
         Ok(*shared.as_bytes())
     }
     let e1 = dh(&esk, peer_eph)?;
-    
+
     let (m1, m2): ([u8; 32], [u8; 32]) = match role {
         ferry_proto::Role::Initiator => (
             *identity
@@ -531,7 +437,6 @@ fn handshake_core<L: Link>(
 
     let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
 
-    
     let my_proof = match role {
         ferry_proto::Role::Initiator => seal_auth(&htk_i2r, &th_hello, &my_stat)?,
         ferry_proto::Role::Responder => seal_auth(&htk_r2i, &th_hello, &my_stat)?,
@@ -569,7 +474,6 @@ fn handshake_core<L: Link>(
         }
     };
 
-    
     let th_final = transcript_hash(&[
         &hello_wires[0],
         &hello_wires[1],
@@ -614,14 +518,11 @@ mod tests {
         DeviceIdentity::from_secret_bytes(&sk)
     }
 
-    
     fn raw_pair() -> (RawLink<DuplexHalf>, RawLink<DuplexHalf>) {
         let (a, b) = duplex_pair();
         (RawLink(a), RawLink(b))
     }
 
-    
-    
     fn pinned_pair<'a, 'b>(
         la: &'a mut RawLink<DuplexHalf>,
         lb: &'b mut RawLink<DuplexHalf>,
@@ -665,7 +566,6 @@ mod tests {
         assert_eq!(eb.peer, *id_a.device_id());
         assert_eq!(ea.agreed_version, ProtocolVersion::V1_0);
 
-        
         let offer = codec::FolderOffer {
             folder_id: [7; 16],
             manifest_id: [9; 32],
@@ -679,7 +579,6 @@ mod tests {
         let got = codec::FolderOffer::parse(&fb.payload).unwrap();
         assert_eq!(got.manifest_id, [9; 32]);
 
-        
         eb.io
             .send_frame(
                 codec::MSG_BYE,
@@ -699,8 +598,6 @@ mod tests {
         let id_b = identity(22);
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
-            
-            
             let ha = s.spawn(|| {
                 let mut est = establish(
                     &mut la,
@@ -726,8 +623,7 @@ mod tests {
                 .unwrap();
                 assert!(!est.encrypted);
                 let raw = est.io.link_recv_raw_for_test();
-                
-                
+
                 assert_eq!(&raw[..4], b"FRW1");
                 assert_eq!(raw[4], codec::MSG_FOLDER_OFFER);
                 let fb = FrameBody::parse(&raw).unwrap();
@@ -764,11 +660,7 @@ mod tests {
                 )
             });
             let results = (ha.join().unwrap(), hb.join().unwrap());
-            
-            
-            
-            
-            
+
             let detecting = |err: &ProtoError| {
                 matches!(
                     err,
@@ -798,7 +690,6 @@ mod tests {
 
     #[test]
     fn version_major_mismatch_responder_side_fails_cleanly_with_bye1() {
-        
         let id_a = identity(66);
         let id_b = identity(77);
         let (mut la, mut lb) = raw_pair();
@@ -815,7 +706,7 @@ mod tests {
             evil_hello.encode(),
         )
         .encode();
-        
+
         la.0.write_all(&wire_image(&body)).unwrap();
 
         let res = establish(
@@ -837,10 +728,6 @@ mod tests {
             "{err}"
         );
 
-        
-        
-        
-        
         let mut prefix = [0u8; 4];
         la.0.read_exact(&mut prefix).unwrap();
         let body_len = u32::from_be_bytes(prefix) as usize;
@@ -859,7 +746,6 @@ mod tests {
         let peer_id = *id_b.device_id();
         let (mut la, mut lb) = raw_pair();
         std::thread::scope(|s| {
-            
             let evil = s.spawn(move || {
                 let mut buf = vec![0u8; 65536];
                 let _ = la.0.read(&mut buf).unwrap_or(0);
@@ -943,7 +829,7 @@ mod tests {
                     true,
                 )
                 .unwrap();
-                
+
                 let payload = codec::FolderOffer {
                     folder_id: [1; 16],
                     manifest_id: [2; 32],
@@ -977,11 +863,10 @@ mod tests {
     }
 
     impl SessionIo<'_> {
-        
         fn seal_for_test(&mut self, len: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
             self.tx.as_mut().unwrap().seal_frame(len, body)
         }
-        
+
         fn link_recv_raw_for_test(&mut self) -> Vec<u8> {
             self.link.recv_body().unwrap_or_default()
         }

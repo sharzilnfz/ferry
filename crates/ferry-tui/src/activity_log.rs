@@ -1,8 +1,5 @@
-
-
 use ferry_ipc::protocol::DaemonMessage;
 use std::collections::VecDeque;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -11,7 +8,6 @@ pub enum LogLevel {
     Error,
     Success,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
@@ -31,7 +27,6 @@ impl LogEntry {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ActivityLog {
     entries: VecDeque<LogEntry>,
@@ -45,7 +40,6 @@ impl Default for ActivityLog {
 }
 
 impl ActivityLog {
-    
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         let cap = capacity.max(1);
@@ -55,7 +49,6 @@ impl ActivityLog {
         }
     }
 
-    
     pub fn push(&mut self, entry: LogEntry) {
         if self.entries.len() >= self.capacity {
             self.entries.pop_front();
@@ -63,27 +56,22 @@ impl ActivityLog {
         self.entries.push_back(entry);
     }
 
-    
     pub fn push_info(&mut self, timestamp: impl Into<String>, message: impl Into<String>) {
         self.push(LogEntry::new(timestamp, message, LogLevel::Info));
     }
 
-    
     pub fn push_warn(&mut self, timestamp: impl Into<String>, message: impl Into<String>) {
         self.push(LogEntry::new(timestamp, message, LogLevel::Warn));
     }
 
-    
     pub fn push_error(&mut self, timestamp: impl Into<String>, message: impl Into<String>) {
         self.push(LogEntry::new(timestamp, message, LogLevel::Error));
     }
 
-    
     pub fn push_success(&mut self, timestamp: impl Into<String>, message: impl Into<String>) {
         self.push(LogEntry::new(timestamp, message, LogLevel::Success));
     }
 
-    
     pub fn record_daemon_message(&mut self, timestamp: impl Into<String>, msg: &DaemonMessage) {
         let ts = timestamp.into();
         match msg {
@@ -145,31 +133,26 @@ impl ActivityLog {
         }
     }
 
-    
     #[must_use]
     pub fn entries(&self) -> &VecDeque<LogEntry> {
         &self.entries
     }
 
-    
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    
     pub fn clear(&mut self) {
         self.entries.clear();
     }

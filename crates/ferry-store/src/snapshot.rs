@@ -1,41 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -51,9 +13,6 @@ use crate::manifest::{
     serialize_tree_node, symlink_entry, EntryPayload, RootManifest, TreeEntry, TreeNode,
 };
 use crate::store::{Store, StoreError};
-
-
-
 
 #[derive(Debug, Error)]
 pub enum SnapshotError {
@@ -81,9 +40,6 @@ pub enum SnapshotError {
     #[error("chunker polynomial rejected: {0}")]
     Polynomial(#[from] PolynomialError),
 }
-
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Error)]
 pub enum RefusalReason {
@@ -117,14 +73,11 @@ pub enum RefusalReason {
     EscapingSymlinkTarget,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefusedPath {
-    
     pub path: Vec<String>,
     pub reason: RefusalReason,
 }
-
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScanStats {
@@ -133,8 +86,6 @@ pub struct ScanStats {
     pub symlinks: usize,
     pub bytes_chunked: u64,
 }
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotIdentity {
@@ -145,34 +96,17 @@ pub struct SnapshotIdentity {
     pub created_nsec: u32,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotOutput {
-    
     pub manifest: RootManifest,
-    
+
     pub manifest_id: BlobId,
-    
+
     pub root_tree_id: BlobId,
     pub stats: ScanStats,
-    
-    
+
     pub refused: Vec<RefusedPath>,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub fn snapshot_dir(
     store: &Store,
@@ -187,23 +121,6 @@ pub fn snapshot_dir(
     )
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub fn snapshot_dir_incremental(
     store: &Store,
     poly: ValidatedPoly,
@@ -217,8 +134,6 @@ pub fn snapshot_dir_incremental(
     )
 }
 
-
-
 fn finish_snapshot(
     store: &Store,
     identity: &SnapshotIdentity,
@@ -228,11 +143,6 @@ fn finish_snapshot(
     let root_bytes = serialize_tree_node(&root);
     let root_tree_id = store.put_meta(BlobKind::TreeNode, &root_bytes)?;
 
-    
-    
-    
-    
-    
     if let Some(parent) = &parent {
         if parent.root_tree_id == root_tree_id {
             store.flush()?;
@@ -257,7 +167,6 @@ fn finish_snapshot(
     let manifest_bytes = serialize_manifest(&manifest);
     let manifest_id = store.put_meta(BlobKind::Manifest, &manifest_bytes)?;
 
-    
     store.flush()?;
 
     Ok(SnapshotOutput {
@@ -268,10 +177,6 @@ fn finish_snapshot(
         refused,
     })
 }
-
-
-
-
 
 fn walk_snapshot(
     store: &Store,
@@ -313,14 +218,6 @@ fn walk_snapshot(
     Ok((root, walker.stats, walker.refused, parent))
 }
 
-
-
-
-
-
-
-
-
 fn current_parent(store: &Store, identity: &SnapshotIdentity) -> Option<RootManifest> {
     if identity.parent_manifest_id == [0u8; 32] {
         return None;
@@ -332,13 +229,9 @@ fn current_parent(store: &Store, identity: &SnapshotIdentity) -> Option<RootMani
     (manifest.folder_id == identity.folder_id).then_some(manifest)
 }
 
-
 pub fn join_path(parts: &[String]) -> String {
     parts.join("/")
 }
-
-
-
 
 pub fn ensure_no_sibling_collisions(
     parent: &[String],
@@ -355,14 +248,6 @@ pub fn ensure_no_sibling_collisions(
     }
     Ok(())
 }
-
-
-
-
-
-
-
-
 
 pub fn ensure_no_host_case_collisions(
     parent: &[String],
@@ -382,8 +267,6 @@ pub fn ensure_no_host_case_collisions(
     Ok(())
 }
 
-
-
 pub fn ensure_no_collisions(parent: &[String], entries: &[TreeEntry]) -> Result<(), SnapshotError> {
     ensure_no_sibling_collisions(parent, entries)?;
     ensure_no_host_case_collisions(parent, entries)
@@ -397,16 +280,12 @@ fn io_err(path: &Path) -> impl Fn(std::io::Error) -> SnapshotError + '_ {
     }
 }
 
-
-
 fn mtime_of(meta: &std::fs::Metadata) -> (i64, u32) {
     match meta.modified() {
         Ok(t) => ferry_platform::split_unix(t),
         Err(_) => (0, 0),
     }
 }
-
-
 
 fn exec_of(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
@@ -421,11 +300,6 @@ fn exec_of(meta: &std::fs::Metadata) -> bool {
         false
     }
 }
-
-
-
-
-
 
 pub const DEFAULT_IGNORE: &[&str] = &[
     ".DS_Store",
@@ -492,8 +366,7 @@ struct Walker<'a> {
     stats: ScanStats,
     refused: Vec<RefusedPath>,
     rules: Vec<String>,
-    
-    
+
     prev_nodes: HashMap<BlobId, Rc<TreeNode>>,
 }
 
@@ -505,8 +378,6 @@ impl Walker<'_> {
         });
     }
 
-    
-    
     fn prev_node(&mut self, id: &BlobId) -> Option<Rc<TreeNode>> {
         if let Some(n) = self.prev_nodes.get(id) {
             return Some(Rc::clone(n));
@@ -517,7 +388,6 @@ impl Walker<'_> {
         Some(node)
     }
 
-    
     fn prev_entry<'p>(prev: Option<&'p TreeNode>, name: &str) -> Option<&'p TreeEntry> {
         prev.and_then(|n| n.entries.iter().find(|e| e.name == name))
     }
@@ -538,17 +408,17 @@ impl Walker<'_> {
             let entry = entry.map_err(io_err(dir))?;
             names.push(entry.file_name());
         }
-        
+
         names.sort_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
 
         let mut entries: Vec<TreeEntry> = Vec::with_capacity(names.len());
         for name in names {
             let raw = name.as_encoded_bytes();
-            
+
             if raw == b"." || raw == b".." {
                 continue;
             }
-            
+
             if rel.is_empty() && raw == crate::store::STORE_DIR_NAME.as_bytes() {
                 continue;
             }
@@ -560,8 +430,7 @@ impl Walker<'_> {
             if is_ignored(&self.rules, &name.to_string_lossy(), is_dir) {
                 continue;
             }
-            
-            
+
             let visited = self.visit(&child_path, name.as_os_str(), rel, prev);
             if let Some(e) = visited? {
                 entries.push(e);
@@ -572,9 +441,6 @@ impl Walker<'_> {
         Ok(TreeNode { entries })
     }
 
-    
-    
-    
     fn visit(
         &mut self,
         path: &Path,
@@ -582,8 +448,6 @@ impl Walker<'_> {
         rel: &mut Vec<String>,
         prev: Option<&TreeNode>,
     ) -> Result<Option<TreeEntry>, SnapshotError> {
-        
-        
         let meta = std::fs::symlink_metadata(path).map_err(io_err(path))?;
         let ft = meta.file_type();
         let kind = if ft.is_symlink() {
@@ -595,7 +459,7 @@ impl Walker<'_> {
         } else {
             ObservedKind::Other
         };
-        
+
         let link_target = if ft.is_symlink() {
             Some(
                 std::fs::read_link(path)
@@ -606,9 +470,6 @@ impl Walker<'_> {
             None
         };
 
-        
-        
-        
         let admitted = match admission::admit(admission::EntryFacts {
             raw_name,
             kind,
@@ -630,9 +491,6 @@ impl Walker<'_> {
         out
     }
 
-    
-    
-    
     fn payload(
         &mut self,
         path: &Path,
@@ -649,9 +507,6 @@ impl Walker<'_> {
                 Ok(Some(symlink_entry(&component, sec, nsec, &target)))
             }
             AdmittedKind::Dir => {
-                
-                
-                
                 let child_prev =
                     Self::prev_entry(prev, &component).and_then(|e| match &e.payload {
                         EntryPayload::Dir { child_tree_id } => Some(*child_tree_id),
@@ -665,12 +520,6 @@ impl Walker<'_> {
                 Ok(Some(dir_entry(&component, sec, nsec, child_tree_id)))
             }
             AdmittedKind::File => {
-                
-                
-                
-                
-                
-                
                 if let Some(prev_e) = Self::prev_entry(prev, &component) {
                     if file_reusable(prev_e, meta) {
                         let chunks = match &prev_e.payload {
@@ -684,8 +533,7 @@ impl Walker<'_> {
                     }
                 }
                 let bytes = std::fs::read(path).map_err(io_err(path))?;
-                
-                
+
                 let pieces = chunk(self.poly.get(), &bytes)?;
                 let mut chunks = Vec::new();
                 for piece in pieces {
@@ -701,9 +549,6 @@ impl Walker<'_> {
         }
     }
 }
-
-
-
 
 fn file_reusable(prev: &TreeEntry, meta: &std::fs::Metadata) -> bool {
     let (sec, nsec) = mtime_of(meta);
@@ -725,18 +570,11 @@ pub(crate) mod testutil {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    
-    
-    
     pub(crate) const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
     pub(crate) fn q(nsec: u32) -> u32 {
         nsec / NS_GRAN * NS_GRAN
     }
 
-    
-    
-    
-    
     #[cfg(unix)]
     use rand::Rng;
     use std::fs::FileTimes;
@@ -771,8 +609,6 @@ pub(crate) mod testutil {
         (0..len).map(|_| rng.gen()).collect()
     }
 
-    
-    
     pub(crate) fn write_file(path: &Path, bytes: &[u8], exec: bool, mt: (i64, u32)) {
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).unwrap();
@@ -796,7 +632,6 @@ pub(crate) mod testutil {
             .unwrap();
     }
 
-    
     pub(crate) fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
         #[cfg(unix)]
         {
@@ -806,9 +641,6 @@ pub(crate) mod testutil {
         }
         #[cfg(windows)]
         {
-            
-            
-            
             filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
         }
         #[cfg(not(any(unix, windows)))]
@@ -822,7 +654,6 @@ mod tests {
     use super::*;
     use crate::manifest::{parse_manifest, parse_tree_node, EntryPayload};
 
-    
     #[cfg(unix)]
     fn make_symlink<P: AsRef<Path>>(target: P, at: &Path) {
         std::os::unix::fs::symlink(target, at).unwrap();
@@ -862,9 +693,8 @@ mod tests {
         assert_eq!(out.stats.files, 4);
         assert_eq!(out.stats.dirs, 1);
         assert_eq!(out.stats.symlinks, 1);
-        assert_eq!(out.stats.bytes_chunked, 11 + 18 + 9); 
+        assert_eq!(out.stats.bytes_chunked, 11 + 18 + 9);
 
-        
         assert_eq!(out.manifest.folder_id, [7; 16]);
         assert_eq!(out.manifest.device_id, [9; 32]);
         assert_eq!(out.manifest.parent_manifest_id, [0; 32]);
@@ -880,7 +710,6 @@ mod tests {
         let echoed = parse_manifest(&stored).unwrap();
         assert_eq!(echoed, out.manifest);
 
-        
         let root_bytes = store.get(BlobKind::TreeNode, &out.root_tree_id).unwrap();
         let root = parse_tree_node(&root_bytes).unwrap();
         let names: Vec<&str> = root.entries.iter().map(|e| e.name.as_str()).collect();
@@ -897,10 +726,7 @@ mod tests {
         );
 
         let run = root.entries.iter().find(|e| e.name == "run.sh").unwrap();
-        
-        
-        
-        
+
         if cfg!(unix) {
             assert!(run.exec, "exec bit maps to flags bit 0");
         }
@@ -920,7 +746,6 @@ mod tests {
             }
         );
 
-        
         let docs = root.entries.iter().find(|e| e.name == "docs").unwrap();
         let EntryPayload::Dir { child_tree_id } = &docs.payload else {
             panic!("docs must be a dir");
@@ -929,7 +754,6 @@ mod tests {
         assert!(docs_node.is_ok());
         assert_eq!(docs_node.unwrap().entries[0].name, "a.txt");
 
-        
         let EntryPayload::File { chunks, .. } = &notes.payload else {
             panic!("notes.md must be a file");
         };
@@ -970,7 +794,6 @@ mod tests {
         );
         assert_eq!(o1.manifest_id, o2.manifest_id);
 
-        
         let root =
             parse_tree_node(&store.get(BlobKind::TreeNode, &o1.root_tree_id).unwrap()).unwrap();
         let child = |name: &str| match &root
@@ -987,8 +810,6 @@ mod tests {
         let c2 = child("dup2");
         assert_eq!(c1, c2, "identical sibling listings share one tree node");
 
-        
-        
         store.write_index_snapshot().unwrap();
         drop(store);
         let reopened = crate::store::Store::create(
@@ -1040,10 +861,6 @@ mod tests {
         assert_eq!(before, after, "dedup must leave the pack set untouched");
     }
 
-    
-    
-    
-    
     #[test]
     fn k_rescans_of_unchanged_folder_grow_the_store_below_a_small_constant() {
         let (_dir, store) = fresh_store();
@@ -1070,7 +887,6 @@ mod tests {
         let mut first_tree_id = None;
         let mut baseline = None;
         for scan in 0..K {
-            
             let idn = identity((100 + scan, 7));
             let out = snapshot_dir(&store, poly_of(13), &tree, &idn).unwrap();
             match first_tree_id {
@@ -1111,8 +927,6 @@ mod tests {
             &tree.join("bad_link"),
         );
 
-        
-        
         let non_utf8_name = std::ffi::OsStr::from_bytes(b"na\xffme");
         let name_refused = std::fs::write(tree.join(non_utf8_name), b"y").is_ok();
 
@@ -1134,7 +948,6 @@ mod tests {
         want.sort();
         assert_eq!(got, want, "every refusal must be loud and specific");
 
-        
         let root =
             parse_tree_node(&store.get(BlobKind::TreeNode, &out.root_tree_id).unwrap()).unwrap();
         let names: Vec<&str> = root.entries.iter().map(|e| e.name.as_str()).collect();
@@ -1147,7 +960,7 @@ mod tests {
     fn scan_normalizes_names_to_nfc() {
         let (_dir, store) = fresh_store();
         let tree = _dir.path().join("t");
-        
+
         write_file(&tree.join("cafe\u{301}.txt"), b"nfc me", false, (1, 0));
 
         let out = snapshot_dir(&store, poly_of(19), &tree, &identity((1, 1))).unwrap();
@@ -1159,8 +972,6 @@ mod tests {
 
     #[test]
     fn sibling_name_collision_after_nfc_is_a_hard_error() {
-        
-        
         let entries = vec![
             file_entry("cafe\u{301}.txt", false, 0, 0, vec![]),
             file_entry("caf\u{e9}.txt", false, 0, 0, vec![]),
@@ -1176,8 +987,6 @@ mod tests {
         )
         .is_ok());
     }
-
-    
 
     #[test]
     fn case_only_siblings_are_fatal_on_folding_hosts_allowed_on_case_sensitive() {
@@ -1195,8 +1004,6 @@ mod tests {
                 assert_eq!((first.as_str(), second.as_str()), ("README", "readme"));
             }
             other => {
-                
-                
                 assert!(
                     !host_folds_case(),
                     "on a folding host the collision must be fatal, got {other:?}"
@@ -1239,7 +1046,7 @@ mod tests {
 
         make_symlink("/etc/passwd", &tree.join("abs_link"));
         make_symlink("../../outside", &tree.join("esc_link"));
-        
+
         make_symlink("../real.txt", &tree.join("sub/ok_link"));
 
         let out = snapshot_dir(&store, poly_of(6), &tree, &identity((1, 1))).unwrap();
@@ -1263,7 +1070,7 @@ mod tests {
             ],
             "every refusal names path + reason + fix"
         );
-        
+
         let sub =
             parse_tree_node(&store.get(BlobKind::TreeNode, &out.root_tree_id).unwrap()).unwrap();
         let _ = sub;
@@ -1272,11 +1079,9 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn decomposed_and_precomposed_directory_spellings_are_one_name() {
-        
-        
         let (_dir, store) = fresh_store();
         let tree = _dir.path().join("t");
-        
+
         let nfd_dir = tree.join("rapport-anne\u{301}e");
         std::fs::create_dir_all(nfd_dir).unwrap();
         write_file(
@@ -1293,11 +1098,6 @@ mod tests {
         let names: Vec<&str> = root.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["rapport-ann\u{e9}e"], "stored form is composed NFC");
 
-        
-        
-        
-        
-        
         if host_folds_case() {
             return;
         }
@@ -1305,8 +1105,6 @@ mod tests {
         let err = snapshot_dir(&store, poly_of(7), &tree, &identity((2, 2))).unwrap_err();
         assert!(matches!(err, SnapshotError::NameCollision { .. }), "{err}");
     }
-
-    
 
     fn artifact_counts(p: &Path) -> (usize, usize) {
         let packs = std::fs::read_dir(p.join(".ferry/packs"))
@@ -1334,16 +1132,12 @@ mod tests {
         let mut idn = identity((500, 999_999_999));
         idn.parent_manifest_id = s1.manifest_id;
 
-        
-        
         let s2 = snapshot_dir(&store, poly, &tree, &idn).unwrap();
         assert_eq!(s2.root_tree_id, s1.root_tree_id);
         assert_eq!(s2.manifest_id, s1.manifest_id);
         assert_eq!(s2.stats.bytes_chunked, 5 + 4);
         assert_eq!(artifact_counts(_dir.path()), before);
 
-        
-        
         let s3 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
         assert_eq!(s3.root_tree_id, s1.root_tree_id);
         assert_eq!(s3.manifest_id, s1.manifest_id);
@@ -1354,7 +1148,6 @@ mod tests {
         assert_eq!(s3.stats.bytes_chunked, 0);
         assert_eq!(artifact_counts(_dir.path()), before);
 
-        
         write_file(&tree.join("a.txt"), "alphas".as_bytes(), false, (11, 5));
         let s4 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
         assert_ne!(s4.root_tree_id, s1.root_tree_id);
@@ -1375,12 +1168,10 @@ mod tests {
         let mut idn = identity((2, 0));
         idn.parent_manifest_id = s1.manifest_id;
 
-        
         let s2 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
         assert_eq!(s2.manifest_id, s1.manifest_id);
         assert_eq!(s2.stats.bytes_chunked, 0);
 
-        
         std::fs::write(&victim, b"payload!").unwrap();
         set_mtime(&victim, 77, 123);
         let s3 = snapshot_dir_incremental(&store, poly, &tree, &idn).unwrap();
@@ -1390,8 +1181,6 @@ mod tests {
         );
         assert_eq!(s3.stats.bytes_chunked, 8);
 
-        
-        
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1405,7 +1194,6 @@ mod tests {
             assert_ne!(s4.root_tree_id, s3.root_tree_id, "exec drift must surface");
             assert_eq!(s4.stats.bytes_chunked, 8);
 
-            
             let mut perm = std::fs::metadata(&victim).unwrap().permissions();
             perm.set_mode(0o644);
             std::fs::set_permissions(&victim, perm).unwrap();
@@ -1417,12 +1205,6 @@ mod tests {
         }
     }
 
-    
-    
-    
-    
-    
-    
     #[test]
     #[cfg(unix)]
     fn same_stat_tamper_beats_incremental_but_not_the_audit_walk() {
@@ -1459,15 +1241,12 @@ mod tests {
         let tree = _dir.path().join("t");
         write_file(&tree.join("a.txt"), b"alpha", false, (10, 1));
 
-        
         let mut idn = identity((1, 0));
         idn.parent_manifest_id = [0xEE; 32];
         let out = snapshot_dir(&store, poly_of(29), &tree, &idn).unwrap();
         assert_eq!(out.stats.bytes_chunked, 5);
         assert_eq!(out.manifest.parent_manifest_id, [0xEE; 32]);
 
-        
-        
         let mut foreign = identity((9, 9));
         foreign.folder_id = [1; 16];
         let f1 = snapshot_dir(&store, poly_of(29), &tree, &foreign).unwrap();
@@ -1479,10 +1258,6 @@ mod tests {
         assert_ne!(f2.root_tree_id, f1.root_tree_id);
     }
 
-    
-    
-    
-    
     #[test]
     fn adopted_peer_manifest_holds_when_content_is_unchanged() {
         let (_dir, store) = fresh_store();

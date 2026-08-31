@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 
 use ferry_store::manifest::{TreeEntry, TreeNode};
@@ -34,9 +25,6 @@ impl DirCache {
         self.dirs.get(rel)
     }
 
-    
-    
-    
     pub(crate) fn take(&mut self, rel: &RelPath) -> Option<CachedDir> {
         self.dirs.remove(rel)
     }
@@ -45,8 +33,6 @@ impl DirCache {
         self.dirs.insert(rel, dir);
     }
 
-    
-    
     pub(crate) fn child_entry(&self, parent: &RelPath, name: &str) -> Option<&TreeEntry> {
         self.dirs
             .get(parent)?
@@ -56,14 +42,10 @@ impl DirCache {
             .find(|e| e.name == name)
     }
 
-    
-    
-    
     pub(crate) fn remove_prefix(&mut self, prefix: &RelPath) {
         self.dirs.retain(|k, _| !starts_with(k, prefix));
     }
 
-    
     pub(crate) fn keys_under<'c>(
         &'c self,
         parent: &'c RelPath,
@@ -73,7 +55,6 @@ impl DirCache {
             .filter(move |k| k.len() == parent.len() + 1 && k[..parent.len()] == parent[..])
     }
 
-    
     pub(crate) fn iter_within<'c>(
         &'c self,
         subtree: &'c RelPath,
@@ -88,7 +69,6 @@ impl DirCache {
         self.dirs.len()
     }
 }
-
 
 pub(crate) fn starts_with(path: &RelPath, prefix: &RelPath) -> bool {
     path.len() >= prefix.len() && path[..prefix.len()] == prefix[..]
@@ -106,8 +86,6 @@ mod tests {
         parts.iter().map(std::string::ToString::to_string).collect()
     }
 
-    
-    
     fn seed(store: &ferry_store::store::Store, root: &std::path::Path) -> (DirCache, BlobId) {
         let mut cache = DirCache::new();
         let mut closed = BTreeSet::new();
@@ -138,7 +116,7 @@ mod tests {
         write_file(&root.join("sub/deep/b.txt"), b"beta", true, (2, 0));
 
         let (cache, root_id) = seed(&store, &root);
-        
+
         assert_eq!(cache.len(), 3);
 
         let sub = cache.node(&key(&["sub"])).expect("sub cached");
@@ -157,7 +135,7 @@ mod tests {
             deep,
             "cached id matches parent's pointer"
         );
-        
+
         let scratch =
             ferry_store::snapshot::snapshot_dir(&store, poly_of(3), &root, &identity((2, 0)))
                 .unwrap()

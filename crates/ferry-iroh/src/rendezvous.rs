@@ -20,7 +20,10 @@ pub fn service_name_for_code(code: &str) -> String {
 
 pub fn send_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     if payload.len() > MAX_PAIRING_FRAME_LEN {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "frame too large",
+        ));
     }
     let len = (payload.len() as u32).to_le_bytes();
     writer.write_all(&len)?;
@@ -36,7 +39,10 @@ pub fn recv_frame<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
     reader.read_exact(&mut len_buf)?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > MAX_PAIRING_FRAME_LEN {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     let mut buf = vec![0u8; len];
     if len > 0 {
@@ -200,10 +206,19 @@ where
 
     while Instant::now() < deadline && discovered_addr.is_none() {
         // Send probes to loopback, LAN broadcast, and multicast
-        let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::from(([127, 0, 0, 1], DISCOVERY_PORT)));
-        let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)));
+        let _ = udp_socket.send_to(
+            probe.as_bytes(),
+            SocketAddr::from(([127, 0, 0, 1], DISCOVERY_PORT)),
+        );
+        let _ = udp_socket.send_to(
+            probe.as_bytes(),
+            SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)),
+        );
         if let Ok(mcast_ip) = MULTICAST_ADDR.parse::<Ipv4Addr>() {
-            let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::new(IpAddr::V4(mcast_ip), DISCOVERY_PORT));
+            let _ = udp_socket.send_to(
+                probe.as_bytes(),
+                SocketAddr::new(IpAddr::V4(mcast_ip), DISCOVERY_PORT),
+            );
         }
 
         // Wait for reply
@@ -253,7 +268,10 @@ where
     // Step 1: Read offer
     let offer_bytes = recv_frame(&mut stream)?;
     if offer_bytes.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty offer received"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "empty offer received",
+        ));
     }
 
     // Step 2: Run client handshake
@@ -265,7 +283,10 @@ where
     // Step 4: Receive grant
     let grant_bytes = recv_frame(&mut stream)?;
     if grant_bytes.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty grant received"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "empty grant received",
+        ));
     }
 
     // Step 5: Process grant

@@ -1,36 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferry_store::diff::{diff_roots, CompPath, EntryKind, EntryState};
@@ -60,19 +27,14 @@ pub enum ReconcileError {
     StructuralConflict { ancestor: String, path: String },
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConflictKind {
-    
     BothChanged,
-    
+
     DeleteVsEdit,
-    
+
     AddVsAdd,
 }
-
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MaterializeOp {
@@ -81,19 +43,16 @@ pub(crate) struct MaterializeOp {
     pub(crate) result: Option<EntryState>,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LoserContent {
-    
-    
-    
-    
-    LiveLocal { expected_chunks: Vec<(BlobId, u64)> },
-    
-    
-    LiveLocalSymlink { expected_target: String },
-    
-    
+    LiveLocal {
+        expected_chunks: Vec<(BlobId, u64)>,
+    },
+
+    LiveLocalSymlink {
+        expected_target: String,
+    },
+
     FromStore {
         kind: ferry_store::diff::EntryKind,
         exec: bool,
@@ -104,21 +63,18 @@ pub(crate) enum LoserContent {
     },
 }
 
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QuarantineOp {
     pub(crate) path: CompPath,
-    
+
     pub(crate) loser_device: [u8; 32],
-    
+
     pub(crate) loser_mtime_sec: i64,
     pub(crate) loser_mtime_nsec: u32,
-    
+
     pub(crate) exec: bool,
     pub(crate) content: LoserContent,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PlannedConflict {
@@ -126,49 +82,36 @@ pub(crate) struct PlannedConflict {
     pub(crate) kind: ConflictKind,
     pub(crate) winner: Side,
     pub(crate) loser: Side,
-    
+
     pub(crate) winner_device: [u8; 32],
     pub(crate) loser_device: [u8; 32],
-    
-    
+
     pub(crate) winner_mtime_sec: i64,
     pub(crate) winner_mtime_nsec: u32,
-    
+
     pub(crate) loser_mtime_sec: Option<i64>,
     pub(crate) loser_mtime_nsec: Option<u32>,
 }
 
-
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ActionPlan {
-    
-    
     pub(crate) materialize: Vec<MaterializeOp>,
-    
+
     pub(crate) quarantine: Vec<QuarantineOp>,
-    
-    
+
     pub(crate) send: Vec<(BlobId, u64)>,
-    
-    
-    
-    
+
     pub(crate) fetch: Vec<(BlobId, u64)>,
     pub(crate) conflicts: Vec<PlannedConflict>,
 }
 
-
 pub(crate) struct ReconcileInput<'a> {
-    
-    
     pub(crate) store: &'a Store,
     pub(crate) local: &'a RootManifest,
     pub(crate) remote: &'a RootManifest,
-    
+
     pub(crate) base: Option<&'a RootManifest>,
 }
-
 
 #[derive(Clone, Debug, Default)]
 struct SideView {
@@ -200,8 +143,6 @@ fn index_change_set(cs: &ferry_store::diff::ChangeSet) -> ViewMap {
     map
 }
 
-
-
 fn same_content(l: &EntryState, r: &EntryState) -> bool {
     l.kind == r.kind
         && match l.kind {
@@ -209,8 +150,6 @@ fn same_content(l: &EntryState, r: &EntryState) -> bool {
             _ => l.chunks == r.chunks,
         }
 }
-
-
 
 fn pick_winner(
     l: &EntryState,
@@ -236,17 +175,13 @@ fn pick_winner(
 
 enum Decision {
     Nothing,
-    
-    ApplyRemote,
-    
-    KeepLocal,
-    
-    Conflict {
-        kind: ConflictKind,
-        winner: Side,
-    },
-}
 
+    ApplyRemote,
+
+    KeepLocal,
+
+    Conflict { kind: ConflictKind, winner: Side },
+}
 
 fn manifest_chunk_refs(store: &Store, root: &BlobId) -> Result<BTreeSet<BlobId>, ReconcileError> {
     let mut seen_trees: BTreeSet<BlobId> = BTreeSet::new();
@@ -278,18 +213,11 @@ fn collect_chunks(state: &EntryState, out: &mut BTreeMap<BlobId, u64>) {
     }
 }
 
-
 enum SafeBase<'a> {
-    
     Proven(&'a RootManifest),
-    
-    
-    
-    
+
     Empty,
 }
-
-
 
 fn is_ancestor(store: &Store, ancestor: &BlobId, of: &RootManifest) -> bool {
     if *blake3::hash(&serialize_manifest(of)).as_bytes() == *ancestor {
@@ -330,7 +258,6 @@ fn resolve_safe_base<'a>(
     }
 }
 
-
 pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, ReconcileError> {
     let ReconcileInput {
         store,
@@ -339,9 +266,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         base,
     } = input;
 
-    
-    
-    
     let safe_base = resolve_safe_base(store, local, remote, base);
 
     let empty_root = store.put_meta(
@@ -374,8 +298,7 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             .expect("every key comes from at least one view")
             .0
             .clone();
-        
-        
+
         let (b, l, r) = match (lv, rv) {
             (Some((_, lv)), Some((_, rv))) => (
                 lv.base.clone().or_else(|| rv.base.clone()),
@@ -396,14 +319,11 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             (false, true) => Decision::ApplyRemote,
             (true, true) => {
                 if l == r {
-                    
                     Decision::Nothing
                 } else {
                     match (&l, &r) {
                         (Some(ls), Some(rs)) => {
                             if same_content(ls, rs) {
-                                
-                                
                                 if pick_winner(ls, rs, &local.device_id, &remote.device_id)
                                     == Side::Local
                                 {
@@ -412,12 +332,9 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                                     Decision::ApplyRemote
                                 }
                             } else if ls.kind == EntryKind::Dir && rs.kind == EntryKind::Dir {
-                                
                                 Decision::Nothing
                             } else {
                                 let kind = if l.is_none() || r.is_none() {
-                                    
-                                    
                                     ConflictKind::DeleteVsEdit
                                 } else if b.is_none() {
                                     ConflictKind::AddVsAdd
@@ -425,7 +342,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                                     ConflictKind::BothChanged
                                 };
                                 let winner = match kind {
-                                    
                                     ConflictKind::DeleteVsEdit => {
                                         if l.is_some() {
                                             Side::Local
@@ -438,18 +354,14 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                                 Decision::Conflict { kind, winner }
                             }
                         }
-                        _ => {
-                            
-                            
-                            Decision::Conflict {
-                                kind: ConflictKind::DeleteVsEdit,
-                                winner: if l.is_some() {
-                                    Side::Local
-                                } else {
-                                    Side::Remote
-                                },
-                            }
-                        }
+                        _ => Decision::Conflict {
+                            kind: ConflictKind::DeleteVsEdit,
+                            winner: if l.is_some() {
+                                Side::Local
+                            } else {
+                                Side::Remote
+                            },
+                        },
                     }
                 }
             }
@@ -516,11 +428,9 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                         });
                     }
                 }
-                
+
                 if let Some(loser_state) = lost {
                     if loser_state.kind == EntryKind::Dir {
-                        
-                        
                         return Err(ReconcileError::StructuralConflict {
                             ancestor: join(&path),
                             path: join(&path),
@@ -540,8 +450,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
                             (local.device_id, content)
                         }
                         Side::Remote => {
-                            
-                            
                             for (id, len) in &loser_state.chunks {
                                 fetch_cand.insert(*id, *len);
                             }
@@ -572,8 +480,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         decided.push((key.clone(), decision, l, r));
     }
 
-    
-    
     let remote_refs = manifest_chunk_refs(store, &remote.root_tree_id)?;
     let local_refs = manifest_chunk_refs(store, &local.root_tree_id)?;
     let send: BTreeMap<BlobId, u64> = send_cand
@@ -585,12 +491,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         .filter(|(id, _)| !local_refs.contains(id))
         .collect();
 
-    
-    
-    
-    
-    
-    
     let mut final_state: BTreeMap<String, Option<&EntryState>> = BTreeMap::new();
     for (key, d, l, r) in &decided {
         let s = match d {
@@ -611,10 +511,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         .map(|op| join(&op.path))
         .collect();
 
-    
-    
-    
-    
     let mut survivors: Vec<CompPath> = Vec::new();
     for q in &quarantine {
         survivors.push(q.path.clone());
@@ -626,7 +522,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
     }
     for (key, d, l, _) in &decided {
         if matches!(d, Decision::KeepLocal) && l.is_some() {
-            
             if let Some((p, _)) = local_view.get(key).or_else(|| remote_view.get(key)) {
                 survivors.push(p.clone());
             }
@@ -646,11 +541,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
         materialize.retain(|op| !(op.result.is_none() && suppressed.contains(&join(&op.path))));
     }
 
-    
-    
-    
-    
-    
     let targets: Vec<CompPath> = materialize
         .iter()
         .filter(|op| op.result.is_some())
@@ -666,7 +556,6 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
             }
             match final_state.get(&anc_key) {
                 Some(None) => {
-                    
                     let base_state = local_view
                         .get(&anc_key)
                         .and_then(|(_, v)| v.base.clone())
@@ -723,8 +612,6 @@ mod tests {
     const DEV_A: [u8; 32] = [0xA1; 32];
     const DEV_B: [u8; 32] = [0xB2; 32];
 
-    
-    
     struct Pair {
         a: Device,
         b: Device,
@@ -740,7 +627,7 @@ mod tests {
         build_b(&b.tree);
         let sa = a.snapshot();
         let sb = b.snapshot();
-        
+
         transfer_manifest(&b.store, &a.store, &sb.manifest, sb.manifest_id);
         transfer_manifest(&a.store, &b.store, &sa.manifest, sa.manifest_id);
         Pair { a, b, sa, sb }
@@ -765,7 +652,7 @@ mod tests {
         let plan = plan_on_a(&p);
         assert!(plan.conflicts.is_empty());
         assert!(plan.quarantine.is_empty());
-        
+
         assert_eq!(plan.materialize.len(), 1);
         assert_eq!(
             join(&plan.materialize[0].path),
@@ -812,7 +699,7 @@ mod tests {
         );
         let plan = plan_on_a(&p);
         assert!(plan.conflicts.is_empty() && plan.quarantine.is_empty());
-        
+
         assert_eq!(plan.materialize.len(), 1);
         assert_eq!(plan.materialize[0].result.as_ref().unwrap().mtime_sec, 20);
     }
@@ -855,7 +742,6 @@ mod tests {
             "tie: DEV_B is the higher device id"
         );
 
-        
         let mirrored = reconcile(ReconcileInput {
             store: &p.b.store,
             local: &p.sb.manifest,
@@ -872,14 +758,12 @@ mod tests {
 
     #[test]
     fn delete_vs_edit_resurrects_the_edit() {
-        
         let mut p = pair(
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
             &|t| write_file(&t.join("f.txt"), b"base", false, (50, 0)),
         );
         let base = p.sa.manifest.clone();
-        
-        
+
         p.b.parent = p.sa.manifest_id;
 
         write_file(&p.a.tree.join("f.txt"), b"the edit", false, (60, 0));
@@ -959,10 +843,9 @@ mod tests {
         let base = p.sa.manifest.clone();
         p.b.parent = p.sa.manifest_id;
 
-        
         std::fs::remove_dir_all(p.a.tree.join("d")).unwrap();
         write_file(&p.a.tree.join("d"), b"now a file", false, (80, 0));
-        
+
         write_file(
             &p.b.tree.join("d/inner.txt"),
             b"edited inner",

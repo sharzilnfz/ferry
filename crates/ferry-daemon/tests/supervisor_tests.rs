@@ -16,8 +16,6 @@ fn tmp_home() -> TempDir {
     tempfile::tempdir().expect("home tempdir")
 }
 
-
-
 fn init_folder(identity: &DeviceIdentity) -> TempDir {
     let dir = tempfile::tempdir().expect("folder tempdir");
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -63,7 +61,7 @@ async fn supervisor_two_engines_distinct_status() {
     let (mut sup, identity) = new_supervisor(&home);
     let dir_a = init_folder(&identity);
     let dir_b = init_folder(&identity);
-    
+
     let rec_a = sup
         .handle_register(dir_a.path().to_path_buf())
         .expect("register a");
@@ -71,7 +69,7 @@ async fn supervisor_two_engines_distinct_status() {
         .handle_register(dir_b.path().to_path_buf())
         .expect("register b");
     assert_ne!(rec_a.folder_id, rec_b.folder_id);
-    
+
     assert!(
         sup.wait_for_manifests(Duration::from_secs(5)),
         "engines should produce manifests"
@@ -85,7 +83,7 @@ async fn supervisor_two_engines_distinct_status() {
     assert_eq!(snap_a.folder_id, rec_a.folder_id);
     assert_eq!(snap_b.folder_id, rec_b.folder_id);
     assert_ne!(snap_a.folder_id, snap_b.folder_id);
-    
+
     assert!(snap_a.manifest_id.is_some(), "manifest a");
     assert!(snap_b.manifest_id.is_some(), "manifest b");
     assert_ne!(
@@ -104,7 +102,7 @@ async fn register_adds_and_list_returns_three() {
     sup.handle_register(dir_a.path().to_path_buf()).unwrap();
     sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     assert_eq!(sup.list_folders().len(), 2);
-    
+
     let dir_c = init_folder(&identity);
     let rec_c = sup
         .handle_register(dir_c.path().to_path_buf())
@@ -112,7 +110,7 @@ async fn register_adds_and_list_returns_three() {
     let list = sup.list_folders();
     assert_eq!(list.len(), 3);
     assert!(list.iter().any(|r| r.folder_id == rec_c.folder_id));
-    
+
     let reg = ferry_folder::inventory::FolderInventory::new(home.path())
         .list()
         .unwrap();
@@ -131,17 +129,17 @@ async fn remove_stops_and_list_returns_two() {
     let rec_b = sup.handle_register(dir_b.path().to_path_buf()).unwrap();
     let rec_c = sup.handle_register(dir_c.path().to_path_buf()).unwrap();
     assert_eq!(sup.list_folders().len(), 3);
-    
+
     sup.handle_remove(&rec_b.folder_id).expect("remove b");
     let list = sup.list_folders();
     assert_eq!(list.len(), 2);
     assert!(!list.iter().any(|r| r.folder_id == rec_b.folder_id));
     assert!(list.iter().any(|r| r.folder_id == rec_a.folder_id));
     assert!(list.iter().any(|r| r.folder_id == rec_c.folder_id));
-    
+
     assert!(sup.get_engine_handle(&rec_b.folder_id).is_none());
     assert!(sup.get_engine_handle(&rec_a.folder_id).is_some());
-    
+
     let reg = ferry_folder::inventory::FolderInventory::new(home.path())
         .list()
         .unwrap();
@@ -151,7 +149,6 @@ async fn remove_stops_and_list_returns_two() {
 
 #[test]
 fn central_socket_default_path_respects_ferry_home() {
-    
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOCK.lock().unwrap();
     let orig = std::env::var_os("FERRY_HOME");
@@ -159,17 +156,17 @@ fn central_socket_default_path_respects_ferry_home() {
     std::env::set_var("FERRY_HOME", tmp.path());
     let p = default_socket_path();
     assert_eq!(p, tmp.path().join("daemon.sock"));
-    
+
     #[allow(deprecated)]
     let p2 = ferry_ipc::paths::socket_path_for_dir(&PathBuf::from("/any/folder"));
-    
+
     let _ = p2;
-    
+
     match orig {
         Some(v) => std::env::set_var("FERRY_HOME", v),
         None => std::env::remove_var("FERRY_HOME"),
     }
-    
+
     let p3 = default_socket_path();
     assert!(p3.ends_with("daemon.sock"));
     assert!(p3.to_string_lossy().contains(".ferry"));
@@ -192,10 +189,10 @@ async fn ipc_dispatch_list_folders_over_loopback() {
     tokio::spawn(async move {
         ferry_daemon::ipc::handle_supervisor_connection(server_conn, sup_clone).await;
     });
-    
+
     let init = client_conn.recv_message().await.unwrap().unwrap();
     assert!(matches!(init, DaemonMessage::Snapshot(_)));
-    
+
     client_conn
         .send_command(&ClientCommand::ListFolders)
         .await
@@ -207,7 +204,7 @@ async fn ipc_dispatch_list_folders_over_loopback() {
         }
         other => panic!("expected FolderList, got {other:?}"),
     }
-    
+
     client_conn
         .send_command(&ClientCommand::ListFolders)
         .await
@@ -217,7 +214,7 @@ async fn ipc_dispatch_list_folders_over_loopback() {
         DaemonMessage::FolderList { folders } => assert_eq!(folders.len(), expected_count),
         other => panic!("expected FolderList second, got {other:?}"),
     }
-    
+
     sup_arc.lock().await.shutdown();
 }
 
@@ -304,12 +301,11 @@ async fn expect_engine_crashed(
 
 #[tokio::test]
 async fn supervisor_spawn_engines_from_existing_registry() {
-    
     let home = tmp_home();
     let identity = DeviceIdentity::generate();
     let dir_a = init_folder(&identity);
     let dir_b = init_folder(&identity);
-    
+
     let inv = ferry_folder::inventory::FolderInventory::new(home.path());
     inv.register(dir_a.path()).unwrap();
     inv.register(dir_b.path()).unwrap();
@@ -338,7 +334,6 @@ async fn polynomial_stability_across_supervisor_instances() {
     let folder_id = [7u8; 16];
     let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(42));
 
-    
     let dir1 = tempfile::tempdir().expect("folder 1");
     let (store1, _) =
         ferry_folder::folder::create_folder(dir1.path(), &identity1, folder_id, poly).unwrap();
@@ -357,7 +352,6 @@ async fn polynomial_stability_across_supervisor_instances() {
     .unwrap();
     std::fs::write(dir1.path().join("file.txt"), b"deterministic payload").unwrap();
 
-    
     let dir2 = tempfile::tempdir().expect("folder 2");
     let (store2, _) =
         ferry_folder::folder::create_folder(dir2.path(), &identity2, folder_id, poly).unwrap();
@@ -376,7 +370,6 @@ async fn polynomial_stability_across_supervisor_instances() {
     .unwrap();
     std::fs::write(dir2.path().join("file.txt"), b"deterministic payload").unwrap();
 
-    
     let mut sup1 = new_supervisor_with(home1.path(), identity1.clone());
     let rec1 = sup1
         .handle_register(dir1.path().to_path_buf())
@@ -388,7 +381,6 @@ async fn polynomial_stability_across_supervisor_instances() {
     assert!(handle1.is_healthy());
     sup1.shutdown();
 
-    
     let mut sup2 = new_supervisor_with(home2.path(), identity2.clone());
     let rec2 = sup2
         .handle_register(dir2.path().to_path_buf())
@@ -400,7 +392,6 @@ async fn polynomial_stability_across_supervisor_instances() {
     assert!(handle2.is_healthy());
     sup2.shutdown();
 
-    
     let m1_id = ferry_store::format::unhex::<32>(&manifest_id1).expect("unhex m1");
     let m2_id = ferry_store::format::unhex::<32>(&manifest_id2).expect("unhex m2");
 
@@ -469,7 +460,6 @@ async fn folder_engine_direct_lifecycle_and_state_broadcast() {
     assert_eq!(engine.restart_count(), 0);
     assert!(engine.is_healthy());
 
-    
     let mut got_state_changed = false;
     for _ in 0..50 {
         if let Ok(ferry_ipc::backend::UiEvent::StateChanged {
@@ -511,7 +501,6 @@ async fn folder_engine_crash_recovery_and_backoff_escalation() {
 
     let handle_before = std::sync::Arc::clone(engine.handle());
 
-    
     handle_before.shutdown();
     assert!(!engine.is_healthy());
 
@@ -521,14 +510,12 @@ async fn folder_engine_crash_recovery_and_backoff_escalation() {
     assert!(engine.is_healthy());
     assert!(!std::sync::Arc::ptr_eq(&handle_before, engine.handle()));
 
-    
     let first_msg = expect_engine_crashed(&mut rx).await;
     assert!(
         first_msg.contains("100ms"),
         "first restart should emit 100ms backoff, got: {first_msg}"
     );
 
-    
     let handle_second = std::sync::Arc::clone(engine.handle());
     handle_second.shutdown();
     assert!(!engine.is_healthy());

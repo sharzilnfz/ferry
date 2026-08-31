@@ -1,18 +1,4 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 use crate::error::ProtoError;
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProtocolVersion(u16);
@@ -40,9 +26,6 @@ impl ProtocolVersion {
         ProtocolVersion(v)
     }
 
-    
-    
-    
     pub const fn min_minor(a: ProtocolVersion, b: ProtocolVersion) -> ProtocolVersion {
         if a.0 <= b.0 {
             a
@@ -57,10 +40,6 @@ impl core::fmt::Display for ProtocolVersion {
         write!(f, "{}.{}", self.major(), self.minor())
     }
 }
-
-
-
-
 
 pub fn negotiate(
     ours: ProtocolVersion,
@@ -93,7 +72,7 @@ mod tests {
             negotiate(ProtocolVersion::new(1, 4), ProtocolVersion::new(1, 7)).unwrap(),
             ProtocolVersion::new(1, 4)
         );
-        
+
         assert_eq!(
             negotiate(ProtocolVersion::new(1, 7), ProtocolVersion::new(1, 4)).unwrap(),
             ProtocolVersion::new(1, 4)
@@ -118,8 +97,7 @@ mod tests {
     fn min_minor_never_crosses_majors() {
         let a = ProtocolVersion::new(1, 9);
         let b = ProtocolVersion::new(2, 0);
-        
-        
+
         assert_eq!(ProtocolVersion::min_minor(a, b).major(), 1);
     }
 }

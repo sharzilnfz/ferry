@@ -1,13 +1,11 @@
-
-
 use crate::activity_log::ActivityLog;
 use ferry_ipc::protocol::{
     ConflictEntry, DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
     TransferDirection,
 };
 pub use ferry_platform::format_bytes;
-pub use ferry_platform::SyncState;
 use ferry_platform::time::current_time_str;
+pub use ferry_platform::SyncState;
 use std::collections::HashMap;
 
 pub trait SyncStateBadge {
@@ -28,7 +26,6 @@ impl SyncStateBadge for SyncState {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferProgressState {
     pub bytes_transferred: u64,
@@ -39,7 +36,6 @@ pub struct TransferProgressState {
     pub peer_device_id: Option<String>,
     pub direction: Option<TransferDirection>,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct TuiState {
@@ -63,7 +59,6 @@ pub struct TuiState {
     pub is_connected: bool,
     pub should_quit: bool,
 
-    
     pub cached_metrics_line: String,
     pub cached_manifest_line: String,
     pub cached_pin_line: String,
@@ -107,7 +102,6 @@ impl Default for TuiState {
 }
 
 impl TuiState {
-    
     #[must_use]
     pub fn new(
         folder: impl Into<String>,
@@ -124,7 +118,6 @@ impl TuiState {
         s
     }
 
-    
     #[must_use]
     pub fn resolve_sync_state(&self) -> SyncState {
         if !self.is_connected && self.raw_state_str.eq_ignore_ascii_case("offline") {
@@ -153,7 +146,6 @@ impl TuiState {
         }
     }
 
-    
     pub fn apply_snapshot(&mut self, snapshot: EngineSnapshot) {
         self.folder = snapshot.folder;
         self.folder_id = snapshot.folder_id;
@@ -193,7 +185,6 @@ impl TuiState {
         );
     }
 
-    
     pub fn apply_state_changed(
         &mut self,
         state: String,
@@ -225,7 +216,6 @@ impl TuiState {
         );
     }
 
-    
     #[allow(clippy::too_many_arguments)]
     pub fn apply_transfer_progress(
         &mut self,
@@ -268,7 +258,6 @@ impl TuiState {
         );
     }
 
-    
     pub fn apply_conflict_recorded(
         &mut self,
         path: String,
@@ -291,7 +280,6 @@ impl TuiState {
         );
     }
 
-    
     pub fn apply_error(&mut self, code: String, message: String) {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
@@ -300,7 +288,6 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Error { code, message });
     }
 
-    
     pub fn apply_ack(&mut self, command: String, message: Option<String>) {
         self.is_connected = true;
         if command == "list_conflicts" {
@@ -317,7 +304,6 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Ack { command, message });
     }
 
-    
     pub fn apply_pong(&mut self) {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
@@ -326,7 +312,6 @@ impl TuiState {
             .record_daemon_message(current_time_str(), &DaemonMessage::Pong);
     }
 
-    
     pub fn handle_daemon_message(&mut self, msg: DaemonMessage) {
         match msg {
             DaemonMessage::Snapshot(s) => self.apply_snapshot(s),
@@ -371,7 +356,6 @@ impl TuiState {
         }
     }
 
-    
     pub fn update_cached_strings(&mut self) {
         self.cached_metrics_line = format!(
             "{} files, {} dirs, {} symlinks ({})",

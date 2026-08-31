@@ -1,7 +1,3 @@
-
-
-
-
 #![cfg(test)]
 
 use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
@@ -55,10 +51,6 @@ pub fn set_mtime(path: &Path, sec: i64, nsec: u32) {
     .unwrap();
 }
 
-
-
-
-
 pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
     #[cfg(unix)]
     {
@@ -78,7 +70,6 @@ pub fn set_dir_mtime(path: &Path, sec: i64, nsec: u32) {
 }
 
 pub struct Device {
-    
     #[allow(dead_code)]
     pub dir: tempfile::TempDir,
     pub store: Store,
@@ -91,7 +82,6 @@ pub struct Device {
 }
 
 impl Device {
-    
     pub fn new(tag: u8, device_id: [u8; 32], poly: ferry_store::chunker::ValidatedPoly) -> Device {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
@@ -121,7 +111,6 @@ impl Device {
     }
 }
 
-
 pub fn transfer(
     from: &Store,
     to: &Store,
@@ -134,8 +123,6 @@ pub fn transfer(
         }
     }
 }
-
-
 
 pub fn transfer_manifest(
     from: &Store,

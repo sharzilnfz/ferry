@@ -1,32 +1,18 @@
-
-
-
-
-
-
-
-
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::procs::process_start_token;
 
-
 pub const PID_FILENAME: &str = "daemon.pid";
 const LOCK_FILENAME: &str = "daemon.lock";
 
-
-
 pub const TERMINATE_DEADLINE: Duration = Duration::from_secs(5);
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PidRecord {
     pub pid: u32,
-    
-    
+
     pub start_token: Option<u64>,
 }
 
@@ -38,24 +24,18 @@ pub enum DaemonLockError {
     Io(#[from] std::io::Error),
 }
 
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminateOutcome {
-    
     Stopped { pid: u32 },
-    
+
     NotRunning,
-    
+
     Timeout { pid: u32 },
 }
 
 fn pid_path(dir: &Path) -> PathBuf {
     dir.join(PID_FILENAME)
 }
-
-
-
 
 pub fn read_pid(dir: &Path) -> Option<PidRecord> {
     let text = std::fs::read_to_string(pid_path(dir)).ok()?;
@@ -65,27 +45,18 @@ pub fn read_pid(dir: &Path) -> Option<PidRecord> {
     Some(PidRecord { pid, start_token })
 }
 
-
-
 pub fn running_pid(dir: &Path) -> Option<u32> {
     let record = read_pid(dir)?;
     instance_alive(&record).then_some(record.pid)
 }
 
-
 pub fn is_running(dir: &Path) -> bool {
     running_pid(dir).is_some()
 }
 
-
-
-
-
-
 pub fn terminate(dir: &Path, deadline: Duration) -> Result<TerminateOutcome, DaemonLockError> {
     let path = pid_path(dir);
     let Some(record) = read_pid(dir) else {
-        
         let _ = std::fs::remove_file(&path);
         return Ok(TerminateOutcome::NotRunning);
     };
@@ -108,8 +79,6 @@ pub fn terminate(dir: &Path, deadline: Duration) -> Result<TerminateOutcome, Dae
     }
 }
 
-
-
 fn instance_alive(record: &PidRecord) -> bool {
     match record.start_token {
         Some(recorded) => process_start_token(record.pid) == Some(recorded),
@@ -117,16 +86,12 @@ fn instance_alive(record: &PidRecord) -> bool {
     }
 }
 
-
-
-
-
 #[cfg(unix)]
 fn still_alive(record: &PidRecord) -> bool {
     let Ok(pid) = i32::try_from(record.pid) else {
         return instance_alive(record);
     };
-    
+
     let rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
     match rc {
         0 => true,
@@ -143,12 +108,10 @@ fn still_alive(record: &PidRecord) -> bool {
 fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
     #[cfg(unix)]
     {
-        
         let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            
-            
+
             if err.raw_os_error() != Some(libc::ESRCH) {
                 return Err(err.into());
             }
@@ -162,14 +125,12 @@ fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
             OpenProcess, TerminateProcess, PROCESS_TERMINATE,
         };
 
-        
         let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
         if handle.is_null() {
-            
             return Ok(());
         }
         let ok = unsafe { TerminateProcess(handle, 1) };
-        
+
         unsafe { CloseHandle(handle) };
         if ok == 0 {
             return Err(std::io::Error::last_os_error().into());
@@ -177,8 +138,6 @@ fn signal_terminate(pid: u32) -> Result<(), DaemonLockError> {
         Ok(())
     }
 }
-
-
 
 #[derive(Debug)]
 pub struct DaemonLock {
@@ -188,8 +147,6 @@ pub struct DaemonLock {
 }
 
 impl DaemonLock {
-    
-    
     pub fn acquire(dir: &Path) -> Result<Self, DaemonLockError> {
         std::fs::create_dir_all(dir)?;
         let lock_path = dir.join(LOCK_FILENAME);
@@ -206,7 +163,7 @@ impl DaemonLock {
         {
             use std::os::unix::io::AsRawFd;
             let fd = file.as_raw_fd();
-            
+
             let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
             if ret != 0 {
                 let err = std::io::Error::last_os_error();
@@ -242,7 +199,7 @@ impl Drop for DaemonLock {
         {
             use std::os::unix::io::AsRawFd;
             let fd = self._file.as_raw_fd();
-            
+
             unsafe { libc::flock(fd, libc::LOCK_UN) };
         }
         let _ = std::fs::remove_file(&self.lock_path);
@@ -261,8 +218,6 @@ mod tests {
         }
     }
 
-    
-    
     fn live_record(dir: &Path) -> (std::process::Child, PidRecord) {
         let child = spawn_sleeper(30).expect("spawn sleeper");
         let token = process_start_token(child.id());
@@ -336,8 +291,7 @@ mod tests {
     fn is_running_rejects_pid_reuse_with_foreign_token() {
         let dir = tempfile::tempdir().unwrap();
         let (mut child, record) = live_record(dir.path());
-        
-        
+
         let forged = PidRecord {
             start_token: record.start_token.map(|t| t.wrapping_add(1)),
             ..record
@@ -375,7 +329,7 @@ mod tests {
     #[test]
     fn terminate_timeout_preserves_pid_file_and_liveness() {
         let dir = tempfile::tempdir().unwrap();
-        
+
         let mut child = std::process::Command::new("sh")
             .args(["-c", "trap \"\" TERM; sleep 30"])
             .spawn()

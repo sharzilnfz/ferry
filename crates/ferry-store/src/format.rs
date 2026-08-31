@@ -1,19 +1,10 @@
-
-
-
-
-
-
 use thiserror::Error;
 
-
 pub const MAGIC: [u8; 5] = *b"FERRY";
-
 
 pub const FORMAT_VERSION: u32 = 1;
 
 pub const HEADER_LEN: usize = 10;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContainerKind {
@@ -39,7 +30,6 @@ impl ContainerKind {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlobKind {
     DataChunk = 0x01,
@@ -63,13 +53,10 @@ impl BlobKind {
         self as u8
     }
 
-    
     pub fn is_meta(self) -> bool {
         !matches!(self, BlobKind::DataChunk)
     }
 }
-
-
 
 pub type BlobId = [u8; 32];
 
@@ -89,7 +76,6 @@ pub enum FormatError {
     ReservedNonzero,
 }
 
-
 pub fn write_header(kind: ContainerKind) -> [u8; HEADER_LEN] {
     let mut h = [0u8; HEADER_LEN];
     h[..5].copy_from_slice(&MAGIC);
@@ -97,7 +83,6 @@ pub fn write_header(kind: ContainerKind) -> [u8; HEADER_LEN] {
     h[6..10].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
     h
 }
-
 
 pub fn parse_header(bytes: &[u8]) -> Result<ContainerKind, FormatError> {
     if bytes.len() < HEADER_LEN {
@@ -123,8 +108,6 @@ pub fn parse_header(bytes: &[u8]) -> Result<ContainerKind, FormatError> {
     Ok(kind)
 }
 
-
-
 pub fn put_u8(out: &mut Vec<u8>, v: u8) {
     out.push(v);
 }
@@ -148,7 +131,6 @@ pub fn put_i64(out: &mut Vec<u8>, v: i64) {
 pub fn put_bytes(out: &mut Vec<u8>, v: &[u8]) {
     out.extend_from_slice(v);
 }
-
 
 pub struct Reader<'a> {
     buf: &'a [u8],
@@ -202,8 +184,6 @@ impl<'a> Reader<'a> {
         s
     }
 
-    
-    
     pub fn expect_end(&mut self) -> Result<(), FormatError> {
         if self.pos != self.buf.len() {
             return Err(FormatError::Truncated {
@@ -214,7 +194,6 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 }
-
 
 pub fn hex(bytes: &[u8]) -> String {
     hex::encode(bytes)

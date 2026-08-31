@@ -1,10 +1,5 @@
 #![allow(warnings, clippy::all, clippy::pedantic)]
 
-
-
-
-
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -101,7 +96,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
                     test: false,
                 });
             }
-            
+
             return ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
                 folder: None,
                 gui: false,

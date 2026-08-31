@@ -1,45 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
@@ -62,17 +20,13 @@ use crate::version::{negotiate, ProtocolVersion};
 pub const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
-
 pub const INFO_HANDSHAKE: &[u8] = b"ferry/v1/handshake";
 pub const INFO_HTK_I2R: &[u8] = b"ferry/v1/htk/i2r";
 pub const INFO_HTK_R2I: &[u8] = b"ferry/v1/htk/r2i";
 pub const INFO_TK_I2R: &[u8] = b"ferry/v1/tk/i2r";
 pub const INFO_TK_R2I: &[u8] = b"ferry/v1/tk/r2i";
 
-
 const TRAFFIC_NONCE_PREFIX: [u8; 4] = *b"FPN1";
-
-
 
 pub fn transcript_hash(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
@@ -90,11 +44,6 @@ fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
         .expect("32-byte OKM always valid");
     okm
 }
-
-
-
-
-
 
 pub type HandshakeKeys = (
     Zeroizing<[u8; KEY_LEN]>,
@@ -121,8 +70,7 @@ pub fn kdf_handshake(
     (htk_i2r, htk_r2i, prk_box)
 }
 
-
-#[derive(Debug)] 
+#[derive(Debug)]
 pub struct SessionKey(Zeroizing<[u8; KEY_LEN]>);
 
 impl SessionKey {
@@ -135,15 +83,7 @@ impl SessionKey {
     }
 }
 
-
-
-
-
-
-pub fn traffic_keys(
-    prk: &[u8; KEY_LEN],
-    final_transcript: &[u8; 32],
-) -> (SessionKey, SessionKey) {
+pub fn traffic_keys(prk: &[u8; KEY_LEN], final_transcript: &[u8; 32]) -> (SessionKey, SessionKey) {
     let ext = Hkdf::<Sha256>::new(Some(final_transcript), prk);
     let mut root = Zeroizing::new([0u8; KEY_LEN]);
     ext.expand(b"ferry/v1/traffic", root.as_mut())
@@ -153,9 +93,6 @@ pub fn traffic_keys(
         SessionKey(expand_from(root.as_slice(), INFO_TK_R2I)),
     )
 }
-
-
-
 
 pub(crate) fn seal_auth(
     key: &[u8; KEY_LEN],
@@ -196,8 +133,6 @@ pub(crate) fn open_auth(
         .map_err(|_| ProtoError::Auth("auth plaintext wrong length"))
 }
 
-
-
 pub struct SessionCipher {
     key: SessionKey,
     seq: u64,
@@ -208,7 +143,6 @@ impl SessionCipher {
         SessionCipher { key, seq: 0 }
     }
 
-    
     #[cfg(test)]
     pub(crate) fn at_sequence(key: SessionKey, seq: u64) -> Self {
         SessionCipher { key, seq }
@@ -225,9 +159,6 @@ impl SessionCipher {
         Ok(n)
     }
 
-    
-    
-    
     pub fn seal_frame(
         &mut self,
         len_prefix: u32,
@@ -246,8 +177,6 @@ impl SessionCipher {
             .map_err(|_| ProtoError::ProtocolViolation("frame seal failure"))
     }
 
-    
-    
     pub fn open_frame(&mut self, len_prefix: u32, ct: &[u8]) -> Result<Vec<u8>, ProtoError> {
         if ct.len() < 16 {
             return Err(ProtoError::ProtocolViolation("sealed body too short"));
@@ -273,8 +202,6 @@ impl core::fmt::Debug for SessionCipher {
             .finish()
     }
 }
-
-
 
 fn full_wire(fb: &FrameBody) -> Vec<u8> {
     let body = fb.encode();
@@ -360,12 +287,6 @@ struct HelloWires {
     responder: Vec<u8>,
 }
 
-
-
-
-
-
-
 pub struct SecureSession<S: ByteStream> {
     io: S,
     version: ProtocolVersion,
@@ -377,16 +298,6 @@ pub struct SecureSession<S: ByteStream> {
 }
 
 impl<S: ByteStream> SecureSession<S> {
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn establish(
         mut io: S,
         role: Role,
@@ -442,7 +353,7 @@ impl<S: ByteStream> SecureSession<S> {
         ProtoError,
     > {
         let flags = FLAG_EXTENSION_AWARE;
-        
+
         let esk = StaticSecret::random_from_rng(OsRng);
         let my_epk = *PublicKey::from(&esk).as_bytes();
         let my_nonce = random32();
@@ -456,7 +367,6 @@ impl<S: ByteStream> SecureSession<S> {
             nonce: my_nonce,
         };
 
-        
         let (peer_hello, hello_wires) = match role {
             Role::Initiator => {
                 let my_wire = send_preauth(io, codec::MSG_HELLO, our_max, &my_hello.encode())?;
@@ -465,7 +375,7 @@ impl<S: ByteStream> SecureSession<S> {
                     return Err(ProtoError::ProtocolViolation("expected hello ack"));
                 }
                 let ack = HelloAck::parse(&fb.payload)?;
-                
+
                 check_identity(ack.stat_pub, expected_peer)?;
                 let expected_agreed = negotiate(our_max, ack.version)?;
                 if ack.agreed != expected_agreed {
@@ -487,7 +397,7 @@ impl<S: ByteStream> SecureSession<S> {
                     return Err(ProtoError::ProtocolViolation("expected hello"));
                 }
                 let hello = Hello::parse(&fb.payload)?;
-                
+
                 check_identity(hello.stat_pub, expected_peer)?;
                 let agreed = negotiate(our_max, hello.version)?;
                 let ack = HelloAck {
@@ -522,7 +432,6 @@ impl<S: ByteStream> SecureSession<S> {
 
         let th_hello = transcript_hash(&[&hello_wires.initiator, &hello_wires.responder]);
 
-        
         fn dh(sk: &StaticSecret, peer: [u8; 32]) -> Result<[u8; 32], ProtoError> {
             let shared = sk.diffie_hellman(&PublicKey::from(peer));
             if !shared.was_contributory() {
@@ -546,10 +455,8 @@ impl<S: ByteStream> SecureSession<S> {
             ),
         };
 
-        
         let (htk_i2r, htk_r2i, prk) = kdf_handshake(&th_hello, &e1, &m1, &m2);
 
-        
         let proof_a: AuthProof = seal_auth(&htk_i2r, &th_hello, identity.device_id())?;
         let proof_b_key = htk_r2i.clone();
 
@@ -587,7 +494,6 @@ impl<S: ByteStream> SecureSession<S> {
             }
         };
 
-        
         let th_final = transcript_hash(&[
             &hello_wires.initiator,
             &hello_wires.responder,
@@ -642,7 +548,7 @@ impl<S: ByteStream> SecureSession<S> {
                     && self.peer_max.minor() > ProtocolVersion::V1_0.minor();
                 let flagged = (self.peer_flags & !FLAG_EXTENSION_AWARE) != 0;
                 if higher && flagged {
-                    continue; 
+                    continue;
                 }
                 return Err(ProtoError::UnknownMessage {
                     msg_type: fb.msg_type,
@@ -746,8 +652,6 @@ mod tests {
     use crate::version::ProtocolVersion;
 
     fn dh_terms() -> ([Box<[u8; 32]>; 3], [u8; 32]) {
-        
-        
         (
             [
                 Box::new(core::array::from_fn(|i| i as u8 + 1)),
@@ -765,10 +669,9 @@ mod tests {
         assert_ne!(h_a2b.as_ref(), h_b2a.as_ref());
 
         let (t_a2b, t_b2a) = traffic_keys(&prk, &th);
-        
+
         assert_ne!(t_a2b.0.as_ref(), t_b2a.0.as_ref());
-        
-        
+
         let again = kdf_handshake(&th, &terms[0], &terms[1], &terms[2]);
         assert_eq!(again.0.as_ref(), h_a2b.as_ref());
         let (t2, _) = traffic_keys(&again.2, &th);
@@ -791,7 +694,6 @@ mod tests {
         assert_ne!(base.0.as_ref(), changed_e.0.as_ref());
         assert_ne!(base.2.as_ref(), changed_e.2.as_ref());
 
-        
         let (ta, _) = traffic_keys(&base.2, &th);
         let (tb, _) = traffic_keys(&base.2, &th2);
         assert_ne!(ta.0.as_ref(), tb.0.as_ref());
@@ -805,7 +707,6 @@ mod tests {
         assert_eq!(proof.ciphertext.len(), AuthProof::CT_LEN);
         assert_eq!(open_auth(&h_a2b, &th, &proof).unwrap(), [9; 32]);
 
-        
         let mut th_evil = th;
         th_evil[0] ^= 1;
         assert!(open_auth(&h_a2b, &th_evil, &proof).is_err());
@@ -815,8 +716,7 @@ mod tests {
     fn frames_seal_open_with_counters_and_reject_reorder_replay_tamper() {
         let (terms, th) = dh_terms();
         let (_, _, prk) = kdf_handshake(&th, &terms[0], &terms[1], &terms[2]);
-        
-        
+
         let (ka, _) = traffic_keys(&prk, &th);
         let (kb2, _) = traffic_keys(&prk, &th);
         let mut tx = ka.cipher();
@@ -826,13 +726,8 @@ mod tests {
         let f1 = tx.seal_frame(105, b"second").unwrap();
         assert_ne!(f0, f1, "counter must change the ciphertext");
 
-        
-        
-        
-        
         assert!(rx.open_frame(105, &f1).is_err());
 
-        
         let (ka3, _) = traffic_keys(&prk, &th);
         let (ka4, _) = traffic_keys(&prk, &th);
         let mut tx = ka3.cipher();
@@ -842,17 +737,13 @@ mod tests {
         assert_eq!(rx.open_frame(100, &g0).unwrap(), b"first");
         assert_eq!(rx.open_frame(105, &g1).unwrap(), b"second");
 
-        
         assert!(rx.open_frame(100, &g0).is_err());
 
-        
         let fresh = tx.seal_frame(10, b"payload").unwrap();
         let mut evil = fresh.clone();
         evil[3] ^= 0x80;
         assert!(rx.open_frame(10, &evil).is_err());
 
-        
-        
         let bound = tx.seal_frame(77, b"x").unwrap();
         assert!(rx.open_frame(78, &bound).is_err());
     }
@@ -873,7 +764,7 @@ mod tests {
         let (_, _, prk) = kdf_handshake(&[0u8; 32], &[1; 32], &[2; 32], &[3; 32]);
         let (k, _) = traffic_keys(&prk, &[5u8; 32]);
         let rendered = format!("{:?}\n{:?}", k, SessionCipher::new(SessionKey(k.0.clone())));
-        
+
         let hexy = hex(&k.0.as_ref()[..4]);
         assert!(!rendered.contains(&hexy));
         assert!(!rendered.contains("secret"));
@@ -986,7 +877,6 @@ mod tests {
             }
         });
 
-        
         let cli_res = SecureSession::establish(
             client_io,
             Role::Initiator,
@@ -1011,7 +901,6 @@ mod tests {
             let id_b = id_b.clone();
             let id_wrong_dev = *id_wrong.device_id();
             move || {
-                
                 SecureSession::establish(
                     server_io,
                     Role::Responder,
@@ -1078,25 +967,20 @@ mod tests {
             }
         });
 
-        
         let hello = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &hello).unwrap();
 
-        
         let ack = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &ack).unwrap();
 
-        
         let mut auth_init = crate::frame::read_body(&mut pipe_a).unwrap();
         let last = auth_init.len() - 1;
         auth_init[last] ^= 0xFF;
         crate::frame::write_body(&mut pipe_b, &auth_init).unwrap();
 
-        
         let srv_res = srv.join().unwrap();
         assert!(matches!(srv_res, Err(ProtoError::Auth(_))), "{srv_res:?}");
 
-        
         let bye = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &bye).unwrap();
 
@@ -1149,19 +1033,15 @@ mod tests {
             }
         });
 
-        
         let hello = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &hello).unwrap();
 
-        
         let ack = crate::frame::read_body(&mut pipe_b).unwrap();
         crate::frame::write_body(&mut pipe_a, &ack).unwrap();
 
-        
         let auth_init = crate::frame::read_body(&mut pipe_a).unwrap();
         crate::frame::write_body(&mut pipe_b, &auth_init).unwrap();
 
-        
         let mut auth_confirm = crate::frame::read_body(&mut pipe_b).unwrap();
         let last = auth_confirm.len() - 1;
         auth_confirm[last] ^= 0xFF;
@@ -1195,7 +1075,6 @@ mod tests {
             }
         });
 
-        
         let cli_res = SecureSession::establish(
             client_io,
             Role::Initiator,

@@ -1,7 +1,3 @@
-
-
-
-
 mod common;
 
 use std::time::Duration;
@@ -20,7 +16,7 @@ fn steady_state_sync_never_triggers_full_index_rebuild() {
     let fx = EngineFixture::start("incr", 777);
 
     let mut tb = TreeBuilder::new(fx.tree_a(), 4242);
-    
+
     let paths = tb.create_random_files(10);
 
     let deadline = std::time::Instant::now() + timeout_from_env();
@@ -37,14 +33,11 @@ fn steady_state_sync_never_triggers_full_index_rebuild() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    
-    
     let b_root = fx.tree_b();
     for rel in &paths {
         assert!(b_root.join(rel).is_file(), "{rel} missing on B");
     }
 
-    
     for rel in &paths[0..3] {
         tb.write_random(rel, 4096);
     }

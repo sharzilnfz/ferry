@@ -1,37 +1,7 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkRefusal {
-    
     AbsoluteTarget,
-    
+
     EscapesRoot,
 }
 
@@ -53,31 +23,19 @@ impl std::fmt::Display for LinkRefusal {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkDecision {
-    
     SyncAsLink,
-    
+
     Refuse(LinkRefusal),
 }
 
-
-
-
-
-
-
-
 pub fn classify_link(depth: usize, target: &str) -> LinkDecision {
-    
     if target.starts_with('/') || target.starts_with('\\') {
         return LinkDecision::Refuse(LinkRefusal::AbsoluteTarget);
     }
     let b = target.as_bytes();
     if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
-        
-        
         return LinkDecision::Refuse(LinkRefusal::AbsoluteTarget);
     }
 
@@ -96,13 +54,6 @@ pub fn classify_link(depth: usize, target: &str) -> LinkDecision {
     }
     LinkDecision::SyncAsLink
 }
-
-
-
-
-
-
-
 
 pub fn allow_windows_dir_links() -> bool {
     #[cfg(windows)]
@@ -130,9 +81,9 @@ mod tests {
         assert!(sync(2, "../../shared/asset.png"));
         assert!(sync(1, "../sibling.txt"));
         assert!(sync(0, "./here.txt"));
-        
+
         assert!(sync(3, "../../../root-file"));
-        
+
         assert!(sync(1, "..\\other\\file.txt"));
         assert!(sync(0, "dir\\nested"));
     }
@@ -156,25 +107,24 @@ mod tests {
 
     #[test]
     fn escaping_relative_targets_are_refused_exactly_at_the_boundary() {
-        
         assert!(sync(1, "../in-root"));
         assert_eq!(
             classify_link(1, "../../out"),
             LinkDecision::Refuse(LinkRefusal::EscapesRoot)
         );
-        
+
         assert_eq!(
             classify_link(0, ".."),
             LinkDecision::Refuse(LinkRefusal::EscapesRoot)
         );
-        
+
         assert_eq!(
             classify_link(0, "a/b/../../../out"),
             LinkDecision::Refuse(LinkRefusal::EscapesRoot)
         );
-        
+
         assert!(sync(0, "a/../b"));
-        
+
         assert_eq!(
             classify_link(0, "./../evil"),
             LinkDecision::Refuse(LinkRefusal::EscapesRoot)
@@ -183,8 +133,6 @@ mod tests {
 
     #[test]
     fn windows_dir_link_gate_defaults_off_everywhere() {
-        
-        
         assert!(!allow_windows_dir_links());
     }
 }

@@ -1,8 +1,3 @@
-
-
-
-
-
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -42,7 +37,6 @@ fn ferry_bin() -> PathBuf {
         .expect("bin built by cargo")
 }
 
-
 struct Daemon(Child);
 
 impl Drop for Daemon {
@@ -68,7 +62,6 @@ fn two_devices_pair_and_converge_over_localhost() {
     let a = Device::new("a");
     let b = Device::new("b");
 
-    
     let out = a.command(&["init"]).output().expect("run init");
     assert!(
         out.status.success(),
@@ -79,14 +72,13 @@ fn two_devices_pair_and_converge_over_localhost() {
     std::fs::write(a.tree.join("hello.txt"), b"hello from device A\n").unwrap();
     std::fs::create_dir_all(a.tree.join("src")).unwrap();
     std::fs::write(a.tree.join("src/main.py"), b"print('hi')\n").unwrap();
-    
+
     std::fs::write(
         a.tree.join(".env"),
         "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
     )
     .unwrap();
 
-    
     let mut pair_a = a
         .command(&["pair", "--timeout-secs", "60"])
         .stdout(Stdio::null())
@@ -116,7 +108,6 @@ fn two_devices_pair_and_converge_over_localhost() {
     assert!(status_a, "device A's `ferry pair` never completed");
     assert!(b.tree.join(".ferry/config").is_file(), "B adopted a store");
 
-    
     let log_dir = std::env::temp_dir().join(format!("ferry-test-logs-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log_dir);
     let mut daemon_a_cmd =
@@ -138,7 +129,6 @@ fn two_devices_pair_and_converge_over_localhost() {
     );
     let _ = &mut daemon_b;
 
-    
     let hello_a_path = a.tree.join("hello.txt");
     let hello_b = b.tree.join("hello.txt");
     let src_b = b.tree.join("src/main.py");
@@ -153,10 +143,6 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    
-    
-    
-    
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
@@ -184,7 +170,6 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    
     std::fs::remove_file(a.tree.join("hello.txt")).unwrap();
     let mut timeline: Vec<String> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(90);
@@ -230,13 +215,11 @@ fn two_devices_pair_and_converge_over_localhost() {
         std::thread::sleep(Duration::from_millis(250));
     }
 
-    
     assert!(
         !b.tree.join(".env").exists(),
         ".env must not sync under default rules"
     );
 
-    
     for d in [&a, &b] {
         let out = d
             .command(&["conflicts", "list", "--json"])
@@ -247,7 +230,6 @@ fn two_devices_pair_and_converge_over_localhost() {
         assert_eq!(doc["entries"].as_array().unwrap().len(), 0, "{doc}");
     }
 
-    
     let out = b.command(&["status", "--json"]).output().unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let peers = doc["peers"].as_array().unwrap();
@@ -257,7 +239,6 @@ fn two_devices_pair_and_converge_over_localhost() {
     drop(daemon_a);
     drop(daemon_b);
 }
-
 
 fn wait_for(child: &mut Child, secs: u64) -> bool {
     let deadline = Instant::now() + Duration::from_secs(secs);
@@ -269,7 +250,6 @@ fn wait_for(child: &mut Child, secs: u64) -> bool {
         }
     }
 }
-
 
 fn read_listening<R: std::io::Read>(r: R, secs: u64) -> Option<String> {
     let reader = BufReader::new(r);

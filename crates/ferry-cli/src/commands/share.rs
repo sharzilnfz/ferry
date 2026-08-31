@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -13,7 +6,6 @@ use serde_json::json;
 use crate::error::{CliError, CliResult};
 use crate::folder;
 use crate::out::Output;
-
 
 struct Finding {
     path: String,
@@ -72,7 +64,6 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
         return Err(err);
     }
 
-    
     if let Some(out) = try_pairing_code_share(&opened, &findings, timeout_secs) {
         return out;
     }

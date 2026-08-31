@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -18,14 +10,12 @@ use ferry_store::chunker::ValidatedPoly;
 use crate::error::{CliError, CliResult};
 use crate::folder::OpenFolder;
 
-
 pub struct OneShot {
     pub manifest: RootManifest,
     pub manifest_bytes: Vec<u8>,
     pub manifest_id: BlobId,
     pub stats: ferry_scan::walk::PassStats,
 }
-
 
 pub fn one_shot(opened: &OpenFolder, device_id: [u8; 32]) -> CliResult<OneShot> {
     let rules = folder_rules(opened)?;
@@ -96,14 +86,13 @@ pub fn one_shot_raw_with_parent(
         parent_manifest_id,
         ..ScanConfig::default()
     };
-    let engine =
-        ScanEngine::watch_with(root, handle, cfg, ignore).map_err(|e| {
-            CliError::new(
-                "scan",
-                e.to_string(),
-                "check the folder exists and is readable",
-            )
-        })?;
+    let engine = ScanEngine::watch_with(root, handle, cfg, ignore).map_err(|e| {
+        CliError::new(
+            "scan",
+            e.to_string(),
+            "check the folder exists and is readable",
+        )
+    })?;
     let current = engine.current().ok_or_else(|| {
         CliError::new(
             "scan",
@@ -113,7 +102,7 @@ pub fn one_shot_raw_with_parent(
     })?;
     let manifest = current.manifest.clone();
     let stats = current.stats.clone();
-    
+
     drop(engine);
     Ok(OneShot {
         manifest_bytes: serialize_manifest(&manifest),

@@ -1,10 +1,6 @@
-
-
 use std::path::{Path, PathBuf};
 
-
 pub const DEFAULT_SOCKET_FILENAME: &str = "daemon.sock";
-
 
 pub const DEFAULT_WINDOWS_PIPE_PREFIX: &str = r"\\.\pipe\ferry";
 
@@ -26,9 +22,6 @@ fn ferry_home_dir() -> PathBuf {
     PathBuf::from("/tmp/.ferry")
 }
 
-
-
-
 pub fn default_socket_path() -> PathBuf {
     #[cfg(windows)]
     {
@@ -40,12 +33,6 @@ pub fn default_socket_path() -> PathBuf {
     }
 }
 
-
-
-
-
-
-
 #[deprecated(
     since = "0.1.0",
     note = "use default_socket_path() instead; socket is now device-global"
@@ -56,7 +43,6 @@ pub fn socket_path_for_dir(dir: &Path) -> PathBuf {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        
         let root = if dir.file_name().and_then(|n| n.to_str()) == Some(".ferry") {
             dir.parent().unwrap_or(dir)
         } else {

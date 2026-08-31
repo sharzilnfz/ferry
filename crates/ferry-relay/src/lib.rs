@@ -1,30 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ferry_store::format::hex;
-
-
-
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -35,11 +13,8 @@ use iroh_relay::server::{
     Access, AccessControl, ClientRequest, Server as RelayServer, ServerConfig,
 };
 
-
 #[derive(Debug, Clone)]
 pub struct RelayOptions {
-    
-    
     pub http_bind_addr: SocketAddr,
 }
 
@@ -48,8 +23,6 @@ impl RelayOptions {
         RelayOptions { http_bind_addr }
     }
 }
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerEntry {
@@ -62,7 +35,6 @@ pub enum LedgerEntry {
     },
 }
 
-
 #[derive(Debug, Clone, Default)]
 pub struct Ledger(Arc<Mutex<Vec<LedgerEntry>>>);
 
@@ -71,13 +43,10 @@ impl Ledger {
         lock(&self.0).push(e);
     }
 
-    
     pub fn entries(&self) -> Vec<LedgerEntry> {
         lock(&self.0).clone()
     }
 
-    
-    
     pub fn render(&self) -> Vec<String> {
         self.entries()
             .into_iter()
@@ -95,8 +64,6 @@ impl Ledger {
             .collect()
     }
 }
-
-
 
 #[derive(Debug)]
 struct LedgerAccessControl(Ledger);
@@ -130,35 +97,28 @@ impl AccessControl for LedgerAccessControl {
     }
 }
 
-
 pub struct LocalRelay {
     url: RelayUrl,
     http_addr: SocketAddr,
     ledger: Ledger,
     server: Arc<Mutex<Option<RelayServer>>>,
-    
-    
+
     _rt: Mutex<Option<tokio::runtime::Runtime>>,
 }
 
 impl LocalRelay {
-    
     pub fn url(&self) -> RelayUrl {
         self.url.clone()
     }
 
-    
     pub fn http_addr(&self) -> SocketAddr {
         self.http_addr
     }
 
-    
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
     }
 
-    
-    
     pub async fn shutdown(self) {
         let taken = lock(&self.server).take();
         if let Some(server) = taken {
@@ -169,18 +129,9 @@ impl LocalRelay {
 
 impl Drop for LocalRelay {
     fn drop(&mut self) {
-        
-        
-        if let Some(_server) = lock(&self.server).take() {
-            
-        }
+        if let Some(_server) = lock(&self.server).take() {}
     }
 }
-
-
-
-
-
 
 pub async fn spawn(opts: RelayOptions) -> Result<LocalRelay, String> {
     let ledger = Ledger::default();
@@ -208,8 +159,6 @@ pub async fn spawn(opts: RelayOptions) -> Result<LocalRelay, String> {
     })
 }
 
-
-
 pub fn spawn_sync(opts: RelayOptions) -> Result<LocalRelay, String> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -220,12 +169,6 @@ pub fn spawn_sync(opts: RelayOptions) -> Result<LocalRelay, String> {
     *lock(&relay._rt) = Some(rt);
     Ok(relay)
 }
-
-
-
-
-
-
 
 #[doc(hidden)]
 pub fn install_capturing_subscriber(
@@ -252,17 +195,12 @@ pub fn install_capturing_subscriber(
     }
 
     let subscriber = tracing_subscriber::registry().with(
-        
-        
         tracing_subscriber::fmt::layer()
             .with_writer(BufWriter(buffer))
             .with_ansi(false)
             .with_filter(tracing_subscriber::filter::LevelFilter::TRACE),
     );
-    
-    
-    
-    
+
     Ok(tracing::subscriber::set_global_default(subscriber).is_ok())
 }
 
@@ -280,15 +218,11 @@ mod tests {
         relay.shutdown().await;
     }
 
-    
-    
     #[test]
     fn poisoned_ledger_mutex_still_usable() {
         let shared = Arc::new(Mutex::new(Vec::<LedgerEntry>::new()));
         let ledger = Ledger(shared.clone());
 
-        
-        
         let handle = {
             let shared = shared.clone();
             std::thread::spawn(move || {
@@ -301,7 +235,6 @@ mod tests {
         };
         handle.join().expect("poisoner thread completes");
 
-        
         ledger.push(LedgerEntry::Disconnected {
             endpoint_id_hex: "aa".into(),
         });

@@ -1,5 +1,3 @@
-
-
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -11,14 +9,11 @@ use std::io::{self, stdout, Stdout};
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
-
-
 pub struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
 impl TerminalGuard {
-    
     pub fn init() -> io::Result<Self> {
         install_panic_hook();
         enable_raw_mode()?;
@@ -29,7 +24,6 @@ impl TerminalGuard {
         Ok(Self { terminal })
     }
 
-    
     pub fn terminal_mut(&mut self) -> &mut Terminal<CrosstermBackend<Stdout>> {
         &mut self.terminal
     }
@@ -48,7 +42,6 @@ impl Drop for TerminalGuard {
     }
 }
 
-
 pub fn restore_terminal_writer<W: io::Write>(writer: &mut W) -> io::Result<()> {
     let _ = disable_raw_mode();
     let _ = execute!(
@@ -59,7 +52,6 @@ pub fn restore_terminal_writer<W: io::Write>(writer: &mut W) -> io::Result<()> {
     );
     Ok(())
 }
-
 
 pub fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
@@ -76,7 +68,6 @@ pub fn install_panic_hook() {
     }));
 }
 
-
 pub struct TerminalEvents {
     rx: UnboundedReceiver<Event>,
     _worker: tokio::task::JoinHandle<()>,
@@ -89,23 +80,19 @@ impl Default for TerminalEvents {
 }
 
 impl TerminalEvents {
-    
     #[must_use]
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let worker = tokio::task::spawn_blocking(move || {
-            loop {
-                
-                if event::poll(Duration::from_millis(200)).unwrap_or(false) {
-                    if let Ok(evt) = event::read() {
-                        if tx.send(evt).is_err() {
-                            break;
-                        }
+        let worker = tokio::task::spawn_blocking(move || loop {
+            if event::poll(Duration::from_millis(200)).unwrap_or(false) {
+                if let Ok(evt) = event::read() {
+                    if tx.send(evt).is_err() {
+                        break;
                     }
                 }
-                if tx.is_closed() {
-                    break;
-                }
+            }
+            if tx.is_closed() {
+                break;
             }
         });
         Self {
@@ -114,7 +101,6 @@ impl TerminalEvents {
         }
     }
 
-    
     pub async fn next(&mut self) -> Option<Event> {
         self.rx.recv().await
     }

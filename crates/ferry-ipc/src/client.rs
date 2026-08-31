@@ -1,23 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -37,27 +17,21 @@ use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingReq
 use crate::protocol::{ClientCommand, ConflictEntry, DaemonMessage, EngineSnapshot};
 use crate::{validate_path, FolderRecord, ListDirectoryResponse};
 
-
 const SUPERVISOR_POLL: Duration = Duration::from_millis(500);
 
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct ReconnectPolicy {
-    
     pub attempts: u32,
-    
+
     pub base_delay: Duration,
-    
+
     pub max_delay: Duration,
 }
 
 impl Default for ReconnectPolicy {
     fn default() -> Self {
-        
-        
-        
         Self {
             attempts: 2,
             base_delay: Duration::from_millis(50),
@@ -65,10 +39,6 @@ impl Default for ReconnectPolicy {
         }
     }
 }
-
-
-
-
 
 #[derive(Clone)]
 struct LiveConn {
@@ -82,8 +52,6 @@ struct Outbound {
     command: ClientCommand,
 }
 
-
-
 struct Pending {
     command: ClientCommand,
     reply: oneshot::Sender<Result<DaemonMessage, OpError>>,
@@ -94,13 +62,10 @@ struct Inner {
     policy: ReconnectPolicy,
     conn: Mutex<Option<LiveConn>>,
     event_tx: broadcast::Sender<UiEvent>,
-    
+
     conn_gen: watch::Sender<u64>,
     supervisor_started: AtomicBool,
 }
-
-
-
 
 #[derive(Clone)]
 pub struct DaemonClient {
@@ -154,13 +119,11 @@ async fn platform_connect(path: &Path) -> Result<ConnHalves, IpcError> {
 }
 
 impl DaemonClient {
-    
     #[must_use]
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self::with_policy(socket_path, ReconnectPolicy::default())
     }
 
-    
     #[must_use]
     pub fn with_policy(socket_path: impl Into<PathBuf>, policy: ReconnectPolicy) -> Self {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -177,26 +140,19 @@ impl DaemonClient {
         }
     }
 
-    
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.inner.socket_path
     }
 
-    
     pub fn subscribe(&self) -> broadcast::Receiver<UiEvent> {
         self.inner.event_tx.subscribe()
     }
 
-    
-    
-    
-    
     pub async fn call(&self, command: ClientCommand) -> Result<DaemonMessage, OpError> {
         let conn = self.ensure_connected().await?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        
-        
+
         let pending = Pending {
             command: command.clone(),
             reply: reply_tx,
@@ -218,8 +174,6 @@ impl DaemonClient {
         }
     }
 
-    
-    
     pub async fn event_stream(&self) -> Result<UiEventStream, OpError> {
         self.ensure_connected().await?;
         Ok(UiEventStream::new(self.inner.event_tx.subscribe()))
@@ -230,8 +184,6 @@ impl DaemonClient {
         guard.clone().filter(|c| !*c.closed.borrow())
     }
 
-    
-    
     async fn ensure_connected(&self) -> Result<LiveConn, OpError> {
         let policy = self.inner.policy;
         let mut delay = policy.base_delay;
@@ -264,10 +216,7 @@ impl DaemonClient {
         let (sender, mut receiver) = platform_connect(&self.inner.socket_path)
             .await
             .map_err(unreachable_err)?;
-        
-        
-        
-        
+
         match receiver.recv_message().await {
             Ok(Some(msg)) => {
                 if let Some(event) = push_event_of(&msg) {
@@ -312,10 +261,6 @@ impl DaemonClient {
         let _ = self.inner.conn_gen.send(gen.wrapping_add(1));
     }
 
-    
-    
-    
-    
     fn spawn_supervisor(&self) {
         if self.inner.supervisor_started.swap(true, Ordering::SeqCst) {
             return;
@@ -357,7 +302,6 @@ impl DaemonClient {
     }
 }
 
-
 async fn writer_task<W: AsyncWrite + Unpin + Send + 'static>(
     mut sender: IpcSender<W>,
     mut cmd_rx: mpsc::Receiver<Outbound>,
@@ -369,12 +313,6 @@ async fn writer_task<W: AsyncWrite + Unpin + Send + 'static>(
     }
 }
 
-
-
-
-
-
-
 async fn reader_task<R: AsyncRead + Unpin + Send + 'static>(
     mut receiver: IpcReceiver<R>,
     mut pending_rx: mpsc::Receiver<Pending>,
@@ -385,9 +323,6 @@ async fn reader_task<R: AsyncRead + Unpin + Send + 'static>(
 ) {
     let mut queue: std::collections::VecDeque<Pending> = std::collections::VecDeque::new();
     while let Ok(Some(msg)) = receiver.recv_message().await {
-        
-        
-        
         while let Ok(pending) = pending_rx.try_recv() {
             queue.push_back(pending);
         }
@@ -419,7 +354,6 @@ fn route_message(
     queue: &mut std::collections::VecDeque<Pending>,
     event_tx: &broadcast::Sender<UiEvent>,
 ) {
-    
     let pure_push = matches!(
         &msg,
         DaemonMessage::StateChanged { .. }
@@ -432,9 +366,7 @@ fn route_message(
         }
         return;
     }
-    
-    
-    
+
     let snapshot_for_other = matches!(msg, DaemonMessage::Snapshot(_))
         && !queue
             .front()
@@ -450,15 +382,12 @@ fn route_message(
             let _ = pending.reply.send(Ok(msg));
         }
         None => {
-            
-            
             if let Some(event) = push_event_of(&msg) {
                 let _ = event_tx.send(event);
             }
         }
     }
 }
-
 
 fn push_event_of(msg: &DaemonMessage) -> Option<UiEvent> {
     match msg {
@@ -573,7 +502,6 @@ impl InventoryDomain for DaemonClient {
         path: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<ListDirectoryResponse, OpError>> {
         Box::pin(async move {
-            
             let validated = validate_path(path)?;
             match self
                 .call(ClientCommand::ListDirectory {
@@ -706,9 +634,6 @@ impl SessionDomain for DaemonClient {
         folder: Option<PathBuf>,
         _i_know: bool,
     ) -> BoxFuture<'_, Result<ShareOffer, OpError>> {
-        
-        
-        
         let dir = folder.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
             Err(OpError::new(
@@ -741,7 +666,6 @@ impl SessionDomain for DaemonClient {
         code_or_payload: String,
         dir: Option<PathBuf>,
     ) -> BoxFuture<'_, Result<PairResult, OpError>> {
-        
         let folder = dir.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
             Err(OpError::new(

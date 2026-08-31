@@ -1,89 +1,55 @@
-
-
-
-
-
-
-
-
-
 use std::collections::BTreeSet;
-
 
 pub type RelPath = Vec<String>;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Trigger {
-    
     Initial,
-    
+
     #[default]
     Events,
-    
+
     Poll,
-    
+
     OverflowRecovery,
-    
+
     Audit,
 }
 
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WatchSignal {
-    
-    
-    
     Changed(Vec<RelPath>),
-    
-    
-    
+
     PolledChanged(Vec<RelPath>),
-    
-    
-    
+
     Overflow { reason: String },
-    
-    
+
     Unwatchable { subtree: RelPath, reason: String },
-    
-    
-    
+
     PolledTick(RelPath),
-    
+
     AuditDue,
-    
+
     RootVanished,
-    
+
     RootReturned,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Nothing,
-    
+
     RescanSubtrees(Vec<RelPath>),
-    
-    
-    FullRescan {
-        reason: String,
-    },
-    
-    StartPolling {
-        subtree: RelPath,
-    },
-    
+
+    FullRescan { reason: String },
+
+    StartPolling { subtree: RelPath },
+
     RunAudit,
 }
 
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyState {
-    
-    
     pub polling: BTreeSet<RelPath>,
 }
 
@@ -106,12 +72,10 @@ impl PolicyState {
                     subtree: subtree.clone(),
                 }
             }
-            
-            
+
             WatchSignal::PolledTick(_) => Action::Nothing,
             WatchSignal::AuditDue => Action::RunAudit,
-            
-            
+
             WatchSignal::RootVanished => Action::Nothing,
             WatchSignal::RootReturned => Action::FullRescan {
                 reason: "watched root reappeared".to_string(),
@@ -119,22 +83,6 @@ impl PolicyState {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub fn enclosing_dirs(paths: &[RelPath]) -> Vec<RelPath> {
     let mut out: BTreeSet<RelPath> = BTreeSet::new();
@@ -163,9 +111,9 @@ mod tests {
     #[test]
     fn changed_paths_mark_self_and_parent() {
         let a = PolicyState::default().apply(&WatchSignal::Changed(vec![
-            p(&["a.txt"]),         
-            p(&["src", "lib.rs"]), 
-            p(&["src", "sub"]),    
+            p(&["a.txt"]),
+            p(&["src", "lib.rs"]),
+            p(&["src", "sub"]),
         ]));
         match a {
             Action::RescanSubtrees(dirs) => {
@@ -175,7 +123,7 @@ mod tests {
                     got,
                     vec![
                         p(&[]),
-                        p(&["a.txt"]), 
+                        p(&["a.txt"]),
                         p(&["src"]),
                         p(&["src", "lib.rs"]),
                         p(&["src", "sub"])
@@ -232,7 +180,7 @@ mod tests {
             st.polling.contains(&p(&["node_modules"])),
             "state remembers the fallback"
         );
-        
+
         st.apply(&WatchSignal::Unwatchable {
             subtree: p(&["big2"]),
             reason: "EMFILE".into(),

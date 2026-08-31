@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,14 +12,13 @@ use ferry_ipc::protocol::{ConflictEntry, EngineSnapshot, TransferDirection};
 use crate::activity::{render_activity_stream, ActivityEntry};
 use crate::beacon::{beacon_color, beacon_label, status_beacon_ui};
 use crate::fleet::render_fleet_table;
-use ferry_platform::SyncState;
-pub use ferry_platform::format_bytes;
 use crate::modals::{
     render_conflicts_modal, render_pair_modal, render_pin_modal, render_share_modal,
 };
 use crate::telemetry::render_telemetry_hairline;
 use crate::theme::{colors, Theme};
-
+pub use ferry_platform::format_bytes;
+use ferry_platform::SyncState;
 
 pub enum BackendAction {
     TriggerScan,
@@ -44,7 +41,6 @@ pub enum BackendAction {
     },
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuiTransferState {
     pub bytes_transferred: u64,
@@ -55,10 +51,6 @@ pub struct GuiTransferState {
     pub peer_device_id: Option<String>,
     pub direction: Option<TransferDirection>,
 }
-
-
-
-
 
 pub struct GuiApp {
     pub backend: Arc<dyn UiBackend>,
@@ -91,7 +83,6 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    
     #[must_use]
     pub fn new_headless(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -121,7 +112,6 @@ impl GuiApp {
         }
     }
 
-    
     #[must_use]
     pub fn new(
         backend: Arc<dyn UiBackend>,
@@ -131,7 +121,6 @@ impl GuiApp {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (action_tx, mut action_rx) = tokio::sync::mpsc::unbounded_channel::<BackendAction>();
 
-        
         let b_clone = backend.clone();
         let ev_tx_clone = event_tx.clone();
         let ctx_clone = ctx.clone();
@@ -153,7 +142,6 @@ impl GuiApp {
             }
         });
 
-        
         let b_events = backend.clone();
         let ev_tx_stream = event_tx.clone();
         let ctx_stream = ctx.clone();
@@ -168,7 +156,6 @@ impl GuiApp {
             }
         });
 
-        
         let b_actions = backend.clone();
         let ev_tx_actions = event_tx.clone();
         let ctx_actions = ctx.clone();
@@ -312,8 +299,6 @@ impl GuiApp {
         }
     }
 
-    
-    
     #[must_use]
     pub fn new_auto(
         socket_path: impl Into<std::path::PathBuf>,
@@ -328,14 +313,12 @@ impl GuiApp {
         )
     }
 
-    
     pub fn dispatch(&self, action: BackendAction) {
         if let Some(ref tx) = self.action_tx {
             let _ = tx.send(action);
         }
     }
 
-    
     #[must_use]
     pub fn beacon_state(&self) -> SyncState {
         if !self.is_connected {
@@ -363,7 +346,6 @@ impl GuiApp {
         }
     }
 
-    
     #[must_use]
     pub fn current_badge(&self) -> (&'static str, Color32, Color32) {
         let b_state = self.beacon_state();
@@ -377,7 +359,6 @@ impl GuiApp {
         (beacon_label(b_state), bg, fg)
     }
 
-    
     pub fn handle_event(&mut self, event: UiEvent) {
         self.is_connected = true;
         match event {
@@ -540,7 +521,6 @@ impl GuiApp {
         }
     }
 
-    
     pub fn drain_events(&mut self) {
         let mut events = Vec::new();
         if let Some(ref mut rx) = self.event_rx {
@@ -553,10 +533,8 @@ impl GuiApp {
         }
     }
 
-    
     pub fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         ctx.input(|i| {
-            
             if i.key_pressed(Key::Escape) {
                 if self.show_conflicts_modal
                     || self.show_pin_modal
@@ -572,7 +550,6 @@ impl GuiApp {
                 }
             }
 
-            
             if i.key_pressed(Key::R) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.dispatch(BackendAction::TriggerScan);
                 self.status_message = Some((
@@ -587,7 +564,6 @@ impl GuiApp {
                 ));
             }
 
-            
             if i.key_pressed(Key::P) && !i.modifiers.command && !i.modifiers.ctrl {
                 let is_pinned = self
                     .snapshot
@@ -611,7 +587,6 @@ impl GuiApp {
                 }
             }
 
-            
             if i.key_pressed(Key::C) && !i.modifiers.command && !i.modifiers.ctrl {
                 self.show_conflicts_modal = !self.show_conflicts_modal;
                 if self.show_conflicts_modal {
@@ -619,7 +594,6 @@ impl GuiApp {
                 }
             }
 
-            
             if (i.key_pressed(Key::Q) && i.modifiers.ctrl)
                 || (i.key_pressed(Key::Q)
                     && !self.show_conflicts_modal
@@ -632,7 +606,6 @@ impl GuiApp {
         });
     }
 
-    
     pub fn update_ui(&mut self, ctx: &egui::Context) {
         Theme::apply(ctx);
         self.drain_events();
@@ -645,7 +618,6 @@ impl GuiApp {
         let time = ctx.input(|i| i.time);
         let b_state = self.beacon_state();
 
-        
         TopBottomPanel::top("top_panel")
             .frame(
                 Frame::none()
@@ -655,7 +627,6 @@ impl GuiApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    
                     ui.heading(
                         RichText::new("⛵ Ferry")
                             .strong()
@@ -665,9 +636,7 @@ impl GuiApp {
 
                     status_beacon_ui(ui, b_state, time);
 
-                    
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        
                         if ui
                             .button(
                                 RichText::new("Select Folder")
@@ -707,7 +676,6 @@ impl GuiApp {
                             }
                         }
 
-                        
                         if ui
                             .button(
                                 RichText::new("+ Pair Device")
@@ -719,7 +687,6 @@ impl GuiApp {
                             self.show_pair_modal = true;
                         }
 
-                        
                         if ui
                             .button(RichText::new("Share Folder").size(12.0))
                             .clicked()
@@ -727,7 +694,6 @@ impl GuiApp {
                             self.show_share_modal = true;
                         }
 
-                        
                         let conf_btn_text = if self.conflicts.is_empty() {
                             "Conflicts [C]".to_string()
                         } else {
@@ -746,7 +712,6 @@ impl GuiApp {
                             self.dispatch(BackendAction::FetchConflicts);
                         }
 
-                        
                         let is_pinned = self.snapshot.as_ref().is_some_and(|s| {
                             s.pin.holding || s.state.eq_ignore_ascii_case("pinned")
                         });
@@ -775,7 +740,6 @@ impl GuiApp {
                             self.show_pin_modal = true;
                         }
 
-                        
                         if ui
                             .button(
                                 RichText::new("↻ Sync Now [R]")
@@ -796,7 +760,6 @@ impl GuiApp {
                 });
             });
 
-        
         let mut telemetry_conflicts_clicked = false;
         TopBottomPanel::top("telemetry_panel")
             .frame(
@@ -816,7 +779,6 @@ impl GuiApp {
             self.dispatch(BackendAction::FetchConflicts);
         }
 
-        
         TopBottomPanel::bottom("bottom_panel")
             .frame(
                 Frame::none()
@@ -860,7 +822,6 @@ impl GuiApp {
                 });
             });
 
-        
         let mut fleet_open_pair = false;
         let mut fleet_open_share = false;
         let mut clear_activity = false;
@@ -874,7 +835,6 @@ impl GuiApp {
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     if let Some(ref snap) = self.snapshot {
-                        
                         render_card(ui, "Folder Status", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Path:").color(colors::TEXT_MUTED));
@@ -901,7 +861,6 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        
                         render_card(ui, "Storage & Tree Metrics", |ui| {
                             ui.columns(4, |cols| {
                                 cols[0].label(
@@ -946,7 +905,6 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        
                         if let Some(ref transfer) = self.active_transfer {
                             render_card(ui, "Active Transfer", |ui| {
                                 let ratio = (transfer.bytes_transferred as f32
@@ -981,7 +939,6 @@ impl GuiApp {
                             ui.add_space(12.0);
                         }
 
-                        
                         render_fleet_table(
                             ui,
                             &snap.peers,
@@ -991,7 +948,6 @@ impl GuiApp {
 
                         ui.add_space(12.0);
 
-                        
                         render_activity_stream(
                             ui,
                             &self.activity_log,
@@ -1020,7 +976,6 @@ impl GuiApp {
             self.activity_log.clear();
         }
 
-        
         if self.show_conflicts_modal {
             let mut refresh_conflicts = false;
             render_conflicts_modal(ctx, &mut self.show_conflicts_modal, &self.conflicts, || {

@@ -1,35 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::io::{Read, Write};
 
 use crate::error::ProtoError;
 
-
-
-
-
-
 pub const MAX_FRAME_BODY: usize = 64 * 1024 * 1024;
-
-
-
 
 pub(crate) fn read_body(reader: &mut impl Read) -> Result<Vec<u8>, ProtoError> {
     let mut len_bytes = [0u8; 4];
@@ -53,8 +26,7 @@ pub(crate) fn write_body(writer: &mut impl Write, body: &[u8]) -> Result<(), Pro
             max: MAX_FRAME_BODY,
         });
     }
-    
-    
+
     let mut buf = Vec::with_capacity(4 + body.len());
     buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
     buf.extend_from_slice(body);
@@ -86,7 +58,7 @@ mod tests {
     #[test]
     fn oversize_incoming_never_allocates_and_errors_typed() {
         let (mut a, mut b) = duplex_pair();
-        
+
         a.write_all(&((MAX_FRAME_BODY as u32) + 1).to_be_bytes())
             .unwrap();
         let err = read_body(&mut b).unwrap_err();
@@ -102,7 +74,7 @@ mod tests {
     #[test]
     fn truncated_frame_surfaces_io_error_not_garbage() {
         let (mut a, mut b) = duplex_pair();
-        
+
         let mut partial = Vec::new();
         partial.extend_from_slice(&100u32.to_be_bytes());
         partial.extend_from_slice(&[0u8; 40]);

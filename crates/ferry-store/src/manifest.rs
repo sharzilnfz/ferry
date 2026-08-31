@@ -1,20 +1,9 @@
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn tree_node_serialization_fixture_hand_computed() {
-        
-        
         let tn = TreeNode {
             entries: vec![file_entry(
                 "b.txt",
@@ -25,19 +14,19 @@ mod tests {
             )],
         };
         let mut expect: Vec<u8> = Vec::new();
-        expect.extend_from_slice(&1u32.to_le_bytes()); 
-        expect.push(0x00); 
-        expect.extend_from_slice(&5u32.to_le_bytes()); 
-        expect.extend_from_slice(b"b.txt"); 
-        expect.push(0x01); 
-        expect.extend_from_slice(&0x10000000i64.to_le_bytes()); 
-        expect.extend_from_slice(&999_999_999u32.to_le_bytes()); 
-        expect.extend_from_slice(&5u64.to_le_bytes()); 
-        expect.extend_from_slice(&1u32.to_le_bytes()); 
-        expect.extend_from_slice(&[0xaa; 32]); 
-        expect.extend_from_slice(&5u64.to_le_bytes()); 
+        expect.extend_from_slice(&1u32.to_le_bytes());
+        expect.push(0x00);
+        expect.extend_from_slice(&5u32.to_le_bytes());
+        expect.extend_from_slice(b"b.txt");
+        expect.push(0x01);
+        expect.extend_from_slice(&0x10000000i64.to_le_bytes());
+        expect.extend_from_slice(&999_999_999u32.to_le_bytes());
+        expect.extend_from_slice(&5u64.to_le_bytes());
+        expect.extend_from_slice(&1u32.to_le_bytes());
+        expect.extend_from_slice(&[0xaa; 32]);
+        expect.extend_from_slice(&5u64.to_le_bytes());
         assert_eq!(serialize_tree_node(&tn), expect);
-        
+
         assert_eq!(parse_tree_node(&expect).unwrap(), tn);
     }
 
@@ -57,8 +46,8 @@ mod tests {
         expect.extend_from_slice(&0x10000000i64.to_le_bytes());
         expect.extend_from_slice(&999_999_999u32.to_le_bytes());
         expect.extend_from_slice(&[0x33; 32]);
-        expect.extend_from_slice(&[0; 32]); 
-        expect.extend_from_slice(&[0; 32]); 
+        expect.extend_from_slice(&[0; 32]);
+        expect.extend_from_slice(&[0; 32]);
         assert_eq!(serialize_manifest(&m), expect);
         assert_eq!(parse_manifest(&expect).unwrap(), m);
     }
@@ -74,12 +63,11 @@ mod tests {
         };
         let bytes = serialize_tree_node(&tn);
         let parsed = parse_tree_node(&bytes).unwrap();
-        
+
         let mut expect_entries = tn.entries.clone();
         expect_entries.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         assert_eq!(parsed.entries, expect_entries);
 
-        
         let a = &parsed.entries.iter().find(|e| e.name == "a.bin").unwrap();
         assert_eq!(a.mtime_sec, -5);
         assert_eq!(a.mtime_nsec, 0);
@@ -96,9 +84,9 @@ mod tests {
         };
         let parsed = parse_tree_node(&serialize_tree_node(&tn)).unwrap();
         let names: Vec<&str> = parsed.entries.iter().map(|e| e.name.as_str()).collect();
-        
+
         assert_eq!(names, ["Alpha", "beta", "zeta"]);
-        
+
         let reordered = TreeNode {
             entries: vec![
                 dir_entry("Alpha", 0, 0, [3; 32]),
@@ -143,12 +131,6 @@ mod tests {
 
     #[test]
     fn colon_or_prefixed_names_rejected() {
-        
-        
-        
-        
-        
-        
         for bad in ["C:x", "C:\\x", "a:b", "C:", "/abs"].map(str::to_string) {
             let e = TreeEntry {
                 name: bad.clone(),
@@ -171,7 +153,6 @@ mod tests {
 
     #[test]
     fn names_are_nfc_normalized_on_write_and_validated_on_read() {
-        
         let decomposed = "cafe\u{301}";
         let composed = "caf\u{e9}";
         assert_ne!(decomposed, composed);
@@ -182,19 +163,16 @@ mod tests {
         let stored_name = parse_tree_node(&bytes).unwrap().entries[0].name.clone();
         assert_eq!(stored_name, composed, "stored form must be NFC");
 
-        
-        
-        
         let mut evil: Vec<u8> = Vec::new();
-        put_u32(&mut evil, 1); 
-        evil.push(0x00); 
+        put_u32(&mut evil, 1);
+        evil.push(0x00);
         put_u32(&mut evil, decomposed.len() as u32);
         put_bytes(&mut evil, decomposed.as_bytes());
-        evil.push(0x00); 
-        put_i64(&mut evil, 0); 
-        put_u32(&mut evil, 0); 
-        put_u64(&mut evil, 0); 
-        put_u32(&mut evil, 0); 
+        evil.push(0x00);
+        put_i64(&mut evil, 0);
+        put_u32(&mut evil, 0);
+        put_u64(&mut evil, 0);
+        put_u32(&mut evil, 0);
         assert!(matches!(
             parse_tree_node(&evil),
             Err(ManifestError::NotNfc(_))
@@ -203,13 +181,11 @@ mod tests {
 
     #[test]
     fn reserved_flag_bits_and_non_file_exec_rejected_on_parse() {
-        
-        
         let tn = TreeNode {
             entries: vec![file_entry("f", false, 0, 0, vec![])],
         };
         let mut b = serialize_tree_node(&tn);
-        
+
         assert_eq!(10, 4 + 1 + 4 + 1);
         b[10] = 0b10;
         assert!(matches!(
@@ -217,7 +193,6 @@ mod tests {
             Err(ManifestError::ReservedBitsSet)
         ));
 
-        
         let d = TreeNode {
             entries: vec![dir_entry("d", 0, 0, [1; 32])],
         };
@@ -260,35 +235,27 @@ mod tests {
         ));
     }
 
-    
-    
-    
-    
     #[test]
     fn lying_chunk_count_is_a_typed_error_without_huge_allocation() {
-        
-        
         let mut evil: Vec<u8> = Vec::new();
-        put_u32(&mut evil, 1); 
-        evil.push(0x00); 
+        put_u32(&mut evil, 1);
+        evil.push(0x00);
         put_u32(&mut evil, 1);
         put_bytes(&mut evil, b"f");
-        evil.push(0x00); 
-        put_i64(&mut evil, 0); 
-        put_u32(&mut evil, 0); 
-        put_u64(&mut evil, 0); 
-        put_u32(&mut evil, u32::MAX); 
+        evil.push(0x00);
+        put_i64(&mut evil, 0);
+        put_u32(&mut evil, 0);
+        put_u64(&mut evil, 0);
+        put_u32(&mut evil, u32::MAX);
         let err = parse_tree_node(&evil).unwrap_err();
         assert!(
             matches!(err, ManifestError::Corrupt("truncated")),
             "got {err:?}"
         );
 
-        
-        
         let mut half = evil.clone();
-        half.extend_from_slice(&[0xaa; 32]); 
-        put_u64(&mut half, 5); 
+        half.extend_from_slice(&[0xaa; 32]);
+        put_u64(&mut half, 5);
         assert!(matches!(
             parse_tree_node(&half),
             Err(ManifestError::Corrupt("truncated"))
@@ -307,7 +274,7 @@ mod tests {
         };
         let mut b = serialize_manifest(&m);
         let n = b.len();
-        b[n - 1] = 1; 
+        b[n - 1] = 1;
         assert!(matches!(
             parse_manifest(&b),
             Err(ManifestError::ReservedNonzero)
@@ -402,13 +369,11 @@ impl From<FormatError> for ManifestError {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryPayload {
     File {
-        
         size: u64,
-        
+
         chunks: Vec<(BlobId, u64)>,
     },
     Dir {
@@ -431,13 +396,12 @@ impl EntryPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeEntry {
-    
     pub name: String,
-    
+
     pub exec: bool,
-    
+
     pub mtime_sec: i64,
-    
+
     pub mtime_nsec: u32,
     pub payload: EntryPayload,
 }
@@ -446,7 +410,6 @@ pub struct TreeEntry {
 pub struct TreeNode {
     pub entries: Vec<TreeEntry>,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootManifest {
@@ -464,13 +427,9 @@ impl RootManifest {
     }
 }
 
-
 fn to_nfc(s: &str) -> String {
     s.nfc().collect()
 }
-
-
-
 
 pub fn file_entry(
     name: &str,
@@ -504,7 +463,6 @@ pub fn dir_entry(name: &str, mtime_sec: i64, mtime_nsec: u32, child_tree_id: Blo
 }
 
 pub fn symlink_entry(name: &str, mtime_sec: i64, mtime_nsec: u32, target: &str) -> TreeEntry {
-    
     let e = TreeEntry {
         name: to_nfc(name),
         exec: false,
@@ -524,20 +482,12 @@ fn expect_valid(e: &TreeEntry) {
     }
 }
 
-
-
-
-
-
 pub fn validate_name(name: &str) -> Result<(), ManifestError> {
     if name.contains('/')
         || name.contains('\0')
         || name == "."
         || name == ".."
         || name.contains(':')
-        
-        
-        
         || !matches!(
             std::path::Path::new(name).components().next(),
             Some(std::path::Component::Normal(_))
@@ -553,15 +503,12 @@ pub fn validate_name(name: &str) -> Result<(), ManifestError> {
 }
 
 fn validate_target(target: &str) -> Result<(), ManifestError> {
-    
-    
     let nfc: String = target.nfc().collect();
     if nfc != target {
         return Err(ManifestError::NotNfc(target.to_string()));
     }
     Ok(())
 }
-
 
 pub fn validate_entry(e: &TreeEntry) -> Result<(), ManifestError> {
     validate_name(&e.name)?;
@@ -587,8 +534,6 @@ pub fn validate_entry(e: &TreeEntry) -> Result<(), ManifestError> {
     }
     Ok(())
 }
-
-
 
 pub fn validate_entries(entries: &[TreeEntry]) -> Result<(), ManifestError> {
     for pair in entries.windows(2) {
@@ -616,9 +561,6 @@ fn flags_byte(e: &TreeEntry) -> Result<u8, ManifestError> {
         }
     }
 }
-
-
-
 
 pub fn serialize_tree_node(node: &TreeNode) -> Vec<u8> {
     let mut sorted = node.entries.clone();
@@ -662,8 +604,6 @@ pub fn serialize_tree_node(node: &TreeNode) -> Vec<u8> {
     out
 }
 
-
-
 pub fn parse_tree_node(bytes: &[u8]) -> Result<TreeNode, ManifestError> {
     let mut r = Reader::new(bytes);
     let count = r.u32()?;
@@ -686,11 +626,7 @@ pub fn parse_tree_node(bytes: &[u8]) -> Result<TreeNode, ManifestError> {
             0x00 => {
                 let size = r.u64()?;
                 let chunk_count = r.u32()?;
-                
-                
-                
-                
-                
+
                 let mut chunks = Vec::new();
                 for _ in 0..chunk_count {
                     let id = r.array()?;
@@ -726,7 +662,6 @@ pub fn parse_tree_node(bytes: &[u8]) -> Result<TreeNode, ManifestError> {
     Ok(TreeNode { entries })
 }
 
-
 pub fn serialize_manifest(m: &RootManifest) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + 32 + 8 + 4 + 32 + 32 + 32);
     put_bytes(&mut out, &m.folder_id);
@@ -735,10 +670,9 @@ pub fn serialize_manifest(m: &RootManifest) -> Vec<u8> {
     put_u32(&mut out, m.created_nsec);
     put_bytes(&mut out, &m.root_tree_id);
     put_bytes(&mut out, &m.parent_manifest_id);
-    put_bytes(&mut out, &[0u8; 32]); 
+    put_bytes(&mut out, &[0u8; 32]);
     out
 }
-
 
 pub fn parse_manifest(bytes: &[u8]) -> Result<RootManifest, ManifestError> {
     let mut r = Reader::new(bytes);
@@ -766,9 +700,6 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<RootManifest, ManifestError> {
 }
 
 impl TreeNode {
-    
-    
-    
     pub fn referenced_blobs(&self) -> Vec<(crate::format::BlobKind, BlobId)> {
         use crate::format::BlobKind;
         let mut out = Vec::new();
@@ -786,7 +717,6 @@ impl TreeNode {
         out
     }
 
-    
     pub fn referenced_blob_ids(&self) -> Vec<BlobId> {
         self.referenced_blobs()
             .into_iter()

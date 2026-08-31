@@ -1,30 +1,21 @@
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Context, RawInput};
-use ferry_platform::SyncState;
 use ferry_gui::format_bytes;
 use ferry_gui::modals::render_share_modal;
 use ferry_gui::theme::Theme;
 use ferry_gui::GuiApp;
 use ferry_ipc::backend::{FakeBackend, SessionDomain, UiEvent};
 use ferry_ipc::protocol::{ConflictEntry, DeviceStamp, EngineSnapshot, PinView, TransferDirection};
+use ferry_platform::SyncState;
 
 #[test]
 fn test_edge_case_asymmetric_conflicts() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    
     let deep_conflict = ConflictEntry {
         ts: "2026-08-28T03:25:00.123456789Z".to_string(),
         folder_id: "deep-repo-root".to_string(),
@@ -51,7 +42,6 @@ fn test_edge_case_asymmetric_conflicts() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
@@ -110,7 +100,6 @@ fn test_edge_case_held_pins_and_multi_peer_holds() {
 
 #[test]
 fn test_edge_case_active_transfers_boundary_values() {
-    
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
     app.handle_event(UiEvent::State(EngineSnapshot::new(
@@ -141,7 +130,6 @@ fn test_edge_case_active_transfers_boundary_values() {
         app.update_ui(ctx);
     });
 
-    
     assert_eq!(format_bytes(120 * 1024 * 1024 * 1024), "120.00 GB");
 
     app.handle_event(UiEvent::TransferProgress {
@@ -168,7 +156,6 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake.clone());
 
-    
     let warnings = vec![
         ".env: line 4 [AWS Access Key ID]".to_string(),
         "id_ed25519: line 1 [Private SSH Key]".to_string(),
@@ -182,7 +169,6 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_share_modal(
             ctx,
@@ -197,7 +183,6 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
     assert!(!app.share_override_secrets);
     assert!(app.active_share.is_none());
 
-    
     app.share_override_secrets = true;
 
     let offer = fake
@@ -211,7 +196,6 @@ async fn test_edge_case_secret_scan_warnings_and_override() {
 
     app.active_share = Some(offer.clone());
 
-    
     let _ = ctx.run(RawInput::default(), |ctx| {
         render_share_modal(
             ctx,

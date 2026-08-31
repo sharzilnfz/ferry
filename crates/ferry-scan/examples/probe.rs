@@ -1,6 +1,3 @@
-
-
-
 use ferry_scan::engine::{ScanEngine, StoreHandle};
 use ferry_scan::policy::WatchSignal;
 use ferry_store::crypto::PassthroughCipher;
@@ -42,8 +39,6 @@ fn main() {
             .map(|c| (c.trigger, c.stats.files, c.stats.bytes_chunked))
     );
 
-    
-    
     let (raw_tx, raw_rx) = std::sync::mpsc::channel();
     let mut raw = notify::RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {

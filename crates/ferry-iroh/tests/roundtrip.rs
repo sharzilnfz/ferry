@@ -1,6 +1,3 @@
-
-
-
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -54,7 +51,7 @@ fn frames_round_trip_over_iroh_including_empty_and_multi() {
         let empty = c.recv_frame().unwrap();
         c.send_frame(&empty).unwrap();
         c.send_frame(&first).unwrap();
-        
+
         assert_eq!(c.recv_frame().unwrap_err().kind(), ErrorKind::UnexpectedEof);
     });
 
@@ -63,14 +60,12 @@ fn frames_round_trip_over_iroh_including_empty_and_multi() {
     cli.send_frame(&[]).unwrap();
     assert_eq!(cli.recv_frame().unwrap(), b"");
     assert_eq!(cli.recv_frame().unwrap(), b"over-quic");
-    drop(cli); 
+    drop(cli);
     server.join().unwrap();
 }
 
 #[test]
 fn large_frames_survive_the_quic_path() {
-    
-    
     let payload: Vec<u8> = (0..3 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
     let payload_hash = blake3_hash(&payload);
 
@@ -110,9 +105,6 @@ fn unknown_alias_dial_is_typed_not_found() {
 
 #[test]
 fn wrong_key_dial_fails_cleanly_typed() {
-    
-    
-    
     let mut ghost_key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut ghost_key);
 
@@ -149,9 +141,6 @@ fn wrong_key_dial_fails_cleanly_typed() {
             || err.to_string().contains("Connect"),
         "error should carry diagnostic context: {err}"
     );
-    
-    
-    
 }
 
 #[test]

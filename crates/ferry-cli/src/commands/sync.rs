@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -92,10 +86,7 @@ pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
                 "check folder permissions and network configuration",
             )
         })?;
-    
-    
-    
-    
+
     if let Ok(identity) = crate::home::load_device_identity() {
         engine.set_identity(identity);
     }

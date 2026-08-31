@@ -1,15 +1,12 @@
-
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::{DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView};
-use ferry_sync_engine::pin::{HeldSummary, PinError, PinManager, PinRecord};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
-
+use ferry_sync_engine::pin::{HeldSummary, PinError, PinManager, PinRecord};
 
 pub struct DaemonState {
     handle: EngineHandle,
@@ -22,7 +19,6 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    
     pub fn new(
         handle: EngineHandle,
         store_dir: PathBuf,
@@ -75,13 +71,10 @@ impl DaemonState {
         &self.broadcast_tx
     }
 
-    
     pub fn broadcast(&self, msg: DaemonMessage) {
-        
         let _ = self.broadcast_tx.send(msg);
     }
 
-    
     pub fn snapshot(&self) -> EngineSnapshot {
         let manifest = self.handle.current_manifest_id();
         let manifest_id_hex = manifest.map(|m| hex_str(&m));
@@ -155,7 +148,6 @@ impl DaemonState {
         }
     }
 
-    
     pub fn start_pin(
         &self,
         paths: Vec<String>,
@@ -178,19 +170,16 @@ impl DaemonState {
         )
     }
 
-    
     pub fn release_pin(&self) -> Result<bool, PinError> {
         let res = PinManager::new(self.state_dir()).stop_session();
         self.handle.trigger_scan();
         res
     }
 
-    
     pub fn trigger_scan(&self) {
         self.handle.trigger_scan();
     }
 
-    
     pub fn list_conflicts(
         &self,
     ) -> Result<Vec<ferry_sync_engine::ConflictEntry>, ferry_sync_engine::LogError> {

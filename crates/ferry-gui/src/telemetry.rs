@@ -1,17 +1,7 @@
-
-
-
-
-
-
-
-
-
 use egui::{Color32, Frame, Margin, RichText, Rounding, Stroke};
 use ferry_ipc::protocol::EngineSnapshot;
 
 use crate::theme::colors;
-
 
 #[must_use]
 pub fn format_short_hex(hash: Option<&str>) -> String {
@@ -21,7 +11,6 @@ pub fn format_short_hex(hash: Option<&str>) -> String {
         Some(s) => s.to_string(),
     }
 }
-
 
 pub fn render_telemetry_hairline(
     ui: &mut egui::Ui,
@@ -36,7 +25,6 @@ pub fn render_telemetry_hairline(
         .rounding(Rounding::same(6.0f32))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                
                 ui.label(
                     RichText::new("ROOT:")
                         .color(colors::TEXT_MUTED)
@@ -56,7 +44,6 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                
                 let held = snapshot.map_or(0, |s| s.held_changes);
                 ui.label(
                     RichText::new("HELD:")
@@ -78,7 +65,6 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                
                 let conf_count =
                     snapshot.map_or(conflicts_count, |s| s.conflicts.max(conflicts_count));
                 ui.label(
@@ -105,7 +91,6 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                
                 ui.label(
                     RichText::new("CIPHER:")
                         .color(colors::TEXT_MUTED)
@@ -120,7 +105,6 @@ pub fn render_telemetry_hairline(
 
                 render_divider(ui);
 
-                
                 ui.label(
                     RichText::new("TRANSPORT:")
                         .color(colors::TEXT_MUTED)

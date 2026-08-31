@@ -1,5 +1,3 @@
-
-
 pub mod device_daemon;
 pub mod folder_engine;
 pub mod ipc;

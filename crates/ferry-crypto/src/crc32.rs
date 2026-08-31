@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 pub fn crc32(data: &[u8]) -> u32 {
     crc32fast::hash(data)
 }
@@ -20,7 +8,6 @@ mod tests {
 
     #[test]
     fn known_check_value() {
-        
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         assert_eq!(crc32(b""), 0x0000_0000);
     }

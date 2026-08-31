@@ -1,14 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +12,6 @@ use ferry_store::format::hex as hex_str;
 
 use crate::state::DaemonState;
 
-
 pub struct IpcServerHandle {
     socket_path: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -33,13 +21,11 @@ pub struct IpcServerHandle {
 }
 
 impl IpcServerHandle {
-    
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
-    
     pub fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.server_task.take() {
@@ -70,9 +56,6 @@ impl Drop for IpcServerHandle {
         }
     }
 }
-
-
-
 
 pub fn spawn_ipc_server(
     socket_path: PathBuf,
@@ -130,7 +113,6 @@ pub fn spawn_ipc_server(
     })
 }
 
-
 async fn run_server_loop(
     server: IpcServer,
     state: Arc<DaemonState>,
@@ -166,12 +148,10 @@ async fn run_server_loop(
     server.close();
 }
 
-
 pub async fn handle_client_connection<S>(mut conn: IpcConnection<S>, state: Arc<DaemonState>)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    
     let initial_snapshot = state.snapshot();
     if let Err(e) = conn
         .send_message(&DaemonMessage::Snapshot(initial_snapshot))
@@ -195,7 +175,7 @@ where
                         }
                     }
                     Ok(None) => {
-                        
+
                         break;
                     }
                     Err(e) => {
@@ -216,7 +196,7 @@ where
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        
+
                         let snap = state.snapshot();
                         if sender.send_message(&DaemonMessage::Snapshot(snap)).await.is_err() {
                             break;
@@ -240,8 +220,6 @@ fn registry_error(e: ferry_folder::FolderError) -> DaemonMessage {
     }
 }
 
-
-
 fn pairing_ritual(
     home: PathBuf,
     identity: ferry_crypto::identity::DeviceIdentity,
@@ -259,7 +237,6 @@ fn expires_rfc3339(t: std::time::SystemTime) -> String {
     });
     ferry_platform::time::fmt_rfc3339(secs.as_secs() as i64)
 }
-
 
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
     match cmd {
@@ -288,7 +265,9 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                     ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
                     ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
                     ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
-                    ferry_sync_engine::pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
+                    ferry_sync_engine::pin::PinError::ManifestMissing { .. } => {
+                        "held-manifest-missing"
+                    }
                     ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
                     ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
                     _ => "pin_error",
@@ -417,7 +396,6 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
     }
 }
 
-
 pub fn dispatch_supervisor_command(
     supervisor: &mut crate::supervisor::Supervisor,
     cmd: ClientCommand,
@@ -520,7 +498,6 @@ fn dispatch_client_command_fallback(cmd: ClientCommand) -> DaemonMessage {
     }
 }
 
-
 pub async fn handle_supervisor_connection<S>(
     mut conn: IpcConnection<S>,
     supervisor: std::sync::Arc<tokio::sync::Mutex<crate::supervisor::Supervisor>>,
@@ -562,7 +539,6 @@ pub async fn handle_supervisor_connection<S>(
         }
     }
 }
-
 
 pub fn spawn_supervisor_ipc_server(
     socket_path: PathBuf,
@@ -636,7 +612,6 @@ async fn run_supervisor_server_loop(
     }
     server.close();
 }
-
 
 async fn run_state_watcher(
     state: Arc<DaemonState>,
@@ -721,7 +696,7 @@ async fn run_state_watcher(
                     });
                 }
 
-                
+
                 let cur_meta = std::fs::metadata(&conflicts_file).ok().map(|m| (m.len(), m.modified().ok()));
                 if cur_meta != last_meta {
                     last_meta = cur_meta;

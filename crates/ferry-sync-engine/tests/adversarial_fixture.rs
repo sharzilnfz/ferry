@@ -1,31 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -42,9 +14,8 @@ const DEV_A: [u8; 32] = [0xA1; 32];
 const DEV_B: [u8; 32] = [0xB2; 32];
 const NOW: (i64, u32) = (1_787_574_896, 0);
 
-
 const UNICODE_FILE: &str = "rapport-anne\u{301}e.md";
-const UNICODE_DIR: &str = "\u{1f980}-proj\u{65}\u{301}ct"; 
+const UNICODE_DIR: &str = "\u{1f980}-proj\u{65}\u{301}ct";
 const UNICODE_NOTE: &str = "notes-caf\u{65}\u{301}.txt";
 const CASE_FILE_BEFORE: &str = "Rename-Me.txt";
 const CASE_FILE_AFTER: &str = "rename-me.TXT";
@@ -89,11 +60,6 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
     }
     #[cfg(windows)]
     {
-        
-        
-        
-        
-        
         filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(mt.0, mt.1)).unwrap();
     }
     #[cfg(not(any(unix, windows)))]
@@ -101,7 +67,6 @@ fn set_dir_mtime(path: &Path, mt: (i64, u32)) {
         let _ = (path, mt);
     }
 }
-
 
 fn symlink_creation_works(root: &Path) -> bool {
     use std::sync::OnceLock;
@@ -130,8 +95,6 @@ fn symlink_creation_works(root: &Path) -> bool {
     })
 }
 
-
-
 fn mkdir_deep(cumulative: &Path) {
     let effective = ferry_platform::extend_path(cumulative);
     if effective.exists() {
@@ -139,7 +102,6 @@ fn mkdir_deep(cumulative: &Path) {
     }
     std::fs::create_dir(&effective)
         .or_else(|e| {
-            
             if let Some(parent) = effective.parent() {
                 if !parent.as_os_str().is_empty() && !parent.exists() {
                     mkdir_deep(parent);
@@ -151,12 +113,9 @@ fn mkdir_deep(cumulative: &Path) {
         .unwrap();
 }
 
-
-
 fn build_fixture(root: &Path) {
     std::fs::create_dir_all(root).unwrap();
 
-    
     write_file(
         &root.join(UNICODE_DIR).join(UNICODE_NOTE),
         "caf\u{e9} notes inside an emoji dir\n".as_bytes(),
@@ -168,7 +127,6 @@ fn build_fixture(root: &Path) {
         (1_700_000_200, 20),
     );
 
-    
     let mut deep = root.to_path_buf();
     for i in 0..14 {
         deep.push(format!("level-{i:02}-aaaaaaaaaaaaaaaaaaaaaaaaaa"));
@@ -180,24 +138,19 @@ fn build_fixture(root: &Path) {
         (1_700_000_300, 30),
     );
 
-    
     write_file(
         &root.join(CASE_FILE_BEFORE),
         b"case me\n",
         (1_700_000_400, 40),
     );
 
-    
-    
-    
     if symlink_creation_works(root) {
         write_file(
             &root.join("z_link_c"),
             b"chain target\n",
             (1_700_000_500, 50),
         );
-        
-        
+
         std::fs::remove_file(root.join("z_link_c")).unwrap();
         write_file(
             &root.join("real-note.txt"),
@@ -207,10 +160,7 @@ fn build_fixture(root: &Path) {
         make_link("real-note.txt", &root.join("z_link_c"));
         make_link("z_link_c", &root.join("z_link_b"));
         make_link("z_link_b", &root.join("z_link_a"));
-        
-        
-        
-        
+
         for (i, name) in ["z_link_c", "z_link_b", "z_link_a"].iter().enumerate() {
             let _ = ferry_materialize::set_symlink_times(
                 &root.join(name),
@@ -220,7 +170,6 @@ fn build_fixture(root: &Path) {
         }
     }
 
-    
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).unwrap().flatten() {
@@ -240,8 +189,6 @@ fn make_link(target: &str, at: &Path) {
 fn make_link(target: &str, at: &Path) {
     std::os::windows::fs::symlink_file(target, at).unwrap();
 }
-
-
 
 struct RoundTrip {
     _dir: tempfile::TempDir,
@@ -304,8 +251,6 @@ fn identity(at: (i64, u32)) -> SnapshotIdentity {
         created_nsec: at.1,
     }
 }
-
-
 
 struct Dev {
     _dir: tempfile::TempDir,
@@ -378,8 +323,6 @@ fn load_base_object(d: &Dev, id: Option<BlobId>) -> Option<ferry_store::manifest
     ferry_store::manifest::parse_manifest(&bytes).ok()
 }
 
-
-
 struct PeerFetch<'x> {
     from: &'x Store,
     to: &'x Store,
@@ -401,7 +344,6 @@ impl ferry_sync_engine::BlobFetch for PeerFetch<'_> {
         Ok(())
     }
 }
-
 
 fn converge_on(
     exec_dev: &mut Dev,
@@ -481,10 +423,6 @@ fn quarantine_names(root: &Path) -> Vec<String> {
     names
 }
 
-
-
-
-
 fn has_exact_entry(dir: &Path, name: &str) -> bool {
     std::fs::read_dir(dir)
         .unwrap()
@@ -508,8 +446,6 @@ fn round_trips_through_snapshot_materialize() {
          symlink chains, all mtimes)"
     );
 
-    
-    
     std::fs::rename(
         rt.source.join(CASE_FILE_BEFORE),
         rt.source.join(CASE_FILE_AFTER),
@@ -517,12 +453,6 @@ fn round_trips_through_snapshot_materialize() {
     .expect("case-only rename must work on the host FS");
     let s3 = rt.snap_source();
 
-    
-    
-    
-    
-    
-    
     let guarded = Applier::new(&rt.store, &rt.target)
         .overwrite(ferry_materialize::Overwrite::Expect {
             expected: s2.manifest.clone(),
@@ -548,8 +478,6 @@ fn round_trips_through_snapshot_materialize() {
         );
     }
 
-    
-    
     Applier::new(&rt.store, &rt.target)
         .apply_manifest(&s3.manifest)
         .expect("unguarded rename propagation must succeed");
@@ -571,7 +499,6 @@ fn round_trips_through_snapshot_materialize() {
     );
     assert!(has_exact_entry(&rt.target, CASE_FILE_AFTER));
 
-    
     let mut probe = rt.source.clone();
     for i in 0..14 {
         probe.push(format!("level-{i:02}-aaaaaaaaaaaaaaaaaaaaaaaaaa"));
@@ -582,11 +509,7 @@ fn round_trips_through_snapshot_materialize() {
         .count();
     assert!(
         total >= ferry_platform::MAX_PATH
-            || cfg!(target_os = "macos") && {
-                
-                
-                probe.components().count() > 15
-            },
+            || cfg!(target_os = "macos") && { probe.components().count() > 15 },
         "fixture deep branch must stress path limits ({total} chars)"
     );
 }
@@ -596,13 +519,11 @@ fn reconciliation_conflict_inside_fixture() {
     let mut a = Dev::new(1, DEV_A);
     let mut b = Dev::new(2, DEV_B);
 
-    
     let sa0 = a.snap();
     let sb0 = b.snap();
     record_agreement(&mut a, DEV_B, sa0.manifest_id);
     record_agreement(&mut b, DEV_A, sb0.manifest_id);
 
-    
     write_file(&a.tree.join(UNICODE_FILE), b"version A\n", (3_000, 700));
     write_file(&b.tree.join(UNICODE_FILE), b"version B\n", (2_900, 500));
 
@@ -615,7 +536,6 @@ fn reconciliation_conflict_inside_fixture() {
     let sa = a.snap();
     let sb = b.snap();
 
-    
     let base_a = load_base_object(&a, load_agreed(&a, DEV_B).map(|r| r.manifest_id));
     transfer_meta(&b.store, &a.store, &sb);
     converge_on(&mut a, &sa, &sb, base_a.as_ref(), &b);
@@ -624,7 +544,6 @@ fn reconciliation_conflict_inside_fixture() {
     transfer_meta(&a.store, &b.store, &sa2);
     converge_on(&mut b, &sb, &sa2, base_b.as_ref(), &a);
 
-    
     let mut rounds = 1;
     loop {
         let sa3 = a.snap();
@@ -642,14 +561,12 @@ fn reconciliation_conflict_inside_fixture() {
         converge_on(&mut b, &sb3, &sa3, bb.as_ref(), &a);
     }
 
-    
     for (label, tree) in [("A", &a.tree), ("B", &b.tree)] {
         let got = collect_bytes(tree);
         let missing: Vec<Vec<u8>> = truth.difference(&got).cloned().collect();
         assert!(missing.is_empty(), "device {label} LOST {missing:?}");
     }
 
-    
     assert_eq!(
         std::fs::read(a.tree.join(UNICODE_FILE)).unwrap(),
         b"version A\n"
@@ -659,8 +576,6 @@ fn reconciliation_conflict_inside_fixture() {
         b"version A\n"
     );
 
-    
-    
     let qs = quarantine_names(&b.tree);
     assert_eq!(qs.len(), 1, "exactly the loser copy, got {qs:?}");
     assert!(qs[0].contains("b2b2b2b2"), "loser short id: {}", qs[0]);
@@ -670,7 +585,6 @@ fn reconciliation_conflict_inside_fixture() {
         qs[0]
     );
 
-    
     let sa4 = a.snap();
     let sb4 = b.snap();
     transfer_meta(&a.store, &b.store, &sa4);

@@ -74,16 +74,13 @@ async fn test_daemon_ipc_server_startup_snapshot_and_cleanup() {
     let ipc_handle =
         spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state)).expect("spawn ipc");
 
-    
     #[cfg(unix)]
     assert!(socket_path.exists(), "socket file must exist after startup");
 
-    
     let mut client = IpcClient::connect(&socket_path)
         .await
         .expect("client connect");
 
-    
     let first_msg = client
         .recv_message()
         .await
@@ -99,10 +96,8 @@ async fn test_daemon_ipc_server_startup_snapshot_and_cleanup() {
         other => panic!("expected DaemonMessage::Snapshot, got {other:?}"),
     }
 
-    
     drop(client);
 
-    
     ipc_handle.shutdown();
 
     #[cfg(unix)]
@@ -137,11 +132,9 @@ async fn test_daemon_ipc_command_dispatch() {
         .await
         .expect("client connect");
 
-    
     let init_snap = client.recv_message().await.unwrap().unwrap();
     assert!(matches!(init_snap, DaemonMessage::Snapshot(_)));
 
-    
     client.send_command(&ClientCommand::Ping).await.unwrap();
     loop {
         match client.recv_message().await.unwrap().unwrap() {
@@ -151,7 +144,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::GetStatus)
         .await
@@ -164,7 +156,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::StartPin {
             paths: vec!["src/main.rs".to_string()],
@@ -184,7 +175,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::GetStatus)
         .await
@@ -201,7 +191,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::TriggerScan)
         .await
@@ -217,7 +206,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::ListConflicts)
         .await
@@ -233,7 +221,6 @@ async fn test_daemon_ipc_command_dispatch() {
         }
     }
 
-    
     client
         .send_command(&ClientCommand::ReleasePin)
         .await
@@ -279,13 +266,11 @@ async fn test_daemon_broadcast_on_state_change() {
         .await
         .expect("client b connect");
 
-    
     let snap_a = client_a.recv_message().await.unwrap().unwrap();
     let snap_b = client_b.recv_message().await.unwrap().unwrap();
     assert!(matches!(snap_a, DaemonMessage::Snapshot(_)));
     assert!(matches!(snap_b, DaemonMessage::Snapshot(_)));
 
-    
     client_a
         .send_command(&ClientCommand::StartPin {
             paths: vec!["file.txt".to_string()],
@@ -294,7 +279,6 @@ async fn test_daemon_broadcast_on_state_change() {
         .await
         .unwrap();
 
-    
     let msg1 = client_a.recv_message().await.unwrap().unwrap();
     let is_ack_first = matches!(msg1, DaemonMessage::Ack { .. });
     if !is_ack_first {
@@ -303,7 +287,6 @@ async fn test_daemon_broadcast_on_state_change() {
         assert!(matches!(msg2, DaemonMessage::Ack { .. }));
     }
 
-    
     let event = client_b.recv_message().await.unwrap().unwrap();
     match event {
         DaemonMessage::StateChanged { .. } => {}
@@ -337,10 +320,8 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
         .await
         .expect("client connect");
 
-    
     let _ = client.recv_message().await.unwrap().unwrap();
 
-    
     let entry = ferry_sync_engine::ConflictEntry {
         ts: "2026-08-26T12:00:00Z".to_string(),
         folder_id: "0102030405060708090a0b0c0d0e0f10".to_string(),
@@ -361,7 +342,6 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
 
     ferry_sync_engine::append_entries(&rig.store_dir.join(".ferry"), &[entry]).unwrap();
 
-    
     let mut received_conflict = false;
     for _ in 0..20 {
         match tokio::time::timeout(Duration::from_millis(200), client.recv_message()).await {
@@ -378,9 +358,7 @@ async fn test_daemon_broadcast_on_conflict_recorded() {
                 received_conflict = true;
                 break;
             }
-            Ok(Ok(Some(DaemonMessage::StateChanged { .. }))) => {
-                
-            }
+            Ok(Ok(Some(DaemonMessage::StateChanged { .. }))) => {}
             _ => {}
         }
     }
@@ -416,7 +394,6 @@ async fn test_in_memory_connection_handling() {
         handle_client_connection(server_conn, st).await;
     });
 
-    
     let initial = client_conn.recv_message().await.unwrap().unwrap();
     match initial {
         DaemonMessage::Snapshot(snap) => {
@@ -425,7 +402,6 @@ async fn test_in_memory_connection_handling() {
         other => panic!("expected Snapshot, got {other:?}"),
     }
 
-    
     client_conn
         .send_command(&ClientCommand::Ping)
         .await

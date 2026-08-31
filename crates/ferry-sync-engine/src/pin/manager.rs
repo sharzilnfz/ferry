@@ -6,8 +6,8 @@ use ferry_store::store::Store;
 use serde::{Deserialize, Serialize};
 
 use crate::held::{distinct_paths, HeldEntry, HeldLedger};
-use crate::pin::{PinRecord, PinStore, PIN_FORMAT_VERSION};
 use crate::pin::release::ReleasePeerPlan;
+use crate::pin::{PinRecord, PinStore, PIN_FORMAT_VERSION};
 use crate::pin_error::PinError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,8 +229,9 @@ impl PinManager {
                 });
                 from_pin.or_else(|| {
                     if let Some(peer_bytes) = ferry_store::format::unhex::<32>(peer_hex) {
-                        if let Ok(Some(rec)) = ferry_store::agreement::AgreementLedger::new(&self.state_dir)
-                            .get(&local_manifest.folder_id, &peer_bytes)
+                        if let Ok(Some(rec)) =
+                            ferry_store::agreement::AgreementLedger::new(&self.state_dir)
+                                .get(&local_manifest.folder_id, &peer_bytes)
                         {
                             let b_hex = ferry_store::format::hex(&rec.manifest_id);
                             return crate::pin::release::load_manifest(

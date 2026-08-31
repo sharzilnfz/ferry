@@ -1,6 +1,3 @@
-
-
-
 use std::path::Path;
 
 use ferry_crypto::identity::load_or_create;
@@ -13,8 +10,6 @@ use ferry_store::store::Store;
 
 const FOLDER_ID: [u8; 16] = [7u8; 16];
 const POLY: u64 = 0x1234_5678_9ABC_DEF0;
-
-
 
 #[track_caller]
 fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
@@ -40,8 +35,6 @@ fn default_settings() -> Settings {
     }
 }
 
-
-
 fn make_folder(root: &Path, id: &ferry_crypto::identity::DeviceIdentity) {
     let (store, _fmk) = create_folder(root, id, FOLDER_ID, POLY).unwrap();
     save_settings(root, &default_settings()).unwrap();
@@ -59,7 +52,6 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
 
     make_folder(&root, &id);
 
-    
     assert!(root.join(".ferry/config").is_file());
     assert!(root.join(".ferry/packs").is_dir());
     assert!(root.join(".ferry/index").is_dir());
@@ -73,7 +65,6 @@ fn create_then_open_round_trips_folder_id_and_polynomial() {
     assert_eq!(opened.state_dir(), dot_dir(&root));
     assert_eq!(opened.path(), root.as_path());
 
-    
     assert_eq!(find_polynomial(&opened.store).unwrap(), POLY);
 }
 
@@ -118,7 +109,7 @@ fn open_rejects_a_device_the_folder_was_never_shared_with() {
 
     make_folder(&root, &owner);
     let err = open_folder(&root, &stranger).err().unwrap();
-    assert_eq!(err.code, "not-shared-with-device"); 
+    assert_eq!(err.code, "not-shared-with-device");
     assert!(
         err.message.contains(&short_device(stranger.public())),
         "{}",
@@ -132,7 +123,6 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
     let (_a_home, a) = identity_at("a");
     let (_b_home, b) = identity_at("b");
 
-    
     make_folder(&work.path().join("owned"), &a);
     let fmk = ferry_crypto::folder_key::generate_fmk();
     let target = work.path().join("adopted");
@@ -141,16 +131,13 @@ fn adopt_writes_only_own_wrap_but_still_opens_cleanly() {
 
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
-    
-    
+
     ferry_folder::folder::save_settings(&target, &default_settings()).unwrap();
 
-    
     let opened_b = open_folder(&target, &b).expect("adopter opens");
     assert_eq!(opened_b.folder_id, FOLDER_ID);
     assert_eq!(code_of(open_folder(&target, &a)), "not-shared-with-device");
 
-    
     let head = ferry_crypto::config_head::parse_config_head(
         &std::fs::read(target.join(".ferry/config")).unwrap(),
     )
@@ -210,14 +197,11 @@ fn opened_store_is_encrypted_at_rest() {
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
 
-    
     assert_eq!(
         opened.store.get(BlobKind::DataChunk, &blob).unwrap(),
         marker
     );
 
-    
-    
     for entry in std::fs::read_dir(root.join(".ferry/packs"))
         .unwrap()
         .flatten()
@@ -239,8 +223,6 @@ fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
     std::fs::create_dir_all(&root).unwrap();
     make_folder(&root, &id);
 
-    
-    
     let config_path = root.join(".ferry/config");
     let mut head =
         ferry_crypto::config_head::parse_config_head(&std::fs::read(&config_path).unwrap())
@@ -255,7 +237,6 @@ fn corrupt_wrapped_key_fails_loud_with_typed_key_unwrap_error() {
     let err = open_folder(&root, &id).err().unwrap();
     assert_eq!(err.code, "key-unwrap");
 
-    
     assert!(root.join(".ferry/packs").is_dir());
 }
 
@@ -268,8 +249,6 @@ fn wrong_fmk_cannot_reopen_the_store() {
     make_folder(&root, &id);
     drop(open_folder(&root, &id).expect("open succeeds"));
 
-    
-    
     assert!(
         Store::open(
             &root,

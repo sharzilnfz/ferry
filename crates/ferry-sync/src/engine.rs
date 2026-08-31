@@ -1,30 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -47,63 +20,38 @@ use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 pub use ferry_store::snapshot::ScanStats;
 use ferry_store::store::Store;
 
-
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-
-
 
 pub const DEFAULT_OPPORTUNISTIC_EVERY: u32 = 50;
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub tag: String,
-    
+
     pub store_dir: PathBuf,
-    
+
     pub tree_dir: PathBuf,
-    
-    
-    
+
     pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub poll_interval: Duration,
     pub opportunistic_every: u32,
-    
+
     pub bind_addr: Option<SocketAddr>,
-    
-    
+
     pub connect_to: Option<SocketAddr>,
-    
-    
-    
-    
-    
+
     pub allow_trust_on_first_use: bool,
-    
-    
-    
-    
+
     pub pin_state_dir: Option<PathBuf>,
-    
+
     pub quiet: bool,
 }
 
-
-
-
-
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerPolicy {
-    
-    
     AllowList(HashSet<BlobId>),
-    
-    
-    
-    
+
     TrustOnFirstUse,
 }
 
@@ -113,28 +61,20 @@ impl Default for PeerPolicy {
     }
 }
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerExpectation {
-    
-    
     Refuse,
-    
+
     Pin(BlobId),
-    
-    
+
     TrustOnFirstUse { pin: bool },
 }
 
 impl PeerPolicy {
-    
     pub fn from_allowed<I: IntoIterator<Item = BlobId>>(peers: I) -> Self {
         PeerPolicy::AllowList(peers.into_iter().collect())
     }
 
-    
-    
     pub fn from_config_head(
         bytes: &[u8],
     ) -> Result<Self, ferry_crypto::config_head::ConfigHeadError> {
@@ -143,8 +83,6 @@ impl PeerPolicy {
         Ok(PeerPolicy::AllowList(set))
     }
 
-    
-    
     pub fn remote_peers(&self, self_id: &BlobId) -> Vec<BlobId> {
         match self {
             PeerPolicy::AllowList(set) => {
@@ -156,9 +94,6 @@ impl PeerPolicy {
         }
     }
 
-    
-    
-    
     pub fn expected_peer(
         &self,
         self_id: &BlobId,
@@ -181,9 +116,6 @@ impl PeerPolicy {
         }
     }
 
-    
-    
-    
     pub fn admits(&self, peer: &BlobId) -> bool {
         match self {
             PeerPolicy::AllowList(set) => set.contains(peer),
@@ -192,15 +124,12 @@ impl PeerPolicy {
     }
 }
 
-
-
 #[derive(Clone, Debug)]
 pub struct PeerLedger {
     dir: PathBuf,
 }
 
 impl PeerLedger {
-    
     pub fn new(store_dir: impl Into<PathBuf>) -> Self {
         PeerLedger {
             dir: store_dir.into().join("peers"),
@@ -212,7 +141,6 @@ impl PeerLedger {
             .join(format!("{}-{}.peer", hex(folder_id), hex(peer)))
     }
 
-    
     pub fn record_peer(&self, folder_id: &[u8; 16], peer: &[u8; 32]) -> Result<(), std::io::Error> {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self
@@ -223,7 +151,6 @@ impl PeerLedger {
         Ok(())
     }
 
-    
     pub fn list_peers(&self, folder_id: &[u8; 16]) -> Result<Vec<BlobId>, std::io::Error> {
         let prefix = format!("{}-", hex(folder_id));
         let rd = match std::fs::read_dir(&self.dir) {
@@ -252,7 +179,6 @@ impl PeerLedger {
         Ok(out)
     }
 
-    
     pub fn forget_peer(
         &self,
         folder_id: &[u8; 16],
@@ -265,10 +191,6 @@ impl PeerLedger {
         }
     }
 }
-
-
-
-
 
 fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolicy {
     let candidates = [
@@ -291,8 +213,6 @@ fn resolve_peer_policy_from_disk(cfg: &EngineConfig, store: &Store) -> PeerPolic
         PeerPolicy::default()
     }
 }
-
-
 
 fn resolve_ignore_policy_from_disk(
     cfg: &EngineConfig,
@@ -330,7 +250,6 @@ fn resolve_ignore_policy_from_disk(
 }
 
 impl EngineConfig {
-    
     pub fn default_for_test(poly_seed: u64) -> Self {
         EngineConfig {
             tag: "test-node".into(),
@@ -355,9 +274,7 @@ impl EngineConfig {
 pub struct EngineStats {
     pub sessions_ok: u64,
     pub sessions_failed: u64,
-    
-    
-    
+
     pub rejected_items: u64,
 }
 
@@ -372,8 +289,6 @@ pub enum EngineError {
     #[error("{0}")]
     Other(String),
 }
-
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -393,7 +308,6 @@ pub enum IngestError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    
     #[error("v1 wire: {0}")]
     Wire(#[from] ferry_proto::error::ProtoError),
     #[error("ingest: {0}")]
@@ -424,25 +338,9 @@ struct SnapshotData {
     manifest_id: BlobId,
 }
 
-
 const FIRST_STATE_WAIT: Duration = Duration::from_secs(10);
 
-
-
-
 const MAX_CONCURRENT_SESSIONS: usize = 4;
-
-
-
-
-
-
-
-
-
-
-
-
 
 struct FolderState {
     inner: Mutex<FolderPointers>,
@@ -451,17 +349,16 @@ struct FolderState {
 
 #[derive(Default)]
 struct FolderPointers {
-    
     latest: Option<Arc<SnapshotData>>,
-    
+
     current: Option<Arc<SnapshotData>>,
-    
+
     baseline: Option<RootManifest>,
-    
+
     agreed: Option<BlobId>,
-    
+
     last_own_manifest_id: BlobId,
-    
+
     scan_stats: Option<ScanStats>,
 }
 
@@ -496,9 +393,6 @@ impl FolderState {
         self.changed.notify_all();
     }
 
-    
-    
-    
     fn adopt_peer(&self, data: Arc<SnapshotData>) {
         let id = data.manifest_id;
         let mut g = self.lock();
@@ -509,8 +403,6 @@ impl FolderState {
         self.changed.notify_all();
     }
 
-    
-    
     fn record_agreed(&self, manifest: RootManifest, manifest_id: BlobId) {
         let mut g = self.lock();
         g.baseline = Some(manifest);
@@ -519,7 +411,6 @@ impl FolderState {
         self.changed.notify_all();
     }
 
-    
     fn wait_current(&self, deadline: Instant) -> Option<Arc<SnapshotData>> {
         let mut g = self.lock();
         loop {
@@ -569,8 +460,6 @@ impl FolderState {
         }
     }
 
-    
-    
     fn wake_all(&self) {
         self.changed.notify_all();
     }
@@ -585,15 +474,12 @@ impl FolderState {
 struct SharedState {
     shutdown: AtomicBool,
     stats: Mutex<EngineStats>,
-    
-    
-    
-    
+
     live_sessions: Mutex<usize>,
     live_idle: Condvar,
-    
+
     free_permits: Mutex<usize>,
-    
+
     park: Mutex<()>,
     park_cv: Condvar,
     peer_connectivity: Mutex<HashMap<BlobId, (Instant, &'static str)>>,
@@ -646,8 +532,6 @@ impl SharedState {
         self.shutdown.load(Ordering::SeqCst)
     }
 
-    
-    
     fn acquire_permit(self: &Arc<Self>) -> Option<SessionPermit> {
         let mut g = self.free_permits.lock().unwrap();
         if *g == 0 {
@@ -659,7 +543,6 @@ impl SharedState {
         })
     }
 
-    
     fn register_live_session(self: &Arc<Self>) -> LiveSession {
         *self.live_sessions.lock().unwrap() += 1;
         LiveSession {
@@ -667,7 +550,6 @@ impl SharedState {
         }
     }
 
-    
     fn wait_sessions_done(&self) {
         let mut g = self.live_sessions.lock().unwrap();
         while *g > 0 {
@@ -675,7 +557,6 @@ impl SharedState {
         }
     }
 }
-
 
 struct SessionPermit {
     shared: Arc<SharedState>,
@@ -686,8 +567,6 @@ impl Drop for SessionPermit {
         *self.shared.free_permits.lock().unwrap() += 1;
     }
 }
-
-
 
 struct LiveSession {
     shared: Arc<SharedState>,
@@ -701,16 +580,12 @@ impl Drop for LiveSession {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Donor {
-    
     First,
-    
+
     Second,
 }
-
-
 
 fn lineage_winner(a: &RootManifest, b: &RootManifest) -> Donor {
     let ka = (a.created_sec, a.created_nsec, a.device_id, a.root_tree_id);
@@ -722,17 +597,12 @@ fn lineage_winner(a: &RootManifest, b: &RootManifest) -> Donor {
     }
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct PeerState {
-    
     pub current_root: BlobId,
-    
+
     pub baseline_root: Option<BlobId>,
 }
-
-
-
 
 fn has_diverged(p: PeerState) -> bool {
     match p.baseline_root {
@@ -740,18 +610,6 @@ fn has_diverged(p: PeerState) -> bool {
         Some(base) => base != p.current_root,
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub fn select_donor(
     mine: PeerState,
@@ -770,19 +628,6 @@ pub fn select_donor(
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
     debug_assert_ne!(a.root_tree_id, b.root_tree_id, "caller checked roots");
     let empty = crate::empty_tree_id();
@@ -796,19 +641,15 @@ pub fn pick_donor(a: &RootManifest, b: &RootManifest) -> Donor {
 
 struct Ctx {
     cfg: EngineConfig,
-    
-    
-    
-    
+
     identity: DeviceIdentity,
     store: Arc<Store>,
     transport: Arc<dyn Transport>,
     session_lock: Mutex<()>,
-    
-    
+
     folder: Arc<FolderState>,
     shared: Arc<SharedState>,
-    
+
     peer_policy: PeerPolicy,
     _scan_engine: Arc<ScanEngine>,
     dial_backoff: Mutex<(u32, Option<Instant>)>,
@@ -833,8 +674,6 @@ impl Ctx {
         self.shared.bump(|s| s.rejected_items += 1);
     }
 
-    
-    
     fn current_snapshot(&self) -> Result<Arc<SnapshotData>, SessionError> {
         let deadline = Instant::now() + FIRST_STATE_WAIT;
         self.folder
@@ -842,10 +681,6 @@ impl Ctx {
             .ok_or_else(|| SessionError::Other("no local folder state available".into()))
     }
 
-    
-    
-    
-    
     fn record_agreement(
         &self,
         peer: BlobId,
@@ -896,7 +731,6 @@ impl Ctx {
         Ok(())
     }
 
-    
     fn handle_scan_update(&self, cur: &CurrentScan) {
         let manifest_bytes = serialize_manifest(&cur.manifest);
         let data = Arc::new(SnapshotData {
@@ -948,7 +782,7 @@ impl Ctx {
                 }
             },
             Err(e) => {
-                if let [peer] = self.peer_policy.remote_peers(self.identity.public())[..] {
+                if let [peer] = self.current_policy().remote_peers(self.identity.public())[..] {
                     self.shared.record_peer_connectivity(peer, "unreachable");
                 }
                 self.status(&format!("SESSION dial error: {e}"));
@@ -967,10 +801,67 @@ impl Ctx {
         *guard = (failures, Some(next));
     }
 
-    
-    
-    
-    
+    fn current_policy(&self) -> PeerPolicy {
+        let refreshed = resolve_peer_policy_from_disk(&self.cfg, &self.store);
+        if refreshed != PeerPolicy::default() || self.peer_policy == PeerPolicy::default() {
+            refreshed
+        } else {
+            self.peer_policy.clone()
+        }
+    }
+
+    fn dial_discovered_peers(&self) {
+        let policy = self.current_policy();
+        let peers = policy.remote_peers(self.identity.public());
+        if peers.is_empty() {
+            return;
+        }
+        {
+            let guard = self.dial_backoff.lock().unwrap();
+            if let Some(next) = guard.1 {
+                if Instant::now() < next {
+                    return;
+                }
+            }
+        }
+        let mut any_success = false;
+        let mut attempted = false;
+        for peer in peers {
+            attempted = true;
+            match self.transport.dial_peer(&peer) {
+                Ok(mut conn) => match run_session_v1(conn.as_mut(), self, true) {
+                    Ok(()) => {
+                        any_success = true;
+                        self.bump_ok();
+                        self.shared.record_peer_connectivity(peer, "reachable");
+                        break;
+                    }
+                    Err(e) => {
+                        self.note_session_failure(&e);
+                        self.status(&format!(
+                            "SESSION failed (autonomous dial to {}): {e}",
+                            hex_short(&peer)
+                        ));
+                        self.shared.record_peer_connectivity(peer, "unreachable");
+                    }
+                },
+                Err(e) => {
+                    self.shared.record_peer_connectivity(peer, "unreachable");
+                    self.status(&format!(
+                        "SESSION autonomous dial to {} error: {e}",
+                        hex_short(&peer)
+                    ));
+                }
+            }
+        }
+        if any_success {
+            let mut guard = self.dial_backoff.lock().unwrap();
+            *guard = (0, None);
+        } else if attempted {
+            self.record_dial_failure();
+        }
+    }
+
     fn note_session_failure(&self, e: &SessionError) {
         if matches!(
             e,
@@ -985,11 +876,7 @@ impl Ctx {
     }
 }
 
-
 const MAX_ITEM_RETRIES: u32 = 3;
-
-
-
 
 fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<(), SessionError> {
     let role = if dialer {
@@ -999,9 +886,8 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     };
 
     let ledger = PeerLedger::new(ctx.store.store_dir());
-    let resolved =
-        ctx.peer_policy
-            .expected_peer(ctx.identity.public(), &ctx.cfg.folder_id, &ledger)?;
+    let policy = ctx.current_policy();
+    let resolved = policy.expected_peer(ctx.identity.public(), &ctx.cfg.folder_id, &ledger)?;
     let expect = match resolved {
         PeerExpectation::Refuse => {
             ctx.status("PEER refused: allow-list names no paired peer");
@@ -1016,7 +902,7 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
 
-    if !ctx.peer_policy.admits(&est.peer) {
+    if !policy.admits(&est.peer) {
         let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
         ctx.shared.record_peer_connectivity(est.peer, "unreachable");
         ctx.status(&format!(
@@ -1070,8 +956,6 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     }
     res
 }
-
-
 
 struct EngineHost<'x> {
     ctx: &'x Ctx,
@@ -1136,9 +1020,6 @@ pub(crate) fn now_parts() -> (i64, u32) {
     (d.as_secs() as i64, d.subsec_nanos())
 }
 
-
-
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn collect_chunk_ids(changes: &ChangeSet) -> Vec<BlobId> {
     let mut seen: HashSet<BlobId> = HashSet::new();
@@ -1165,26 +1046,12 @@ pub struct SyncEngine {
     store: Arc<Store>,
     listener: Option<Box<dyn crate::transport::Listener>>,
     peer_policy: Option<PeerPolicy>,
-    
-    
-    
-    
+
     identity: Option<DeviceIdentity>,
     ignore_policy: Option<Arc<dyn ferry_scan::IgnorePolicy>>,
 }
 
 impl SyncEngine {
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn with_store(
         cfg: EngineConfig,
         transport: Arc<dyn Transport>,
@@ -1209,38 +1076,27 @@ impl SyncEngine {
         })
     }
 
-    
     pub fn set_peer_policy(&mut self, policy: PeerPolicy) {
         self.peer_policy = Some(policy);
     }
 
-    
     pub fn set_ignore_policy(&mut self, policy: Arc<dyn ferry_scan::IgnorePolicy>) {
         self.ignore_policy = Some(policy);
     }
 
-    
     pub fn with_ignore_policy(mut self, policy: Arc<dyn ferry_scan::IgnorePolicy>) -> Self {
         self.ignore_policy = Some(policy);
         self
     }
 
-    
-    
-    
-    
     pub fn set_identity(&mut self, identity: DeviceIdentity) {
         self.identity = Some(identity);
     }
 
-    
     pub fn listen_addr(&self) -> Option<SocketAddr> {
         self.listener.as_ref().and_then(|l| l.local_addr().ok())
     }
 
-    
-    
-    
     pub fn ingest_pack_bytes_for_test(
         store: &Store,
         claimed_name: &PackId,
@@ -1249,8 +1105,6 @@ impl SyncEngine {
         crate::exchange::ingest_pack_verified(store, claimed_name, bytes)
     }
 
-    
-    
     pub fn start(mut self) -> EngineHandle {
         let listener: Option<Arc<dyn crate::transport::Listener>> =
             self.listener.take().map(Arc::from);
@@ -1278,12 +1132,7 @@ impl SyncEngine {
         }
         let store_dir = self.store.store_dir().to_path_buf();
         let folder_id = self.cfg.folder_id;
-        
-        
-        
-        
-        
-        
+
         let device = self
             .identity
             .take()
@@ -1337,8 +1186,6 @@ impl SyncEngine {
             ctx.handle_scan_update(&cur);
         }
 
-        
-        
         let joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
         let loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -1388,7 +1235,14 @@ impl SyncEngine {
         connect_to: Option<std::net::SocketAddr>,
         poll_interval: Option<std::time::Duration>,
         opportunistic_every: Option<u32>,
-    ) -> Result<(EngineHandle, ferry_folder::inventory::FolderRecord, [u8; 16]), EngineError> {
+    ) -> Result<
+        (
+            EngineHandle,
+            ferry_folder::inventory::FolderRecord,
+            [u8; 16],
+        ),
+        EngineError,
+    > {
         let opened = ferry_folder::folder::open_folder(folder_path, identity)
             .map_err(|e| EngineError::Other(format!("{}: {}", e.code, e.message)))?;
         let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly)
@@ -1409,7 +1263,8 @@ impl SyncEngine {
             pin_state_dir: Some(opened.state_dir()),
             quiet: true,
         };
-        let mut engine = SyncEngine::with_store(cfg, transport, std::sync::Arc::clone(&opened.store))?;
+        let mut engine =
+            SyncEngine::with_store(cfg, transport, std::sync::Arc::clone(&opened.store))?;
         engine.set_identity(identity.clone());
         engine.set_ignore_policy(opened.ignore_policy());
         let handle = engine.start();
@@ -1422,13 +1277,6 @@ impl SyncEngine {
     }
 }
 
-
-
-
-
-
-
-
 pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
     use blake3::Hasher;
     use rand::SeedableRng;
@@ -1437,7 +1285,7 @@ pub fn device_identity_for_tag(tag: &str) -> DeviceIdentity {
     h.update(tag.as_bytes());
     let digest = h.finalize();
     let mut seed = [0u8; 32];
-    
+
     let mut rng = StdRng::from_seed(*digest.as_bytes());
     use rand::RngCore;
     rng.fill_bytes(&mut seed);
@@ -1456,16 +1304,13 @@ fn accept_loop(
                 if shared.shutting_down() {
                     break;
                 }
-                
-                
-                
+
                 let Some(permit) = shared.acquire_permit() else {
                     ctx.status("SESSION refused: engine busy");
                     drop(conn);
                     continue;
                 };
-                
-                
+
                 let live = shared.register_live_session();
                 let ctx = Arc::clone(&ctx);
                 let h = std::thread::Builder::new()
@@ -1473,7 +1318,7 @@ fn accept_loop(
                     .spawn(move || {
                         let _live = live;
                         let _permit = permit;
-                        
+
                         let _guard = ctx.session_lock.lock().unwrap();
                         if ctx.shared.shutting_down() {
                             return;
@@ -1533,7 +1378,12 @@ fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Recei
             }
         }
 
-        if ctx.cfg.connect_to.is_some() {
+        let has_explicit = ctx.cfg.connect_to.is_some();
+        let has_peers = !ctx
+            .current_policy()
+            .remote_peers(ctx.identity.public())
+            .is_empty();
+        if has_explicit || has_peers {
             let diverged = ctx.folder.baseline_root() != ctx.folder.current_root();
             let backstop_due = last_backstop.elapsed() >= backstop_interval;
             if diverged || backstop_due {
@@ -1541,21 +1391,24 @@ fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Recei
                     last_backstop = Instant::now();
                 }
                 if let Ok(_guard) = ctx.session_lock.try_lock() {
-                    ctx.dial_and_run();
+                    if has_explicit {
+                        ctx.dial_and_run();
+                    }
+                    if has_peers {
+                        ctx.dial_discovered_peers();
+                    }
                 }
             }
         }
     }
 }
 
-
 #[derive(Clone)]
 pub struct EngineHandle {
     shared: Arc<SharedState>,
     folder: Arc<FolderState>,
     joins: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
-    
-    
+
     loops: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     listen_addr: Option<SocketAddr>,
     listener: Option<Arc<dyn crate::transport::Listener>>,
@@ -1571,8 +1424,6 @@ impl EngineHandle {
         &self.tag
     }
 
-    
-    
     pub fn is_healthy(&self) -> bool {
         !self.shared.shutting_down() && self.loops.lock().unwrap().iter().all(|j| !j.is_finished())
     }
@@ -1597,8 +1448,6 @@ impl EngineHandle {
         self.folder.pending_changes()
     }
 
-    
-    
     pub fn wait_for_change(&self, timeout: Duration) -> bool {
         self.folder.wait_for_change(timeout)
     }
@@ -1619,7 +1468,6 @@ impl EngineHandle {
         self.shared.record_peer_connectivity(peer, status);
     }
 
-    
     pub fn pinned_peers(&self) -> Result<Vec<BlobId>, std::io::Error> {
         let ledger = PeerLedger::new(&self.store_dir);
         ledger.list_peers(&self.folder_id)
@@ -1633,26 +1481,21 @@ impl EngineHandle {
         &self.folder_id
     }
 
-    
     pub fn trigger_scan(&self) {
         self.scan_engine.debug_inject_signal(WatchSignal::AuditDue);
         let _ = self.scan_engine.scan_once();
     }
 
-    
-    
-    
     pub fn shutdown(&self) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
         self.scan_engine.stop();
-        
-        
+
         self.folder.wake_all();
         self.shared.wake_parked();
         if let Some(ref l) = self.listener {
             let _ = l.close();
         }
-        
+
         if let Some(addr) = self.listen_addr {
             let _ = self.transport.dial(addr);
         }
@@ -1662,24 +1505,17 @@ impl EngineHandle {
         while let Some(j) = self.loops.lock().unwrap().pop() {
             let _ = j.join();
         }
-        
-        
+
         self.shared.wait_sessions_done();
-        
-        
+
         while let Some(j) = self.joins.lock().unwrap().pop() {
             let _ = j.join();
         }
     }
 
-    
-    
-    
     pub fn join_until_signal(&self) {
         let mut guard = self.shared.park.lock().unwrap();
         while !self.shared.shutting_down() {
-            
-            
             let (ng, _) = self
                 .shared
                 .park_cv
@@ -1703,8 +1539,6 @@ mod tests {
         dir_entry, file_entry, serialize_manifest, RootManifest, TreeNode,
     };
 
-    
-    
     fn test_store(store_dir: &Path, tag: &str) -> Arc<Store> {
         ferry_folder::open_or_create_test_store(store_dir, &device_identity_for_tag(tag))
             .expect("test store")
@@ -1730,8 +1564,8 @@ mod tests {
     fn donor_selection_prefers_nonempty_on_bootstrap() {
         let empty = crate::empty_tree_id();
         let full = tree(vec![file_entry("x", false, 0, 0, vec![])]);
-        let fresh = manifest_at(999, [9; 32], empty); 
-        let populated = manifest_at(1, [1; 32], full); 
+        let fresh = manifest_at(999, [9; 32], empty);
+        let populated = manifest_at(1, [1; 32], full);
         assert_eq!(
             pick_donor(&fresh, &populated),
             Donor::Second,
@@ -1749,7 +1583,6 @@ mod tests {
         assert_eq!(pick_donor(&older, &newer), Donor::Second);
         assert_eq!(pick_donor(&newer, &older), Donor::First);
 
-        
         let same_a = manifest_at(300, [1; 32], t1);
         let same_b = manifest_at(300, [2; 32], t2);
         assert_eq!(pick_donor(&same_a, &same_b), Donor::Second);
@@ -1794,9 +1627,6 @@ mod tests {
         );
     }
 
-    
-
-    
     fn fake_scan(
         sec: i64,
         dev: [u8; 32],
@@ -1838,7 +1668,6 @@ mod tests {
         let folder = Arc::new(FolderState::new());
         folder.update_from_scan(scan_a, stats_a);
 
-        
         folder.adopt_peer(Arc::clone(&adopted));
 
         {
@@ -1859,7 +1688,6 @@ mod tests {
             );
         }
 
-        
         let (fresh, stats_fresh) = fake_scan(40, me, [4; 32], [0; 32]);
         folder.update_from_scan(fresh, stats_fresh);
         {
@@ -1879,8 +1707,6 @@ mod tests {
 
     #[test]
     fn startup_sweep_removes_planted_stale_temps_at_every_site() {
-        
-        
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("root");
         let store = test_store(&root, "t20-sweep");
@@ -1901,7 +1727,7 @@ mod tests {
         ];
         for p in &stale {
             std::fs::write(p, b"stale residue").unwrap();
-            
+
             let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
             f.set_times(std::fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
                 .unwrap();
@@ -1935,12 +1761,10 @@ mod tests {
 
     #[test]
     fn rescan_of_unchanged_tree_holds_the_current_pointer() {
-        
-        
         let me = [3u8; 32];
         let root = [5; 32];
         let (first, stats_1) = fake_scan(1, me, root, [0; 32]);
-        let (again, stats_2) = fake_scan(2, me, root, [0; 32]); 
+        let (again, stats_2) = fake_scan(2, me, root, [0; 32]);
         let first_id = first.manifest_id;
         let second_id = again.manifest_id;
 
@@ -1975,25 +1799,21 @@ mod tests {
         let (own, stats_own) = fake_scan(1, me, [1; 32], [0; 32]);
         folder.update_from_scan(own, stats_own);
 
-        
         let before = folder
             .wait_current(Instant::now() + Duration::from_secs(1))
             .unwrap();
         assert_eq!(before.manifest.root_tree_id, [1; 32]);
 
-        
         let (peer_snap, _) = fake_scan(9, peer, [2; 32], [0; 32]);
         folder.adopt_peer(Arc::clone(&peer_snap));
         folder.record_agreed(peer_snap.manifest.clone(), peer_snap.manifest_id);
 
-        
         let after = folder
             .wait_current(Instant::now() + Duration::from_secs(1))
             .unwrap();
         assert_eq!(after.manifest_id, peer_snap.manifest_id);
         assert_eq!(after.manifest.root_tree_id, [2; 32]);
 
-        
         assert_eq!(before.manifest.root_tree_id, [1; 32]);
     }
 
@@ -2014,11 +1834,9 @@ mod tests {
             "a finished handler frees its permit"
         );
 
-        
-        
         let live = shared.register_live_session();
         drop(live);
-        shared.wait_sessions_done(); 
+        shared.wait_sessions_done();
     }
 
     #[test]
@@ -2061,24 +1879,19 @@ mod tests {
         let peer_a = [10u8; 32];
         let peer_b = [20u8; 32];
 
-        
         assert_eq!(ledger.list_peers(&folder1).unwrap(), Vec::<BlobId>::new());
 
-        
         ledger.record_peer(&folder1, &peer_a).unwrap();
         assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a]);
-        
+
         assert_eq!(ledger.list_peers(&folder2).unwrap(), Vec::<BlobId>::new());
 
-        
         ledger.record_peer(&folder1, &peer_b).unwrap();
         assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_a, peer_b]);
 
-        
         assert!(ledger.forget_peer(&folder1, &peer_a).unwrap());
         assert_eq!(ledger.list_peers(&folder1).unwrap(), vec![peer_b]);
 
-        
         assert!(!ledger.forget_peer(&folder1, &peer_a).unwrap());
     }
 
@@ -2128,7 +1941,6 @@ mod tests {
         .unwrap();
         let handle = engine.start();
 
-        
         let deadline = Instant::now() + Duration::from_secs(5);
         while handle.scan_counts().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
@@ -2140,14 +1952,11 @@ mod tests {
         assert_eq!(counts.files, 1);
         assert_eq!(counts.dirs, 0);
 
-        
         assert_eq!(handle.pending_changes(), None);
 
-        
         let peer_dev = [99u8; 32];
         assert_eq!(handle.peer_connectivity(&peer_dev), "unknown");
 
-        
         handle.record_peer_connectivity(peer_dev, "reachable");
         assert_eq!(handle.peer_connectivity(&peer_dev), "reachable");
 

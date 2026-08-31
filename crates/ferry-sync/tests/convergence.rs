@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 mod common;
 
 use std::fs;
@@ -20,7 +8,6 @@ use std::time::Duration;
 use common::{EngineFixture, TreeBuilder};
 use ferry_sync::format::hex;
 
-
 const SEED: u64 = 20260824;
 
 #[test]
@@ -28,7 +15,6 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
     let timeout = common::timeout_from_env();
     let fx = EngineFixture::start("conv", SEED);
 
-    
     let mut builder = TreeBuilder::new(fx.tree_a(), SEED);
     builder.create_random_files(50);
     let exec_file = "scripts/run.sh";
@@ -38,11 +24,8 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
     let total_lines = 250usize;
     let writer = spawn_log_writer(fx.tree_a().join(log_rel), total_lines);
 
-    
-    
     writer.join().expect("log writer thread");
 
-    
     let deadline = std::time::Instant::now() + timeout;
     let agreed = loop {
         assert!(
@@ -60,10 +43,8 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
         std::thread::sleep(Duration::from_millis(100));
     };
 
-    
     assert_ne!(agreed, [0u8; 32]);
 
-    
     let got_lines = count_lines(&fx.tree_b().join(log_rel));
     assert_eq!(got_lines, total_lines, "log tail torn on receiving side");
     let last = last_line(&fx.tree_b().join(log_rel));
@@ -73,7 +54,6 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
         format!("log line {total_lines} payload-{want_payload}")
     );
 
-    
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -84,7 +64,6 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
         assert_ne!(mode & 0o111, 0, "exec bit lost in transfer");
     }
 
-    
     assert!(fx.a.stats().sessions_ok >= 1);
     assert!(fx.b.stats().sessions_ok >= 1);
 
@@ -96,25 +75,20 @@ fn fifty_random_files_plus_append_heavy_log_converge_within_n_seconds() {
     );
 }
 
-
-
-
 #[test]
 fn edits_on_either_side_converge_both_directions() {
     let fx = EngineFixture::start("bidi", SEED + 1);
 
-    
     let mut b1 = TreeBuilder::new(fx.tree_a(), SEED + 2);
     b1.write("from-a.txt", b"written on node A");
     b1.write("nested/deep/from-a.bin", &vec![7u8; 4096]);
     wait_converged(&fx, common::timeout_from_env());
     assert!(trees_byte_equal(&fx), "phase 1 (A->B)");
 
-    
     std::thread::sleep(Duration::from_millis(1100));
     let mut b2 = TreeBuilder::new(fx.tree_b(), SEED + 3);
     b2.write("from-b.txt", b"written on node B");
-    b2.write("from-a.txt", b"edited on node B"); 
+    b2.write("from-a.txt", b"edited on node B");
     b2.remove("nested/deep/from-a.bin");
     wait_converged(&fx, common::timeout_from_env());
     assert!(trees_byte_equal(&fx), "phase 2 (B->A)");
@@ -158,8 +132,6 @@ fn last_line(p: &Path) -> String {
         .unwrap_or_default()
         .to_string()
 }
-
-
 
 fn spawn_log_writer(path: std::path::PathBuf, lines: usize) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {

@@ -1,17 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub mod error;
 pub mod folder;
 pub mod inventory;

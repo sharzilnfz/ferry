@@ -1,21 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub mod apply;
 pub mod error;
 pub mod temp;

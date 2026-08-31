@@ -1,26 +1,17 @@
-
-
-
-
-
-
-
-
 use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-use ferry_sync_engine::pin::PinManager;
 use ferry_platform::time::fmt_rfc3339;
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
 use ferry_sync_engine::list_conflicts;
+use ferry_sync_engine::pin::PinManager;
 use serde_json::json;
 
 use crate::error::CliResult;
 use crate::folder::{self, OpenFolder};
 use crate::out::Output;
-
 
 struct PeerRow {
     device_id: String,
@@ -112,7 +103,6 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
     }?;
     let device_id = hex(identity.public());
 
-    
     let scan = crate::scan::one_shot(&opened, *identity.public())?;
     let manifest = &scan.manifest;
     let manifest_id = hex(&scan.manifest_id);
@@ -126,8 +116,6 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
         )
     })?;
 
-    
-    
     let pending: Option<i64> = match most_recent_base(&opened)? {
         BaseLookup::NoAgreement => None,
         BaseLookup::Unreadable => Some(-1),
@@ -145,8 +133,6 @@ fn run_offline(folder: &Path) -> CliResult<Output> {
         ),
     };
 
-    
-    
     let pin_summary = PinManager::new(opened.state_dir()).summary().map_err(|e| {
         crate::error::CliError::new(
             "pin-state-corrupt",
@@ -283,7 +269,6 @@ fn render_human(
     human
 }
 
-
 pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
     let identity = {
         let home = crate::home::ferry_home()?;
@@ -297,8 +282,6 @@ pub fn scan_now(opened: &OpenFolder) -> CliResult<crate::scan::OneShot> {
     }?;
     crate::scan::one_shot(opened, *identity.public())
 }
-
-
 
 fn list_peers(opened: &OpenFolder) -> CliResult<Vec<PeerRow>> {
     let ledger = AgreementLedger::new(opened.state_dir());
@@ -331,8 +314,7 @@ fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
             "check .ferry/agreement permissions",
         )
     })?;
-    
-    
+
     let best = records
         .into_iter()
         .max_by_key(|(_, rec)| (rec.agreed_sec, rec.agreed_nsec));
@@ -351,23 +333,18 @@ fn most_recent_base(opened: &OpenFolder) -> CliResult<BaseLookup> {
                 "the agreed manifest blob is damaged",
             )),
         },
-        
-        
+
         Err(_) => Ok(BaseLookup::Unreadable),
     }
 }
 
-
 enum BaseLookup {
-    
     NoAgreement,
-    
+
     Unreadable,
-    
+
     Base(ferry_store::manifest::RootManifest),
 }
-
-
 
 fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
     let addr_path = opened
@@ -385,7 +362,6 @@ fn probe_peer(opened: &OpenFolder, peer_hex: &str) -> &'static str {
         Err(_) => "unreachable",
     }
 }
-
 
 pub fn format_agreed_time(rec: &ferry_store::agreement::AgreedRecord) -> String {
     fmt_rfc3339(rec.agreed_sec)

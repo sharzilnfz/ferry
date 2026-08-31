@@ -1,18 +1,11 @@
-
-
-
-
-
 use std::path::Path;
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderError {
-    
     pub code: &'static str,
-    
+
     pub message: String,
-    
+
     pub hint: String,
 }
 
@@ -29,7 +22,6 @@ impl FolderError {
         }
     }
 
-    
     pub fn not_initialized(path: impl AsRef<Path>) -> Self {
         FolderError::new(
             Self::NOT_INITIALIZED_CODE,
@@ -55,7 +47,6 @@ impl std::fmt::Display for FolderError {
 impl std::error::Error for FolderError {}
 
 pub type FolderResult<T> = Result<T, FolderError>;
-
 
 pub trait CodeInto<T> {
     fn code(self, code: &'static str, hint: impl Into<String>) -> FolderResult<T>;

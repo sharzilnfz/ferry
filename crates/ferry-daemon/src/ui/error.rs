@@ -3,7 +3,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::Value;
 
-
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
@@ -61,9 +60,6 @@ impl IntoResponse for ApiError {
 }
 
 pub use ferry_ipc::backend::OpError;
-
-
-
 
 #[must_use]
 pub fn status_for_code(code: &str) -> StatusCode {

@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 #[cfg(feature = "web-ui")]
 use std::sync::Arc;
@@ -28,7 +20,6 @@ use serde_json::json;
 use crate::error::{CliError, CliResult};
 use crate::out::Output;
 
-
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct UiArgs<'a> {
@@ -41,7 +32,6 @@ pub struct UiArgs<'a> {
     pub no_open: bool,
     pub test: bool,
 }
-
 
 #[cfg(feature = "web-ui")]
 #[derive(Clone, Debug)]
@@ -77,7 +67,6 @@ impl UiServerState {
     }
 }
 
-
 #[cfg(feature = "web-ui")]
 pub fn router(state: Arc<UiServerState>) -> Router {
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&state.folder);
@@ -90,7 +79,6 @@ pub fn router(state: Arc<UiServerState>) -> Router {
         .with_inactivity_timeout(INACTIVITY_TIMEOUT);
     server.router()
 }
-
 
 pub fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
@@ -270,7 +258,6 @@ fn run_web_mode(
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
-        
         let monitor_server = server.clone();
         let monitor_shutdown = shutdown_tx.clone();
         let monitor_handle = tokio::spawn(async move {
@@ -330,7 +317,6 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         let _ = crate::bootstrap::ensure_daemon(&home);
     }
 
-    
     if args.gui {
         #[cfg(feature = "gui")]
         {
@@ -346,7 +332,6 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    
     if args.web {
         #[cfg(feature = "web-ui")]
         {
@@ -362,7 +347,6 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    
     if args.tui {
         #[cfg(feature = "tui")]
         {
@@ -378,7 +362,6 @@ pub fn run(args: UiArgs) -> CliResult<Output> {
         }
     }
 
-    
     #[cfg(feature = "gui")]
     {
         return run_gui_mode(&_folder_path, args.test);

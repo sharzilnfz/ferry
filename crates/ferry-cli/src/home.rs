@@ -1,25 +1,6 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::PathBuf;
 
 use crate::error::{CliError, CliResult, CodeInto};
-
-
-
-
-
-
 
 pub fn ferry_home() -> CliResult<PathBuf> {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
@@ -42,14 +23,9 @@ pub fn ferry_home() -> CliResult<PathBuf> {
     Ok(home.join(".ferry"))
 }
 
-
 pub fn identity_root(home: &std::path::Path) -> PathBuf {
     home.join("identity")
 }
-
-
-
-
 
 pub fn load_device_identity() -> CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = ferry_home()?;
@@ -63,9 +39,6 @@ mod tests {
 
     #[test]
     fn ferry_home_env_overrides_home_join() {
-        
-        
-        
         let saved = std::env::var_os("FERRY_HOME");
         std::env::remove_var("FERRY_HOME");
         let fallback = ferry_home().unwrap();
@@ -74,7 +47,6 @@ mod tests {
         std::env::set_var("FERRY_HOME", "/tmp/fh-override");
         assert_eq!(ferry_home().unwrap(), PathBuf::from("/tmp/fh-override"));
 
-        
         std::env::set_var("FERRY_HOME", "");
         let again = ferry_home().unwrap();
         assert!(again.ends_with(".ferry"), "{again:?}");

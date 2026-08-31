@@ -4,10 +4,10 @@
 
 **Blocked by:** 02: Network rendezvous over P2P topic and mutual key wrapping for share and join
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Local network mDNS service discovery and advertisement are enabled by default on sync transport endpoints
-- [ ] Daemon supervisor inspects authorized peer keys from the folder configuration for all registered folders
-- [ ] Discovered peer network addresses are automatically mapped in the transport route table
-- [ ] Daemons automatically dial and establish sync sessions with authorized peers without manual peer URL flags
-- [ ] Automated multi-daemon tests verify that two instances on the same network discover each other and converge file changes autonomously
+- [x] Local network mDNS service discovery and advertisement are enabled by default on sync transport endpoints
+- [x] Daemon supervisor inspects authorized peer keys from the folder configuration for all registered folders
+- [x] Discovered peer network addresses are automatically mapped in the transport route table
+- [x] Daemons automatically dial and establish sync sessions with authorized peers without manual peer URL flags
+- [x] Automated multi-daemon tests verify that two instances on the same network discover each other and converge file changes autonomously

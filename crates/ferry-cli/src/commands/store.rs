@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -87,8 +75,6 @@ pub fn run(args: GcArgs<'_>) -> CliResult<Output> {
         ))
     }
 }
-
-
 
 fn live_roots(folder_root: &Path, folder_id: &[u8; 16]) -> CliResult<Vec<BlobId>> {
     let state_dir = folder::state_dir(folder_root);

@@ -1,42 +1,13 @@
-
-
-
-
-
-
-
-
-
-
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
-    
-    
     File,
-    
+
     Dir,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 pub trait IgnorePolicy: Send + Sync {
     fn ignored(&self, rel: &[String], kind: EntryKind) -> bool;
 }
-
-
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NoIgnores;
