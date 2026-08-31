@@ -143,57 +143,6 @@ fn code_key(code: &str) -> String {
 
 
 
-fn rendezvous_file_path(code: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("ferry-rendezvous-{}.json", code_key(code)))
-}
-
-fn write_rendezvous_file(record: &SessionRecord) {
-    let doc = json!({
-        "code": record.code,
-        "folder_id": record.folder_id_hex,
-        "folder_path": record.folder_path.display().to_string(),
-        "offer": ferry_store::format::hex(&record.offer_bytes),
-        "fmk_hex": ferry_store::format::hex(record.fmk.as_ref()),
-        "poly": record.poly,
-        "initiator_pub": ferry_store::format::hex(&record.initiator_pub),
-        "expires_at": record
-            .expires_at
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    });
-    let path = rendezvous_file_path(&record.code);
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new("/tmp")));
-    let _ = std::fs::write(&path, doc.to_string());
-}
-
-fn read_rendezvous_file(code: &str) -> Option<SessionRecord> {
-    let bytes = std::fs::read(rendezvous_file_path(code)).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let folder_id: [u8; 16] = ferry_store::format::unhex(v["folder_id"].as_str()?)?;
-    let offer_bytes: Vec<u8> =
-        ferry_store::format::unhex::<OFFER_LEN>(v["offer"].as_str()?).map(|b| b.to_vec())?;
-    let fmk: Fmk = ferry_store::format::unhex(v["fmk_hex"].as_str()?)?;
-    let initiator_pub: [u8; 32] = ferry_store::format::unhex(v["initiator_pub"].as_str()?)?;
-    let expires = v["expires_at"].as_u64()?;
-    Some(SessionRecord {
-        code: code_key(code),
-        folder_id,
-        folder_id_hex: v["folder_id"].as_str()?.to_string(),
-        folder_path: PathBuf::from(v["folder_path"].as_str()?),
-        offer_bytes,
-        fmk,
-        poly: v["poly"].as_u64()?,
-        expires_at: UNIX_EPOCH + Duration::from_secs(expires),
-        initiator_pub,
-    })
-}
-
-fn remove_rendezvous_file(code: &str) {
-    let _ = std::fs::remove_file(rendezvous_file_path(code));
-}
-
-
-
 
 
 fn encode_envelope(code: &str, offer_bytes: &[u8], expires_at: SystemTime) -> String {
@@ -405,7 +354,6 @@ impl PairingRitual {
             .lock()
             .expect("rendezvous map")
             .insert(record.code.clone(), record.clone());
-        write_rendezvous_file(&record);
 
         let payload = encode_envelope(&code, &offer_bytes, expires_at);
         Ok(PendingOffer {
@@ -586,16 +534,11 @@ impl PairingRitual {
     
 
     fn peek_session(&self, key: &str) -> Option<SessionRecord> {
-        if let Some(r) = self
-            .rendezvous
+        self.rendezvous
             .lock()
             .expect("rendezvous map")
             .get(key)
             .cloned()
-        {
-            return Some(r);
-        }
-        read_rendezvous_file(key)
     }
 
     
@@ -617,7 +560,6 @@ impl PairingRitual {
                 .lock()
                 .expect("rendezvous map")
                 .remove(&record.code);
-            remove_rendezvous_file(&record.code);
             return Err(FolderError::new(
                 "pairing-expired",
                 format!("pairing code {} expired", record.code),
@@ -702,7 +644,6 @@ impl PairingRitual {
             .lock()
             .expect("rendezvous map")
             .remove(&record.code);
-        remove_rendezvous_file(&record.code);
 
         Ok(accepted)
     }
