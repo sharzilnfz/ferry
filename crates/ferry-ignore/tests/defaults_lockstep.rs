@@ -1,14 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
 use ferry_ignore::defaults::DEFAULT_RULES as CANONICAL_DEFAULT_RULES;
 
 #[test]

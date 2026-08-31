@@ -1,8 +1,3 @@
-
-
-
-
-
 pub mod backend;
 pub mod client;
 pub mod error;
@@ -12,17 +7,15 @@ pub mod paths;
 pub mod protocol;
 pub mod transport;
 
+#[cfg(any(test, feature = "test-util"))]
+pub use backend::FakeBackend;
 pub use backend::{
     connect_auto, AutoBackend, BoxFuture, InventoryDomain, OpError, PairResult, PinRecord,
     PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain,
     UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
 };
-#[cfg(any(test, feature = "test-util"))]
-pub use backend::FakeBackend;
 pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;
-
-
 
 pub use ferry_folder::inventory::{
     default_listing_root, sort_entries, validate_and_normalize, validate_path, DirectoryEntry,

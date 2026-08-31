@@ -1,56 +1,16 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-
-
-
 pub const DEFAULT_STALE_AGE_SECS: u64 = 24 * 60 * 60;
-
-
-
 
 pub fn sweep_store_temps(folder_root: &Path, max_age: Duration) -> std::io::Result<Vec<PathBuf>> {
     let cutoff = SystemTime::now()
         .checked_sub(max_age)
-        
-        
         .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut removed = Vec::new();
 
     let store_dir = folder_root.join(crate::store::STORE_DIR_NAME);
 
-    
     let tmp_dir = store_dir.join("tmp");
     if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
         for entry in entries.flatten() {
@@ -60,15 +20,10 @@ pub fn sweep_store_temps(folder_root: &Path, max_age: Duration) -> std::io::Resu
         }
     }
 
-    
     type TempPredicate = fn(&str) -> bool;
     let sites: [(&str, TempPredicate); 3] = [
-        
-        
         ("", |n: &str| n.contains(".tmp")),
-        
         ("peers", |n| n.starts_with(".tmp-")),
-        
         ("agreement", |n| n.starts_with(".tmp-")),
     ];
     for (subdir, is_temp) in sites {
@@ -102,16 +57,14 @@ fn remove_if_stale(path: &Path, cutoff: SystemTime) -> std::io::Result<bool> {
         Err(e) => return Err(e),
     };
     match meta.modified() {
-        Ok(t) if t < cutoff => {
-            match std::fs::remove_file(path) {
-                Ok(()) => Ok(true),
-                
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-                Err(e) => Err(e),
-            }
-        }
+        Ok(t) if t < cutoff => match std::fs::remove_file(path) {
+            Ok(()) => Ok(true),
+
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        },
         Ok(_) => Ok(false),
-        Err(_) => Ok(false), 
+        Err(_) => Ok(false),
     }
 }
 
@@ -144,7 +97,6 @@ mod tests {
             std::fs::create_dir_all(sd.join(d)).unwrap();
         }
 
-        
         let stale = [
             sd.join("tmp").join(format!("pack-{}.tmp", hex(&[7u8; 16]))),
             sd.join("tmp").join("gc-state"),
@@ -176,7 +128,6 @@ mod tests {
             assert!(p.exists(), "live/fresh file {p:?} must survive");
         }
 
-        
         let again = sweep_store_temps(root, Duration::from_hours(1)).unwrap();
         assert!(again.is_empty(), "{again:?}");
     }

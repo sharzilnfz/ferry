@@ -1,5 +1,3 @@
-
-
 use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -25,13 +23,11 @@ enum KeyOutcome {
     PickerSpace,
 }
 
-
-
 pub struct TuiApp {
     pub state: TuiState,
     pub backend: Option<Arc<dyn UiBackend>>,
     pub picker: Option<PickerState>,
-    
+
     pub headless_override: Option<bool>,
 }
 
@@ -42,7 +38,6 @@ impl Default for TuiApp {
 }
 
 impl TuiApp {
-    
     #[must_use]
     pub fn new(state: TuiState) -> Self {
         Self {
@@ -53,7 +48,6 @@ impl TuiApp {
         }
     }
 
-    
     #[must_use]
     pub fn new_with_backend(backend: Arc<dyn UiBackend>) -> Self {
         Self {
@@ -64,9 +58,6 @@ impl TuiApp {
         }
     }
 
-    
-    
-    
     #[must_use]
     pub fn new_auto(
         socket_path: impl Into<std::path::PathBuf>,
@@ -78,7 +69,6 @@ impl TuiApp {
         )))
     }
 
-    
     #[must_use]
     pub fn with_backend(mut self, backend: Arc<dyn UiBackend>) -> Self {
         self.backend = Some(backend);
@@ -101,7 +91,6 @@ impl TuiApp {
         self.picker = None;
     }
 
-    
     pub async fn open_picker(
         &mut self,
         backend: &Arc<dyn UiBackend>,
@@ -130,13 +119,11 @@ impl TuiApp {
         }
     }
 
-    
     #[must_use]
     pub fn should_quit(&self) -> bool {
         self.state.should_quit
     }
 
-    
     pub fn render(&self, frame: &mut Frame) {
         ui::render(&self.state, frame);
         if let Some(ref picker) = self.picker {
@@ -144,12 +131,10 @@ impl TuiApp {
         }
     }
 
-    
     pub fn handle_message(&mut self, msg: DaemonMessage) {
         self.state.handle_daemon_message(msg);
     }
 
-    
     pub fn handle_ui_event(&mut self, event: UiEvent) {
         match event {
             UiEvent::State(snapshot) => self.state.apply_snapshot(snapshot),
@@ -391,21 +376,22 @@ impl TuiApp {
                             .push_error(current_time_str(), format!("Release pin error: {e}"));
                     }
                 },
-                ClientCommand::StartPin { paths, duration_hours } => {
-                    match backend.start_pin(paths, duration_hours).await {
-                        Ok(record) => {
-                            self.state.activity_log.push_info(
-                                current_time_str(),
-                                format!("Pin started: {}", record.status),
-                            );
-                        }
-                        Err(e) => {
-                            self.state
-                                .activity_log
-                                .push_error(current_time_str(), format!("Start pin error: {e}"));
-                        }
+                ClientCommand::StartPin {
+                    paths,
+                    duration_hours,
+                } => match backend.start_pin(paths, duration_hours).await {
+                    Ok(record) => {
+                        self.state.activity_log.push_info(
+                            current_time_str(),
+                            format!("Pin started: {}", record.status),
+                        );
                     }
-                }
+                    Err(e) => {
+                        self.state
+                            .activity_log
+                            .push_error(current_time_str(), format!("Start pin error: {e}"));
+                    }
+                },
                 ClientCommand::ListConflicts => match backend.list_conflicts().await {
                     Ok(entries) => {
                         self.state.conflict_entries = entries;
@@ -434,10 +420,9 @@ impl TuiApp {
                 match next.load(backend.as_ref()).await {
                     Ok(()) => self.picker = Some(next),
                     Err(e) => {
-                        self.state.activity_log.push_error(
-                            current_time_str(),
-                            format!("Picker load error: {e}"),
-                        );
+                        self.state
+                            .activity_log
+                            .push_error(current_time_str(), format!("Picker load error: {e}"));
                     }
                 }
             }
@@ -487,7 +472,6 @@ impl TuiApp {
         }
     }
 
-    
     pub async fn picker_go_parent(&mut self, backend: &Arc<dyn UiBackend>) {
         let parent = self.picker.as_ref().and_then(PickerState::go_parent);
         if let Some(par) = parent {
@@ -499,16 +483,12 @@ impl TuiApp {
         }
     }
 
-    
-    
-    
     pub async fn run<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
         backend: Arc<dyn UiBackend>,
         mut events: TerminalEvents,
     ) -> Result<(), TuiError> {
-        
         match backend.get_status().await {
             Ok(snap) => {
                 self.state.apply_snapshot(snap);
@@ -520,10 +500,8 @@ impl TuiApp {
             }
         }
 
-        
         let mut stream = backend.subscribe_events().await.ok();
 
-        
         terminal.draw(|f| self.render(f))?;
 
         while !self.state.should_quit {
@@ -579,7 +557,6 @@ impl TuiApp {
         Ok(())
     }
 
-    
     pub async fn run_with_connection<B: Backend, S: AsyncRead + AsyncWrite + Unpin>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -590,7 +567,6 @@ impl TuiApp {
         self.run_loop(terminal, receiver, sender, events).await
     }
 
-    
     pub async fn run_loop<B: Backend, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         &mut self,
         terminal: &mut Terminal<B>,

@@ -50,8 +50,6 @@ pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
             )
         })?;
 
-    
-    
     let ritual = ferry_folder::pairing::PairingRitual::with_shared(
         home,
         identity.clone(),

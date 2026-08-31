@@ -1,7 +1,5 @@
 #![allow(warnings, clippy::all, clippy::pedantic)]
 
-
-
 pub mod bootstrap;
 pub mod cli;
 pub mod commands;
@@ -11,8 +9,6 @@ pub mod home;
 pub mod ipc;
 pub mod out;
 pub mod scan;
-
-
 
 pub fn ensure_identity() -> error::CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = home::ferry_home()?;

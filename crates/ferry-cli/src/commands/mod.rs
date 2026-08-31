@@ -1,6 +1,3 @@
-
-
-
 pub mod conflicts;
 pub mod daemon;
 pub mod ignore_cmd;

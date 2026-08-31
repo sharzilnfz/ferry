@@ -1,13 +1,3 @@
-
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,7 +24,6 @@ mod tests {
 
     #[test]
     fn table_serialization_fixture_hand_computed() {
-        
         let e = IndexEntry {
             kind: BlobKind::DataChunk,
             id: [0xaa; 32],
@@ -43,10 +32,10 @@ mod tests {
             plain_len: 7,
         };
         let mut expect: Vec<u8> = Vec::new();
-        expect.extend_from_slice(&1u32.to_le_bytes()); 
-        expect.push(0x01); 
-        expect.extend_from_slice(&[0xaa; 32]); 
-        expect.extend_from_slice(&[0xcc; 32]); 
+        expect.extend_from_slice(&1u32.to_le_bytes());
+        expect.push(0x01);
+        expect.extend_from_slice(&[0xaa; 32]);
+        expect.extend_from_slice(&[0xcc; 32]);
         expect.extend_from_slice(&5u64.to_le_bytes());
         expect.extend_from_slice(&7u64.to_le_bytes());
         assert_eq!(table_plain(&[e]), expect);
@@ -77,7 +66,6 @@ mod tests {
             ]
         );
 
-        
         let again = table_plain(&[manifest, data_low, tree, data_high]);
         assert_eq!(out, again);
     }
@@ -87,7 +75,7 @@ mod tests {
         let a = entry(BlobKind::DataChunk, 0x10, 9, 0, 0);
         let b = entry(BlobKind::DataChunk, 0x20, 9, 0, 0);
         let good = table_plain(&[a.clone(), b.clone()]);
-        
+
         let mut bad = Vec::new();
         put_u32(&mut bad, 2);
         for e in [b, a] {
@@ -98,7 +86,7 @@ mod tests {
             put_u64(&mut bad, e.plain_len);
         }
         assert!(matches!(table_parse(&bad), Err(IndexError::Unsorted)));
-        
+
         assert!(matches!(
             table_parse(&good[..good.len() - 3]),
             Err(IndexError::Corrupt(_))
@@ -114,7 +102,6 @@ mod tests {
         ];
         let file = seal_index_container(&fmk(), &salt(), &entries, &cipher).unwrap();
 
-        
         assert_eq!(&file[..5], b"FERRY");
         assert_eq!(file[5], ContainerKind::Index.to_u8());
         assert_eq!(&file[6..10], &1u32.to_le_bytes());
@@ -141,22 +128,17 @@ mod tests {
         let err = open_index_container(&evil, &fmk(), &cipher).unwrap_err();
         assert!(matches!(err, IndexError::Format(FormatError::BadMagic)));
 
-        
         let mut not_index = file.clone();
         not_index[5] = ContainerKind::PackData.to_u8();
         let err = open_index_container(&not_index, &fmk(), &cipher).unwrap_err();
         assert!(matches!(err, IndexError::NotAnIndex));
     }
 
-    
-    
-    
     #[test]
     fn corrupt_trailer_length_is_a_typed_error_not_a_panic() {
         let cipher = PassthroughCipher;
         let file = seal_index_container(&fmk(), &salt(), &[], &cipher).unwrap();
 
-        
         let mut evil = file.clone();
         let n = evil.len();
         evil[n - 4..].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -165,9 +147,6 @@ mod tests {
             Err(IndexError::Corrupt("negative table extent"))
         ));
 
-        
-        
-        
         let mut small = file;
         let n = small.len();
         let tlen = (n - HEADER_LEN) as u32;
@@ -181,13 +160,12 @@ mod tests {
     #[test]
     fn union_of_indexes_resolves_duplicates_preferring_existing_packs() {
         let mut table = LocationTable::default();
-        let a = entry(BlobKind::DataChunk, 0x10, 0xAA, 0, 10); 
-        let b = entry(BlobKind::DataChunk, 0x10, 0xBB, 20, 10); 
+        let a = entry(BlobKind::DataChunk, 0x10, 0xAA, 0, 10);
+        let b = entry(BlobKind::DataChunk, 0x10, 0xBB, 20, 10);
 
         table.merge(std::iter::once(a.clone()));
         table.merge(std::iter::once(b.clone()));
 
-        
         let exists_aa = |p: &PackId| p[0] == 0xAA;
         let exists_bb = |p: &PackId| p[0] == 0xBB;
         let exists_none = |_: &PackId| false;
@@ -200,20 +178,16 @@ mod tests {
             .resolve(BlobKind::DataChunk, &a.id, exists_bb)
             .unwrap();
         assert_eq!(got.pack, b.pack);
-        
+
         assert!(table
             .resolve(BlobKind::DataChunk, &a.id, exists_none)
             .is_none());
 
-        
         let mut duped = LocationTable::default();
         duped.merge([a.clone(), a.clone(), b.clone()]);
         assert_eq!(duped.candidates(BlobKind::DataChunk, &a.id).len(), 2);
     }
 
-    
-    
-    
     #[test]
     fn packs_dedup_and_sort_regardless_of_merge_order() {
         let mk = |pack_byte: u8| entry(BlobKind::DataChunk, pack_byte, pack_byte, 0, 0);
@@ -223,7 +197,7 @@ mod tests {
         t2.merge([mk(0x03)]);
         t1.merge(t2.entries.clone());
         assert_eq!(t1.packs(), vec![[0x01; 32], [0x02; 32], [0x03; 32]]);
-        
+
         assert_eq!(t1.len(), 3);
     }
 
@@ -234,7 +208,6 @@ mod tests {
         let packs_dir = dir.path().join("packs");
         std::fs::create_dir(&packs_dir).unwrap();
 
-        
         let mk_pack = |kind: ContainerKind, payloads: &[(BlobKind, u8, usize)]| {
             let mut body = Vec::new();
             let mut entries = Vec::new();
@@ -283,7 +256,6 @@ mod tests {
         assert_eq!(got, want);
         assert!(skipped.is_empty());
 
-        
         let liar_path = packs_dir.join(format!("{}.pack", "0".repeat(64)));
         std::fs::write(&liar_path, b"not really a pack").unwrap();
         let (_, skipped) = rebuild_entries(&packs_dir, &fmk(), &cipher).unwrap();
@@ -334,7 +306,6 @@ pub enum IndexError {
     Io(#[from] std::io::Error),
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IndexEntry {
     pub kind: BlobKind,
@@ -347,13 +318,6 @@ pub struct IndexEntry {
 fn entry_key(e: &IndexEntry) -> (u8, &[u8]) {
     (e.kind.to_u8(), &e.id[..])
 }
-
-
-
-
-
-
-
 
 pub fn table_plain(entries: &[IndexEntry]) -> Vec<u8> {
     let mut sorted = entries.to_vec();
@@ -370,8 +334,6 @@ pub fn table_plain(entries: &[IndexEntry]) -> Vec<u8> {
     }
     out
 }
-
-
 
 pub fn table_parse(bytes: &[u8]) -> Result<Vec<IndexEntry>, IndexError> {
     let mut r = Reader::new(bytes);
@@ -405,8 +367,6 @@ pub fn table_parse(bytes: &[u8]) -> Result<Vec<IndexEntry>, IndexError> {
     Ok(out)
 }
 
-
-
 pub fn seal_index_container(
     fmk: &[u8; KEY_LEN],
     salt: &[u8; SALT_LEN],
@@ -430,7 +390,6 @@ pub fn seal_index_container(
     Ok(file)
 }
 
-
 pub fn open_index_container(
     file_bytes: &[u8],
     fmk: &[u8; KEY_LEN],
@@ -448,10 +407,7 @@ pub fn open_index_container(
         .unwrap();
     let tlen_pos = file_bytes.len() - 4;
     let tlen = u32::from_le_bytes(file_bytes[tlen_pos..].try_into().unwrap()) as usize;
-    
-    
-    
-    
+
     let ct_start = tlen_pos
         .checked_sub(tlen)
         .ok_or(IndexError::Corrupt("negative table extent"))?;
@@ -469,28 +425,16 @@ pub fn open_index_container(
     table_parse(&pt)
 }
 
-
-
 #[derive(Debug, Default)]
 pub struct LocationTable {
     entries: Vec<IndexEntry>,
-    
-    
+
     seen: std::collections::HashSet<IndexEntry>,
-    
-    
-    
-    
-    
-    
-    
+
     by_blob: std::collections::HashMap<(BlobKind, BlobId), Vec<usize>>,
 }
 
 impl LocationTable {
-    
-    
-    
     pub fn merge<I: IntoIterator<Item = IndexEntry>>(&mut self, incoming: I) {
         for e in incoming {
             if self.seen.insert(e.clone()) {
@@ -511,7 +455,6 @@ impl LocationTable {
         self.entries.len()
     }
 
-    
     pub fn candidates(&self, kind: BlobKind, id: &BlobId) -> Vec<IndexEntry> {
         match self.by_blob.get(&(kind, *id)) {
             Some(rows) => rows
@@ -523,9 +466,6 @@ impl LocationTable {
         }
     }
 
-    
-    
-    
     pub fn resolve(
         &self,
         kind: BlobKind,
@@ -537,15 +477,12 @@ impl LocationTable {
             .find(|e| pack_exists(&e.pack))
     }
 
-    
-    
     pub fn packs(&self) -> Vec<PackId> {
         let seen: std::collections::BTreeSet<PackId> =
             self.entries.iter().map(|e| e.pack).collect();
         seen.into_iter().collect()
     }
 
-    
     pub fn iter_sorted(&self) -> Vec<IndexEntry> {
         let mut v = self.entries.clone();
         v.sort_by(|a, b| Ord::cmp(&entry_key(a), &entry_key(b)));
@@ -553,13 +490,6 @@ impl LocationTable {
         v
     }
 }
-
-
-
-
-
-
-
 
 pub fn rebuild_entries(
     packs_dir: &std::path::Path,
@@ -601,8 +531,6 @@ pub fn rebuild_entries(
     }
     Ok((out, skipped))
 }
-
-
 
 pub fn write_named_atomically(
     tmp_dir: &std::path::Path,

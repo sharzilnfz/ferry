@@ -1,40 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::ffi::OsStr;
 
 use ferry_platform::{classify_link, is_reserved_device_name};
@@ -42,88 +5,55 @@ use unicode_normalization::UnicodeNormalization;
 
 pub use crate::snapshot::RefusalReason;
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObservedKind {
     File,
     Dir,
     Symlink,
-    
+
     Other,
 }
-
-
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     pub reason: RefusalReason,
-    
-    
-    
-    
+
     pub display_name: String,
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdmittedEntry {
-    
     pub component: String,
     pub kind: AdmittedKind,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdmittedKind {
     File,
     Dir,
-    Symlink {
-        
-        
-        target: String,
-    },
+    Symlink { target: String },
 }
-
-
-
 
 #[derive(Clone, Debug)]
 pub struct EntryFacts<'a> {
-    
     pub raw_name: &'a OsStr,
     pub kind: ObservedKind,
-    
-    
+
     pub link_target: Option<&'a OsStr>,
-    
-    
-    
+
     pub parent_depth: usize,
 }
-
-
-
-
-
-
 
 pub fn admit_name(raw: &OsStr) -> Result<String, Refusal> {
     match std::str::from_utf8(raw.as_encoded_bytes()) {
         Ok(s) => Ok(s.nfc().collect::<String>()),
-        
-        
+
         Err(_) => Err(Refusal {
             reason: RefusalReason::NonUtf8Name,
             display_name: String::from_utf8_lossy(raw.as_encoded_bytes()).into_owned(),
         }),
     }
 }
-
-
-
-
 
 pub fn admit_kind(
     component: String,
@@ -138,8 +68,6 @@ pub fn admit_kind(
         })
     };
 
-    
-    
     if is_reserved_device_name(&component) {
         return refuse(RefusalReason::ReservedName);
     }
@@ -148,21 +76,16 @@ pub fn admit_kind(
         ObservedKind::File => AdmittedKind::File,
         ObservedKind::Dir => AdmittedKind::Dir,
         ObservedKind::Other => {
-            
             return refuse(RefusalReason::UnknownFileType);
         }
         ObservedKind::Symlink => {
             let Some(raw) = link_target else {
-                
-                
-                
                 return refuse(RefusalReason::NonUtf8SymlinkTarget);
             };
             let Some(t) = raw.to_str() else {
                 return refuse(RefusalReason::NonUtf8SymlinkTarget);
             };
-            
-            
+
             match classify_link(parent_depth, t) {
                 ferry_platform::LinkDecision::SyncAsLink => AdmittedKind::Symlink {
                     target: t.to_owned(),
@@ -187,10 +110,6 @@ pub fn admit_kind(
     })
 }
 
-
-
-
-
 pub fn admit(facts: EntryFacts<'_>) -> Result<AdmittedEntry, Refusal> {
     let component = admit_name(facts.raw_name)?;
     admit_kind(component, facts.kind, facts.link_target, facts.parent_depth)
@@ -209,7 +128,6 @@ mod tests {
 
     #[test]
     fn names_are_nfc_composed_and_bad_bytes_refused_with_lossy_display() {
-        
         #[cfg(unix)]
         let nfd = os(b"cafe\xcc\x81.txt");
         #[cfg(not(unix))]
@@ -233,7 +151,7 @@ mod tests {
             assert_eq!(err.reason, RefusalReason::ReservedName, "{n}");
             assert_eq!(err.display_name, n);
         }
-        
+
         assert!(admit_kind("com0.txt".to_string(), ObservedKind::File, None, 0).is_ok());
         assert!(admit_kind("auxiliary".to_string(), ObservedKind::File, None, 0).is_ok());
     }
@@ -268,7 +186,7 @@ mod tests {
                 depth,
             )
         };
-        
+
         let ok = t(OsStr::new("../real.txt"), 2).unwrap();
         assert_eq!(
             ok.kind,
@@ -276,12 +194,12 @@ mod tests {
                 target: "../real.txt".into()
             }
         );
-        
+
         assert_eq!(
             t(OsStr::new("/etc/passwd"), 0).unwrap_err().reason,
             RefusalReason::AbsoluteSymlinkTarget
         );
-        
+
         assert_eq!(
             t(OsStr::new("../../out"), 1).unwrap_err().reason,
             RefusalReason::EscapingSymlinkTarget

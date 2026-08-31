@@ -1,8 +1,3 @@
-
-
-
-
-
 pub mod activity_log;
 pub mod app;
 pub mod error;

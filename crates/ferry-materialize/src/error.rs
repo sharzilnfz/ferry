@@ -1,18 +1,14 @@
-
-
 use std::path::PathBuf;
 
 use ferry_store::diff::{join_path, CompPath};
 use thiserror::Error;
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DivergeReason {
-    
     ExpectedAbsent,
-    
+
     ExpectedPresent,
-    
+
     KindMismatch {
         expected: ferry_store::diff::EntryKind,
         found: ferry_store::diff::EntryKind,
@@ -29,11 +25,9 @@ pub enum DivergeReason {
         expected: String,
         found: String,
     },
-    
-    
+
     ContentMismatch,
-    
-    
+
     NotInBase,
 }
 
@@ -67,7 +61,6 @@ impl std::fmt::Display for DivergeReason {
         }
     }
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Divergence {
@@ -165,7 +158,6 @@ pub enum MaterializeError {
         second: String,
     },
 }
-
 
 pub(crate) fn io_at(path: impl Into<PathBuf>, e: std::io::Error) -> MaterializeError {
     MaterializeError::Io {

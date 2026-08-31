@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 mod common;
 
 use std::path::{Path, PathBuf};
@@ -109,7 +97,6 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    
     write_with_mtime(
         &fx.tree_a().join("notes.txt"),
         b"initial baseline notes",
@@ -125,11 +112,9 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         },
     );
 
-    
     fx.b.shutdown();
     fx.a.shutdown();
 
-    
     let winner_mtime = 1_800_000_200i64;
     write_with_mtime(
         &fx.tree_a().join("notes.txt"),
@@ -138,7 +123,6 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         0,
     );
 
-    
     let loser_mtime = 1_800_000_100i64;
     write_with_mtime(
         &fx.tree_b().join("notes.txt"),
@@ -147,24 +131,19 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
         0,
     );
 
-    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    
     wait_until("winner content is live on both trees", || {
         read_to_string(&fx.tree_a(), "notes.txt").as_deref() == Some("version A winning content\n")
             && read_to_string(&fx.tree_b(), "notes.txt").as_deref()
                 == Some("version A winning content\n")
     });
 
-    
-    
     let loser_short_hex = &hex_b[..8];
     let loser_ts_compact = ferry_platform::time::fmt_compact(loser_mtime);
     let expected_conflict_name =
         format!("notes.txt.ferry-conflict.{loser_short_hex}-{loser_ts_compact}");
 
-    
     wait_until("loser quarantine file is present on A", || {
         read_to_string(&fx.tree_a(), &expected_conflict_name).as_deref()
             == Some("version B losing content\n")
@@ -174,7 +153,6 @@ fn unpinned_concurrent_edits_preserve_winner_quarantine_loser_and_log_conflict()
             == Some("version B losing content\n")
     });
 
-    
     wait_until("both_changed conflict is logged", || {
         let entries_a = read_conflict_log(&store_a);
         let entries_b = read_conflict_log(&store_b);
@@ -220,7 +198,6 @@ fn edit_versus_delete_resurrects_edited_file() {
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    
     write_with_mtime(
         &fx.tree_a().join("keep.txt"),
         b"keep this file",
@@ -242,7 +219,6 @@ fn edit_versus_delete_resurrects_edited_file() {
         },
     );
 
-    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -255,10 +231,8 @@ fn edit_versus_delete_resurrects_edited_file() {
     );
     std::fs::remove_file(fx.tree_b().join("file.txt")).unwrap();
 
-    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    
     wait_until("resurrected edit lands on both trees", || {
         read_to_string(&fx.tree_a(), "file.txt").as_deref()
             == Some("resurrected content edited on A\n")
@@ -266,7 +240,6 @@ fn edit_versus_delete_resurrects_edited_file() {
                 == Some("resurrected content edited on A\n")
     });
 
-    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "no quarantine file should be generated for delete-vs-edit"
@@ -276,7 +249,6 @@ fn edit_versus_delete_resurrects_edited_file() {
         "no quarantine file should be generated for delete-vs-edit"
     );
 
-    
     wait_until("delete_vs_edit conflict is logged", || {
         let entries_a = read_conflict_log(&store_a);
         let entries_b = read_conflict_log(&store_b);
@@ -315,7 +287,6 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
     let store_a = fx._dir.path().join("a/store");
     let store_b = fx._dir.path().join("b/store");
 
-    
     write_with_mtime(
         &fx.tree_a().join("doc.txt"),
         b"initial baseline doc",
@@ -331,7 +302,6 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         },
     );
 
-    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -349,10 +319,8 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         0,
     );
 
-    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    
     wait_until("both trees hold identical modified content", || {
         read_to_string(&fx.tree_a(), "doc.txt").as_deref()
             == Some("exact same modified bytes on both nodes\n")
@@ -360,7 +328,6 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
                 == Some("exact same modified bytes on both nodes\n")
     });
 
-    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "identical content must not produce conflict quarantine file on A"
@@ -370,7 +337,6 @@ fn identical_content_edits_differing_mtimes_resolve_silently_without_conflict_fi
         "identical content must not produce conflict quarantine file on B"
     );
 
-    
     let entries_a = read_conflict_log(&store_a);
     let entries_b = read_conflict_log(&store_b);
     assert!(
@@ -399,7 +365,6 @@ fn identical_content_differing_permissions_resolves_silently() {
     let fx = EngineFixture::start(name, SEED + 3);
     let _store_a = fx._dir.path().join("a/store");
 
-    
     let script_bytes = b"#!/bin/sh\necho hello\n";
     write_with_mtime(
         &fx.tree_a().join("script.sh"),
@@ -416,7 +381,6 @@ fn identical_content_differing_permissions_resolves_silently() {
         },
     );
 
-    
     fx.b.shutdown();
     fx.a.shutdown();
 
@@ -432,17 +396,14 @@ fn identical_content_differing_permissions_resolves_silently() {
     perm_b.set_mode(0o644);
     std::fs::set_permissions(&p_b, perm_b).unwrap();
 
-    
     let (handle_a, handle_b) = restart_engines(&fx, &tag_a, &tag_b);
 
-    
     wait_until("both trees hold identical script", || {
         read_to_string(&fx.tree_a(), "script.sh").as_deref() == Some("#!/bin/sh\necho hello\n")
             && read_to_string(&fx.tree_b(), "script.sh").as_deref()
                 == Some("#!/bin/sh\necho hello\n")
     });
 
-    
     assert!(
         list_conflict_files(&fx.tree_a()).is_empty(),
         "permission-only divergence must not create conflict files on A"

@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,8 +14,6 @@ use ferry_folder::pairing::{
 const FOLDER_ID: [u8; 16] = [9u8; 16];
 const POLY: u64 = 0x0FED_CBA9_8765_4321;
 
-
-
 #[track_caller]
 fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
     match r {
@@ -29,7 +21,6 @@ fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
         Ok(_) => panic!("expected an error"),
     }
 }
-
 
 struct Home(tempfile::TempDir);
 
@@ -55,7 +46,6 @@ fn default_settings() -> Settings {
     }
 }
 
-
 fn opened_owner_folder(root: &Path, id: &DeviceIdentity) -> OpenFolder {
     std::fs::create_dir_all(root).unwrap();
     let (store, _fmk) = create_folder(root, id, FOLDER_ID, POLY).unwrap();
@@ -64,7 +54,6 @@ fn opened_owner_folder(root: &Path, id: &DeviceIdentity) -> OpenFolder {
     store.write_index_snapshot().unwrap();
     open_folder(root, id).unwrap()
 }
-
 
 fn ritual(home: &Path, id: &DeviceIdentity, rendezvous: &SharedRendezvous) -> PairingRitual {
     PairingRitual::with_shared(home.to_path_buf(), id.clone(), Arc::clone(rendezvous))
@@ -104,7 +93,6 @@ fn rendezvous_code_completes_pairing_without_any_payload_files() {
         .create_offer(&opened_a)
         .unwrap();
 
-    
     assert_eq!(pending_i.short_code.len(), 6);
     assert!(pending_i
         .short_code
@@ -115,7 +103,6 @@ fn rendezvous_code_completes_pairing_without_any_payload_files() {
         "no artifact before complete"
     );
 
-    
     let pending_b: PendingAcceptance = ritual(home_b.path(), &id_b, &rendezvous)
         .accept_offer(&pending_i.short_code, Some(&target_b))
         .unwrap();
@@ -133,12 +120,10 @@ fn rendezvous_code_completes_pairing_without_any_payload_files() {
 
     assert_both_configs_name_both_devices(&root_a, &accepted.folder, id_a.public(), &id_b);
 
-    
     let opened_b = open_folder(accepted.folder.as_path(), &id_b).unwrap();
     assert_eq!(opened_b.poly, POLY);
     assert!(accepted.folder.join(".ferry/index").is_dir());
 
-    
     let err = code_of(
         ritual(home_b.path(), &id_b, &rendezvous)
             .accept_offer(&pending_i.short_code, Some(&work.path().join("again"))),
@@ -165,18 +150,14 @@ fn payload_file_exchange_completes_pairing_beside_the_offer() {
     let id_a_for_thread = id_a.clone();
     let short_code = pending_i.short_code.clone();
 
-    
-    
     let handle = std::thread::spawn(move || -> PairingCompleted {
         pending_i
             .complete(&opened_for_thread, &id_a_for_thread, 30)
             .expect("initiate")
     });
 
-    
-    
     let offer_file = dot_dir(&root_a).join(OFFER_SUFFIX);
-    
+
     let mut deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !offer_file.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
@@ -194,8 +175,6 @@ fn payload_file_exchange_completes_pairing_beside_the_offer() {
         }
     };
 
-    
-    
     assert_eq!(pending_b.expected_short_code, short_code);
     assert_eq!(
         pending_b.response_path.as_ref().unwrap(),
@@ -221,9 +200,6 @@ fn payload_file_exchange_completes_pairing_beside_the_offer() {
 
 #[test]
 fn envelope_parses_digit_bearing_base32_codes() {
-    
-    
-    
     let envelope = format!("FERRY1:XUM5CA:{}:1788082604", "ab".repeat(93));
     let parsed = ferry_folder::pairing::parse_payload_envelope(&envelope).expect("parses");
     assert_eq!(parsed.code, "XUM5CA");
@@ -244,7 +220,6 @@ fn envelope_text_answer_in_band_without_a_file() {
         .create_offer(&opened_a)
         .unwrap();
 
-    
     let envelope = pending_i.qr_payload();
     assert!(envelope.starts_with(PAYLOAD_PREFIX));
 
@@ -276,7 +251,6 @@ fn wrong_or_mistyped_codes_fail_with_pairing_not_found() {
         assert_eq!(err, "pairing-not-found", "{bad}");
     }
 
-    
     let pending_b = ritual(home_b.path(), &id_b, &rendezvous)
         .accept_offer(&pending_i.short_code, Some(&target_b))
         .unwrap();
@@ -297,8 +271,6 @@ fn expired_code_is_refused_and_consumed() {
         .create_offer(&opened_a)
         .unwrap();
 
-    
-    
     let key = pending_i.short_code.to_ascii_uppercase();
     rendezvous.lock().unwrap().get_mut(&key).unwrap().expires_at =
         SystemTime::now() - Duration::from_secs(1);
@@ -324,7 +296,7 @@ fn accept_refuses_an_already_initialized_target() {
     let pending_i = ritual(home_a.path(), &id_a, &rendezvous)
         .create_offer(&opened_a)
         .unwrap();
-    
+
     std::fs::create_dir_all(dot_dir(&target_b)).unwrap();
 
     let err = code_of(
@@ -347,7 +319,7 @@ fn initiate_times_out_without_a_responder() {
         .unwrap();
     let err = code_of(pending_i.complete(&opened_a, &id_a, 0));
     assert_eq!(err, "pair-timeout");
-    
+
     assert!(dot_dir(&root_a).join(OFFER_SUFFIX).is_file());
 }
 
@@ -364,7 +336,7 @@ fn accept_times_out_without_a_grant() {
     let pending_i = ritual(home_a.path(), &id_a, &rendezvous)
         .create_offer(&opened_a)
         .unwrap();
-    
+
     let pending = &pending_i;
     std::fs::write(&pending.payload_path, &pending.payload).unwrap();
 
@@ -376,5 +348,5 @@ fn accept_times_out_without_a_grant() {
 
     let err = code_of(pending_b.complete(0));
     assert_eq!(err, "pair-timeout");
-    let _ = UNIX_EPOCH; 
+    let _ = UNIX_EPOCH;
 }

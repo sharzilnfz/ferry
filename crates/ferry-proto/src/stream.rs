@@ -1,41 +1,17 @@
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Condvar, Mutex};
 
-
-
-
-
-
 pub trait ByteStream: io::Read + io::Write {}
 impl<T: io::Read + io::Write> ByteStream for T {}
 
-
-
-
-
 pub struct DuplexHalf {
     shared: Arc<DuplexShared>,
-    
-    
+
     inbox: usize,
 }
 
 struct DuplexShared {
-    
-    
     state: Mutex<DuplexState>,
     cv: Condvar,
 }
@@ -44,8 +20,6 @@ struct DuplexState {
     queues: [VecDeque<Vec<u8>>; 2],
     open: bool,
 }
-
-
 
 pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
     let shared = Arc::new(DuplexShared {
@@ -59,16 +33,13 @@ pub fn duplex_pair() -> (DuplexHalf, DuplexHalf) {
         DuplexHalf {
             shared: Arc::clone(&shared),
             inbox: 1,
-        }, 
-        DuplexHalf { shared, inbox: 0 }, 
+        },
+        DuplexHalf { shared, inbox: 0 },
     )
 }
 
 impl Drop for DuplexHalf {
     fn drop(&mut self) {
-        
-        
-        
         let mut st = self.shared.state.lock().expect("duplex lock");
         st.open = false;
         self.shared.cv.notify_all();
@@ -76,9 +47,6 @@ impl Drop for DuplexHalf {
 }
 
 impl DuplexHalf {
-    
-    
-    
     pub fn close(&self) {
         let mut st = self.shared.state.lock().expect("duplex lock");
         st.open = false;
@@ -101,8 +69,6 @@ impl io::Read for DuplexHalf {
                 let n = record.len().min(buf.len());
                 buf[..n].copy_from_slice(&record[..n]);
                 if n < record.len() {
-                    
-                    
                     st.queues[self.inbox].push_front(record[n..].to_vec());
                 }
                 return Ok(n);
@@ -174,7 +140,7 @@ mod tests {
     fn partial_reads_preserve_stream_semantics() {
         let (mut a, mut b) = duplex_pair();
         a.write_all(b"abcdefgh").unwrap();
-        
+
         let mut acc = Vec::new();
         let mut chunk = [0u8; 3];
         while acc.len() < 8 {
@@ -188,7 +154,7 @@ mod tests {
     #[test]
     fn close_wakes_a_blocked_reader_on_the_other_half() {
         let (_keep_writer_half_alive, mut b) = duplex_pair();
-        
+
         let reader = std::thread::spawn(move || {
             let mut chunk = [0u8; 4];
             b.read(&mut chunk).map(|_| ())

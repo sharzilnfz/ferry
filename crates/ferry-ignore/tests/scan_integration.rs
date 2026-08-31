@@ -1,8 +1,3 @@
-
-
-
-
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,8 +28,6 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap();
 }
 
-
-
 fn collect_paths(store: &Store, id: &BlobId, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     let bytes = store.get(BlobKind::TreeNode, id).unwrap();
     let node = parse_tree_node(&bytes).unwrap();
@@ -64,8 +57,6 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
 
-    
-    
     write_file(
         &root.join("ferry.ignore"),
         b"*.log\n!node_modules/\n!.env\nscratch/\n",
@@ -98,7 +89,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         device_id: [9; 32],
     };
 
-    let cfg = IgnoreConfig::default(); 
+    let cfg = IgnoreConfig::default();
     let policy = Arc::new(FerryIgnore::new(&root, &cfg).unwrap());
 
     let scan_cfg = ScanConfig {
@@ -113,9 +104,7 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     let mut paths = Vec::new();
     collect_paths(&store, &current.root_tree_id, &mut Vec::new(), &mut paths);
     paths.sort();
-    
-    
-    
+
     let mut want: Vec<Vec<String>> = [
         ".env",
         "README.md",
@@ -135,17 +124,8 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     want.sort();
     assert_eq!(paths, want, "manifest must contain exactly the allowed set");
 
-    
-    
-    
-    
-    
-    
-    
     engine.stop();
 
-    
-    
     write_file(&root.join("scratch/junk.bin"), b"churn");
     engine.debug_inject_signal(WatchSignal::Changed(vec![rel("scratch/junk.bin")]));
     let run = engine.scan_once().unwrap();
@@ -155,7 +135,6 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
     );
     assert_eq!(run.stats.bytes_chunked, 0);
 
-    
     write_file(&root.join("README.md"), b"hello v2");
     engine.debug_inject_signal(WatchSignal::Changed(vec![rel("README.md")]));
     let run = engine.scan_once().unwrap();
@@ -166,8 +145,6 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
         "manifest lineage chains"
     );
 
-    
-    
     let warnings = ferry_ignore::secrets::scan_for_secrets(&policy, &root);
     assert!(warnings
         .iter()
@@ -180,8 +157,6 @@ fn mixed_tree_manifests_exactly_the_allowed_paths() {
 
 #[test]
 fn policy_filters_poll_sweeps_like_walker_events() {
-    
-    
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     write_file(&root.join("ferry.ignore"), b"cache/\n");
@@ -189,9 +164,7 @@ fn policy_filters_poll_sweeps_like_walker_events() {
     write_file(&root.join("cache/blob.bin"), b"cached junk v1");
 
     let policy = FerryIgnore::new(&root, &IgnoreConfig::default()).unwrap();
-    
-    
-    
+
     assert!(policy.ignored(&rel("cache"), EntryKind::Dir));
     assert!(policy.ignored(&rel("cache/blob.bin"), EntryKind::File));
     assert!(!policy.ignored(&rel("keep.txt"), EntryKind::File));

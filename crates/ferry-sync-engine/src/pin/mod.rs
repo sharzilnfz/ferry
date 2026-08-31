@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub use crate::held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
-pub use crate::pin_error::PinError;
 use crate::pin_error::io_at;
+pub use crate::pin_error::PinError;
 
 pub mod manager;
 pub mod release;

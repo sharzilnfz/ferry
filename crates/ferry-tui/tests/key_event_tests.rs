@@ -1,5 +1,3 @@
-
-
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use ferry_ipc::protocol::{ClientCommand, PinView};
 use ferry_tui::state::SyncState;
@@ -59,7 +57,6 @@ fn test_key_pin_toggle() {
     app.state.engine_state = SyncState::Synced;
     app.state.pin = PinView::none();
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('p'), KeyModifiers::NONE));
     assert_eq!(
         cmd,
@@ -69,11 +66,9 @@ fn test_key_pin_toggle() {
         })
     );
 
-    
     app.state.engine_state = SyncState::Pinned;
     app.state.pin = PinView::active(vec!["file.txt".to_string()]);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('P'), KeyModifiers::NONE));
     assert_eq!(cmd, Some(ClientCommand::ReleasePin));
 }
@@ -93,16 +88,14 @@ fn test_key_conflicts_modal_toggle_and_dismiss_esc() {
     let mut app = TuiApp::default();
     assert!(!app.state.show_conflicts_modal);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert_eq!(cmd, Some(ClientCommand::ListConflicts));
     assert!(app.state.show_conflicts_modal);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
-    assert!(!app.should_quit()); 
+    assert!(!app.should_quit());
 }
 
 #[test]
@@ -111,13 +104,11 @@ fn test_key_conflicts_modal_dismiss_q() {
     app.handle_key(make_key_event(KeyCode::Char('C'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('q'), KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
     assert!(!app.should_quit());
 
-    
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
     let cmd = app.handle_key(make_key_event(KeyCode::Char('Q'), KeyModifiers::NONE));
@@ -132,13 +123,11 @@ fn test_key_conflicts_modal_dismiss_c() {
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert_eq!(cmd, None);
     assert!(!app.state.show_conflicts_modal);
     assert!(!app.should_quit());
 
-    
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
     let cmd = app.handle_key(make_key_event(KeyCode::Char('C'), KeyModifiers::NONE));
@@ -153,7 +142,6 @@ fn test_key_ctrl_c_inside_modal_quits() {
     app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::NONE));
     assert!(app.state.show_conflicts_modal);
 
-    
     let cmd = app.handle_key(make_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert_eq!(cmd, None);
     assert!(app.should_quit());

@@ -1,13 +1,3 @@
-
-
-
-
-
-
-
-
-
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,11 +9,9 @@ use ferry_store::store::Store;
 use ferry_store::BlobKind;
 
 fn open_store(dir: &Path) -> Arc<Store> {
-    
     let identity = ferry_crypto::identity::DeviceIdentity::from_secret_bytes(&[0xB2u8; 32]);
     ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
 }
-
 
 fn empty_manifest(store: &Store) -> RootManifest {
     let bytes = serialize_tree_node(&TreeNode {
@@ -57,8 +45,6 @@ fn symlink_added(path: &[&str], target: &str) -> ChangeSet {
     }
 }
 
-
-
 fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(&dir.path().join("store"));
@@ -87,7 +73,6 @@ fn assert_refused(path: &[&str], target: &str, want_reason: LinkRefusal) {
         other => panic!("expected SymlinkRefused for {target:?}, got {other}"),
     }
 
-    
     let mut probe = tree.clone();
     for c in path {
         probe.push(c);
@@ -102,8 +87,6 @@ fn absolute_target_is_refused_through_the_engine_path() {
 
 #[test]
 fn escaping_dotdot_target_is_refused_through_the_engine_path() {
-    
-    
     assert_refused(
         &["sub", "lnk"],
         "../../../outside",
@@ -113,8 +96,6 @@ fn escaping_dotdot_target_is_refused_through_the_engine_path() {
 
 #[test]
 fn windows_drive_prefixed_target_is_refused_through_the_engine_path() {
-    
-    
     assert_refused(&["drive"], "C:x", LinkRefusal::AbsoluteTarget);
 }
 
@@ -127,14 +108,12 @@ fn unc_and_backslash_root_targets_are_refused_too() {
 #[test]
 #[cfg(unix)]
 fn benign_relative_link_still_applies_through_the_engine_path() {
-    
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(&dir.path().join("store"));
     let tree = dir.path().join("tree");
     std::fs::create_dir_all(&tree).unwrap();
     let manifest = empty_manifest(&store);
-    
-    
+
     std::fs::create_dir_all(tree.join("sub")).unwrap();
 
     Applier::new(&store, &tree)

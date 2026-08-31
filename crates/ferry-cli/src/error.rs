@@ -1,20 +1,11 @@
-
-
-
-
-
-
-
 #[derive(Debug)]
 pub struct CliError {
-    
     pub code: String,
-    
+
     pub message: String,
-    
+
     pub hint: String,
-    
-    
+
     pub detail: Option<serde_json::Value>,
 }
 
@@ -32,10 +23,6 @@ impl CliError {
         }
     }
 
-    
-    
-    
-    
     pub fn exit_code(&self) -> u8 {
         match self.code.as_str() {
             "secrets-found" => 3,
@@ -58,7 +45,6 @@ impl std::fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 pub type CliResult<T> = Result<T, CliError>;
-
 
 pub trait CodeInto<T> {
     fn code(self, code: &'static str, hint: impl Into<String>) -> CliResult<T>;

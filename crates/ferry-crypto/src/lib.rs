@@ -1,64 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub mod base32;
 pub mod config_head;
 pub mod crc32;
@@ -68,19 +7,14 @@ pub mod pack_cipher;
 pub mod pairing;
 pub mod recovery;
 
-
-
 pub(crate) fn hex_short(data: &[u8]) -> String {
     ferry_store::format::hex(&data[..8.min(data.len())])
 }
-
 
 #[cfg(test)]
 pub(crate) mod testing {
     use rand::{CryptoRng, RngCore};
 
-    
-    
     pub(crate) struct FixedRng {
         pattern: [u8; 32],
         pos: usize,

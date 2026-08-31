@@ -300,7 +300,6 @@ async fn fake_backend_stubs_return_not_implemented() {
         .unwrap_err();
     assert_eq!(err.code, "not-found");
 
-    
     let resp = backend
         .create_pairing_session(CreatePairingRequest {
             folder_id: "0123456789abcdef0123456789abcdef".to_string(),
@@ -325,7 +324,7 @@ async fn fake_backend_stubs_return_not_implemented() {
         .expect("join with correct code should succeed");
     assert_eq!(ok.folder_id, "0123456789abcdef0123456789abcdef");
     assert_eq!(ok.status, "paired");
-    
+
     let err = backend
         .join_pairing_session(JoinPairingRequest {
             code: resp.code,

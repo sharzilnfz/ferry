@@ -10,7 +10,6 @@ use unicode_normalization::UnicodeNormalization;
 async fn fake_backend_lists_fixture_with_correct_flags() {
     let backend = FakeBackend::new();
 
-    
     let dir = PathBuf::from("/tmp/fixture_root");
     let mut fixture = HashMap::new();
     fixture.insert(
@@ -61,7 +60,7 @@ async fn fake_backend_lists_fixture_with_correct_flags() {
         .await
         .expect("listing");
     assert_eq!(resp.absolute_path, dir);
-    
+
     assert_eq!(resp.entries.len(), 4);
     assert_eq!(resp.entries[0].name, "a_dir");
     assert!(resp.entries[0].is_dir);
@@ -110,7 +109,7 @@ async fn fake_backend_traversal_protection() {
             assert_eq!(err.hint, "path escapes allowed root");
         }
     }
-    
+
     let err = backend
         .list_directory(Some(PathBuf::from("relative/path")))
         .await
@@ -134,24 +133,19 @@ async fn fake_backend_not_found() {
 
 #[test]
 fn validate_path_helper_direct() {
-    
     let p = validate_path(Some(PathBuf::from("/tmp/foo"))).unwrap();
     assert_eq!(p, PathBuf::from("/tmp/foo"));
 
-    
     let e = validate_path(Some(PathBuf::from("/tmp/../etc/passwd"))).unwrap_err();
     assert_eq!(e.code, "path-traversal");
     assert_eq!(e.hint, "path escapes allowed root");
 
-    
     let e = validate_path(Some(PathBuf::from("relative"))).unwrap_err();
     assert_eq!(e.code, "bad-path");
 
-    
     let e = validate_path(Some(PathBuf::from("/tmp//foo"))).unwrap_err();
     assert_eq!(e.code, "bad-path");
 
-    
     let p = validate_path(None).unwrap();
     assert!(p.is_absolute());
 }
@@ -184,12 +178,11 @@ fn ipc_round_trip_serialization() {
 
 #[test]
 fn nfc_normalization_applied() {
-    
-    let decomposed = "e\u{0301}"; 
+    let decomposed = "e\u{0301}";
     let nfc: String = decomposed.nfc().collect();
     assert_eq!(nfc, "é");
     let p = validate_path(Some(PathBuf::from(format!("/tmp/{decomposed}")))).unwrap();
-    
+
     assert!(p.to_string_lossy().contains('é'));
 }
 
@@ -206,12 +199,10 @@ async fn test_auto_backend_connect_auto_offline_fallback() {
     let socket_path = PathBuf::from("/tmp/nonexistent_socket_test_04.sock");
     let auto = connect_auto(socket_path, root.clone());
 
-    
     let status = auto.get_status().await.expect("offline status");
     assert_eq!(status.folder, root.display().to_string());
     assert_eq!(status.state, "offline");
 
-    
     let listing = auto
         .list_directory(Some(root.clone()))
         .await

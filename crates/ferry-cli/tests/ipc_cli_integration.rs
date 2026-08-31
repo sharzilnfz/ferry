@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 mod common;
 
 use std::time::Duration;
@@ -14,7 +5,6 @@ use std::time::Duration;
 use common::{Env, RunningDaemon};
 use ferry_cli::commands;
 use serde_json::Value;
-
 
 fn schema(v: &Value, path: &str, out: &mut Vec<String>) {
     match v {
@@ -74,41 +64,34 @@ fn test_status_ipc_query_and_schema_matching() {
     commands::init::run(&proj).unwrap();
     std::fs::write(proj.join("initial.txt"), b"initial content\n").unwrap();
 
-    
     let offline_out = commands::status::run(&proj).unwrap();
     assert_matches_expected_schema("status", &schema_of(&offline_out.json));
     assert_eq!(offline_out.json["command"], "status");
-    assert_eq!(offline_out.json["scanned"]["files"], 2); 
+    assert_eq!(offline_out.json["scanned"]["files"], 2);
 
-    
     let mut daemon = RunningDaemon::start(&proj);
 
-    
     std::thread::sleep(Duration::from_millis(150));
 
-    
     let ipc_out = commands::status::run(&proj).unwrap();
     assert_matches_expected_schema("status", &schema_of(&ipc_out.json));
     assert_eq!(ipc_out.json["command"], "status");
 
-    
     std::fs::write(proj.join("unscanned_file.txt"), b"unscanned content\n").unwrap();
 
-    
     let cached_out = commands::status::run(&proj).unwrap();
     assert_eq!(cached_out.json["command"], "status");
     assert_matches_expected_schema("status", &schema_of(&cached_out.json));
     assert!(cached_out.human.contains("Folder"));
     assert!(cached_out.human.contains("Device"));
 
-    
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
     let fallback_out = commands::status::run(&proj).unwrap();
     assert_eq!(fallback_out.json["command"], "status");
     assert_matches_expected_schema("status", &schema_of(&fallback_out.json));
-    
+
     assert_eq!(fallback_out.json["scanned"]["files"], 3);
 }
 
@@ -121,45 +104,37 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/lib.rs"), b"// lib\n").unwrap();
 
-    
     let mut daemon = RunningDaemon::start(&proj);
     std::thread::sleep(Duration::from_millis(150));
 
-    
     let start_out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(start_out.json["command"], "pin");
     assert_eq!(start_out.json["action"], "start");
     assert_eq!(start_out.json["paths"][0], "src/**");
     assert_matches_expected_schema("pin-start", &schema_of(&start_out.json));
 
-    
     let snap = daemon.state.snapshot();
     assert_eq!(snap.pin.state, "active");
     assert!(snap.pin.holding);
     assert_eq!(snap.pin.paths, vec!["src/**".to_string()]);
 
-    
     let status_out = commands::pin::status(&proj).unwrap();
     assert_eq!(status_out.json["state"], "active");
     assert_eq!(status_out.json["holding"], true);
 
-    
     let stop_out = commands::pin::stop(&proj).unwrap();
     assert_eq!(stop_out.json["command"], "pin");
     assert_eq!(stop_out.json["action"], "stop");
     assert_eq!(stop_out.json["was_pinned"], true);
 
-    
     let snap_after = daemon.state.snapshot();
     assert_eq!(snap_after.pin.state, "released");
 
-    
     let release_out = commands::pin::release(&proj).unwrap();
     assert_eq!(release_out.json["command"], "pin");
     assert_eq!(release_out.json["action"], "release");
     assert_eq!(release_out.json["pin_ended"], true);
 
-    
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
@@ -191,18 +166,15 @@ fn test_pin_ownership_and_liveness_across_cli_queries() {
     std::fs::create_dir_all(proj.join("src")).unwrap();
     std::fs::write(proj.join("src/main.rs"), b"fn main() {}\n").unwrap();
 
-    
     let daemon = RunningDaemon::start(&proj);
     std::thread::sleep(Duration::from_millis(150));
 
-    
     let start_out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(start_out.json["command"], "pin");
     assert_eq!(start_out.json["action"], "start");
     let recorded_pid = start_out.json["pid"].as_u64().expect("pid recorded");
     assert_eq!(recorded_pid, u64::from(std::process::id()));
 
-    
     let pin_mgr = ferry_sync_engine::pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
     let rec = pin_mgr.record().unwrap().expect("pin record exists");
     assert_eq!(rec.pid, std::process::id());
@@ -210,14 +182,11 @@ fn test_pin_ownership_and_liveness_across_cli_queries() {
     assert_eq!(rec.liveness(), ferry_sync_engine::pin::Liveness::Alive);
     assert!(rec.holding());
 
-    
     let snap = daemon.state.snapshot();
     assert_eq!(snap.pin.state, "active");
     assert!(snap.pin.holding);
     assert_eq!(snap.pin.paths, vec!["src/**".to_string()]);
 
-    
-    
     for _ in 0..5 {
         let status_out = commands::pin::status(&proj).unwrap();
         assert_eq!(status_out.json["state"], "active");
@@ -257,7 +226,6 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     )
     .unwrap();
 
-    
     let offline_conflicts = commands::conflicts::run(&proj).unwrap();
     assert_eq!(offline_conflicts.json["command"], "conflicts");
     assert_eq!(
@@ -266,7 +234,6 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     );
     assert_matches_expected_schema("conflicts", &schema_of(&offline_conflicts.json));
 
-    
     let mut daemon = RunningDaemon::start(&proj);
     std::thread::sleep(Duration::from_millis(150));
 
@@ -277,7 +244,6 @@ fn test_conflicts_query_over_ipc_and_fallback() {
     assert_matches_expected_schema("conflicts", &schema_of(&ipc_conflicts.json));
     assert!(ipc_conflicts.human.contains("conflict.txt"));
 
-    
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
@@ -298,7 +264,6 @@ fn test_pin_duration_hours_and_expiration() {
     let _daemon = RunningDaemon::start(&proj);
     std::thread::sleep(Duration::from_millis(150));
 
-    
     let start_out = commands::pin::start(&proj, &["src/**".to_string()], 12).unwrap();
     assert_eq!(start_out.json["command"], "pin");
 
@@ -307,7 +272,6 @@ fn test_pin_duration_hours_and_expiration() {
     assert_eq!(rec.expires_sec, Some(rec.started_sec + 12 * 3600));
     assert!(rec.holding());
 
-    
     let mut expired = rec.clone();
     expired.expires_sec = Some(rec.started_sec - 100);
     assert!(!expired.holding());

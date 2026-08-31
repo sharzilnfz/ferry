@@ -1,69 +1,24 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::error::{io_at, MaterializeError};
 
-
 pub const TEMP_SUFFIX: &str = ".tmp";
-
 
 pub const ENTROPY_HEX_LEN: usize = 8;
 
-
-
-
 const NAME_LEN_LIMIT: usize = 200;
-
-
 
 pub const DEFAULT_STALE_TEMP_AGE_SECS: u64 = 24 * 60 * 60;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TempStyle {
-    
     Dot,
-    
+
     Windows,
 }
 
 impl TempStyle {
-    
     pub fn current() -> Self {
         if cfg!(windows) {
             TempStyle::Windows
@@ -79,8 +34,6 @@ impl TempStyle {
         }
     }
 }
-
-
 
 pub fn temp_file_name(dest_name: &str, style: TempStyle, entropy: &str) -> String {
     debug_assert!(
@@ -100,9 +53,6 @@ pub fn temp_file_name(dest_name: &str, style: TempStyle, entropy: &str) -> Strin
     s
 }
 
-
-
-
 pub fn hashed_temp_file_name(rel_path: &str, style: TempStyle) -> String {
     let digest = blake3::hash(rel_path.as_bytes());
     format!(
@@ -112,9 +62,6 @@ pub fn hashed_temp_file_name(rel_path: &str, style: TempStyle) -> String {
         TEMP_SUFFIX
     )
 }
-
-
-
 
 pub fn temp_name_for(rel_path: &str, style: TempStyle, entropy: &str) -> String {
     let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
@@ -126,11 +73,6 @@ pub fn temp_name_for(rel_path: &str, style: TempStyle, entropy: &str) -> String 
     }
 }
 
-
-
-
-
-
 pub fn is_temp_name(name: &str) -> bool {
     [TempStyle::Dot, TempStyle::Windows]
         .iter()
@@ -141,11 +83,11 @@ fn matches_style(name: &str, style: TempStyle) -> bool {
     let Some(rest) = name.strip_prefix(style.prefix()) else {
         return false;
     };
-    
+
     if rest.len() > TEMP_SUFFIX.len() && rest.ends_with(TEMP_SUFFIX) {
         return true;
     }
-    
+
     if let Some(pos) = rest.rfind(TEMP_SUFFIX) {
         if let Some(ent) = rest[pos + TEMP_SUFFIX.len()..].strip_prefix('.') {
             return ent.len() == ENTROPY_HEX_LEN && ent.bytes().all(|b| b.is_ascii_hexdigit());
@@ -165,17 +107,9 @@ fn hex_entropy() -> String {
     })
 }
 
-
 pub fn fresh_entropy() -> String {
     hex_entropy()
 }
-
-
-
-
-
-
-
 
 pub fn sweep_stale_temps(
     target_root: &Path,
@@ -245,12 +179,12 @@ mod tests {
             temp_file_name("main.rs", TempStyle::Windows, ""),
             "~ferry~main.rs.tmp"
         );
-        
+
         assert_eq!(
             temp_file_name("a.txt", TempStyle::Dot, "0123abcd"),
             ".ferry.a.txt.tmp.0123abcd"
         );
-        
+
         assert_eq!(
             temp_file_name("café.txt", TempStyle::Dot, ""),
             ".ferry.café.txt.tmp"
@@ -267,8 +201,6 @@ mod tests {
 
     #[test]
     fn long_names_fall_back_to_hash_substitution() {
-        
-        
         let long_rel = format!("{}/{}.rs", "d".repeat(80), "n".repeat(195));
         let plain = temp_file_name(long_rel.rsplit('/').next().unwrap(), TempStyle::Dot, "");
         assert!(plain.len() > NAME_LEN_LIMIT);
@@ -276,8 +208,7 @@ mod tests {
         let picked = temp_name_for(&long_rel, TempStyle::Dot, "00112233");
         assert!(picked.len() <= NAME_LEN_LIMIT, "{picked}");
         assert_eq!(picked, hashed_temp_file_name(&long_rel, TempStyle::Dot));
-        
-        
+
         assert_eq!(picked, temp_name_for(&long_rel, TempStyle::Dot, "x"));
         assert_ne!(
             hashed_temp_file_name(&long_rel, TempStyle::Dot),
@@ -292,20 +223,18 @@ mod tests {
 
     #[test]
     fn is_temp_name_accepts_every_documented_form_and_nothing_else() {
-        
         assert!(is_temp_name(".ferry.x.tmp"));
         assert!(is_temp_name(".ferry.x.tmp.deadbeef"));
         assert!(is_temp_name("~ferry~x.tmp"));
         assert!(is_temp_name("~ferry~x.tmp.DEADBEEF"));
-        
+
         assert!(!is_temp_name("x.tmp"));
         assert!(!is_temp_name(".ferry"));
-        assert!(!is_temp_name(".ferryx.tmp")); 
-        assert!(!is_temp_name("~ferry~x.tmp.short")); 
+        assert!(!is_temp_name(".ferryx.tmp"));
+        assert!(!is_temp_name("~ferry~x.tmp.short"));
         assert!(!is_temp_name("~ferry~x.tmp.nothex!"));
-        assert!(!is_temp_name(".ferry..tmp")); 
-                                               
-                                               
+        assert!(!is_temp_name(".ferry..tmp"));
+
         assert!(!is_temp_name(".ferry.notes.tmp.b"));
     }
 
@@ -321,7 +250,6 @@ mod tests {
         std::fs::create_dir(root.join("subdir")).unwrap();
         std::fs::write(root.join("subdir/.ferry.deep.tmp"), b"stale deep").unwrap();
 
-        
         let old = SystemTime::UNIX_EPOCH + Duration::from_secs(100_000);
         for name in [
             ".ferry.old.tmp.1234abcd",
@@ -340,8 +268,6 @@ mod tests {
         let names: Vec<String> = removed
             .iter()
             .map(|p| {
-                
-                
                 p.strip_prefix(root)
                     .unwrap()
                     .to_string_lossy()
@@ -360,7 +286,6 @@ mod tests {
         assert!(root.join(".ferry.fresh.tmp.aabbccdd").exists());
         assert!(root.join("real.txt").exists());
 
-        
         assert_eq!(DEFAULT_STALE_TEMP_AGE_SECS, 86_400);
     }
 
@@ -368,9 +293,9 @@ mod tests {
     fn sweep_tolerates_vanishing_entries_mid_walk() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".ferry.gone.tmp"), b"x").unwrap();
-        
+
         let removed = sweep_stale_temps(dir.path(), Duration::from_hours(1)).unwrap();
-        
+
         assert!(removed.is_empty());
     }
 }

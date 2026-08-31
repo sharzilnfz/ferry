@@ -1,27 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -32,20 +8,13 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{FolderError, FolderResult};
 
-
 const REGISTRY_FILE: &str = "folders.toml";
 
 const LOCK_FILE: &str = "folders.toml.lock";
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-
 const LOCK_STALE: Duration = Duration::from_secs(10);
-
-
-
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderRecord {
@@ -53,7 +22,6 @@ pub struct FolderRecord {
     pub path: PathBuf,
     pub added_at: String,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryEntry {
@@ -63,11 +31,9 @@ pub struct DirectoryEntry {
     pub is_symlink: bool,
     pub is_git_repo: bool,
     pub is_already_synced: bool,
-    
-    
+
     pub is_initialized: bool,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ListDirectoryRequest {
@@ -80,7 +46,6 @@ impl ListDirectoryRequest {
         Self { path }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListDirectoryResponse {
@@ -97,13 +62,6 @@ impl ListDirectoryResponse {
         }
     }
 }
-
-
-
-
-
-
-
 
 #[must_use]
 pub fn default_listing_root() -> PathBuf {
@@ -127,9 +85,6 @@ pub fn default_listing_root() -> PathBuf {
     PathBuf::from("/tmp")
 }
 
-
-
-
 #[must_use]
 pub fn ferry_home() -> PathBuf {
     if let Some(v) = std::env::var_os("FERRY_HOME") {
@@ -149,18 +104,11 @@ pub fn ferry_home() -> PathBuf {
     PathBuf::from("/tmp/.ferry")
 }
 
-
 fn nfc_normalize_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy().to_string();
     let nfc: String = s.nfc().collect();
     PathBuf::from(nfc)
 }
-
-
-
-
-
-
 
 pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
     let nfc_path = nfc_normalize_path(&raw);
@@ -202,7 +150,6 @@ pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
         ));
     }
 
-    
     let mut cleaned = PathBuf::new();
     for comp in nfc_path.components() {
         match comp {
@@ -225,20 +172,14 @@ pub fn validate_and_normalize(raw: PathBuf) -> FolderResult<PathBuf> {
     Ok(cleaned)
 }
 
-
 pub fn validate_path(input: Option<PathBuf>) -> FolderResult<PathBuf> {
     let raw = input.unwrap_or_else(default_listing_root);
     validate_and_normalize(raw)
 }
 
-
 pub fn sort_entries(entries: &mut [DirectoryEntry]) {
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 }
-
-
-
-
 
 fn is_hex(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_hexdigit())
@@ -251,7 +192,6 @@ fn validate_folder_id(id: &str) -> bool {
 fn is_overlapping(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(b) || b.starts_with(a)
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 struct RegistryFile {
@@ -342,13 +282,6 @@ fn io_error(err: std::io::Error) -> FolderError {
     FolderError::new("io", err.to_string(), "check permissions and disk space")
 }
 
-
-
-
-
-
-
-
 struct RegistryLock {
     path: PathBuf,
 }
@@ -366,7 +299,6 @@ impl RegistryLock {
                 Ok(_) => return Ok(Self { path }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     if Self::is_stale(&path) {
-                        
                         let _ = std::fs::remove_file(&path);
                         continue;
                     }
@@ -386,7 +318,6 @@ impl RegistryLock {
 
     fn is_stale(path: &Path) -> bool {
         let Ok(meta) = std::fs::metadata(path) else {
-            
             return true;
         };
         match meta.modified() {
@@ -402,22 +333,11 @@ impl Drop for RegistryLock {
     }
 }
 
-
-
-
-
-
-
-
-
-
 pub struct FolderInventory {
     home: PathBuf,
 }
 
 impl FolderInventory {
-    
-    
     #[must_use]
     pub fn new(home: &Path) -> Self {
         Self {
@@ -425,13 +345,11 @@ impl FolderInventory {
         }
     }
 
-    
     #[must_use]
     pub fn open() -> Self {
         Self::new(&ferry_home())
     }
 
-    
     #[must_use]
     pub fn home(&self) -> &Path {
         &self.home
@@ -441,7 +359,6 @@ impl FolderInventory {
         self.home.join(REGISTRY_FILE)
     }
 
-    
     fn load_strict(&self) -> FolderResult<Vec<FolderRecord>> {
         let path = self.registry_path();
         if !path.exists() {
@@ -459,17 +376,10 @@ impl FolderInventory {
         Ok(file.folders)
     }
 
-    
-    
-    
-    
     fn load_best_effort(&self) -> Vec<FolderRecord> {
         self.load_strict().unwrap_or_default()
     }
 
-    
-    
-    
     fn persist(&self, records: &[FolderRecord]) -> FolderResult<()> {
         let mut sorted = records.to_vec();
         sort_by_added_at(&mut sorted);
@@ -491,14 +401,6 @@ impl FolderInventory {
         Ok(())
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn register(&self, path: &Path) -> FolderResult<FolderRecord> {
         std::fs::create_dir_all(&self.home).map_err(io_error)?;
         let _lock = RegistryLock::acquire(&self.home)?;
@@ -560,7 +462,6 @@ impl FolderInventory {
         Ok(record)
     }
 
-    
     pub fn unregister(&self, folder_id: &str) -> FolderResult<()> {
         std::fs::create_dir_all(&self.home).map_err(io_error)?;
         let _lock = RegistryLock::acquire(&self.home)?;
@@ -580,18 +481,10 @@ impl FolderInventory {
         Ok(())
     }
 
-    
-    
-    
     pub fn list(&self) -> FolderResult<Vec<FolderRecord>> {
         self.load_strict()
     }
 
-    
-    
-    
-    
-    
     pub fn inspect_dir(&self, path: Option<PathBuf>) -> FolderResult<ListDirectoryResponse> {
         let validated = validate_path(path)?;
         let registry = self.load_best_effort();

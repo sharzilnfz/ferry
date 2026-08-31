@@ -1,13 +1,9 @@
-
-
-
-
 mod common;
 
 use common::{Env, RunningDaemon};
 use ferry_cli::commands;
-use ferry_sync_engine::pin::{HeldEntry, HeldLedger};
 use ferry_store::format::BlobKind;
+use ferry_sync_engine::pin::{HeldEntry, HeldLedger};
 use std::collections::BTreeMap;
 
 fn setup() -> (Env, std::path::PathBuf, RunningDaemon) {
@@ -21,8 +17,6 @@ fn setup() -> (Env, std::path::PathBuf, RunningDaemon) {
     let daemon = RunningDaemon::start(&proj);
     (env, proj, daemon)
 }
-
-
 
 fn hold_one_real_change(proj: &std::path::Path, peer_hex: &str, path: &str) {
     let opened = ferry_cli::folder::open_folder(proj).unwrap();
@@ -56,7 +50,6 @@ fn hold_one_real_change(proj: &std::path::Path, peer_hex: &str, path: &str) {
 fn full_lifecycle_with_json_shapes() {
     let (_e, proj, _daemon) = setup();
 
-    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["command"], "pin");
     assert_eq!(st.json["action"], "status");
@@ -64,7 +57,6 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(st.json["holding"], false);
     assert_eq!(st.json["held_changes"], 0);
 
-    
     let out = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     assert_eq!(out.json["action"], "start");
     assert_eq!(out.json["paths"][0], "src/**");
@@ -72,16 +64,13 @@ fn full_lifecycle_with_json_shapes() {
     let device = out.json["device_id"].as_str().unwrap().to_string();
     assert_eq!(device.len(), 64);
 
-    
     let err = commands::pin::start(&proj, &[], 8).unwrap_err();
     assert_eq!(err.code, "pin-active");
 
-    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
     assert_eq!(st.json["holding"], true);
 
-    
     let peer = "b".repeat(32);
     hold_one_real_change(&proj, &peer, "src/a.rs");
     let st = commands::pin::status(&proj).unwrap();
@@ -91,14 +80,12 @@ fn full_lifecycle_with_json_shapes() {
         "src/a.rs"
     );
 
-    
     let stopped = commands::pin::stop(&proj).unwrap();
     assert_eq!(stopped.json["was_pinned"], true);
     assert_eq!(stopped.json["held_changes"], 1);
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "released");
 
-    
     let rel = commands::pin::release(&proj).unwrap();
     assert_eq!(rel.json["action"], "release");
     let peers = rel.json["peers"].as_array().unwrap();
@@ -107,14 +94,12 @@ fn full_lifecycle_with_json_shapes() {
     assert_eq!(peers[0]["held_paths"][0], "src/a.rs");
     assert_eq!(rel.json["pin_ended"], true);
 
-    
     let again = commands::pin::release(&proj).unwrap();
     assert_eq!(again.json["peers"].as_array().unwrap().len(), 0);
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["held_changes"], 0);
 
-    
-    commands::pin::start(&proj, &[], 8).unwrap(); 
+    commands::pin::start(&proj, &[], 8).unwrap();
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
     assert_eq!(st.json["paths"][0], "*");
@@ -147,7 +132,6 @@ fn bad_glob_refused_before_any_state_is_written() {
 fn stale_pin_surfaces_then_a_new_start_replaces_it() {
     let (_e, proj, _daemon) = setup();
 
-    
     let mut child = ferry_platform::spawn_sleeper(30).unwrap();
     let dead_pid = {
         child.kill().unwrap();
@@ -171,12 +155,10 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
         })
         .unwrap();
 
-    
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "stale");
     assert_eq!(st.json["holding"], false);
 
-    
     commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap();
     let st = commands::pin::status(&proj).unwrap();
     assert_eq!(st.json["state"], "active");
@@ -387,7 +369,10 @@ fn pin_release_applies_nonconflicting_and_quarantines_conflicting_held_edits() {
 
     // Run pin release
     let rel = commands::pin::release(&proj).unwrap();
-    eprintln!("DEBUG rel.json: {}", serde_json::to_string_pretty(&rel.json).unwrap());
+    eprintln!(
+        "DEBUG rel.json: {}",
+        serde_json::to_string_pretty(&rel.json).unwrap()
+    );
     let cf = ferry_sync_engine::list_conflicts(&ferry_cli::folder::state_dir(&proj)).unwrap();
     eprintln!("DEBUG conflicts in log: {cf:#?}");
     assert_eq!(rel.json["command"], "pin");
@@ -440,4 +425,3 @@ fn pin_release_applies_nonconflicting_and_quarantines_conflicting_held_edits() {
     assert_eq!(st_after.json["holding"], false);
     assert_eq!(st_after.json["held_changes"], 0);
 }
-

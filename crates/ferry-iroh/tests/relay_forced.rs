@@ -1,23 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::io::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -29,15 +9,12 @@ use ferry_sync::{EngineConfig, SyncEngine};
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 
-
-
 static CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
 
 fn relay_log_capture() -> &'static Arc<Mutex<Vec<u8>>> {
     CAPTURE.get_or_init(|| {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        
-        
+
         let _ = ferry_relay::install_capturing_subscriber(Arc::clone(&buffer));
         buffer
     })
@@ -157,10 +134,6 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
 
 const MARKER_NEEDLE: &str = "FERRY-PLAINTEXT-MARKER";
 
-
-
-
-
 fn plant_markers(tree_a: &std::path::Path) -> Vec<String> {
     let mut rels = Vec::new();
     for i in 0..12 {
@@ -197,10 +170,6 @@ fn wait_converged(pair: &PairFixture, budget: Duration) {
     }
 }
 
-
-
-
-
 fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Duration) {
     let deadline = Instant::now() + budget;
     loop {
@@ -222,13 +191,9 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "127.0.0.1:0".parse().unwrap(),
     ))
     .expect("local relay spawns");
-    let _capture = relay_log_capture(); 
+    let _capture = relay_log_capture();
 
-    let pair = start_pair(
-        true, 
-        Some(relay.url().to_string()),
-        "forced",
-    );
+    let pair = start_pair(true, Some(relay.url().to_string()), "forced");
 
     let tree_a = pair._dir.path().join("a/tree");
     let tree_b = pair._dir.path().join("b/tree");
@@ -237,13 +202,10 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
     wait_converged(&pair, Duration::from_secs(90));
     wait_markers_landed(&tree_b, &planted, Duration::from_secs(30));
 
-    
-    
     std::thread::sleep(Duration::from_millis(300));
     pair.a.0.shutdown();
     pair.b.0.shutdown();
 
-    
     let obs_b = pair
         .b
         .1
@@ -262,7 +224,6 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "an IP path was selected despite force_relay config"
     );
 
-    
     let entries = relay.ledger().entries();
     let ids: Vec<String> = entries
         .iter()
@@ -282,7 +243,6 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
         "relay never saw node B connect: {ids:?}"
     );
 
-    
     assert_eq!(
         scan_relay_side(MARKER_NEEDLE),
         0,
@@ -299,7 +259,6 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     ))
     .expect("local relay spawns");
 
-    
     let pair = start_pair(false, Some(relay.url().to_string()), "normal");
 
     let tree_a = pair._dir.path().join("a/tree");
@@ -307,8 +266,7 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     std::fs::write(tree_a.join("hello.txt"), b"normal mode hello").unwrap();
 
     wait_converged(&pair, Duration::from_secs(90));
-    
-    
+
     let landed_by = Instant::now() + Duration::from_secs(90);
     loop {
         match std::fs::read(tree_b.join("hello.txt")) {
@@ -327,8 +285,6 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
         }
     }
 
-    
-    
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let obs = pair

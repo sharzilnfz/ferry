@@ -1,25 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,19 +19,14 @@ use crate::state::DirCache;
 use crate::walk::{close_under_ancestors, PassStats, Walker};
 use unicode_normalization::UnicodeNormalization;
 
-
-
-
 #[derive(Clone)]
 pub struct StoreHandle {
     pub store: Arc<Store>,
-    
-    
+
     pub poly: ferry_store::chunker::ValidatedPoly,
     pub folder_id: [u8; 16],
     pub device_id: [u8; 32],
 }
-
 
 #[derive(Clone, Debug)]
 pub struct CurrentScan {
@@ -65,22 +38,16 @@ pub struct CurrentScan {
     pub finished_unix_secs: i64,
 }
 
-
-
 #[derive(Clone, Debug)]
 pub enum ScanEvent {
     Updated(Arc<CurrentScan>),
     Failed(String),
 }
 
-
 #[derive(Clone, Debug)]
 pub struct ScanRun {
-    
-    
     pub published: Option<Arc<CurrentScan>>,
-    
-    
+
     pub stats: PassStats,
 }
 
@@ -112,7 +79,6 @@ impl SignalQueue {
         out
     }
 
-    
     fn wait_nonempty(&self, stop: &AtomicBool, tick: Duration) -> bool {
         let mut g = self.q.lock().expect("signal queue");
         loop {
@@ -127,7 +93,6 @@ impl SignalQueue {
         }
     }
 
-    
     fn wait_arrival(&self, stop: &AtomicBool, dur: Duration) -> bool {
         let deadline = Instant::now() + dur;
         let mut g = self.q.lock().expect("signal queue");
@@ -164,13 +129,9 @@ struct Core {
     prev_manifest_id: BlobId,
     prev_root_tree_id: BlobId,
     root_gone: bool,
-    
-    
+
     last_pass: Option<(Trigger, PassStats)>,
 }
-
-
-
 
 struct Parts {
     queue: Arc<SignalQueue>,
@@ -179,24 +140,15 @@ struct Parts {
     subs: Arc<Mutex<Vec<Subscriber>>>,
 }
 
-
-
-
 const SUB_CHANNEL_BOUND: usize = 1;
-
-
 
 struct Subscriber {
     tx: SyncSender<ScanEvent>,
-    
-    
-    
+
     staged: Option<ScanEvent>,
 }
 
 impl Subscriber {
-    
-    
     fn offer(&mut self, ev: ScanEvent) -> bool {
         self.staged = Some(ev);
         match self
@@ -204,8 +156,7 @@ impl Subscriber {
             .try_send(self.staged.as_ref().expect("just staged").clone())
         {
             Ok(()) => self.staged = None,
-            
-            
+
             Err(TrySendError::Full(_)) => {}
             Err(TrySendError::Disconnected(_)) => return false,
         }
@@ -214,8 +165,6 @@ impl Subscriber {
 }
 
 impl Parts {
-    
-    
     fn execute(
         &self,
         signals: Vec<WatchSignal>,
@@ -239,8 +188,6 @@ impl Parts {
         {
             let mut c = self.core.lock().expect("core");
             for s in &signals {
-                
-                
                 match s {
                     WatchSignal::Overflow { .. } | WatchSignal::RootReturned => {
                         trigger = Trigger::OverflowRecovery;
@@ -269,7 +216,6 @@ impl Parts {
             }
         }
 
-        
         if let Some(reason) = full_reason {
             return self.run_full(trigger, &reason);
         }
@@ -300,16 +246,8 @@ impl Parts {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
     fn run_full(&self, trigger: Trigger, reason: &str) -> Result<ScanRun, ScanError> {
-        let _ = reason; 
+        let _ = reason;
         let _started = Instant::now();
         let mut core = self.core.lock().expect("core");
         if !core.disk_root.is_dir() {
@@ -337,7 +275,6 @@ impl Parts {
             &mut stats,
         )?;
 
-        
         core.cache = fresh_cache;
 
         let published = match out {
@@ -371,7 +308,7 @@ impl Parts {
             return Ok(idle_run(trigger));
         }
         let identity = Self::identity_now(&core);
-        
+
         let Core {
             handle,
             ignore,
@@ -432,29 +369,21 @@ impl Parts {
         self.deliver(ScanEvent::Failed(err.to_string()));
     }
 
-    
-    
     fn deliver(&self, ev: ScanEvent) {
         let mut subs = self.subs.lock().expect("subs lock");
         subs.retain_mut(|sub| sub.offer(ev.clone()));
     }
 }
 
-
-
-
 pub struct ScanEngine {
     parts: Arc<Parts>,
     stop: Arc<AtomicBool>,
     handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    
+
     _watcher: Option<RecommendedWatcher>,
 }
 
 impl ScanEngine {
-    
-    
-    
     pub fn watch(root: impl Into<PathBuf>, handle: StoreHandle) -> Result<Self, ScanError> {
         Self::watch_with(
             root,
@@ -464,8 +393,6 @@ impl ScanEngine {
         )
     }
 
-    
-    
     pub fn watch_with(
         root: impl Into<PathBuf>,
         handle: StoreHandle,
@@ -479,10 +406,7 @@ impl ScanEngine {
                 disk_root.display()
             )));
         }
-        
-        
-        
-        
+
         let disk_root = std::fs::canonicalize(&disk_root)
             .map_err(|e| ScanError::Watch(format!("cannot resolve watch root: {e}")))?;
 
@@ -512,8 +436,6 @@ impl ScanEngine {
             _watcher: None,
         };
 
-        
-        
         engine
             .parts
             .run_full(Trigger::Initial, "initial snapshot")?;
@@ -525,47 +447,24 @@ impl ScanEngine {
         Ok(engine)
     }
 
-    
-    
-    
-    
-    
-    
-    
     pub fn scan_once(&self) -> Result<ScanRun, ScanError> {
         let signals = self.parts.queue.drain();
         self.parts.execute(signals, Trigger::Events)
     }
 
-    
     pub fn current(&self) -> Option<Arc<CurrentScan>> {
         self.parts.current.read().expect("current lock").clone()
     }
 
-    
-    
-    
     pub fn last_pass(&self) -> Option<(Trigger, PassStats)> {
         self.parts.core.lock().expect("core").last_pass.clone()
     }
 
-    
-    
     pub fn set_parent_manifest_id(&self, id: BlobId) {
         let mut core = self.parts.core.lock().expect("core lock");
         core.prev_manifest_id = id;
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     pub fn subscribe(&self) -> std::sync::mpsc::Receiver<ScanEvent> {
         let (tx, rx) = sync_channel(SUB_CHANNEL_BOUND);
         self.parts
@@ -576,15 +475,11 @@ impl ScanEngine {
         rx
     }
 
-    
-    
-    
     #[doc(hidden)]
     pub fn debug_inject_signal(&self, s: WatchSignal) {
         self.parts.queue.push(s);
     }
 
-    
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.parts.queue.wake();
@@ -593,10 +488,6 @@ impl ScanEngine {
             let _ = h.join();
         }
     }
-
-    
-    
-    
 
     fn spawn_watcher(&mut self) -> Result<(), ScanError> {
         let queue = self.parts.queue.clone();
@@ -614,9 +505,6 @@ impl ScanEngine {
             move |res: Result<Event, NotifyError>| match res {
                 Ok(ev) => {
                     if ev.paths.is_empty() {
-                        
-                        
-                        
                         queue.push(WatchSignal::Overflow {
                             reason: "synthetic watcher event without paths".into(),
                         });
@@ -662,38 +550,33 @@ impl ScanEngine {
         let quiet = parts.core.lock().expect("core").cfg.quiet_window;
         let h = std::thread::Builder::new()
             .name("ferry-scan-worker".into())
-            .spawn(move || {
-                loop {
-                    if !parts.queue.wait_nonempty(&stop, Duration::from_millis(200)) {
-                        return; 
+            .spawn(move || loop {
+                if !parts.queue.wait_nonempty(&stop, Duration::from_millis(200)) {
+                    return;
+                }
+
+                let mut batch = parts.queue.drain();
+                let mut deadline = Instant::now() + quiet;
+                'debounce: while !stop.load(Ordering::Relaxed) {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
                     }
-                    
-                    
-                    
-                    
-                    let mut batch = parts.queue.drain();
-                    let mut deadline = Instant::now() + quiet;
-                    'debounce: while !stop.load(Ordering::Relaxed) {
-                        let now = Instant::now();
-                        if now >= deadline {
-                            break;
-                        }
-                        if parts.queue.wait_arrival(&stop, deadline - now) {
-                            batch.extend(parts.queue.drain());
-                            deadline = Instant::now() + quiet;
-                        } else {
-                            break 'debounce;
-                        }
+                    if parts.queue.wait_arrival(&stop, deadline - now) {
+                        batch.extend(parts.queue.drain());
+                        deadline = Instant::now() + quiet;
+                    } else {
+                        break 'debounce;
                     }
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    if batch.is_empty() {
-                        continue;
-                    }
-                    if let Err(e) = parts.execute(batch, Trigger::Events) {
-                        parts.report_failure(&e);
-                    }
+                }
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                if batch.is_empty() {
+                    continue;
+                }
+                if let Err(e) = parts.execute(batch, Trigger::Events) {
+                    parts.report_failure(&e);
                 }
             })
             .expect("spawn worker");
@@ -706,43 +589,40 @@ impl ScanEngine {
         let interval = parts.core.lock().expect("core").cfg.poll_interval;
         let h = std::thread::Builder::new()
             .name("ferry-scan-poller".into())
-            .spawn(move || {
-                loop {
-                    sleep_slices(&stop, interval);
-                    if stop.load(Ordering::Relaxed) {
-                        return;
+            .spawn(move || loop {
+                sleep_slices(&stop, interval);
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                {
+                    let mut c = parts.core.lock().expect("core");
+                    let exists = c.disk_root.is_dir();
+                    if exists && c.root_gone {
+                        c.root_gone = false;
+                        drop(c);
+                        parts.queue.push(WatchSignal::RootReturned);
+                        continue;
                     }
-                    
-                    {
-                        let mut c = parts.core.lock().expect("core");
-                        let exists = c.disk_root.is_dir();
-                        if exists && c.root_gone {
-                            c.root_gone = false;
-                            drop(c);
-                            parts.queue.push(WatchSignal::RootReturned);
-                            continue;
-                        }
-                        if !exists && !c.root_gone {
-                            c.root_gone = true;
-                            drop(c);
-                            parts.queue.push(WatchSignal::RootVanished);
-                            continue;
-                        }
+                    if !exists && !c.root_gone {
+                        c.root_gone = true;
+                        drop(c);
+                        parts.queue.push(WatchSignal::RootVanished);
+                        continue;
                     }
-                    
-                    
-                    let subtrees: Vec<RelPath> = {
+                }
+
+                let subtrees: Vec<RelPath> = {
+                    let c = parts.core.lock().expect("core");
+                    c.policy.polling.iter().cloned().collect()
+                };
+                for st in subtrees {
+                    let mismatches = {
                         let c = parts.core.lock().expect("core");
-                        c.policy.polling.iter().cloned().collect()
+                        stat_sweep(&c.disk_root, &st, &c.cache, c.ignore.as_ref())
                     };
-                    for st in subtrees {
-                        let mismatches = {
-                            let c = parts.core.lock().expect("core");
-                            stat_sweep(&c.disk_root, &st, &c.cache, c.ignore.as_ref())
-                        };
-                        if !mismatches.is_empty() {
-                            parts.queue.push(WatchSignal::PolledChanged(mismatches));
-                        }
+                    if !mismatches.is_empty() {
+                        parts.queue.push(WatchSignal::PolledChanged(mismatches));
                     }
                 }
             })
@@ -800,9 +680,6 @@ fn sleep_slices(stop: &AtomicBool, total: Duration) {
     }
 }
 
-
-
-
 fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
     let stripped = p.strip_prefix(root).ok().or_else(|| {
         let p_str = p.to_str()?;
@@ -821,14 +698,6 @@ fn abs_to_rel(root: &Path, p: &Path) -> Option<RelPath> {
     Some(rel)
 }
 
-
-
-
-
-
-
-
-
 fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
     for c in rel {
         if crate::walk::is_store_component(c) {
@@ -844,9 +713,8 @@ fn any_prefix_ignored(rel: &RelPath, ignore: &dyn IgnorePolicy) -> bool {
 }
 
 enum ErrClass {
-    
     Unwatchable(RelPath),
-    
+
     Loss,
 }
 
@@ -862,17 +730,12 @@ fn classify_watch_error(e: &NotifyError) -> ErrClass {
     match &e.kind {
         MaxFilesWatch => ErrClass::Unwatchable(Vec::new()),
         Io(ioe) => match ioe.raw_os_error() {
-            
             Some(28 | 24 | 23) => ErrClass::Unwatchable(subtree_of(&e.paths).unwrap_or_default()),
             _ => ErrClass::Loss,
         },
         _ => ErrClass::Loss,
     }
 }
-
-
-
-
 
 fn stat_sweep(
     disk_root: &Path,
@@ -886,15 +749,12 @@ fn stat_sweep(
         start.push(c);
     }
     if !start.is_dir() {
-        
         let parent = subtree[..subtree.len().saturating_sub(1)].to_vec();
         out.push(parent);
         return out;
     }
     sweep_dir(disk_root, subtree, cache, ignore, &mut out);
-    
-    
-    
+
     let mut dedup: std::collections::BTreeSet<RelPath> = out.drain(..).collect();
     for (dir_rel, cached) in cache.iter_within(subtree) {
         for e in &cached.node.entries {
@@ -903,9 +763,7 @@ fn stat_sweep(
             }
             let mut full = dir_rel.clone();
             full.push(e.name.clone());
-            
-            
-            
+
             let kind = match &e.payload {
                 EntryPayload::Dir { .. } => EntryKind::Dir,
                 _ => EntryKind::File,
@@ -958,9 +816,7 @@ fn sweep_dir(
         let mut child_rel = rel.clone();
         child_rel.push(component.clone());
         let child_disk = disk.join(&name);
-        
-        
-        
+
         let Ok(meta) = std::fs::symlink_metadata(&child_disk) else {
             out.push(rel.clone());
             continue;
@@ -990,14 +846,10 @@ fn sweep_dir(
                 out.push(child_rel);
             }
         } else {
-            
-            
             out.push(child_rel);
         }
     }
 }
-
-
 
 fn live_exec_bit(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
@@ -1083,11 +935,6 @@ mod tests {
 
         let (_sd, _store, cache) = seeded_cache(&root);
 
-        
-        
-        
-        
-        
         write_file(&root.join("changed.txt"), b"CHANGED", false, (99, 9));
         std::fs::remove_file(root.join("sub/deep.txt")).unwrap();
         write_file(&root.join("fresh.txt"), b"new", false, (5, 5));
@@ -1132,9 +979,6 @@ mod tests {
         assert!(found.is_empty(), "ignored paths are never swept: {found:?}");
     }
 
-    
-    
-    
     #[test]
     fn stalled_subscriber_retention_is_bounded_latest_wins() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1157,18 +1001,12 @@ mod tests {
         let rx = engine.subscribe();
         const N: usize = 64;
         for _ in 0..N {
-            
-            
             engine.parts.publish(baseline.clone());
         }
 
-        
         assert!(matches!(rx.try_recv(), Ok(ScanEvent::Updated(_))));
         assert!(rx.try_recv().is_err(), "retention must be bounded");
 
-        
-        
-        
         let subs = engine.parts.subs.lock().expect("subs lock");
         assert_eq!(subs.len(), 1);
         match &subs[0].staged {
@@ -1180,7 +1018,6 @@ mod tests {
         }
         drop(subs);
 
-        
         drop(rx);
         engine.parts.publish(baseline.clone());
         assert!(engine.parts.subs.lock().expect("subs lock").is_empty());

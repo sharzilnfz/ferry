@@ -1,12 +1,6 @@
-
-
-
-
-
 use egui::{Align, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke};
 
 use crate::theme::colors;
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityEntry {
@@ -33,7 +27,6 @@ impl ActivityEntry {
         }
     }
 }
-
 
 pub fn render_activity_stream(
     ui: &mut egui::Ui,
@@ -95,14 +88,12 @@ pub fn render_activity_stream(
                         } else {
                             for entry in activity_log {
                                 ui.horizontal(|ui| {
-                                    
                                     ui.monospace(
                                         RichText::new(&entry.timestamp)
                                             .color(colors::TEXT_MUTED)
                                             .size(11.0),
                                     );
 
-                                    
                                     let cat_text = format!("[{}]", entry.category);
                                     ui.monospace(
                                         RichText::new(cat_text)
@@ -111,7 +102,6 @@ pub fn render_activity_stream(
                                             .size(11.0),
                                     );
 
-                                    
                                     ui.label(
                                         RichText::new(&entry.message)
                                             .color(colors::TEXT_PRIMARY)

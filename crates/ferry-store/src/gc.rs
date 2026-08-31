@@ -1,28 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,13 +17,11 @@ mod tests {
     fn fresh() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::create(dir.path(), fmk(), Box::new(PassthroughCipher)).unwrap();
-        
-        
+
         store.set_seal_target(512);
         (dir, store)
     }
 
-    
     fn put_manifest(store: &Store, m: &RootManifest) -> BlobId {
         let bytes = serialize_manifest(m);
         store.put_meta(BlobKind::Manifest, &bytes).unwrap()
@@ -79,7 +52,6 @@ mod tests {
     fn gc_deletes_only_fully_unreferenced_packs_after_grace() {
         let (_dir, store) = fresh();
 
-        
         let a = chunk(&store, 10, 300);
         let b = chunk(&store, 20, 300);
         let poly_id = store.put_polynomial(0x1234).unwrap();
@@ -94,7 +66,6 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        
         let _c = chunk(&store, 30, 300);
         let d = chunk(&store, 40, 300);
         let _t2 = put_tree(
@@ -111,21 +82,17 @@ mod tests {
         let t0 = SystemTime::now();
         let grace = Duration::from_secs(10);
 
-        
         let r1 = collect_garbage(&store, &[m1], grace, t0).unwrap();
         assert!(r1.deleted.is_empty(), "nothing past grace yet");
         assert!(r1.recorded_unreferenced > 0, "orphans were recorded");
 
-        
         let r2 = collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(5)).unwrap();
         assert!(r2.deleted.is_empty());
 
-        
         let r3 = collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(11)).unwrap();
         assert!(!r3.deleted.is_empty(), "orphan-only packs were collected");
         assert!(r3.deleted.len() < total_packs, "live packs must survive");
 
-        
         for id in [&a, &b, &t1, &m1, &poly_id] {
             store
                 .get(BlobKind::DataChunk, id)
@@ -135,8 +102,6 @@ mod tests {
                 .unwrap_or_else(|e| panic!("live blob {} lost: {e}", crate::format::hex(id)));
         }
 
-        
-        
         collect_garbage(&store, &[m1], grace, t0 + Duration::from_secs(12)).unwrap();
         assert_no_dead_packs(&store, &[m1]);
     }
@@ -145,7 +110,6 @@ mod tests {
     fn reachability_report_lists_superseded_packs_and_never_live_ones() {
         let (_dir, store) = fresh();
 
-        
         let a = chunk(&store, 10, 300);
         let b = chunk(&store, 20, 300);
         let poly_id = store.put_polynomial(0x1234).unwrap();
@@ -160,7 +124,6 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        
         let d = chunk(&store, 40, 300);
         let _t2 = put_tree(
             &store,
@@ -179,8 +142,6 @@ mod tests {
         assert_eq!(r.garbage_packs.len(), 1, "exactly one dead pack: {r:?}");
         assert!(r.reclaimable_bytes > 0);
 
-        
-        
         let garbage_contents: HashSet<_> = r.garbage_packs.iter().map(|(id, _)| *id).collect();
         for path in std::fs::read_dir(store.packs_dir()).unwrap().flatten() {
             let stem = path.file_name().to_string_lossy().to_string();
@@ -192,8 +153,6 @@ mod tests {
             }
             let (_, entries) = store.pack_blob_list(&claimed).unwrap();
             for e in entries {
-                
-                
                 let live_ids = [a, b, t1, m1, poly_id];
                 assert!(
                     !live_ids.contains(&e.id),
@@ -203,7 +162,6 @@ mod tests {
             }
         }
 
-        
         let m2 = put_manifest(&store, &manifest_for(_t2));
         let r_all_live = reachability_report(&store, &[m1, m2]).unwrap();
         assert!(r_all_live.garbage_packs.is_empty(), "{r_all_live:?}");
@@ -222,16 +180,14 @@ mod tests {
         );
         let m1 = put_manifest(&store, &manifest_for(t1));
 
-        
         let revived = chunk(&store, 60, 300);
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
         let t0 = SystemTime::now();
         let grace = Duration::from_secs(100);
-        collect_garbage(&store, &[m1], grace, t0).unwrap(); 
+        collect_garbage(&store, &[m1], grace, t0).unwrap();
 
-        
         let _t2 = put_tree(
             &store,
             &TreeNode {
@@ -242,9 +198,8 @@ mod tests {
         store.flush().unwrap();
         store.write_index_snapshot().unwrap();
 
-        
         let r = collect_garbage(&store, &[m1, m2], grace, t0 + Duration::from_secs(200)).unwrap();
-        
+
         store.get(BlobKind::DataChunk, &revived).unwrap();
         let _ = r;
     }
@@ -261,7 +216,6 @@ mod tests {
         );
         let m = put_manifest(&store, &manifest_for(t));
 
-        
         let liar = store.packs_dir().join(format!("{}.pack", "f".repeat(64)));
         std::fs::write(&liar, b"garbage pretending to be a pack").unwrap();
 
@@ -280,14 +234,10 @@ mod tests {
         assert_eq!(r.scanned, 0);
     }
 
-    
-
     fn count_packs(store: &Store) -> usize {
         std::fs::read_dir(store.packs_dir()).unwrap().count()
     }
 
-    
-    
     fn assert_no_dead_packs(store: &Store, live: &[BlobId]) {
         let reachable = collect_referenced(store, live).unwrap();
         for entry in std::fs::read_dir(store.packs_dir()).unwrap().flatten() {
@@ -317,7 +267,6 @@ use crate::format::{hex, BlobId, BlobKind};
 use crate::manifest::{parse_manifest, parse_tree_node};
 use crate::store::{Store, StoreError};
 
-
 const LEDGER_FILE: &str = "gc-state";
 
 #[derive(Debug, Error)]
@@ -336,38 +285,27 @@ pub enum GcError {
 
 #[derive(Debug, Default)]
 pub struct GcReport {
-    
     pub scanned: usize,
-    
+
     pub deleted: Vec<BlobId>,
-    
+
     pub recorded_unreferenced: usize,
-    
+
     pub skipped_corrupt: Vec<String>,
 }
-
 
 #[derive(Debug, Default)]
 pub struct ReachabilityReport {
-    
     pub scanned_packs: usize,
-    
-    
+
     pub live_packs: usize,
-    
-    
+
     pub garbage_packs: Vec<(BlobId, u64)>,
-    
+
     pub reclaimable_bytes: u64,
-    
+
     pub skipped_corrupt: Vec<String>,
 }
-
-
-
-
-
-
 
 pub fn reachability_report(
     store: &Store,
@@ -411,12 +349,6 @@ pub fn reachability_report(
     Ok(report)
 }
 
-
-
-
-
-
-
 pub fn collect_garbage(
     store: &Store,
     live_manifest_ids: &[BlobId],
@@ -447,8 +379,6 @@ pub fn collect_garbage(
         let _ = &bytes;
         let pack_is_live = match store.pack_blob_list(&claimed) {
             Ok((_, entries)) => entries.iter().any(|e| match e.kind {
-                
-                
                 BlobKind::Polynomial => true,
                 _ => reachable.contains(&(e.kind, e.id)),
             }),
@@ -490,9 +420,6 @@ pub fn collect_garbage(
     Ok(report)
 }
 
-
-
-
 pub fn collect_referenced(
     store: &Store,
     live_manifest_ids: &[BlobId],
@@ -509,7 +436,7 @@ pub fn collect_referenced(
 
     while let Some(tree_id) = tree_stack.pop() {
         if !set.insert((BlobKind::TreeNode, tree_id)) {
-            continue; 
+            continue;
         }
         let bytes = store.get(BlobKind::TreeNode, &tree_id)?;
         let node = parse_tree_node(&bytes)?;
@@ -533,8 +460,6 @@ fn ledger_path(store: &Store) -> PathBuf {
 }
 
 type Ledger = std::collections::HashMap<BlobId, SystemTime>;
-
-
 
 fn load_ledger(path: &std::path::Path) -> Result<Ledger, GcError> {
     let mut map = Ledger::new();

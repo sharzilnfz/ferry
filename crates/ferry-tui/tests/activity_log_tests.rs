@@ -1,5 +1,3 @@
-
-
 use ferry_ipc::protocol::{DaemonMessage, EngineSnapshot};
 use ferry_tui::activity_log::{ActivityLog, LogEntry, LogLevel};
 
@@ -10,18 +8,15 @@ fn test_circular_buffer_capacity_truncation() {
     assert!(log.is_empty());
     assert_eq!(log.len(), 0);
 
-    
     log.push_info("12:00:01", "Item 1");
     log.push_info("12:00:02", "Item 2");
     log.push_info("12:00:03", "Item 3");
     assert_eq!(log.len(), 3);
 
-    
     log.push_info("12:00:04", "Item 4");
     log.push_info("12:00:05", "Item 5");
     assert_eq!(log.len(), 5);
 
-    
     log.push_info("12:00:06", "Item 6");
     log.push_info("12:00:07", "Item 7");
     log.push_info("12:00:08", "Item 8");

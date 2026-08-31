@@ -11,11 +11,11 @@ fn ensure_daemon_fails_with_daemon_start_failed_when_binary_missing() {
     let hp = home.path().to_path_buf();
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
-    
+
     let prev = std::env::var("FERRY_BIN").ok();
     std::env::set_var("FERRY_BIN", "/nonexistent/ferry-missing-binary-xyz");
     let res = ensure_daemon(&hp);
-    
+
     match prev {
         Some(v) => std::env::set_var("FERRY_BIN", v),
         None => std::env::remove_var("FERRY_BIN"),
@@ -43,8 +43,6 @@ fn ensure_daemon_reuses_running_server_via_ping() {
     let sock = hp.join("daemon.sock");
     assert!(!sock.exists());
 
-    
-    
     let sock_clone = sock.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -91,11 +89,9 @@ fn ensure_daemon_reuses_running_server_via_ping() {
         });
     });
 
-    
     let mut waited = std::time::Duration::from_millis(0);
     while waited < std::time::Duration::from_millis(2000) {
         if sock.exists() {
-            
             let probe = ensure_daemon(&hp);
             if probe.is_ok() {
                 break;
@@ -115,7 +111,6 @@ fn ensure_daemon_reuses_running_server_via_ping() {
         "reuse via ping should be fast, got {elapsed:?}"
     );
 
-    
     let start2 = std::time::Instant::now();
     let ok = ensure_daemon(&hp).is_ok();
     assert!(ok);
@@ -150,7 +145,6 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn share_and_join_json_round_trip_two_homes() {
-    
     let home_a = temp_home();
     let home_b = temp_home();
     let work_a = tempfile::tempdir().unwrap();
@@ -168,38 +162,48 @@ fn share_and_join_json_round_trip_two_homes() {
     let code = out_a.json["code"].as_str().unwrap().to_string();
     let folder_id_a = out_a.json["folder_id"].as_str().unwrap().to_string();
     assert_eq!(folder_id_a.len(), 32);
-    
-    
+
     let _has_offer = proj_a.join(".ferry/pair-offer.ferry-pair").exists();
 
-    
     std::env::set_var("FERRY_HOME", home_b.path());
     let dest_b = work_b.path().join("proj-b");
     std::fs::create_dir_all(&dest_b).unwrap();
-    
+
     let out_b = ferry_cli::commands::join::run(&code, Some(&dest_b)).expect("join should succeed");
     assert_eq!(out_b.json["folder_id"], folder_id_a);
     assert_eq!(out_b.json["status"], "joined");
     assert!(dest_b.join(".ferry").is_dir());
     assert!(dest_b.join(".ferry/config").is_file());
-    
+
     let cfg_bytes = std::fs::read(dest_b.join(".ferry/config")).unwrap();
     let head = ferry_crypto::config_head::parse_config_head(&cfg_bytes).unwrap();
     assert_eq!(ferry_store::format::hex(&head.folder_id), folder_id_a);
 
-    let id_a = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_a.path())).unwrap();
-    let id_b = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_b.path())).unwrap();
+    let id_a =
+        ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_a.path()))
+            .unwrap();
+    let id_b =
+        ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_b.path()))
+            .unwrap();
 
     let cfg_a = std::fs::read(proj_a.join(".ferry/config")).unwrap();
     let head_a = ferry_crypto::config_head::parse_config_head(&cfg_a).unwrap();
-    assert_eq!(head_a.entries.len(), 2, "A's config must have 2 device wraps");
+    assert_eq!(
+        head_a.entries.len(),
+        2,
+        "A's config must have 2 device wraps"
+    );
     let pubs_a: Vec<_> = head_a.entries.iter().map(|e| e.device_pub).collect();
     assert!(pubs_a.contains(id_a.public()));
     assert!(pubs_a.contains(id_b.public()));
 
     let cfg_b = std::fs::read(dest_b.join(".ferry/config")).unwrap();
     let head_b = ferry_crypto::config_head::parse_config_head(&cfg_b).unwrap();
-    assert_eq!(head_b.entries.len(), 2, "B's config must have 2 device wraps");
+    assert_eq!(
+        head_b.entries.len(),
+        2,
+        "B's config must have 2 device wraps"
+    );
     let pubs_b: Vec<_> = head_b.entries.iter().map(|e| e.device_pub).collect();
     assert!(pubs_b.contains(id_a.public()));
     assert!(pubs_b.contains(id_b.public()));
@@ -219,7 +223,7 @@ fn headless_share_json_works_without_tty() {
     let out = ferry_cli::commands::share::run(&proj, false, 5).unwrap();
     assert!(out.json["code"].is_string());
     assert!(out.json["expires_at"].is_string());
-    
+
     assert!(out.human.contains("Share code"));
     std::env::remove_var("FERRY_HOME");
 }

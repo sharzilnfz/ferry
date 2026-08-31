@@ -1,29 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub fn process_start_token(pid: u32) -> Option<u64> {
     if pid == 0 {
         return None;
@@ -52,10 +26,6 @@ pub fn process_start_token(pid: u32) -> Option<u64> {
     }
 }
 
-
-
-
-
 #[cfg(target_os = "linux")]
 fn linux_token(pid: u32) -> Option<u64> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -63,17 +33,10 @@ fn linux_token(pid: u32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse::<u64>().ok()
 }
 
-
-
-
-
-
-
-
 #[cfg(target_os = "macos")]
 fn macos_token(pid: u32) -> Option<u64> {
     let Ok(signed_pid) = i32::try_from(pid) else {
-        return None; 
+        return None;
     };
     let mut mib = [
         libc::CTL_KERN,
@@ -82,17 +45,14 @@ fn macos_token(pid: u32) -> Option<u64> {
         signed_pid,
     ];
 
-    
     #[repr(C)]
     struct DarwinTimeVal {
         tv_sec: i64,
         tv_usec: i32,
     }
 
-    
     let mut size: usize = 0;
-    
-    
+
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -107,7 +67,7 @@ fn macos_token(pid: u32) -> Option<u64> {
         return None;
     }
     let mut buf = vec![0u8; size];
-    
+
     let rc = unsafe {
         libc::sysctl(
             mib.as_mut_ptr(),
@@ -118,8 +78,7 @@ fn macos_token(pid: u32) -> Option<u64> {
             0,
         )
     };
-    
-    
+
     if rc != 0 || size < std::mem::size_of::<DarwinTimeVal>() {
         return None;
     }
@@ -129,8 +88,6 @@ fn macos_token(pid: u32) -> Option<u64> {
     Some(sec.wrapping_mul(1_000_000_000).wrapping_add(usec * 1_000))
 }
 
-
-
 #[cfg(windows)]
 fn windows_token(pid: u32) -> Option<u64> {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
@@ -138,7 +95,6 @@ fn windows_token(pid: u32) -> Option<u64> {
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
-    
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
         return None;
@@ -159,7 +115,7 @@ fn windows_token(pid: u32) -> Option<u64> {
         dwLowDateTime: 0,
         dwHighDateTime: 0,
     };
-    
+
     let ok = unsafe {
         GetProcessTimes(
             handle,
@@ -175,11 +131,6 @@ fn windows_token(pid: u32) -> Option<u64> {
     }
     Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
 }
-
-
-
-
-
 
 pub fn spawn_sleeper(secs: u64) -> std::io::Result<std::process::Child> {
     #[cfg(windows)]
@@ -205,29 +156,16 @@ pub fn spawn_sleeper(secs: u64) -> std::io::Result<std::process::Child> {
 mod tests {
     use super::*;
 
-    
-    
-    
     #[test]
     fn own_process_token_is_stable_and_present() {
         let me = std::process::id();
         if let Some(t) = process_start_token(me) {
             assert_eq!(process_start_token(me), Some(t), "stable across calls");
         }
-        
-        
+
         let _ = process_start_token(u32::MAX - 7);
     }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
     #[test]
     fn child_process_token_differs_from_parent_when_visible() {
         let mut attempt = 0;
@@ -241,8 +179,6 @@ mod tests {
                 Some(ct) => {
                     let mine = process_start_token(std::process::id());
                     if mine == Some(ct) && attempt == 0 {
-                        
-                        
                         attempt += 1;
                         std::thread::sleep(std::time::Duration::from_millis(25));
                         continue;

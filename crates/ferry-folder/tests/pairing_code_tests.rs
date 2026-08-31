@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -23,8 +14,6 @@ use ferry_folder::pairing::{
 const FOLDER_ID: [u8; 16] = [9u8; 16];
 const POLY: u64 = 0x0FED_CBA9_8765_4321;
 
-
-
 #[track_caller]
 fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
     match r {
@@ -32,7 +21,6 @@ fn code_of<T>(r: Result<T, ferry_folder::FolderError>) -> &'static str {
         Ok(_) => panic!("expected an error"),
     }
 }
-
 
 struct Home(tempfile::TempDir);
 
@@ -58,7 +46,6 @@ fn default_settings() -> Settings {
     }
 }
 
-
 fn opened_owner_folder(root: &Path, id: &DeviceIdentity) -> OpenFolder {
     std::fs::create_dir_all(root).unwrap();
     let (store, _fmk) = create_folder(root, id, FOLDER_ID, POLY).unwrap();
@@ -68,17 +55,12 @@ fn opened_owner_folder(root: &Path, id: &DeviceIdentity) -> OpenFolder {
     open_folder(root, id).unwrap()
 }
 
-
 fn ritual(home: &Path, id: &DeviceIdentity, rendezvous: &SharedRendezvous) -> PairingRitual {
     PairingRitual::with_shared(home.to_path_buf(), id.clone(), Arc::clone(rendezvous))
 }
 
 #[test]
 fn codes_are_six_base32_symbols_with_matching_checksums() {
-    
-    
-    
-    
     let work = tempfile::tempdir().unwrap();
     let (home_a, id_a) = identity("a");
     let opened_a = opened_owner_folder(&work.path().join("device-a"), &id_a);
@@ -119,14 +101,10 @@ fn typed_codes_tolerate_case_and_separators() {
         .unwrap();
     let code = &pending_i.short_code;
 
-    
-    
     let lowered = code.to_ascii_lowercase();
     let pending_b = accept_code_pending(&lowered, home_b.path(), &id_b, &rendezvous, &target_b);
     assert_eq!(pending_b.complete(0).unwrap().folder_id, FOLDER_ID);
 
-    
-    
     let pending_i2 = ritual(home_a.path(), &id_a, &rendezvous)
         .create_offer(&opened_a)
         .unwrap();
@@ -156,8 +134,6 @@ fn accept_code_pending(
 
 #[test]
 fn checksum_symbol_flip_is_refused() {
-    
-    
     let work = tempfile::tempdir().unwrap();
     let target_b = work.path().join("device-b");
     let (home_a, id_a) = identity("a");
@@ -200,9 +176,6 @@ fn offer_expires_twenty_four_hours_out() {
 
 #[test]
 fn code_verification_is_constant_time_and_zeroized() {
-    
-    
-    
     let content = std::fs::read_to_string("src/pairing.rs").unwrap_or_else(|_| {
         std::fs::read_to_string("crates/ferry-folder/src/pairing.rs").expect("pairing.rs not found")
     });

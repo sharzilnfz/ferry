@@ -162,9 +162,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
         cmd.creation_flags(DETACHED_PROCESS);
     }
     #[cfg(not(windows))]
-    {
-        
-    }
+    {}
     let spawn_res = cmd.spawn();
     if spawn_res.is_err() {
         return Err(BootstrapError::new(
@@ -184,9 +182,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
         if try_ping_sync(&socket) {
             return Ok(socket);
         }
-        if socket.exists() {
-            
-        }
+        if socket.exists() {}
         delay = std::cmp::min(delay * 2, Duration::from_millis(800));
     }
 

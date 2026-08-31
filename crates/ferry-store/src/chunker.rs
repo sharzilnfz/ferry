@@ -1,13 +1,8 @@
-
-
-
-
 use std::fmt;
 use std::sync::Mutex;
 
 use rand::Rng;
 use thiserror::Error;
-
 
 pub const WINDOW_SIZE: usize = 64;
 
@@ -15,12 +10,11 @@ pub const MIN_SIZE: usize = 524_288;
 
 pub const AVG_BITS: u32 = 20;
 
-pub const SPLIT_MASK: u64 = (1 << AVG_BITS) - 1; 
+pub const SPLIT_MASK: u64 = (1 << AVG_BITS) - 1;
 
 pub const MAX_SIZE: usize = 8_388_608;
 
 pub const POLY_DEGREE: u32 = 53;
-
 
 const SLIDE_OUT_X: u32 = 504;
 
@@ -28,17 +22,10 @@ const SLIDE_OUT_X: u32 = 504;
 #[error("polynomial {0:#x} is not monic irreducible of degree 53")]
 pub struct PolynomialError(pub u64);
 
-
-
-
-
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValidatedPoly(u64);
 
 impl ValidatedPoly {
-    
     pub fn new(p: u64) -> Result<Self, PolynomialError> {
         if !is_irreducible(p) {
             return Err(PolynomialError(p));
@@ -46,13 +33,10 @@ impl ValidatedPoly {
         Ok(ValidatedPoly(p))
     }
 
-    
-    
     pub fn generate(rng: &mut impl Rng) -> Self {
         ValidatedPoly(generate_polynomial(rng))
     }
 
-    
     pub fn get(self) -> u64 {
         self.0
     }
@@ -72,7 +56,6 @@ impl From<ValidatedPoly> for u64 {
     }
 }
 
-
 fn poly_degree(v: u64) -> Option<u32> {
     if v == 0 {
         None
@@ -81,21 +64,16 @@ fn poly_degree(v: u64) -> Option<u32> {
     }
 }
 
-
-
-
-
 pub fn gf_mul(a: u64, b: u64) -> u64 {
     let mut acc = 0u64;
     let mut b = b;
     while b != 0 {
         let i = b.trailing_zeros();
         acc ^= a << i;
-        b &= b - 1; 
+        b &= b - 1;
     }
     acc
 }
-
 
 fn gf_mod_deg(mut v: u64, p: u64, d: u32) -> u64 {
     loop {
@@ -107,12 +85,9 @@ fn gf_mod_deg(mut v: u64, p: u64, d: u32) -> u64 {
     }
 }
 
-
 pub fn gf_mod(v: u64, p: u64) -> u64 {
     gf_mod_deg(v, p, POLY_DEGREE)
 }
-
-
 
 #[cfg(test)]
 fn poly_degree128(v: u128) -> u32 {
@@ -122,8 +97,6 @@ fn poly_degree128(v: u128) -> u32 {
         v.ilog2()
     }
 }
-
-
 
 fn mulmod_deg(mut a: u64, b: u64, p: u64, d: u32) -> u64 {
     a = gf_mod_deg(a, p, d);
@@ -138,11 +111,9 @@ fn mulmod_deg(mut a: u64, b: u64, p: u64, d: u32) -> u64 {
     acc
 }
 
-
 pub fn gf_mulmod(a: u64, b: u64, p: u64) -> u64 {
     mulmod_deg(a, b, p, POLY_DEGREE)
 }
-
 
 pub fn gf_pow_x(n: u32, p: u64) -> u64 {
     let mut v = 1u64;
@@ -152,14 +123,11 @@ pub fn gf_pow_x(n: u32, p: u64) -> u64 {
     v
 }
 
-
-
 #[cfg(test)]
 fn pow_x_square_multiply(n: u32, p: u64) -> u64 {
-    
     let base = n;
     let mut result = 1u64;
-    let mut sq = 2u64; 
+    let mut sq = 2u64;
     let mut k = 0u32;
     while (1u32 << k) <= base {
         if (n >> k) & 1 == 1 {
@@ -171,29 +139,21 @@ fn pow_x_square_multiply(n: u32, p: u64) -> u64 {
     result
 }
 
-
-
 pub fn is_irreducible(p: u64) -> bool {
-    
     if p >> POLY_DEGREE != 1 {
         return false;
     }
-    
-    
-    
+
     if (p & 1) == 0 || p.count_ones().is_multiple_of(2) {
         return false;
     }
-    
-    
-    let mut g = 2u64; 
+
+    let mut g = 2u64;
     for _ in 0..POLY_DEGREE {
         g = gf_mulmod(g, g, p);
     }
     g == 2
 }
-
-
 
 pub fn generate_polynomial(rng: &mut impl Rng) -> u64 {
     loop {
@@ -204,12 +164,10 @@ pub fn generate_polynomial(rng: &mut impl Rng) -> u64 {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cut {
-    
     Natural,
-    
+
     Max,
 }
 
@@ -222,14 +180,6 @@ impl fmt::Display for Cut {
     }
 }
 
-
-
-
-
-
-
-
-
 pub struct Chunker {
     poly: u64,
     win: [u8; WINDOW_SIZE],
@@ -239,11 +189,6 @@ pub struct Chunker {
     len: usize,
     tables: &'static DerivedTables,
 }
-
-
-
-
-
 
 struct DerivedTables {
     out_table: [u64; 256],
@@ -260,9 +205,6 @@ fn derived_tables(p: u64) -> &'static DerivedTables {
         let slide_out = gf_pow_x(SLIDE_OUT_X, p);
         let mut out_table = [0u64; 256];
         for (i, slot) in out_table.iter_mut().enumerate() {
-            
-            
-            
             *slot = gf_mod(gf_mul(i as u64, slide_out), p);
         }
         Box::leak(Box::new(DerivedTables { out_table }))
@@ -270,9 +212,6 @@ fn derived_tables(p: u64) -> &'static DerivedTables {
 }
 
 impl Chunker {
-    
-    
-    
     pub fn new(p: u64) -> Result<Self, PolynomialError> {
         if !is_irreducible(p) {
             return Err(PolynomialError(p));
@@ -288,8 +227,6 @@ impl Chunker {
         })
     }
 
-    
-    
     pub fn reset(&mut self) {
         self.win = [0; WINDOW_SIZE];
         self.wpos = 0;
@@ -298,14 +235,10 @@ impl Chunker {
         self.len = 0;
     }
 
-    
     pub fn pending_len(&self) -> usize {
         self.len
     }
 
-    
-    
-    
     pub fn push(&mut self, b: u8) -> Option<usize> {
         self.append(b);
         self.len += 1;
@@ -317,7 +250,6 @@ impl Chunker {
         None
     }
 
-    
     fn cut_at_this_byte(&self) -> Option<Cut> {
         if self.len >= MIN_SIZE && (self.fp & SPLIT_MASK) == 0 {
             Some(Cut::Natural)
@@ -328,13 +260,6 @@ impl Chunker {
         }
     }
 
-    
-    
-    
-    
-    
-    
-    
     pub fn feed(&mut self, data: &[u8]) -> Vec<usize> {
         let mut out = Vec::new();
         for &b in data {
@@ -345,17 +270,10 @@ impl Chunker {
         out
     }
 
-    
-    
-    
     pub fn finish(&self) -> usize {
         self.pending_len()
     }
 
-    
-    
-    
-    
     fn append(&mut self, b: u8) {
         if self.filled < WINDOW_SIZE {
             self.win[self.wpos] = b;
@@ -372,16 +290,7 @@ impl Chunker {
     }
 }
 
-
-
-
-
-
-
-
 pub fn chunk_offsets(poly: u64, data: &[u8]) -> Result<Vec<(usize, usize)>, PolynomialError> {
-    
-    
     let mut c = Chunker::new(poly)?;
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -395,7 +304,6 @@ pub fn chunk_offsets(poly: u64, data: &[u8]) -> Result<Vec<(usize, usize)>, Poly
     }
     Ok(out)
 }
-
 
 pub fn chunk(poly: u64, data: &[u8]) -> Result<Vec<&[u8]>, PolynomialError> {
     Ok(chunk_offsets(poly, data)?
@@ -414,19 +322,15 @@ mod tests {
         generate_polynomial(&mut StdRng::seed_from_u64(seed))
     }
 
-    
     fn prng_bytes(seed: u64, len: usize) -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(seed);
         (0..len).map(|_| rng.gen()).collect()
     }
 
-    
-
     #[test]
     fn gf_mul_matches_shift_xor_reference() {
         let mut rng = StdRng::seed_from_u64(1);
         for _ in 0..2000 {
-            
             let a = rng.gen::<u64>() & ((1 << 28) - 1);
             let b = rng.gen::<u64>() & ((1 << 28) - 1);
             let mut expect = 0u64;
@@ -464,8 +368,7 @@ mod tests {
             let v = rng.gen::<u64>();
             let r = gf_mod(v, p);
             assert!(poly_degree(r).unwrap_or(0) < POLY_DEGREE || r == 0);
-            
-            
+
             let mut wide = u128::from(v);
             let pw = u128::from(p);
             while poly_degree128(wide) >= POLY_DEGREE {
@@ -475,25 +378,22 @@ mod tests {
         }
     }
 
-    #[allow(clippy::many_single_char_names)] 
+    #[allow(clippy::many_single_char_names)]
     #[test]
     fn gf_mulmod_matches_gf_mul_then_mod() {
         let p = test_poly(11);
         let mut rng = StdRng::seed_from_u64(4);
         for _ in 0..1000 {
-            
             let a = rng.gen::<u64>() & ((1 << 5) - 1);
             let b = rng.gen::<u64>() & ((1 << 5) - 1);
             assert_eq!(gf_mulmod(a, b, p), gf_mod(gf_mul(a, b), p));
         }
-        
-        
-        
+
         let a = 0x123456789abcdef;
         let b = 0x0f1e2d3c4b5a6978 & ((1 << 53) - 1);
         let r = gf_mulmod(a, b, p);
         assert!(r < (1 << 53));
-        
+
         let c = 0x00ff00ff00ff00ff & ((1 << 53) - 1);
         assert_eq!(
             gf_mulmod(a ^ c, b, p),
@@ -515,16 +415,13 @@ mod tests {
         }
     }
 
-    
-
     #[test]
     fn rabin_test_agrees_with_trial_division_on_all_small_prime_degrees() {
-        
         fn rabin_generic(p: u64, d: u32) -> bool {
             if poly_degree(p) != Some(d) {
                 return false;
             }
-            
+
             let mut v = 2u64;
             for _ in 0..d {
                 v = mulmod_deg(v, v, p, d);
@@ -532,12 +429,11 @@ mod tests {
             if v != 2 {
                 return false;
             }
-            
+
             (p & 1) == 1 && p.count_ones() % 2 == 1
         }
 
         fn trial_division(p: u64, d: u32) -> bool {
-            
             for k in 1..=(d / 2) {
                 for q in (1u64 << k)..(1u64 << (k + 1)) {
                     if is_irreducible_by_rabin_generic(q, k, d) && gf_mod_deg(p, q, k) == 0 {
@@ -548,16 +444,13 @@ mod tests {
             true
         }
 
-        
-        
         fn is_irreducible_by_rabin_generic(q: u64, k: u32, _ctx: u32) -> bool {
             if !k.is_power_of_two() && !is_prime(k) {
                 return false;
             }
-            
-            
+
             if k <= 1 {
-                return true; 
+                return true;
             }
             let mut v = 2u64;
             for _ in 0..k {
@@ -565,12 +458,7 @@ mod tests {
             }
             let frobenius_ok = v == 2;
             let coprime_ok = (q & 1) == 1 && q.count_ones() % 2 == 1;
-            frobenius_ok && coprime_ok && {
-                
-                
-                
-                true
-            }
+            frobenius_ok && coprime_ok && { true }
         }
 
         fn is_prime(n: u32) -> bool {
@@ -590,14 +478,13 @@ mod tests {
 
     #[test]
     fn rabin_test_rejects_known_shapes() {
-        
         assert!(!is_irreducible(1u64 << 53));
-        
+
         assert!(!is_irreducible((1u64 << 53) | 0b11));
-        
+
         assert!(!is_irreducible(0));
-        assert!(!is_irreducible(1)); 
-        assert!(!is_irreducible(1u64 << 54)); 
+        assert!(!is_irreducible(1));
+        assert!(!is_irreducible(1u64 << 54));
     }
 
     #[test]
@@ -606,13 +493,13 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..24 {
             let p = generate_polynomial(&mut rng);
-            
+
             assert_eq!(p >> 53, 1);
             assert_eq!(p >> 54, 0);
             assert!(is_irreducible(p));
             seen.insert(p);
         }
-        
+
         assert_eq!(seen.len(), 24);
     }
 
@@ -620,64 +507,49 @@ mod tests {
     fn chunker_new_rejects_invalid_polynomials() {
         assert!(Chunker::new(test_poly(5)).is_ok());
         assert!(Chunker::new(0).is_err());
-        assert!(Chunker::new(1u64 << 53).is_err()); 
-        assert!(Chunker::new(0x1234).is_err()); 
+        assert!(Chunker::new(1u64 << 53).is_err());
+        assert!(Chunker::new(0x1234).is_err());
     }
 
-    
-    
-    
     #[test]
     fn free_functions_return_typed_error_on_reducible_polynomial() {
-        
         let bad = 1u64 << 53;
         let err = chunk_offsets(bad, b"hello ferry").unwrap_err();
         assert_eq!(err.0, bad, "the error names the offending polynomial");
         assert!(matches!(chunk(bad, &[1, 2, 3]), Err(PolynomialError(p)) if p == bad));
-        
+
         let good = test_poly(41);
         assert!(chunk_offsets(good, b"hello ferry").is_ok());
     }
-
-    
 
     #[test]
     fn clamping_order_min_gates_split_max_fires_only_without_natural_cut() {
         let mut c = Chunker::new(test_poly(6)).unwrap();
 
-        
         c.len = MIN_SIZE - 1;
         c.fp = 0;
         assert!(c.cut_at_this_byte().is_none());
 
-        
         c.len = MIN_SIZE;
         c.fp = 0;
         assert!(matches!(c.cut_at_this_byte(), Some(Cut::Natural)));
 
-        
         c.len = MIN_SIZE;
-        c.fp = SPLIT_MASK; 
+        c.fp = SPLIT_MASK;
         assert!(c.cut_at_this_byte().is_none());
 
-        
         c.len = MAX_SIZE;
         c.fp = SPLIT_MASK;
         assert!(matches!(c.cut_at_this_byte(), Some(Cut::Max)));
 
-        
-        
         c.len = MAX_SIZE;
         c.fp = 0;
         assert!(matches!(c.cut_at_this_byte(), Some(Cut::Natural)));
 
-        
         c.len = MAX_SIZE - 1;
         c.fp = SPLIT_MASK;
         assert!(c.cut_at_this_byte().is_none());
     }
-
-    
 
     #[test]
     fn empty_input_yields_zero_chunks() {
@@ -708,8 +580,6 @@ mod tests {
 
     #[test]
     fn zero_run_cuts_at_exactly_min_every_time() {
-        
-        
         let p = test_poly(24);
         let data = vec![0u8; MIN_SIZE * 4 + 12345];
         let ch = chunk(p, &data).unwrap();
@@ -724,8 +594,7 @@ mod tests {
     #[test]
     fn round_trip_property_concatenation_identity_and_size_bounds() {
         let p = test_poly(25);
-        
-        
+
         let sizes = [
             0usize,
             1,
@@ -749,11 +618,10 @@ mod tests {
         for (i, size) in sizes.iter().enumerate() {
             let data = prng_bytes(1000 + i as u64, *size);
             let parts = chunk(p, &data).unwrap();
-            
+
             let rejoined: Vec<u8> = parts.concat();
             assert_eq!(rejoined, data, "round trip failed at size {size}");
 
-            
             let mut off = 0usize;
             for part in &parts {
                 assert_eq!(part.as_ptr() as usize - data.as_ptr() as usize, off);
@@ -761,8 +629,6 @@ mod tests {
             }
             assert_eq!(off, data.len());
 
-            
-            
             for (j, part) in parts.iter().enumerate() {
                 assert!(!part.is_empty());
                 if j + 1 < parts.len() {
@@ -784,10 +650,8 @@ mod tests {
         let p = test_poly(26);
         let data = prng_bytes(27, MIN_SIZE * 2 + 4096);
 
-        
         let bulk = chunk_offsets(p, &data).unwrap();
 
-        
         let mut c = Chunker::new(p).unwrap();
         let mut streamed = Vec::new();
         let mut consumed = 0usize;
@@ -805,17 +669,11 @@ mod tests {
         assert_eq!(streamed, bulk);
     }
 
-    
-    
-    
-    
-    
     #[test]
     fn streaming_feed_boundaries_are_identical_to_slice_output() {
         let p = test_poly(46);
         let avg = 1usize << AVG_BITS;
-        
-        
+
         let sizes = [
             0usize,
             1,
@@ -855,12 +713,9 @@ mod tests {
             let data = prng_bytes(2000 + i as u64, *size);
             let expected = chunk_offsets(p, &data).unwrap();
 
-            
             let total: usize = expected.iter().map(|(_, l)| l).sum();
             assert_eq!(total, *size, "slice tiling broke at size {size}");
 
-            
-            
             for block in [
                 1usize,
                 WINDOW_SIZE - 1,
@@ -901,11 +756,6 @@ mod tests {
         );
     }
 
-    
-    
-    
-    
-    
     #[test]
     fn common_suffix_produces_identical_boundaries_from_different_prefixes() {
         let poly = test_poly(78);
@@ -918,13 +768,10 @@ mod tests {
         let a = chunk_offsets(poly, &[p1.as_slice(), c.as_slice()].concat()).unwrap();
         let b = chunk_offsets(poly, &[p2.as_slice(), c.as_slice()].concat()).unwrap();
 
-        
         let ends_a: std::collections::HashSet<usize> = a.iter().map(|(o, _)| total - o).collect();
         let ends_b: std::collections::HashSet<usize> = b.iter().map(|(o, _)| total - o).collect();
         let shared = ends_a.intersection(&ends_b).count();
-        
-        
-        
+
         assert!(
             shared >= 3,
             "only {shared} shared boundaries across a 4 MiB common suffix; \
@@ -942,7 +789,7 @@ mod tests {
         }
         c.reset();
         assert_eq!(c.pending_len(), 0);
-        
+
         let mut fresh_results = Vec::new();
         let mut fresh = Chunker::new(p).unwrap();
         for &b in &data {

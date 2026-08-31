@@ -1,60 +1,23 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 
 use unicode_normalization::UnicodeNormalization;
 
-
-
-
-
-
-
-
-
-
-
-
 pub fn fold_key(name: &str) -> String {
     let nfc: String = name.nfc().collect();
-    
-    
+
     nfc.to_lowercase().replace('ς', "σ")
 }
-
 
 fn canonical(name: &str) -> String {
     name.nfc().collect()
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaseConflict {
-    
     pub key: String,
-    
+
     pub first: String,
-    
+
     pub second: String,
 }
 
@@ -69,11 +32,8 @@ impl std::fmt::Display for CaseConflict {
     }
 }
 
-
-
 #[derive(Clone, Debug, Default)]
 pub struct CaseFoldIndex {
-    
     canonical: HashMap<String, String>,
 }
 
@@ -82,11 +42,6 @@ impl CaseFoldIndex {
         Self::default()
     }
 
-    
-    
-    
-    
-    
     pub fn insert(&mut self, name: &str) -> Result<(), CaseConflict> {
         let key = fold_key(name);
         let canon = canonical(name);
@@ -104,8 +59,6 @@ impl CaseFoldIndex {
     }
 }
 
-
-
 pub fn find_case_conflict(names: &[&str]) -> Option<CaseConflict> {
     let mut idx = CaseFoldIndex::new();
     for n in names {
@@ -115,15 +68,6 @@ pub fn find_case_conflict(names: &[&str]) -> Option<CaseConflict> {
     }
     None
 }
-
-
-
-
-
-
-
-
-
 
 pub fn host_folds_case() -> bool {
     cfg!(windows) || cfg!(target_os = "macos")
@@ -137,21 +81,18 @@ mod tests {
     fn fold_key_ascii_and_unicode_cases_collapse() {
         assert_eq!(fold_key("README.md"), fold_key("readme.md"));
         assert_eq!(fold_key("ÄPFEL"), fold_key("äpfel"));
-        
-        
+
         assert_eq!(fold_key("ΟΔΟΣ"), fold_key("οδο\u{3c2}"));
-        
+
         assert_eq!(fold_key("ПРОЕКТ"), fold_key("проект"));
-        
+
         assert_eq!(fold_key("\u{212A}m"), fold_key("km"));
-        
-        
+
         assert_ne!(fold_key("\u{130}"), fold_key("i"));
     }
 
     #[test]
     fn fold_key_normalizes_decomposed_spellings_first() {
-        
         assert_eq!(fold_key("caf\u{e9}.md"), fold_key("cafe\u{301}.md"));
     }
 
@@ -164,20 +105,17 @@ mod tests {
         assert_eq!(err.first, "Notes.txt");
         assert_eq!(err.second, "NOTES.txt");
         assert_eq!(err.key, "notes.txt");
-        
-        
+
         idx.insert("Notes.txt").unwrap();
     }
 
     #[test]
     fn index_treats_nfc_equal_pair_as_one_name() {
         let mut idx = CaseFoldIndex::new();
-        
-        
+
         idx.insert("rapport-anne\u{301}e.md").unwrap();
         idx.insert("rapport-ann\u{e9}e.md").unwrap();
 
-        
         idx.insert("RAPPORT-ANN\u{e9}E.MD").unwrap_err();
     }
 

@@ -1,46 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -63,10 +20,6 @@ use crate::reconcile::{
     reconcile, ActionPlan, ConflictKind, LoserContent, QuarantineOp, ReconcileError, ReconcileInput,
 };
 use crate::report::{append_entries, ConflictEntry, DeviceStamp, LogError};
-
-
-
-
 
 const MAX_LANDING_ATTEMPTS: u32 = 128;
 
@@ -111,78 +64,52 @@ fn io_at(path: impl Into<PathBuf>, e: std::io::Error) -> ConvergenceError {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Local,
     Remote,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeldDecision {
-    
-    
     RemoteApply,
-    
+
     RemoteDelete,
-    
+
     Conflict { winner: Option<Side> },
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldPath {
-    
     pub path: String,
     pub decision: HeldDecision,
-    
+
     pub chunks: Vec<(BlobId, u64)>,
 }
 
-
-
 #[derive(Clone, Copy, Debug)]
 pub struct LocalTree<'a> {
-    
     pub root: &'a Path,
-    
-    
+
     pub manifest: &'a RootManifest,
 }
 
-
 #[derive(Clone, Debug, Default)]
 pub struct ConvergenceResult {
-    
     pub apply: ApplyStats,
-    
+
     pub quarantined: Vec<String>,
-    
-    
+
     pub conflicts: Vec<ConflictEntry>,
-    
-    
-    
-    
+
     pub send: Vec<(BlobId, u64)>,
-    
+
     pub held: Vec<HeldPath>,
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     pub agreed_manifest_id: Option<BlobId>,
 }
 
 impl ConvergenceResult {
-    
     pub fn is_noop(&self) -> bool {
         self.apply.mutations() == 0
             && self.quarantined.is_empty()
@@ -192,14 +119,9 @@ impl ConvergenceResult {
     }
 }
 
-
-
-
-
 pub trait BlobFetch {
     fn fetch(&mut self, want: &[(BlobId, u64)]) -> Result<(), ConvergenceError>;
 }
-
 
 type HoldGate<'a> = Box<dyn Fn(&[String]) -> bool + 'a>;
 
@@ -208,8 +130,6 @@ enum HoldConfig<'a> {
     Disabled,
     Custom(HoldGate<'a>),
 }
-
-
 
 pub struct ConvergenceEngine<'a> {
     store: &'a Store,
@@ -221,8 +141,6 @@ pub struct ConvergenceEngine<'a> {
 }
 
 impl<'a> ConvergenceEngine<'a> {
-    
-    
     pub fn new(store: &'a Store, root: &'a Path) -> Self {
         ConvergenceEngine {
             store,
@@ -234,56 +152,37 @@ impl<'a> ConvergenceEngine<'a> {
         }
     }
 
-    
-    
     pub fn state_dir(mut self, dir: &'a Path) -> Self {
         self.state_dir = Some(dir);
         self
     }
 
-    
-    
     pub fn at(mut self, now: (i64, u32)) -> Self {
         self.now = now;
         self
     }
 
-    
-    
-    
-    
-    
     pub fn hold(mut self, gate: impl Fn(&[String]) -> bool + 'a) -> Self {
         self.hold = HoldConfig::Custom(Box::new(gate));
         self
     }
 
-    
     pub fn no_hold(mut self) -> Self {
         self.hold = HoldConfig::Disabled;
         self
     }
 
-    
-    
-    
     pub fn fetch_with(mut self, fetcher: &'a mut dyn BlobFetch) -> Self {
         self.fetcher = Some(fetcher);
         self
     }
 
-    
-    
-    
-    
-    
     pub fn converge(
         &mut self,
         local: &RootManifest,
         remote: &RootManifest,
         base: Option<&RootManifest>,
     ) -> Result<ConvergenceResult, ConvergenceError> {
-        
         let plan = reconcile(ReconcileInput {
             store: self.store,
             local,
@@ -291,10 +190,6 @@ impl<'a> ConvergenceEngine<'a> {
             base,
         })?;
 
-        
-        
-        
-        
         let state_dir = self.state_dir.unwrap_or_else(|| self.store.store_dir());
         let (plan, held) = match &self.hold {
             HoldConfig::Custom(gate) => gate_plan(plan, gate.as_ref())?,
@@ -303,35 +198,43 @@ impl<'a> ConvergenceEngine<'a> {
                 let rec = PinStore::new(state_dir).load()?;
                 if let Some(rec) = rec {
                     if rec.holding() {
-                        let gate: Box<dyn Fn(&[String]) -> bool> = if rec.paths.iter().any(|p| p == "*") {
-                            Box::new(|_: &[String]| true)
-                        } else {
-                            let mut builder = ignore::gitignore::GitignoreBuilder::new("");
-                            for line in &rec.paths {
-                                builder.add_line(None, line).map_err(|e| crate::pin_error::PinError::BadPattern {
-                                    line: line.clone(),
-                                    reason: e.to_string(),
-                                })?;
-                            }
-                            let gi = builder.build().map_err(|e| crate::pin_error::PinError::BadPattern {
-                                line: rec.paths.join(", "),
-                                reason: e.to_string(),
-                            })?;
-                            let patterns = rec.paths.clone();
-                            Box::new(move |rel: &[String]| {
-                                if matches!(
-                                    gi.matched_path_or_any_parents(std::path::Path::new(&rel.join("/")), false),
-                                    ignore::Match::Ignore(_)
-                                ) {
-                                    return true;
+                        let gate: Box<dyn Fn(&[String]) -> bool> =
+                            if rec.paths.iter().any(|p| p == "*") {
+                                Box::new(|_: &[String]| true)
+                            } else {
+                                let mut builder = ignore::gitignore::GitignoreBuilder::new("");
+                                for line in &rec.paths {
+                                    builder.add_line(None, line).map_err(|e| {
+                                        crate::pin_error::PinError::BadPattern {
+                                            line: line.clone(),
+                                            reason: e.to_string(),
+                                        }
+                                    })?;
                                 }
-                                let joined = rel.join("/");
-                                patterns.iter().any(|pat| {
-                                    let clean_pat = pat.trim_start_matches('/');
-                                    clean_pat.starts_with(&format!("{joined}/"))
+                                let gi = builder.build().map_err(|e| {
+                                    crate::pin_error::PinError::BadPattern {
+                                        line: rec.paths.join(", "),
+                                        reason: e.to_string(),
+                                    }
+                                })?;
+                                let patterns = rec.paths.clone();
+                                Box::new(move |rel: &[String]| {
+                                    if matches!(
+                                        gi.matched_path_or_any_parents(
+                                            std::path::Path::new(&rel.join("/")),
+                                            false
+                                        ),
+                                        ignore::Match::Ignore(_)
+                                    ) {
+                                        return true;
+                                    }
+                                    let joined = rel.join("/");
+                                    patterns.iter().any(|pat| {
+                                        let clean_pat = pat.trim_start_matches('/');
+                                        clean_pat.starts_with(&format!("{joined}/"))
+                                    })
                                 })
-                            })
-                        };
+                            };
                         gate_plan(plan, gate.as_ref())?
                     } else {
                         (plan, Vec::new())
@@ -342,9 +245,6 @@ impl<'a> ConvergenceEngine<'a> {
             }
         };
 
-        
-        
-        
         let missing: Vec<(BlobId, u64)> = plan
             .fetch
             .iter()
@@ -369,10 +269,6 @@ impl<'a> ConvergenceEngine<'a> {
             }
         }
 
-        
-        
-        
-        
         let mut dest_rel: Vec<String> = Vec::with_capacity(plan.quarantine.len());
         let mut dest_abs: Vec<PathBuf> = Vec::with_capacity(plan.quarantine.len());
         let mut buffers: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
@@ -384,10 +280,6 @@ impl<'a> ConvergenceEngine<'a> {
             let abs = crate::naming::unique_conflict_dest(self.root, parent, &candidate)
                 .map_err(|e| io_at(self.root.join(&candidate), e))?;
             if let LoserContent::LiveLocal { expected_chunks } = &op.content {
-                
-                
-                
-                
                 let live_abs = ferry_materialize::resolve_live(self.root, &op.path);
                 buffers.insert(
                     idx,
@@ -433,8 +325,6 @@ impl<'a> ConvergenceEngine<'a> {
                 .apply_change_set(&cs)?
         };
 
-        
-        
         let folder_id = hex(&local.folder_id);
         let mut conflicts: Vec<ConflictEntry> = Vec::new();
         for c in &plan.conflicts {
@@ -515,11 +405,6 @@ impl<'a> ConvergenceEngine<'a> {
             ledger.append(&peer_hex, &fresh)?;
         }
 
-        
-        
-        
-        
-        
         let mut agreed_manifest_id = None;
         if plan.conflicts.is_empty() && held.is_empty() && plan.send.is_empty() {
             let bytes = serialize_manifest(remote);
@@ -547,9 +432,6 @@ impl<'a> ConvergenceEngine<'a> {
     }
 }
 
-
-
-
 pub fn converge(
     local_tree: LocalTree<'_>,
     remote_manifest: &RootManifest,
@@ -560,17 +442,6 @@ pub fn converge(
         .state_dir(store.store_dir())
         .converge(local_tree.manifest, remote_manifest, base_manifest)
 }
-
-
-
-
-
-
-
-
-
-
-
 
 fn gate_plan(
     plan: ActionPlan,
@@ -722,7 +593,6 @@ fn gate_plan(
     Ok((apply, held))
 }
 
-
 fn nests(prefix: &str, whole: &str) -> bool {
     whole.len() > prefix.len()
         && whole.starts_with(prefix)
@@ -744,10 +614,6 @@ fn rel_under(root: &Path, abs: &Path) -> Vec<String> {
         .filter_map(|c| c.as_os_str().to_str().map(str::to_string))
         .collect()
 }
-
-
-
-
 
 fn read_live_verified(
     abs: &Path,
@@ -792,15 +658,6 @@ fn diverged(rel: &[String], reason: DivergeReason) -> ConvergenceError {
     })
 }
 
-
-
-
-
-
-
-
-
-
 fn write_loser_copy(
     store: &Store,
     root: &Path,
@@ -830,7 +687,6 @@ fn write_loser_copy(
         match rename_exclusive(&tmp, &dest) {
             Ok(()) => return Ok(dest),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                
                 let _ = std::fs::remove_file(&tmp);
             }
             Err(e) => {
@@ -847,8 +703,6 @@ fn write_loser_copy(
     ))
 }
 
-
-
 fn build_tmp(
     store: &Store,
     root: &Path,
@@ -858,7 +712,6 @@ fn build_tmp(
 ) -> Result<(), ConvergenceError> {
     match &op.content {
         LoserContent::LiveLocalSymlink { expected_target } => {
-            
             let actual = std::fs::read_link(ferry_materialize::resolve_live(root, &op.path))
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
@@ -916,19 +769,11 @@ fn build_tmp(
     }
 }
 
-
-
-
-
-
-
-
 fn rename_exclusive(tmp: &Path, dest: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::fs::hard_link(tmp, dest)?;
-        
-        
+
         let _ = std::fs::remove_file(tmp);
         Ok(())
     }
@@ -943,8 +788,6 @@ fn rename_exclusive(tmp: &Path, dest: &Path) -> std::io::Result<()> {
         match std::fs::rename(tmp, dest) {
             Ok(()) => Ok(()),
             Err(e) => {
-                
-                
                 let _ = std::fs::remove_file(dest);
                 Err(e)
             }
@@ -959,10 +802,6 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), ConvergenceError> {
     }
     #[cfg(windows)]
     {
-        
-        
-        
-        
         let resolved = at
             .parent()
             .unwrap_or(std::path::Path::new("."))
@@ -984,8 +823,6 @@ fn make_symlink(target: &str, at: &Path) -> Result<(), ConvergenceError> {
     }
 }
 
-
-
 fn write_bytes_with_meta(
     tmp: &Path,
     bytes: &[u8],
@@ -994,9 +831,7 @@ fn write_bytes_with_meta(
     nsec: u32,
 ) -> Result<(), ConvergenceError> {
     use std::io::Write;
-    
-    
-    
+
     #[cfg(not(unix))]
     let _ = exec;
     {
@@ -1018,9 +853,6 @@ fn write_bytes_with_meta(
     }
     Ok(())
 }
-
-
-
 
 fn fold_into_change_set(
     base: Option<&EntryState>,
@@ -1076,8 +908,6 @@ mod tests {
     const DEV_B: [u8; 32] = [0xB2; 32];
     const NOW: (i64, u32) = (1_787_574_896, 0);
 
-    
-    
     struct PeerFetch<'x> {
         from: &'x Store,
         to: &'x Store,
@@ -1100,10 +930,6 @@ mod tests {
         }
     }
 
-    
-    
-    
-    
     struct Rig {
         a: Device,
         b: Device,
@@ -1119,8 +945,7 @@ mod tests {
         write_file(&b.tree.join("f.txt"), b"base", false, (100, 0));
         let s0a = a.snapshot();
         let _s0b = b.snapshot();
-        
-        
+
         transfer_manifest(&a.store, &b.store, &s0a.manifest, s0a.manifest_id);
         b.parent = s0a.manifest_id;
 
@@ -1158,7 +983,6 @@ mod tests {
         let rig = rig();
         let result = converge_on_b(&rig, NOW).unwrap();
 
-        
         assert_eq!(
             std::fs::read(rig.b.tree.join("f.txt")).unwrap(),
             b"winner from A"
@@ -1170,7 +994,7 @@ mod tests {
             "name carries LOSER device short id + loser mtime UTC"
         );
         assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
-        
+
         let md = std::fs::symlink_metadata(rig.b.tree.join(q)).unwrap();
         let mt = md
             .modified()
@@ -1179,7 +1003,6 @@ mod tests {
             .unwrap();
         assert_eq!((mt.as_secs(), mt.subsec_nanos()), (150, 0));
 
-        
         let log = list_conflicts(&rig.b.state_dir).unwrap();
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].path, "f.txt");
@@ -1188,8 +1011,6 @@ mod tests {
         assert_eq!(log[0].loser.device, hex(&DEV_B));
         assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
 
-        
-        
         assert!(result.agreed_manifest_id.is_none());
         assert!(AgreementLedger::new(rig.b.store.store_dir())
             .get(&[7; 16], &DEV_A)
@@ -1199,11 +1020,6 @@ mod tests {
 
     #[test]
     fn racing_writer_at_landing_time_cannot_be_overwritten() {
-        
-        
-        
-        
-        
         let rig = rig();
         let base = "f.txt.ferry-conflict.b2b2b2b2-19700101-000230";
         let claimed = rig.b.tree.join(base);
@@ -1226,7 +1042,7 @@ mod tests {
         assert_eq!(std::fs::read(rig.b.tree.join(q)).unwrap(), b"loser on B");
         let log = list_conflicts(&rig.b.state_dir).unwrap();
         assert_eq!(log[0].quarantined_as.as_deref(), Some(q.as_str()));
-        
+
         let residue: Vec<_> = std::fs::read_dir(&rig.b.tree)
             .unwrap()
             .map(|e| e.unwrap())
@@ -1237,15 +1053,6 @@ mod tests {
 
     #[test]
     fn exhausted_landing_fails_loudly_without_clobbering_or_residue() {
-        
-        
-        
-        
-        
-        
-        
-        
-        
         let rig = rig();
         let plan = reconcile(ReconcileInput {
             store: &rig.b.store,
@@ -1256,7 +1063,7 @@ mod tests {
         .unwrap();
         let op = &plan.quarantine[0];
         let base = naming::conflict_display_name("f.txt", &op.loser_device, op.loser_mtime_sec);
-        
+
         for counter in 1..=MAX_LANDING_ATTEMPTS {
             let name = if counter == 1 {
                 base.clone()
@@ -1280,7 +1087,7 @@ mod tests {
             matches!(err, ConvergenceError::Io { .. }),
             "exhaustion must fail loudly, got {err:?}"
         );
-        
+
         for counter in 1..=MAX_LANDING_ATTEMPTS {
             let name = if counter == 1 {
                 base.clone()
@@ -1300,7 +1107,7 @@ mod tests {
     #[test]
     fn tampered_live_file_surfaces_diverged_before_any_writes() {
         let rig = rig();
-        
+
         std::fs::write(rig.b.tree.join("f.txt"), b"tampered!!").unwrap();
 
         let err = converge_on_b(&rig, (1, 0)).unwrap_err();
@@ -1311,7 +1118,7 @@ mod tests {
             }
             other => panic!("expected Diverged, got {other:?}"),
         }
-        
+
         assert_eq!(
             std::fs::read(rig.b.tree.join("f.txt")).unwrap(),
             b"tampered!!",
@@ -1322,15 +1129,9 @@ mod tests {
 
     #[test]
     fn nfd_disk_spelling_resolves_for_stored_nfc_paths() {
-        
-        
-        
-        
-        
-        
         let mut a = Device::new(6, DEV_A, poly_of(13));
         let mut b = Device::new(7, DEV_B, poly_of(13));
-        
+
         let nfd = "rapport-anne\u{301}e.md";
         write_file(&a.tree.join(nfd), b"base", false, (100, 0));
         write_file(&b.tree.join(nfd), b"base", false, (100, 0));
@@ -1395,10 +1196,9 @@ mod tests {
             .converge(&sb.manifest, &sa.manifest, None)
             .unwrap();
 
-        
         assert!(result.is_noop(), "{result:?}");
         assert!(list_conflicts(&b.state_dir).unwrap().is_empty());
-        
+
         let agreed = result.agreed_manifest_id.expect("agreement committed");
         assert_eq!(agreed, sa.manifest_id);
         let rec = AgreementLedger::new(b.store.store_dir())
@@ -1421,8 +1221,6 @@ mod tests {
         transfer_manifest(&a.store, &b.store, &s0a.manifest, s0a.manifest_id);
         b.parent = s0a.manifest_id;
 
-        
-        
         std::fs::remove_file(b.tree.join("f.txt")).unwrap();
         write_file(&a.tree.join("f.txt"), b"edited on A", false, (20, 0));
         let sa = a.snapshot();
@@ -1457,8 +1255,7 @@ mod tests {
     #[test]
     fn missing_blobs_fail_loudly_before_any_writes() {
         let rig = rig();
-        
-        
+
         let err = ConvergenceEngine::new(&rig.b.store, &rig.b.tree)
             .state_dir(&rig.b.state_dir)
             .at(NOW)
@@ -1484,8 +1281,6 @@ mod tests {
 
     #[test]
     fn pin_gate_holds_pinned_paths_and_scopes_send() {
-        
-        
         let mut a = Device::new(6, DEV_A, poly_of(17));
         let mut b = Device::new(7, DEV_B, poly_of(17));
         write_file(&a.tree.join("src/a.txt"), b"base src", false, (100, 0));
@@ -1522,14 +1317,11 @@ mod tests {
             .converge(&sa.manifest, &sb.manifest, Some(&s0.manifest))
             .unwrap();
 
-        
         assert_eq!(result.held.len(), 1, "{result:?}");
         assert_eq!(result.held[0].path, "docs/d.txt");
         assert_eq!(result.held[0].decision, HeldDecision::RemoteApply);
         assert!(!result.held[0].chunks.is_empty());
-        
-        
-        
+
         assert_eq!(
             std::fs::read(a.tree.join("docs/d.txt")).unwrap(),
             b"base docs"
@@ -1545,19 +1337,14 @@ mod tests {
         );
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(list_conflicts(&a.state_dir).unwrap()[0].path, "src/a.txt");
-        
-        
+
         assert!(!result.send.is_empty());
-        
+
         assert!(result.agreed_manifest_id.is_none());
     }
 
     #[test]
     fn nested_pin_halves_are_refused_loudly() {
-        
-        
-        
-        
         let (dir, store, local) = store_with_one_file();
         let st = |chunks: Vec<(BlobId, u64)>| EntryState {
             kind: EntryKind::File,
@@ -1571,7 +1358,7 @@ mod tests {
         plan.materialize.push(crate::reconcile::MaterializeOp {
             path: vec!["src".into()],
             base: None,
-            result: None, 
+            result: None,
         });
         plan.materialize.push(crate::reconcile::MaterializeOp {
             path: vec!["src".into(), "inner.rs".into()],
@@ -1579,8 +1366,7 @@ mod tests {
             result: Some(st(Vec::new())),
         });
 
-        let err = gate_plan(plan, |p| p.last().is_some_and(|c| c == "inner.rs"))
-            .unwrap_err();
+        let err = gate_plan(plan, |p| p.last().is_some_and(|c| c == "inner.rs")).unwrap_err();
         let _ = (&store, &local);
         match err {
             ConvergenceError::StructuralSplit { pinned, other } => {
@@ -1625,7 +1411,6 @@ mod tests {
         assert_eq!(cs.type_changed.len(), 0);
     }
 
-    
     fn store_with_one_file() -> (tempfile::TempDir, Store, RootManifest) {
         use rand::SeedableRng;
         let dir = tempfile::tempdir().unwrap();

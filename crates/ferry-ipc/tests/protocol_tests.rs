@@ -99,7 +99,6 @@ fn test_daemon_message_state_changed() {
     let deserialized: DaemonMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized, msg);
 
-    
     let minimal_json =
         r#"{"type":"state_changed","payload":{"state":"synced","manifest_id":"abc"}}"#;
     let deserialized_minimal: DaemonMessage = serde_json::from_str(minimal_json).unwrap();
@@ -137,7 +136,6 @@ fn test_daemon_message_transfer_progress() {
     let deserialized: DaemonMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized, msg);
 
-    
     let minimal_json = r#"{"type":"transfer_progress","payload":{"bytes_transferred":100,"total_bytes":500,"current_path":"data.bin"}}"#;
     let deserialized_minimal: DaemonMessage = serde_json::from_str(minimal_json).unwrap();
     match deserialized_minimal {

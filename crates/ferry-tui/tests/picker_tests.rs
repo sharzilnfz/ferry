@@ -86,24 +86,17 @@ async fn picker_open_and_navigate_via_backend() {
         .unwrap();
     assert_eq!(picker.current_path, PathBuf::from("/"));
     assert!(!picker.loading);
-    
-    
+
     assert_eq!(picker.entries[0].name, "docs");
     assert_eq!(picker.entries[1].name, "projects");
 
-    
     picker.move_down();
     assert_eq!(picker.cursor, 1);
     picker.move_down();
     assert_eq!(picker.cursor, 2);
 
-    
     assert_eq!(picker.visible_len(), 4);
 
-    
-    
-    
-    
     let proj_idx = picker
         .visible_entries()
         .iter()
@@ -127,19 +120,16 @@ async fn picker_enter_via_app_keyboard_simulation() {
     app.headless_override = Some(false);
     let be: Arc<dyn UiBackend> = backend.clone();
 
-    
     app.handle_key_action(&be, char_key('a')).await;
     assert!(app.is_picker_open(), "picker should be open via A");
     let cur = app.picker.as_ref().unwrap().current_path.clone();
     assert_eq!(cur, PathBuf::from("/"));
 
-    
     app.handle_key_action(&be, key(KeyCode::Down)).await;
     app.handle_key_action(&be, key(KeyCode::Down)).await;
     let cursor = app.picker.as_ref().unwrap().cursor;
     assert_eq!(cursor, 2);
 
-    
     {
         let p = app.picker.as_mut().unwrap();
         let idx = p
@@ -172,39 +162,33 @@ async fn filter_narrows_case_insensitive_and_esc_clears() {
         .await
         .unwrap();
 
-    
     assert_eq!(p.visible_len(), 4);
-    
+
     p.apply_filter("pro");
     assert_eq!(p.visible_len(), 1);
     assert_eq!(p.visible_entries()[0].name, "projects");
 
-    
     p.apply_filter("PRO");
     assert_eq!(p.visible_len(), 1);
 
-    
     p.apply_filter("doc");
     assert_eq!(p.visible_len(), 1);
     assert_eq!(p.visible_entries()[0].name, "docs");
 
-    
     p.clear_filter();
     assert_eq!(p.visible_len(), 4);
     assert_eq!(p.filter, "");
     assert_eq!(p.cursor, 0);
 
-    
     p.push_filter_char('p');
     p.push_filter_char('r');
     p.push_filter_char('o');
     assert_eq!(p.filter, "pro");
     assert_eq!(p.visible_len(), 1);
 
-    
     p.pop_filter_char();
     assert_eq!(p.filter, "pr");
-    
+
     assert_eq!(p.visible_len(), 1);
 
     p.pop_filter_char();
@@ -223,7 +207,6 @@ async fn filter_via_app_typing_and_esc() {
     app.handle_key_action(&be, char_key('a')).await;
     assert!(app.is_picker_open());
 
-    
     app.handle_key_action(&be, char_key('p')).await;
     app.handle_key_action(&be, char_key('r')).await;
     app.handle_key_action(&be, char_key('o')).await;
@@ -232,7 +215,6 @@ async fn filter_via_app_typing_and_esc() {
     assert_eq!(p.visible_len(), 1);
     assert_eq!(p.visible_entries()[0].name, "projects");
 
-    
     app.handle_key_action(&be, key(KeyCode::Esc)).await;
     assert!(
         app.is_picker_open(),
@@ -240,7 +222,6 @@ async fn filter_via_app_typing_and_esc() {
     );
     assert_eq!(app.picker.as_ref().unwrap().filter, "");
 
-    
     app.handle_key_action(&be, key(KeyCode::Esc)).await;
     assert!(!app.is_picker_open());
 }
@@ -255,15 +236,14 @@ fn selection_space_on_dir_vs_file() {
         ],
         PathBuf::from("/"),
     );
-    
+
     assert_eq!(p.entries[0].name, "a_dir");
     p.cursor = 0;
     let r = p.try_select();
     assert!(matches!(r, PickerSelectResult::Selected(e) if e.is_dir && e.name == "a_dir"));
 
-    
     p.cursor = 1;
-    
+
     let r2 = p.try_select();
     assert_eq!(r2, PickerSelectResult::Nothing);
 }
@@ -278,8 +258,7 @@ fn selection_already_synced_shows_hint_without_register() {
         ],
         PathBuf::from("/"),
     );
-    
-    
+
     let synced_idx = p
         .visible_entries()
         .iter()
@@ -290,7 +269,6 @@ fn selection_already_synced_shows_hint_without_register() {
     assert!(matches!(r, PickerSelectResult::AlreadySynced(e) if e.name == "synced"));
     assert_eq!(p.hint.as_deref(), Some("already synced"));
 
-    
     let normal_idx = p
         .visible_entries()
         .iter()
@@ -311,7 +289,7 @@ async fn app_space_on_already_synced_shows_hint_no_register() {
     let be: Arc<dyn UiBackend> = backend.clone();
     app.handle_key_action(&be, char_key('a')).await;
     assert!(app.is_picker_open());
-    
+
     {
         let p = app.picker.as_ref().unwrap();
         let idx = p
@@ -322,13 +300,13 @@ async fn app_space_on_already_synced_shows_hint_no_register() {
         app.picker.as_mut().unwrap().cursor = idx;
     }
     app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
-    
+
     assert!(app.is_picker_open());
     assert_eq!(
         app.picker.as_ref().unwrap().hint.as_deref(),
         Some("already synced")
     );
-    
+
     let has_warn = app
         .state
         .activity_log
@@ -362,7 +340,6 @@ fn selection_uninitialized_dir_classifies_as_not_initialized() {
         "{hint}"
     );
 
-    
     let ready_idx = p
         .visible_entries()
         .iter()
@@ -392,7 +369,6 @@ async fn app_space_on_uninitialized_dir_blocks_registration_with_banner() {
     app.handle_key_action(&be, char_key('a')).await;
     assert!(app.is_picker_open());
 
-    
     app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
     assert!(
         app.is_picker_open(),
@@ -424,8 +400,6 @@ async fn app_space_on_uninitialized_dir_blocks_registration_with_banner() {
         .any(|e| e.message.contains("Register folder"));
     assert!(!dispatched, "registration must not reach the backend");
 
-    
-    
     app.handle_key_action(&be, key(KeyCode::Down)).await;
     app.handle_key_action(&be, key(KeyCode::Char(' '))).await;
     let reached_backend = app
@@ -451,7 +425,6 @@ async fn headless_fallback_returns_no_tty() {
     assert_eq!(err.code, "no-tty");
     assert_eq!(err.hint, "pass explicit path");
 
-    
     let mut app2 = TuiApp::default();
     app2.headless_override = Some(true);
     app2.handle_key_action(&be, char_key('a')).await;
@@ -464,12 +437,10 @@ async fn headless_fallback_returns_no_tty() {
         .any(|e| e.message.contains("no-tty") || e.message.contains("no tty"));
     assert!(has_err);
 
-    
     assert!(ferry_tui::picker::is_headless_env("dumb", true));
     assert!(!ferry_tui::picker::is_headless_env("xterm-256color", true));
     assert!(ferry_tui::picker::is_headless_env("xterm-256color", false));
 
-    
     let e = ferry_tui::picker::headless_error();
     assert_eq!(e.code, "no-tty");
 }
@@ -497,12 +468,10 @@ fn picker_state_machine_unit() {
     assert_eq!(p.visible_len(), 0);
     assert!(p.selected().is_none());
 
-    
     p.open(Some(PathBuf::from("/tmp/foo/bar")));
     let parent = p.go_parent().unwrap();
     assert_eq!(parent, PathBuf::from("/tmp/foo"));
 
-    
     p.set_entries(
         vec![
             entry("a", "/tmp/a", true, false, false),

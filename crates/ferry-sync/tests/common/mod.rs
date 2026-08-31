@@ -1,9 +1,3 @@
-
-
-
-
-
-
 #![allow(dead_code)]
 
 pub mod corrupt;
@@ -22,13 +16,10 @@ use ferry_sync::engine::device_identity_for_tag;
 use ferry_sync::format::hex;
 use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
 
-
-
 pub fn test_store(cfg: &EngineConfig) -> Arc<ferry_store::store::Store> {
     ferry_folder::open_or_create_test_store(&cfg.store_dir, &device_identity_for_tag(&cfg.tag))
         .expect("test folder store")
 }
-
 
 pub fn engine(cfg: EngineConfig, transport: Arc<dyn ferry_sync::Transport>) -> SyncEngine {
     let store = test_store(&cfg);
@@ -38,7 +29,6 @@ pub fn engine(cfg: EngineConfig, transport: Arc<dyn ferry_sync::Transport>) -> S
 #[allow(unused_imports)]
 pub use corrupt::CorruptingTransport;
 
-
 pub fn timeout_from_env() -> Duration {
     let secs = std::env::var("FERRY_SYNC_TEST_TIMEOUT_SECS")
         .ok()
@@ -47,25 +37,9 @@ pub fn timeout_from_env() -> Duration {
     Duration::from_secs(secs)
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub fn default_transport() -> Arc<dyn ferry_sync::Transport> {
     match std::env::var("FERRY_SYNC_E2E_TRANSPORT").as_deref() {
         Ok("iroh") => {
-            
-            
-            
             use rand::RngCore;
             let mut seed_a = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut seed_a);
@@ -89,17 +63,13 @@ pub struct EngineFixture {
     pub b: EngineHandle,
 }
 
-
 type CfgHook = Box<dyn FnOnce(&mut EngineConfig)>;
 
 impl EngineFixture {
-    
     pub fn start(name: &str, seed: u64) -> Self {
         Self::start_inner(name, seed, None, None)
     }
 
-    
-    
     pub fn start_with_transport_b(
         name: &str,
         seed: u64,
@@ -108,8 +78,6 @@ impl EngineFixture {
         Self::start_inner(name, seed, Some(transport_b), None)
     }
 
-    
-    
     pub fn start_with_cfg_a(
         name: &str,
         seed: u64,
@@ -199,8 +167,7 @@ impl EngineFixture {
         let addr = engine_a
             .listen_addr()
             .expect("A must report its bound port");
-        
-        
+
         engine_a.set_peer_policy(ferry_sync::PeerPolicy::TrustOnFirstUse);
         let a = engine_a.start();
 
@@ -239,7 +206,6 @@ impl EngineFixture {
         cfg
     }
 
-    
     pub fn replace_b(&mut self, transport: Arc<dyn ferry_sync::Transport>) -> EngineHandle {
         self.b.shutdown();
         let cfg = self.b_config();
@@ -258,8 +224,6 @@ impl EngineFixture {
         self._dir.path().join("b/tree")
     }
 
-    
-    
     pub fn converged(&self) -> bool {
         match (
             self.a.agreed_id(),
@@ -284,7 +248,6 @@ fn self_cfg(base: &Path, slot: &str, tag: String, poly: u64) -> EngineConfig {
     cfg.tree_dir = base.join(slot).join("tree");
     cfg
 }
-
 
 pub struct TreeBuilder {
     root: PathBuf,
@@ -330,8 +293,6 @@ impl TreeBuilder {
         fs::remove_file(self.root.join(rel)).unwrap();
     }
 
-    
-    
     pub fn create_random_files(&mut self, count: usize) -> Vec<String> {
         let mut out = Vec::new();
         for i in 0..count {
@@ -347,8 +308,6 @@ impl TreeBuilder {
         out
     }
 }
-
-
 
 pub fn trees_identical(a: &Path, b: &Path) -> bool {
     let ra = listing(a);

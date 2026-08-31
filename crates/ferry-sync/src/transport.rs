@@ -1,57 +1,36 @@
-
-
-
-
-
-
-
-
-
-
-
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
-
 pub const MAX_FRAME_BYTES: u32 = 512 * 1024 * 1024;
-
 
 pub type PeerId = [u8; 32];
 
 pub trait Transport: Send + Sync {
-    
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>>;
-    
-    
+
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>>;
 
-    
     fn dial_peer(&self, peer: &PeerId) -> io::Result<Box<dyn Connection>> {
         self.dial(peer_id_to_addr(peer))
     }
 }
 
 pub trait Listener: Send + Sync {
-    
     fn local_addr(&self) -> io::Result<SocketAddr>;
-    
-    
+
     fn accept(&self) -> io::Result<Box<dyn Connection>>;
-    
+
     fn close(&self) -> io::Result<()> {
         Ok(())
     }
 }
 
 pub trait Connection: Send {
-    
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()>;
-    
-    
+
     fn recv_frame(&mut self) -> io::Result<Vec<u8>>;
 }
-
 
 pub fn addr_to_peer_id(addr: &SocketAddr) -> PeerId {
     let mut out = [0u8; 32];
@@ -68,13 +47,11 @@ pub fn addr_to_peer_id(addr: &SocketAddr) -> PeerId {
     out
 }
 
-
 pub fn peer_id_to_addr(peer: &PeerId) -> SocketAddr {
     let ip = std::net::Ipv4Addr::new(peer[0], peer[1], peer[2], peer[3]);
     let port = u16::from_be_bytes([peer[4], peer[5]]);
     SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
 }
-
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TcpTransport;
@@ -82,9 +59,7 @@ pub struct TcpTransport;
 impl Transport for TcpTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn Connection>> {
         let stream = TcpStream::connect(addr)?;
-        
-        
-        
+
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
         Ok(Box::new(TcpConn(stream)))
@@ -146,8 +121,6 @@ impl<T: ?Sized + Listener + Send + Sync> Listener for Arc<T> {
 }
 
 struct TcpConn(TcpStream);
-
-
 
 impl Connection for Box<dyn Connection> {
     fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
@@ -212,7 +185,7 @@ mod tests {
             let b = c.recv_frame().unwrap();
             c.send_frame(&b).unwrap();
             c.send_frame(&a).unwrap();
-            
+
             assert!(c.recv_frame().is_err());
         });
         let mut cli = TcpTransport.dial(addr).unwrap();
@@ -220,7 +193,7 @@ mod tests {
         cli.send_frame(&[]).unwrap();
         assert_eq!(cli.recv_frame().unwrap(), b"");
         assert_eq!(cli.recv_frame().unwrap(), b"first");
-        drop(cli); 
+        drop(cli);
         server.join().unwrap();
     }
 
@@ -233,7 +206,7 @@ mod tests {
             let err = c.recv_frame().unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         });
-        
+
         let mut raw = std::net::TcpStream::connect(addr).unwrap();
         raw.write_all(&(u32::MAX - 1).to_le_bytes()).unwrap();
         server.join().unwrap();
@@ -241,7 +214,6 @@ mod tests {
 
     #[test]
     fn dial_refuses_unreachable_addresses_promptly() {
-        
         let res = TcpTransport.dial("127.0.0.1:1".parse().unwrap());
         match res {
             Err(e) => assert!(matches!(e.kind(), io::ErrorKind::ConnectionRefused)),

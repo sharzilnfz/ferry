@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use std::path::Path;
 
 use serde_json::json;
@@ -12,10 +6,6 @@ use crate::error::{CliError, CliResult};
 use crate::folder::OpenFolder;
 use crate::out::Output;
 use ferry_crypto::identity::DeviceIdentity;
-
-
-
-
 
 pub fn initiate(
     opened: &OpenFolder,
@@ -56,10 +46,6 @@ pub fn initiate(
     Ok(Output::new(json_doc, human))
 }
 
-
-
-
-
 pub fn accept(
     identity: &DeviceIdentity,
     offer_file: &Path,
@@ -94,7 +80,6 @@ pub fn accept(
     Ok(Output::new(json_doc, human))
 }
 
-
 fn ritual_for(identity: &DeviceIdentity) -> CliResult<ferry_folder::pairing::PairingRitual> {
     let home = crate::home::ferry_home()?;
     Ok(ferry_folder::pairing::PairingRitual::with_shared(
@@ -103,12 +88,6 @@ fn ritual_for(identity: &DeviceIdentity) -> CliResult<ferry_folder::pairing::Pai
         ferry_folder::pairing::shared_rendezvous(),
     ))
 }
-
-
-
-
-
-
 
 pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     let code = qrcode::QrCode::new(bytes).map_err(|e| {
@@ -131,13 +110,13 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     let total = w + quiet * 2;
 
     let mut out = String::new();
-    out.push('\u{2b}'); 
+    out.push('\u{2b}');
     for _ in 0..total {
-        out.push('\u{2500}'); 
+        out.push('\u{2500}');
     }
     out.push('\u{2b}');
     out.push('\n');
-    let mut y = 0usize; 
+    let mut y = 0usize;
     while y < total {
         let mut line = String::from('\u{2502}');
         let mut x = 0usize;
@@ -150,9 +129,9 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
                 false
             };
             line.push(match (top, bottom) {
-                (true, true) => '\u{2588}',  
-                (true, false) => '\u{2580}', 
-                (false, true) => '\u{2584}', 
+                (true, true) => '\u{2588}',
+                (true, false) => '\u{2580}',
+                (false, true) => '\u{2584}',
                 (false, false) => ' ',
             });
             x += 1;
@@ -169,7 +148,6 @@ pub fn render_ascii_qr(bytes: &[u8]) -> CliResult<String> {
     out.push('\u{2b}');
     Ok(out)
 }
-
 
 fn offer_path_display(p: &Path) -> std::path::Display<'_> {
     let _ = p.canonicalize();

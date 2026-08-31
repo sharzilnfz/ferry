@@ -1,13 +1,3 @@
-
-
-
-
-
-
-
-
-
-
 mod common;
 
 use std::fs;
@@ -25,8 +15,6 @@ const SEED: u64 = 20260825;
 fn empty_allow_list_refuses_unpaired_peers() {
     let dir = tempfile::tempdir().unwrap();
 
-    
-    
     let mut cfg_a = EngineConfig::default_for_test(SEED);
     cfg_a.tag = "refuse-a".into();
     cfg_a.store_dir = dir.path().join("a/store");
@@ -38,8 +26,6 @@ fn empty_allow_list_refuses_unpaired_peers() {
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
-    
-    
     let mut cfg_b = EngineConfig::default_for_test(SEED);
     cfg_b.tag = "refuse-b".into();
     cfg_b.store_dir = dir.path().join("b/store");
@@ -78,7 +64,6 @@ fn empty_allow_list_refuses_unpaired_peers() {
 fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     let dir = tempfile::tempdir().unwrap();
 
-    
     let mut cfg_a = EngineConfig::default_for_test(SEED);
     cfg_a.tag = "tofu-a".into();
     cfg_a.store_dir = dir.path().join("a/store");
@@ -91,10 +76,8 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
-    
     assert_eq!(handle_a.pinned_peers().unwrap(), Vec::<BlobId>::new());
 
-    
     let mut cfg_b = EngineConfig::default_for_test(SEED);
     cfg_b.tag = "tofu-b".into();
     cfg_b.store_dir = dir.path().join("b/store");
@@ -104,13 +87,11 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
 
     let id_b = *device_identity_for_tag("tofu-b").device_id();
 
-    
     fs::write(dir.path().join("b/tree/file1.txt"), b"hello from b").unwrap();
     let mut engine_b = common::engine(cfg_b, Arc::new(TcpTransport));
     engine_b.set_peer_policy(PeerPolicy::TrustOnFirstUse);
     let handle_b = engine_b.start();
 
-    
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while !(handle_a.agreed_id().is_some()
         && handle_a.agreed_id() == handle_b.agreed_id()
@@ -123,16 +104,13 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    
     let pinned = handle_a.pinned_peers().unwrap();
     assert_eq!(pinned, vec![id_b]);
 
-    
     handle_b.shutdown();
 
     let stats_before_c = handle_a.stats();
 
-    
     let mut cfg_c = EngineConfig::default_for_test(SEED);
     cfg_c.tag = "tofu-c".into();
     cfg_c.store_dir = dir.path().join("c/store");
@@ -145,7 +123,6 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
     engine_c.set_peer_policy(PeerPolicy::TrustOnFirstUse);
     let handle_c = engine_c.start();
 
-    
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         let s = handle_a.stats();
@@ -161,7 +138,6 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
         "Node C's files must NOT be applied to Node A"
     );
 
-    
     let stats_after_c = handle_a.stats();
     assert!(
         stats_after_c.sessions_failed > stats_before_c.sessions_failed
@@ -171,7 +147,6 @@ fn tofu_first_connect_pins_identity_and_second_different_keypair_is_refused() {
 
     handle_c.shutdown();
 
-    
     let mut cfg_b2 = EngineConfig::default_for_test(SEED);
     cfg_b2.tag = "tofu-b".into();
     cfg_b2.store_dir = dir.path().join("b/store");
@@ -210,7 +185,6 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     let id_a = *device_identity_for_tag("allow-a").device_id();
     let id_b = *device_identity_for_tag("allow-b").device_id();
 
-    
     let entries = vec![
         WrappedKeyEntry::new(id_a, [1u8; WRAPPED_LEN]),
         WrappedKeyEntry::new(id_b, [2u8; WRAPPED_LEN]),
@@ -225,15 +199,13 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
     let engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
-    
+
     let dot_ferry_a = dir.path().join("a/store/.ferry");
     fs::write(dot_ferry_a.join("config"), &config_bytes).unwrap();
 
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
-    
-    
     let mut cfg_b = EngineConfig::default_for_test(SEED);
     cfg_b.tag = "allow-b".into();
     cfg_b.store_dir = dir.path().join("b/store");
@@ -260,7 +232,6 @@ fn allow_list_policy_seeds_from_config_head_and_denies_unknown_peers() {
 
     handle_b.shutdown();
 
-    
     let stats_before_c = handle_a.stats();
     let mut cfg_c = EngineConfig::default_for_test(SEED);
     cfg_c.tag = "allow-c".into();
@@ -316,12 +287,11 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     fs::create_dir_all(&cfg_a.tree_dir).unwrap();
 
     let mut engine_a = common::engine(cfg_a, Arc::new(TcpTransport));
-    
+
     engine_a.set_peer_policy(PeerPolicy::from_allowed([id_b, id_d]));
     let addr_a = engine_a.listen_addr().unwrap();
     let handle_a = engine_a.start();
 
-    
     let mut cfg_b = EngineConfig::default_for_test(SEED);
     cfg_b.tag = "pre-b".into();
     cfg_b.store_dir = dir.path().join("b/store");
@@ -347,7 +317,6 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     }
     handle_b.shutdown();
 
-    
     let mut cfg_d = EngineConfig::default_for_test(SEED);
     cfg_d.tag = "pre-d".into();
     cfg_d.store_dir = dir.path().join("d/store");
@@ -372,7 +341,6 @@ fn allow_list_pre_seed_skips_tofu_and_permits_multiple_allowed_peers() {
     }
     handle_d.shutdown();
 
-    
     let stats_before_c = handle_a.stats();
     let mut cfg_c = EngineConfig::default_for_test(SEED);
     cfg_c.tag = "pre-c".into();
@@ -422,7 +390,6 @@ fn tofu_pinned_identity_survives_engine_restart() {
 
     let id_b = *device_identity_for_tag("persist-b").device_id();
 
-    
     let mut cfg_b = EngineConfig::default_for_test(SEED);
     cfg_b.tag = "persist-b".into();
     cfg_b.store_dir = dir.path().join("b/store");
@@ -446,11 +413,9 @@ fn tofu_pinned_identity_survives_engine_restart() {
 
     assert_eq!(handle_a.pinned_peers().unwrap(), vec![id_b]);
 
-    
     handle_a.shutdown();
     handle_b.shutdown();
 
-    
     let mut cfg_a_restarted = EngineConfig::default_for_test(SEED);
     cfg_a_restarted.tag = "persist-a".into();
     cfg_a_restarted.store_dir = store_dir_a;
@@ -462,10 +427,8 @@ fn tofu_pinned_identity_survives_engine_restart() {
     let addr_a_restarted = engine_a_restarted.listen_addr().unwrap();
     let handle_a_restarted = engine_a_restarted.start();
 
-    
     assert_eq!(handle_a_restarted.pinned_peers().unwrap(), vec![id_b]);
 
-    
     let stats_before_c = handle_a_restarted.stats();
     let mut cfg_c = EngineConfig::default_for_test(SEED);
     cfg_c.tag = "persist-c".into();
@@ -500,7 +463,6 @@ fn tofu_pinned_identity_survives_engine_restart() {
     );
     handle_c.shutdown();
 
-    
     let mut cfg_b_restarted = EngineConfig::default_for_test(SEED);
     cfg_b_restarted.tag = "persist-b".into();
     cfg_b_restarted.store_dir = dir.path().join("b/store");
@@ -512,10 +474,6 @@ fn tofu_pinned_identity_survives_engine_restart() {
     engine_b_restarted.set_peer_policy(PeerPolicy::TrustOnFirstUse);
     let handle_b_restarted = engine_b_restarted.start();
 
-    
-    
-    
-    
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !(handle_a_restarted.agreed_id() == handle_b_restarted.agreed_id()
         && dir.path().join("a/tree/second.txt").exists())

@@ -1,37 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
@@ -41,7 +7,6 @@ use rand::RngCore;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-
 pub const EXPORT_MAGIC: [u8; 4] = *b"FRRX";
 pub const EXPORT_VERSION: u8 = 1;
 
@@ -49,12 +14,11 @@ pub const SALT_LEN: usize = 16;
 
 pub const NONCE_LEN: usize = 12;
 
-pub const EXPORT_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 16  + 64;
+pub const EXPORT_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN + 16 + 64;
 
 const PURPOSE: &[u8] = b"ferry/v1/recovery/export";
 
 fn kdf() -> Argon2<'static> {
-    
     let params = Params::new(19_456, 2, 1, Some(32)).expect("fixed valid params");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
@@ -75,9 +39,7 @@ pub enum RecoveryError {
     IdentityExists(std::path::PathBuf),
 }
 
-
 pub type RestoredMaterial = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
-
 
 pub struct RecoveryExport<'a> {
     pub fmk: &'a [u8; 32],
@@ -85,9 +47,6 @@ pub struct RecoveryExport<'a> {
 }
 
 impl RecoveryExport<'_> {
-    
-    
-    
     pub fn seal(&self, passphrase: &str) -> Vec<u8> {
         let mut salt = [0u8; SALT_LEN];
         rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -120,10 +79,6 @@ impl RecoveryExport<'_> {
         out
     }
 
-    
-    
-    
-    
     pub fn open(bytes: &[u8], passphrase: &str) -> Result<RestoredMaterial, RecoveryError> {
         if bytes.len() != EXPORT_LEN {
             return Err(RecoveryError::Truncated {
@@ -159,10 +114,6 @@ impl RecoveryExport<'_> {
         Ok((Zeroizing::new(fmk), Zeroizing::new(sk)))
     }
 
-    
-    
-    
-    
     #[cfg(test)]
     pub fn round_trip_through_files(
         &self,
@@ -203,8 +154,6 @@ mod tests {
     const ALICE_SK_HEX: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
 
     fn fixture() -> RecoveryExport<'static> {
-        
-        
         let fmk: &'static [u8; 32] = Box::leak(Box::new(core::array::from_fn(|i| i as u8 + 1)));
         let sk: &'static [u8; 32] = Box::leak(Box::new(unhex(ALICE_SK_HEX).unwrap()));
         RecoveryExport {
@@ -218,7 +167,7 @@ mod tests {
         let exp = fixture();
         let sealed = exp.seal("correct horse battery staple");
         assert_eq!(sealed.len(), EXPORT_LEN);
-        
+
         assert_eq!(sealed.len(), 113);
         assert_eq!(&sealed[..4], b"FRRX");
         assert_eq!(sealed[4], 1);
@@ -233,7 +182,7 @@ mod tests {
         let a = exp.seal("same passphrase");
         let b = exp.seal("same passphrase");
         assert_ne!(a, b, "exports must not be reproducible byte-for-byte");
-        
+
         assert_ne!(&a[5..21], &b[5..21]);
     }
 
@@ -245,7 +194,7 @@ mod tests {
             Err(RecoveryError::AuthFailed) => {}
             other => panic!("expected AuthFailed, got {other:?}"),
         }
-        
+
         for probe in ["Right", "righ", "right ", "", "richt"] {
             assert!(matches!(
                 RecoveryExport::open(&sealed, probe),
@@ -259,8 +208,6 @@ mod tests {
         let exp = fixture();
         let good = exp.seal("p");
 
-        
-        
         for idx in [0usize, 4, 10, 25, 40, 80] {
             let mut evil = good.clone();
             evil[idx] ^= 0x01;
@@ -275,7 +222,7 @@ mod tests {
                 "flip at {idx} gave {err:?}"
             );
         }
-        
+
         assert!(matches!(
             RecoveryExport::open(&good[..good.len() - 1], "p"),
             Err(RecoveryError::Truncated { .. })
@@ -290,7 +237,6 @@ mod tests {
 
     #[test]
     fn exported_key_restores_access_on_a_wiped_device() {
-        
         let dir = tempfile::tempdir().unwrap();
         let export_path = dir.path().join("ferry-backup.ferryexport");
         let original_dir = dir.path().join("identity-original");
@@ -309,15 +255,12 @@ mod tests {
             .unwrap();
         assert_eq!(*restored, fmk);
 
-        
-        
         let reborn = load_or_create(&wiped_dir).unwrap();
         assert_eq!(
             *reborn.public(),
             *DeviceIdentity::from_secret_bytes(&sk).public()
         );
 
-        
         let folder_id = [2u8; 16];
         let wrapped =
             crate::folder_key::wrap_folder_key(&fmk, &folder_id, reborn.public()).unwrap();
@@ -332,12 +275,12 @@ mod tests {
     fn import_refuses_to_clobber_existing_identity() {
         let dir = tempfile::tempdir().unwrap();
         let existing = dir.path().join("identity");
-        load_or_create(&existing).unwrap(); 
+        load_or_create(&existing).unwrap();
 
         let sk = unhex(ALICE_SK_HEX).unwrap();
         let err = crate::identity::import_identity(&existing, &sk).unwrap_err();
         assert!(matches!(err, IdentityError::Io(_)), "{err}");
-        
+
         let kept = load_or_create(&existing).unwrap();
         assert_ne!(
             *kept.public(),

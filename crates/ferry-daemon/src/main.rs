@@ -1,30 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::process::ExitCode;
 use std::str::FromStr as _;
 use std::sync::Arc;
@@ -38,7 +11,6 @@ use ferry_crypto::identity as crypto_identity;
 use ferry_daemon::ui;
 use ferry_store::format::{hex, unhex};
 use ferry_sync::{EngineConfig, SyncEngine};
-
 
 const IROH_BIND_ALIAS: &str = "127.0.0.1:0";
 
@@ -155,8 +127,6 @@ fn ferry_home() -> std::path::PathBuf {
 }
 
 fn cmd_daemon(args: &[String]) -> ExitCode {
-    
-    
     let is_legacy = has_flag(args, "--store")
         || has_flag(args, "--tree")
         || has_flag(args, "--role")
@@ -170,12 +140,12 @@ fn cmd_daemon(args: &[String]) -> ExitCode {
             }
         }
     }
-    
+
     if has_flag(args, "--listen") {
         eprintln!(
             "warning: --listen is deprecated; use `ferry daemon` without args for device daemon"
         );
-        
+
         if let Some(p) = flag(args, "--listen") {
             let home = ferry_home();
             let _ = std::fs::create_dir_all(&home);
@@ -206,7 +176,7 @@ fn run_central_daemon(args: &[String]) -> Result<(), String> {
         .filter(|a| !a.starts_with('-') && a.as_str() != "daemon")
         .map(std::path::PathBuf::from)
         .collect();
-    
+
     let identity = ferry_crypto::identity::load_or_create(&home.join("identity"))
         .or_else(|_| {
             ferry_crypto::identity::load_or_create(&home.join("identity").join("device.key"))
@@ -239,8 +209,6 @@ struct DaemonArgs {
     socket_path: Option<std::path::PathBuf>,
 }
 
-
-
 fn parse_ui_addr(args: &[String]) -> Result<Option<std::net::SocketAddr>, String> {
     if !has_flag(args, "--ui") {
         return Ok(None);
@@ -270,7 +238,7 @@ fn parse_and_run_daemon(args: &[String]) -> Result<(), String> {
     let parsed = DaemonArgs {
         kind,
         role: require(args, "--role")?,
-        
+
         addr: match flag(args, "--addr") {
             Some(a) => {
                 Some(std::net::SocketAddr::from_str(&a).map_err(|e| format!("--addr: {e}"))?)
@@ -326,8 +294,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         tag: d.tag.clone(),
         store_dir: d.store_dir.clone(),
         tree_dir: d.tree_dir.clone(),
-        
-        
+
         poly: ferry_store::chunker::ValidatedPoly::new(d.poly)
             .map_err(|e| format!("--poly: {e}"))?,
         folder_id: d.folder_id,
@@ -335,22 +302,13 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
         opportunistic_every: d.opportunistic_every,
         bind_addr: None,
         connect_to: None,
-        
-        
+
         allow_trust_on_first_use: false,
-        
-        
-        
+
         pin_state_dir: Some(d.store_dir.join(".ferry")),
         quiet: false,
     };
 
-    
-    
-    
-    
-    
-    
     let device = crypto_identity::load_or_create(&d.store_dir.join(".device-identity"))
         .map_err(|e| format!("device identity: {e}"))?;
 
@@ -402,18 +360,12 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
                 }
                 _ => unreachable!("validated above"),
             }
-            
-            
+
             println!("ENDPOINT {endpoint_hex}");
             Arc::new(t)
         }
     };
 
-    
-    
-    
-    
-    
     let store: Arc<ferry_store::store::Store> =
         if ferry_folder::folder::dot_dir(&d.store_dir).is_dir() {
             ferry_folder::folder::open_folder(&d.store_dir, &device)
@@ -423,8 +375,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
             let (store, _fmk) =
                 ferry_folder::folder::create_folder(&d.store_dir, &device, d.folder_id, d.poly)
                     .map_err(|e| format!("startup failed: {e}"))?;
-            
-            
+
             store
                 .flush()
                 .map_err(|e| format!("startup failed: flush: {e}"))?;
@@ -440,7 +391,7 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
     if let Some(a) = engine.listen_addr() {
         println!("LISTENING {a}");
     }
-    
+
     let handle = engine.start();
 
     let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);

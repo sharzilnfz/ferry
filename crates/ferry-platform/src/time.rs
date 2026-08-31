@@ -24,8 +24,8 @@ pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
 }
 
 pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (
         dt.year() as i64,
         dt.month() as u8 as u32,
@@ -38,8 +38,8 @@ pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
 
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let secs = z * 86_400;
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (dt.year() as i64, dt.month() as u8 as u32, dt.day() as u32)
 }
 
@@ -71,8 +71,8 @@ pub fn current_time_str() -> String {
 }
 
 pub fn fmt_rfc3339(secs: i64) -> String {
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     let format = time::format_description::well_known::Rfc3339;
     dt.format(&format)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
@@ -82,7 +82,11 @@ pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
     let format = time::format_description::well_known::Rfc3339;
     let dt = time::OffsetDateTime::parse(ts.trim(), &format).ok()?;
     let secs = dt.unix_timestamp();
-    if secs >= 0 { Some(secs as u64) } else { None }
+    if secs >= 0 {
+        Some(secs as u64)
+    } else {
+        None
+    }
 }
 
 pub fn now_unix() -> (i64, u32) {

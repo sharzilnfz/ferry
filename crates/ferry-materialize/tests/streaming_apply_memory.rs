@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -14,8 +7,6 @@ use ferry_store::crypto::PassthroughCipher;
 use ferry_store::manifest::{file_entry, serialize_tree_node, TreeNode};
 use ferry_store::store::Store;
 use ferry_store::BlobKind;
-
-
 
 struct BigBlockAlloc;
 
@@ -34,7 +25,6 @@ fn big_track_sub(size: usize) {
 
 unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        
         let ptr = unsafe { std::alloc::System.alloc(layout) };
         if !ptr.is_null() && layout.size() >= BIG_BLOCK_MIN {
             big_track_add(layout.size());
@@ -46,7 +36,7 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
         if layout.size() >= BIG_BLOCK_MIN {
             big_track_sub(layout.size());
         }
-        
+
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
 
@@ -54,7 +44,7 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
         if layout.size() >= BIG_BLOCK_MIN {
             big_track_sub(layout.size());
         }
-        
+
         let p = unsafe { std::alloc::System.realloc(ptr, layout, new_size) };
         if !p.is_null() && new_size >= BIG_BLOCK_MIN {
             big_track_add(new_size);
@@ -65,7 +55,6 @@ unsafe impl std::alloc::GlobalAlloc for BigBlockAlloc {
 
 #[global_allocator]
 static GLOBAL_ALLOC: BigBlockAlloc = BigBlockAlloc;
-
 
 fn xorshift_fill(buf: &mut [u8], state: &mut u64) {
     for b in buf.iter_mut() {
@@ -80,8 +69,6 @@ fn fmk() -> [u8; 32] {
     core::array::from_fn(|i| (i * 7 + 3) as u8)
 }
 
-
-
 fn first_valid_poly() -> u64 {
     let mut p = (1u64 << 53) | 1;
     while !is_irreducible(p) {
@@ -89,13 +76,6 @@ fn first_valid_poly() -> u64 {
     }
     p
 }
-
-
-
-
-
-
-
 
 #[test]
 fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
@@ -112,8 +92,6 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
 
     let poly = first_valid_poly();
 
-    
-    
     let mut chunker = Chunker::new(poly).unwrap();
     let mut block = vec![0u8; BLOCK];
     let mut cur: Vec<u8> = Vec::with_capacity(BLOCK * 2);
@@ -125,7 +103,6 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
         xorshift_fill(&mut block[..n], &mut state);
         let mut eaten = 0usize;
         for len in chunker.feed(&block[..n]) {
-            
             let fresh = len - cur.len();
             cur.extend_from_slice(&block[eaten..eaten + fresh]);
             eaten += fresh;
@@ -153,15 +130,12 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
         .unwrap();
     store.flush().unwrap();
 
-    
     BIG_PEAK.store(0, Ordering::SeqCst);
     Applier::new(&store, &target)
         .apply_tree(&root_tree_id)
         .unwrap();
     let peak = BIG_PEAK.load(Ordering::SeqCst);
 
-    
-    
     const LIMIT: usize = 30 * 1024 * 1024;
     println!(
         "T-09 memory gate: file {TOTAL} bytes, peak big-block allocation during apply {peak} \
@@ -173,8 +147,6 @@ fn apply_of_32mib_file_keeps_peak_allocation_bounded() {
          (limit {LIMIT}, file {TOTAL}); this smells like whole-file buffering"
     );
 
-    
-    
     let mut written = std::fs::File::open(target.join("big.bin")).unwrap();
     let mut expect = vec![0u8; BLOCK];
     let mut got = vec![0u8; BLOCK];

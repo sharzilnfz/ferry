@@ -1,18 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::process::ExitCode;
 
 const USAGE: &str = "\
@@ -49,7 +34,6 @@ fn main() -> ExitCode {
         None => "127.0.0.1:3340".parse().unwrap(),
     };
 
-    
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

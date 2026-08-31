@@ -1,11 +1,3 @@
-
-
-
-
-
-
-
-
 use egui::{
     epaint::Shadow, vec2, Align, Align2, Area, Color32, Frame, Layout, Margin, Order, RichText,
     Rounding, ScrollArea, Stroke,
@@ -16,7 +8,6 @@ use qrcode::QrCode;
 
 use crate::telemetry::format_short_hex;
 use crate::theme::colors;
-
 
 #[must_use]
 pub fn generate_ascii_qr(payload: &str) -> String {
@@ -29,7 +20,6 @@ pub fn generate_ascii_qr(payload: &str) -> String {
         format!("[QR: {payload}]")
     }
 }
-
 
 pub fn render_modal_frame(
     ctx: &egui::Context,
@@ -74,7 +64,6 @@ pub fn render_modal_frame(
         });
     *is_open = open;
 }
-
 
 pub fn render_conflicts_modal(
     ctx: &egui::Context,
@@ -212,7 +201,6 @@ pub fn render_conflicts_modal(
     );
 }
 
-
 pub fn render_share_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
@@ -228,11 +216,9 @@ pub fn render_share_modal(
         520.0,
         |ui, open| {
             if let Some(offer) = active_offer {
-                
                 ui.label(RichText::new("Pairing offer is active! Scan QR code or copy the pairing token to the recipient device:").color(colors::TEXT_SECONDARY).size(12.5));
                 ui.add_space(8.0);
 
-                
                 Frame::none()
                     .fill(colors::PANEL_BG)
                     .stroke(Stroke::new(1.0f32, colors::FERRY_GREEN))
@@ -281,7 +267,6 @@ pub fn render_share_modal(
 
                 ui.add_space(8.0);
 
-                
                 let qr_string = generate_ascii_qr(&offer.token);
                 Frame::none()
                     .fill(colors::OBSIDIAN_BG)
@@ -314,11 +299,9 @@ pub fn render_share_modal(
                     }
                 });
             } else {
-                
                 ui.label(RichText::new("Generate an encrypted pairing offer to connect another device to this folder.").color(colors::TEXT_SECONDARY).size(12.5));
                 ui.add_space(8.0);
 
-                
                 if !secret_warnings.is_empty() {
                     Frame::none()
                     .fill(Color32::from_rgba_premultiplied(243, 156, 18, 30))
@@ -383,7 +366,6 @@ pub fn render_share_modal(
     );
 }
 
-
 pub fn render_pair_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
@@ -444,7 +426,6 @@ pub fn render_pair_modal(
         },
     );
 }
-
 
 pub fn render_pin_modal(
     ctx: &egui::Context,

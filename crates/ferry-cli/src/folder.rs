@@ -1,8 +1,3 @@
-
-
-
-
-
 use std::path::Path;
 
 use ferry_crypto::folder_key::Fmk;
@@ -23,12 +18,9 @@ impl From<ferry_folder::FolderError> for CliError {
     }
 }
 
-
 pub fn load_rules(folder: &Path, settings: &Settings) -> CliResult<FerryIgnore> {
     ferry_folder::folder::load_rules(folder, settings).map_err(CliError::from)
 }
-
-
 
 pub fn create_folder(
     root: &Path,
@@ -38,9 +30,6 @@ pub fn create_folder(
 ) -> CliResult<(Store, Fmk)> {
     ferry_folder::folder::create_folder(root, identity, folder_id, poly).map_err(CliError::from)
 }
-
-
-
 
 pub fn adopt_folder(
     root: &Path,
@@ -52,23 +41,18 @@ pub fn adopt_folder(
     ferry_folder::folder::adopt_folder(root, identity, folder_id, fmk, poly).map_err(CliError::from)
 }
 
-
-
 pub fn open_folder(root: &Path) -> CliResult<OpenFolder> {
     let identity = crate::ensure_identity()?;
     ferry_folder::folder::open_folder(root, &identity).map_err(CliError::from)
 }
 
-
 pub fn find_polynomial(store: &Store) -> CliResult<u64> {
     ferry_folder::folder::find_polynomial(store).map_err(CliError::from)
 }
 
-
 pub fn write_default_ignore_if_absent(root: &Path) -> CliResult<bool> {
     ferry_folder::folder::write_default_ignore_if_absent(root).map_err(CliError::from)
 }
-
 
 pub fn save_settings(root: &Path, settings: &Settings) -> CliResult<()> {
     ferry_folder::folder::save_settings(root, settings).map_err(CliError::from)

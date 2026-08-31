@@ -41,7 +41,6 @@ async fn test_in_memory_high_throughput_ordering() {
 
 #[tokio::test]
 async fn test_in_memory_reconnect_simulation() {
-    
     {
         let (mut client1, mut server1) = create_in_memory_pair();
         client1.send_command(&ClientCommand::Ping).await.unwrap();
@@ -50,13 +49,12 @@ async fn test_in_memory_reconnect_simulation() {
         server1.send_message(&DaemonMessage::Pong).await.unwrap();
         let resp = client1.recv_message().await.unwrap().unwrap();
         assert_eq!(resp, DaemonMessage::Pong);
-        
+
         drop(client1);
         let eof = server1.recv_command().await.unwrap();
         assert!(eof.is_none());
     }
 
-    
     {
         let (mut client2, mut server2) = create_in_memory_pair();
         client2
@@ -126,24 +124,20 @@ mod unix_tests {
         let dir = tempdir().unwrap();
         let sock_path = dir.path().join("daemon.sock");
 
-        
         {
             let server1 = IpcServer::bind(&sock_path).unwrap();
             assert!(sock_path.exists());
             drop(server1);
-            
+
             assert!(!sock_path.exists(), "socket file should be cleaned on drop");
         }
 
-        
         std::fs::write(&sock_path, b"stale data").unwrap();
         assert!(sock_path.exists());
 
-        
         let server2 = IpcServer::bind(&sock_path).unwrap();
         assert!(sock_path.exists());
 
-        
         let mut client = IpcClient::connect(&sock_path).await.unwrap();
         client.send_command(&ClientCommand::Ping).await.unwrap();
 

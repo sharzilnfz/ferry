@@ -1,16 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// Custom 32-symbol alphabet for 6-char pairing codes: digits 2-9 then A-Z without
 /// I/O (ambiguous with 1/0). Diverges from RFC4648 `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`
 /// deliberately for typeability and single-character typo resistance via CRC-32 checksum.
@@ -24,7 +11,6 @@ pub enum Base32Error {
     #[error("code is empty")]
     Empty,
 }
-
 
 pub fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len() * 8 / 5 + 2);
@@ -44,10 +30,6 @@ pub fn encode(data: &[u8]) -> String {
     out
 }
 
-
-
-
-
 pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
     if s.is_empty() {
         return Err(Base32Error::Empty);
@@ -59,7 +41,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
         let up = ch.to_ascii_uppercase();
         let v = match up {
             '2'..='9' => up as u32 - '2' as u32,
-            
+
             'A'..='H' => 8 + up as u32 - 'A' as u32,
             'J' => 16,
             'K'..='N' => 17 + up as u32 - 'K' as u32,
@@ -73,7 +55,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, Base32Error> {
             out.push((acc >> bits) as u8);
         }
     }
-    
+
     Ok(out)
 }
 
@@ -85,8 +67,7 @@ mod tests {
     fn empty_round_trip_and_single_symbol_values() {
         assert_eq!(encode(b""), "");
         assert_eq!(decode(""), Err(Base32Error::Empty));
-        
-        
+
         for (i, &sym) in ALPHABET.iter().enumerate() {
             let s = String::from_utf8(vec![sym, ALPHABET[0], ALPHABET[0], ALPHABET[0]]).unwrap();
             let decoded = decode(&s).unwrap();
@@ -105,14 +86,13 @@ mod tests {
 
     #[test]
     fn encoded_length_is_ceil_bits_over_five() {
-        assert_eq!(encode(&[0u8; 10]).len(), 16); 
-        assert_eq!(encode(&[0u8; 12]).len(), 20); 
-        assert_eq!(encode(&[0u8; 2]).len(), 4); 
+        assert_eq!(encode(&[0u8; 10]).len(), 16);
+        assert_eq!(encode(&[0u8; 12]).len(), 20);
+        assert_eq!(encode(&[0u8; 2]).len(), 4);
     }
 
     #[test]
     fn output_never_contains_ambiguous_characters() {
-        
         for &sym in ALPHABET {
             assert!(!matches!(sym, b'0' | b'1' | b'I' | b'O'));
         }
@@ -121,7 +101,7 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 32, "alphabet symbols must be distinct");
-        
+
         for len in [1usize, 5, 12] {
             let data: Vec<u8> = (0..len).map(|i| (i * 91 + 3) as u8).collect();
             for ch in encode(&data).chars() {
@@ -137,7 +117,7 @@ mod tests {
             decode(&upper.to_lowercase()).unwrap(),
             vec![0x12, 0x34, 0x56]
         );
-        
+
         for bad in ['0', '1', 'I', 'O'] {
             let mut tampered = upper.clone();
             tampered.replace_range(0..1, &bad.to_string());
@@ -148,9 +128,6 @@ mod tests {
 
     #[test]
     fn known_answer_rfc4648_bit_packing_remapped_to_canonical_alphabet() {
-        
-        
-        
         let remap = |rfc: &str| -> String {
             let rfc_alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
             rfc.bytes()
@@ -167,8 +144,7 @@ mod tests {
         assert_eq!(encode(b"fo"), remap("MZXQ"));
         assert_eq!(encode(b"foo"), remap("MZXW6"));
         assert_eq!(encode(b"foobar"), remap("MZXW6YTBOI"));
-        
-        
+
         for ch in encode(b"foobar").chars() {
             assert!(!matches!(ch, '0' | '1' | 'I' | 'O'));
         }

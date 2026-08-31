@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 pub mod backend;
 #[cfg(feature = "web-ui")]
 pub mod error;
@@ -22,9 +13,8 @@ use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
 pub use backend::{
-    engine_backend, fs_backend, snapshot_to_status_doc, BoxFuture, DashboardBackend,
-    EngineBackend, EngineStateSource, FolderBackend, FsBackend, FsStateSource, IpcBackend,
-    StateSource,
+    engine_backend, fs_backend, snapshot_to_status_doc, BoxFuture, DashboardBackend, EngineBackend,
+    EngineStateSource, FolderBackend, FsBackend, FsStateSource, IpcBackend, StateSource,
 };
 pub use backend::{DirectBackend, InProcessAdapter};
 pub type AutoBackend = ferry_ipc::backend::AutoBackend;
@@ -39,7 +29,6 @@ pub use server::{
     asset, extract_token, generate_token, is_token_valid, DashboardServer, APP_JS, INDEX_HTML,
     STYLE_CSS,
 };
-
 
 pub struct UiState {
     handle: EngineHandle,
@@ -72,8 +61,6 @@ impl UiState {
         &self.handle
     }
 
-    
-    
     pub(crate) fn tree_dir(&self) -> &Path {
         &self.tree_dir
     }
@@ -94,8 +81,6 @@ impl UiState {
         &self.identity
     }
 }
-
-
 
 #[cfg(feature = "web-ui")]
 pub fn spawn(addr: std::net::SocketAddr, state: Arc<UiState>) -> Result<(), String> {

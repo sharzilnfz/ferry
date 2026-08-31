@@ -1,30 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -43,10 +16,7 @@ use crate::secure::SecureSession;
 use crate::stream::ByteStream;
 use crate::version::ProtocolVersion;
 
-
 const FOLDER_SENTINEL: [u8; 16] = [0; 16];
-
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -54,43 +24,35 @@ pub enum Role {
     Responder,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Granularity {
-    
     Auto,
-    
+
     ItemsOnly,
-    
+
     PacksOnly,
 }
-
 
 pub struct FolderState {
     pub folder_id: [u8; 16],
     pub store: Arc<Store>,
-    
+
     pub current_manifest: Option<BlobId>,
 }
 
-
-
 pub struct EngineConfig {
     pub identity: DeviceIdentity,
-    
+
     pub expected_peer: DeviceId,
     pub folders: Vec<FolderState>,
-    
-    
-    
+
     pub encryption: bool,
     pub granularity: Granularity,
-    
+
     pub max_retries: u32,
 }
 
 impl EngineConfig {
-    
     pub fn new(
         identity: DeviceIdentity,
         expected_peer: DeviceId,
@@ -107,22 +69,17 @@ impl EngineConfig {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderOutcome {
     pub folder_id: [u8; 16],
-    
-    
+
     pub local_manifest_after: Option<BlobId>,
     pub remote_manifest: Option<BlobId>,
-    
-    
+
     pub agreement_recorded: Option<BlobId>,
-    
-    
+
     pub rejections: usize,
 }
-
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionReport {
@@ -131,7 +88,6 @@ pub struct SessionReport {
     pub encrypted: bool,
     pub folders: Vec<FolderOutcome>,
 }
-
 
 pub fn run_engine<S: ByteStream>(
     io: S,
@@ -164,7 +120,6 @@ pub fn run_engine<S: ByteStream>(
         return abort(&mut sess, e);
     }
 
-    
     let bye_result = match role {
         Role::Initiator => sess
             .send_frame(
@@ -197,8 +152,6 @@ pub fn run_engine<S: ByteStream>(
     })
 }
 
-
-
 fn abort<S: ByteStream>(
     sess: &mut SecureSession<S>,
     err: ProtoError,
@@ -230,16 +183,12 @@ fn unexpected(t: u8) -> ProtoError {
     ProtoError::ProtocolViolation("unexpected message in this state")
 }
 
-
-
-
 #[derive(Clone, Copy, Debug)]
 struct PeerFolder {
     manifest: Option<BlobId>,
 }
 
 type AdvertMap = BTreeMap<BlobId, IndexEntry>;
-
 
 const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 
@@ -248,27 +197,9 @@ const BATCH_FLUSH_BYTES: usize = 8 * 1024 * 1024;
 const BUDGET: usize = 262_144;
 const MAX_BFS_ROUNDS: usize = BUDGET;
 
-
-
-
-
-
-
-
-
-
-
-
 pub(crate) const MAX_ADVERT_ROWS_TOTAL: usize = BUDGET;
 
-
-
-
-
 const MAX_BATCHES_PER_ROUND: usize = BUDGET;
-
-
-
 
 const MAX_PACK_FRAMES_PER_ROUND: usize = 1_024;
 
@@ -285,15 +216,11 @@ fn folder_phases<S: ByteStream>(
     cfg: &EngineConfig,
     outcomes: &mut [FolderOutcome],
 ) -> Result<(), ProtoError> {
-    
     let (peer_folders, peer_adverts) = exchange_offers(sess, role, cfg, outcomes, true)?;
     for out in outcomes.iter_mut() {
         out.remote_manifest = peer_folders.get(&out.folder_id).and_then(|p| p.manifest);
     }
 
-    
-    
-    
     let initiator_stage = stage_needed(cfg, &peer_folders, Role::Initiator, role);
     let responder_stage = stage_needed(cfg, &peer_folders, Role::Responder, role);
 
@@ -330,15 +257,8 @@ fn folder_phases<S: ByteStream>(
         }
     }
 
-    
     finish_after_sync(sess, role, cfg, outcomes)
 }
-
-
-
-
-
-
 
 fn stage_needed(
     cfg: &EngineConfig,
@@ -349,7 +269,7 @@ fn stage_needed(
     let mut out = Vec::new();
     for (idx, f) in cfg.folders.iter().enumerate() {
         let Some(pf) = peer_folders.get(&f.folder_id) else {
-            continue; 
+            continue;
         };
         let (that_side, counterpart) = if whose == my_role {
             (f.current_manifest, pf.manifest)
@@ -366,8 +286,6 @@ fn stage_needed(
 fn pull_needed(mine: Option<BlobId>, theirs: Option<BlobId>) -> bool {
     matches!(theirs, Some(t) if mine != Some(t))
 }
-
-
 
 fn run_stage<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -397,7 +315,7 @@ fn run_stage<S: ByteStream>(
             &mut outcomes[idx].rejections,
         )?;
         if f.current_manifest.is_none() {
-            outcomes[idx].local_manifest_after = Some(target); 
+            outcomes[idx].local_manifest_after = Some(target);
         }
     }
     sess.send_frame(
@@ -409,7 +327,6 @@ fn run_stage<S: ByteStream>(
         .encode()?,
     )
 }
-
 
 fn serve_stage<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -456,15 +373,14 @@ fn serve_items<S: ByteStream>(
             size += bytes.len();
             acc.push((kind, id, bytes));
         }
-        
+
         if acc.len() >= codec::MAX_BATCH_ITEMS || size >= BATCH_FLUSH_BYTES {
             let batch = std::mem::take(&mut acc);
             size = 0;
             sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: batch }.encode()?)?;
         }
     }
-    
-    
+
     if !acc.is_empty() {
         sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch { items: acc }.encode()?)?;
     }
@@ -481,7 +397,6 @@ fn serve_packs<S: ByteStream>(
     for name in r.packs {
         let path = packs_dir.join(format!("{}.pack", hex(&name)));
         if let Ok(bytes) = std::fs::read(&path) {
-            
             if *blake3::hash(&bytes).as_bytes() == name {
                 sess.send_frame(
                     codec::MSG_PACK_ITEM,
@@ -492,12 +407,6 @@ fn serve_packs<S: ByteStream>(
     }
     sess.send_frame(codec::MSG_ITEM_BATCH, ItemBatch::TERMINATOR.encode()?)
 }
-
-
-
-
-
-
 
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
@@ -517,8 +426,6 @@ fn exchange_offers<S: ByteStream>(
     let mut peer_folders: BTreeMap<[u8; 16], PeerFolder> = BTreeMap::new();
     let mut peer_adverts: BTreeMap<[u8; 16], AdvertMap> = BTreeMap::new();
 
-    
-    
     fn effective_manifest(
         cfg: &EngineConfig,
         outcomes: &[FolderOutcome],
@@ -536,7 +443,6 @@ fn exchange_offers<S: ByteStream>(
             })
     }
 
-    
     fn announce<T: ByteStream>(
         sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
@@ -559,7 +465,6 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    
     fn echo<T: ByteStream>(
         sess: &mut SecureSession<T>,
         cfg: &EngineConfig,
@@ -590,8 +495,6 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    
-    
     fn consume_announcement<T: ByteStream>(
         po: FolderOffer,
         sess: &mut SecureSession<T>,
@@ -616,8 +519,6 @@ fn exchange_offers<S: ByteStream>(
         Ok(())
     }
 
-    
-    
     fn consume_echo<S: ByteStream>(
         sess: &mut SecureSession<S>,
         with_adverts: bool,
@@ -708,9 +609,6 @@ fn nonzero_manifest(id: BlobId) -> Option<BlobId> {
     }
 }
 
-
-
-
 pub(crate) fn recv_advert_map<S: ByteStream>(
     sess: &mut SecureSession<S>,
 ) -> Result<AdvertMap, ProtoError> {
@@ -719,8 +617,7 @@ pub(crate) fn recv_advert_map<S: ByteStream>(
     loop {
         let fb = sess.expect_frame(codec::MSG_INDEX_ADVERT)?;
         let adv = IndexAdvert::parse(&fb.payload)?;
-        
-        
+
         rows += adv.entries.len();
         if rows > MAX_ADVERT_ROWS_TOTAL {
             return Err(ProtoError::ResourceLimit {
@@ -736,8 +633,6 @@ pub(crate) fn recv_advert_map<S: ByteStream>(
         }
     }
 }
-
-
 
 fn send_my_adverts<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -772,12 +667,6 @@ fn send_my_adverts<S: ByteStream>(
     }
     Ok(())
 }
-
-
-
-
-
-
 
 #[allow(clippy::too_many_arguments)]
 fn fetch_blobs<S: ByteStream>(
@@ -815,9 +704,6 @@ fn fetch_blobs<S: ByteStream>(
     }
 }
 
-
-
-
 fn read_item_batches<S: ByteStream>(
     sess: &mut SecureSession<S>,
     store: &Arc<Store>,
@@ -839,8 +725,6 @@ fn read_item_batches<S: ByteStream>(
             return Ok(got);
         }
         for (kind, id, bytes) in batch.items {
-            
-            
             if *blake3::hash(&bytes).as_bytes() != id {
                 *rejections += 1;
                 continue;
@@ -850,9 +734,6 @@ fn read_item_batches<S: ByteStream>(
         }
     }
 }
-
-
-
 
 fn fetch_via_packs<S: ByteStream>(
     sess: &mut SecureSession<S>,
@@ -904,9 +785,7 @@ fn fetch_via_packs<S: ByteStream>(
             let fb = sess.expect_frame_any(&[codec::MSG_PACK_ITEM, codec::MSG_ITEM_BATCH])?;
             if fb.msg_type == codec::MSG_PACK_ITEM {
                 let item = PackItem::parse(&fb.payload)?;
-                
-                
-                
+
                 if *blake3::hash(&item.bytes).as_bytes() != item.pack {
                     *rejections += 1;
                     continue;
@@ -934,22 +813,11 @@ fn fetch_via_packs<S: ByteStream>(
     Ok(satisfied)
 }
 
-
-
-
-
-
-
-
-
-
-
 pub(crate) fn ingest_pack(store: &Arc<Store>, bytes: &[u8]) -> Result<BlobId, ProtoError> {
     let name = *blake3::hash(bytes).as_bytes();
     store.adopt_pack(&name, bytes).map_err(store_err)?;
     Ok(name)
 }
-
 
 #[allow(clippy::too_many_arguments)]
 fn pull_folder<S: ByteStream>(
@@ -963,7 +831,6 @@ fn pull_folder<S: ByteStream>(
     retries: u32,
     rejections: &mut usize,
 ) -> Result<(), ProtoError> {
-    
     fetch_blobs(
         sess,
         folder_id,
@@ -977,8 +844,6 @@ fn pull_folder<S: ByteStream>(
     let manifest = parse_manifest(&man_bytes)
         .map_err(|_| ProtoError::ProtocolViolation("peer manifest failed to parse"))?;
 
-    
-    
     let mut queue = vec![manifest.root_tree_id];
     let mut enqueued: BTreeSet<BlobId> = queue.iter().copied().collect();
     let mut wanted_chunks: BTreeSet<BlobId> = BTreeSet::new();
@@ -1020,13 +885,11 @@ fn pull_folder<S: ByteStream>(
         }
     }
 
-    
     let wanted: Vec<BlobId> = wanted_chunks
         .into_iter()
         .filter(|id| store.get(BlobKind::DataChunk, id).is_err())
         .collect();
 
-    
     let satisfied = fetch_via_packs(sess, folder_id, &wanted, adverts, gran, store, rejections)?;
     let leftover: Vec<BlobId> = wanted
         .into_iter()
@@ -1044,14 +907,9 @@ fn pull_folder<S: ByteStream>(
         )?;
     }
 
-    let _ = current; 
+    let _ = current;
     Ok(())
 }
-
-
-
-
-
 
 fn finish_after_sync<S: ByteStream>(
     sess: &mut SecureSession<S>,

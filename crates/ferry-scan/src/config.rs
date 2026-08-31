@@ -1,21 +1,13 @@
-
-
-
-
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanConfig {
-    
     pub quiet_window: Duration,
-    
-    
-    
+
     pub audit_interval: Duration,
-    
-    
+
     pub poll_interval: Duration,
-    
+
     pub parent_manifest_id: Option<ferry_store::BlobId>,
 }
 

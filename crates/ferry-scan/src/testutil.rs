@@ -1,6 +1,3 @@
-
-
-
 #![cfg(test)]
 
 use rand::rngs::StdRng;
@@ -16,7 +13,6 @@ use ferry_store::store::Store;
 pub fn fmk() -> [u8; KEY_LEN] {
     core::array::from_fn(|i| i as u8)
 }
-
 
 pub fn fresh_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();

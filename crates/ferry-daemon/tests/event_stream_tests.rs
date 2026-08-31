@@ -11,7 +11,6 @@ async fn test_push_event_stream_direct_subscription() {
     let backend = FakeBackend::new();
     let mut stream = backend.subscribe_events().await.expect("subscribe_events");
 
-    
     backend.emit_event(UiEvent::StateChanged {
         state: "syncing".to_string(),
         manifest_id: "m_12345".to_string(),
@@ -39,7 +38,6 @@ async fn test_push_event_stream_direct_subscription() {
         other => panic!("expected StateChanged, got {other:?}"),
     }
 
-    
     backend.emit_event(UiEvent::TransferProgress {
         bytes_transferred: 1024,
         total_bytes: 4096,
@@ -69,7 +67,6 @@ async fn test_push_event_stream_direct_subscription() {
         other => panic!("expected TransferProgress, got {other:?}"),
     }
 
-    
     backend.emit_event(UiEvent::ConflictRecorded {
         path: "doc.md".to_string(),
         conflict_path: "doc.md.ferry-conflict".to_string(),
@@ -116,13 +113,11 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
         .await
         .expect("tcp connect");
 
-    
     let req = format!(
         "GET /api/events HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\nAccept: text/event-stream\r\n\r\n"
     );
     stream.write_all(req.as_bytes()).await.expect("write req");
 
-    
     let mut buffer = vec![0u8; 4096];
     let mut stream_resp = String::new();
     read_until_contains(
@@ -138,7 +133,6 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
     assert!(stream_resp.contains("event: state"));
     assert!(stream_resp.contains("\"command\":\"status\""));
 
-    
     backend.emit_event(UiEvent::StateChanged {
         state: "syncing".to_string(),
         manifest_id: "m_live_event".to_string(),
@@ -159,7 +153,6 @@ async fn test_sse_api_events_streaming_and_zero_idle_cpu() {
     assert!(stream_resp.contains("\"state\":\"syncing\""));
     assert!(stream_resp.contains("\"manifest_id\":\"m_live_event\""));
 
-    
     backend.emit_event(UiEvent::ConflictRecorded {
         path: "hello.txt".to_string(),
         conflict_path: "hello.txt.ferry-conflict".to_string(),

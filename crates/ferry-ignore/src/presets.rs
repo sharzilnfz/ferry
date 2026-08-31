@@ -1,56 +1,15 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Preset {
-    
     pub id: String,
-    
+
     pub description: String,
-    
+
     pub includes: Vec<String>,
-    
+
     pub excludes: Vec<String>,
 }
 
 impl Preset {
-    
-    
-    
-    
-    
-    
     pub fn claude() -> Self {
         Preset {
             id: "claude".into(),
@@ -64,8 +23,6 @@ impl Preset {
                 "skills/**".into(),
                 "commands/**".into(),
                 "agents/**".into(),
-                
-                
                 "projects/*/memory/**".into(),
             ],
             excludes: vec![
@@ -80,9 +37,6 @@ impl Preset {
         }
     }
 
-    
-    
-    
     pub fn opencode() -> Self {
         Preset {
             id: "opencode".into(),
@@ -107,13 +61,11 @@ impl Preset {
                 "**/*.log".into(),
                 "cache/".into(),
                 "tmp/".into(),
-                
                 "node_modules/".into(),
             ],
         }
     }
 
-    
     pub fn builtin(id: &str) -> Option<Self> {
         match id {
             "claude" => Some(Preset::claude()),
@@ -122,8 +74,6 @@ impl Preset {
         }
     }
 
-    
-    
     pub fn rule_lines(&self) -> Vec<String> {
         self.excludes
             .iter()
@@ -132,12 +82,10 @@ impl Preset {
             .collect()
     }
 
-    
     pub fn to_json_pretty(&self) -> String {
         serde_json::to_string_pretty(self).expect("preset serializes")
     }
 
-    
     pub fn from_json(json: &str) -> Result<Self, crate::error::IgnoreError> {
         serde_json::from_str(json).map_err(|e| crate::error::IgnoreError::PresetJson(e.to_string()))
     }

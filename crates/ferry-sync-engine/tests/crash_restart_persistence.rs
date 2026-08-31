@@ -1,16 +1,13 @@
-
-
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ferry_sync_engine::pin::PinManager;
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
 use ferry_store::manifest::{parse_manifest, parse_tree_node, EntryPayload};
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity, SnapshotOutput};
 use ferry_store::store::Store;
+use ferry_sync_engine::pin::PinManager;
 use ferry_sync_engine::report::list_conflicts;
 use ferry_sync_engine::{ConvergenceEngine, ConvergenceError};
 use rand::SeedableRng;
@@ -116,7 +113,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     let a_store = Store::create(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
     let b_store = Store::create(&b_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
 
-    
     write_file(&a_tree.join("src/lib.rs"), b"v0-lib", (1000, 0));
     write_file(&a_tree.join("src/main.rs"), b"v0-main", (1000, 0));
     write_file(&a_tree.join("docs/readme.md"), b"v0-doc", (1000, 0));
@@ -142,7 +138,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         )
         .unwrap();
 
-    
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), hex(&sa_base.manifest_id));
 
@@ -157,7 +152,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         .unwrap();
     assert!(pin_rec.holding());
 
-    
     write_file(&a_tree.join("src/lib.rs"), b"v1-a-lib", (3000, 0));
     write_file(&a_tree.join("src/main.rs"), b"v1-a-main", (2500, 0));
 
@@ -176,7 +170,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     )
     .unwrap();
 
-    
     let mut fetch = PeerFetch {
         from: &b_store,
         to: &a_store,
@@ -202,14 +195,12 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         b"v1-a-lib"
     );
 
-    
     a_store.flush().unwrap();
     b_store.flush().unwrap();
     drop(a_store);
     drop(b_store);
     drop(pin_mgr);
 
-    
     let pin_mgr_restarted = PinManager::new(&a_state);
     let summary = pin_mgr_restarted.summary().unwrap();
     assert_eq!(summary.state, "active");
@@ -231,7 +222,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         assert_eq!(e.remote_manifest_id, hex(&sb_edit.manifest_id));
     }
 
-    
     drop(pin_mgr_restarted);
 
     let a_store_restarted = Store::open(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
@@ -257,9 +247,6 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
     assert_eq!(release_summary.total_conflicts, 2);
     assert!(release_summary.pin_ended);
 
-    
-    
-    
     assert_eq!(
         std::fs::read(a_tree.join("src/lib.rs")).unwrap(),
         b"v1-a-lib"
@@ -269,15 +256,12 @@ fn held_ledger_persists_across_daemon_crashes_and_restarts() {
         b"v1-b-main"
     );
 
-    
     let conflicts = list_conflicts(&a_state).unwrap();
     assert_eq!(conflicts.len(), 3);
 
-    
     assert!(pin_mgr_final.held_peers().unwrap().is_empty());
     assert!(!pin_mgr_final.is_holding().unwrap());
 
-    
     drop(pin_mgr_final);
     drop(a_store_restarted);
 
@@ -308,11 +292,9 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
 
     let a_store = Store::create(&a_store_dir, fmk(), Box::new(PassthroughCipher)).unwrap();
 
-    
     write_file(&a_tree.join("src/lib.rs"), b"a-initial", (1000, 0));
     let sa = snap(&a_store, &a_tree, DEV_A, [0; 32], 1000);
 
-    
     let pin_mgr = PinManager::new(&a_state);
     let mut base_agreements = BTreeMap::new();
     base_agreements.insert(hex(&DEV_B), hex(&sa.manifest_id));
@@ -338,13 +320,14 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
     };
     pin_mgr.append_held(&hex(&DEV_B), &[held_entry]).unwrap();
 
-    
     let err = pin_mgr
         .release(&a_store, &a_tree, &sa.manifest, NOW)
         .unwrap_err();
-    assert!(matches!(err, ferry_sync_engine::pin::PinError::ManifestMissing { .. }));
+    assert!(matches!(
+        err,
+        ferry_sync_engine::pin::PinError::ManifestMissing { .. }
+    ));
 
-    
     let peers = pin_mgr.held_peers().unwrap();
     assert_eq!(peers, vec![hex(&DEV_B)]);
     let held = pin_mgr.load_held_peer(&hex(&DEV_B)).unwrap();
@@ -352,7 +335,6 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
     assert_eq!(held[0].path, "src/lib.rs");
     assert_eq!(held[0].remote_manifest_id, fake_remote_manifest);
 
-    
     drop(pin_mgr);
     drop(a_store);
 

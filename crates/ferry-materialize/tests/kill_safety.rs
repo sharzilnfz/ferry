@@ -1,34 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::time::Duration;
-
-
-
-
 
 use rand::rngs::StdRng;
 #[cfg(unix)]
@@ -48,10 +22,6 @@ const KILL_ITERATIONS: usize = 25;
 #[cfg(unix)]
 const SEED_BASE: u64 = 0x5EED_0001;
 
-
-
-
-
 #[derive(Clone)]
 struct FileSpec {
     bytes: Vec<u8>,
@@ -60,8 +30,6 @@ struct FileSpec {
 
 #[derive(Clone, Default)]
 struct Model {
-    
-    
     files: BTreeMap<String, FileSpec>,
     dirs: BTreeSet<String>,
     symlinks: BTreeMap<String, String>,
@@ -98,17 +66,12 @@ fn base_name(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
-
 fn prng_bytes(seed: u64, len: usize) -> Vec<u8> {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     let mut rng = StdRng::seed_from_u64(seed);
     (0..len).map(|_| rng.gen()).collect()
 }
-
-
-
-
 
 const KIB: usize = 1024;
 
@@ -118,13 +81,10 @@ struct WorldRoot {
     poly: u64,
 }
 
-
-
 fn build_models() -> (Model, Model) {
     let mut old = Model::default();
     let mut new = Model::default();
 
-    
     for m in [&mut old, &mut new] {
         m.add_file("a/target.txt", b"link target one".to_vec(), false);
         m.add_file("a/other.txt", b"link target two".to_vec(), false);
@@ -132,7 +92,6 @@ fn build_models() -> (Model, Model) {
     old.add_symlink("lnk", "a/target.txt");
     new.add_symlink("lnk", "a/other.txt");
 
-    
     for (i, size) in [64 * KIB, 200 * KIB, 64 * KIB].iter().enumerate() {
         let bytes = prng_bytes(1000 + i as u64, *size);
         let exec = i % 2 == 0;
@@ -140,24 +99,20 @@ fn build_models() -> (Model, Model) {
         new.add_file(&format!("same{i}.bin"), bytes, exec);
     }
 
-    
     for i in 0..2u64 {
         let o = prng_bytes(2000 + i, 600 * KIB);
         let n = prng_bytes(3000 + i, 600 * KIB + 777);
         old.add_file(&format!("mod{i}.bin"), o, false);
-        new.add_file(&format!("mod{i}.bin"), n, i == 1); 
+        new.add_file(&format!("mod{i}.bin"), n, i == 1);
     }
 
-    
     old.add_file("big.bin", prng_bytes(4001, 1400 * KIB), false);
     new.add_file("big.bin", prng_bytes(4002, 1500 * KIB), true);
 
-    
     old.add_file("gone.txt", b"delete me".to_vec(), false);
     old.add_dir("z");
     old.add_file("z/deep.txt", b"old subtree".to_vec(), true);
 
-    
     old.add_file("tc", b"was a file".to_vec(), true);
     new.add_dir("tc");
     new.add_file("tc/child.txt", b"now a dir".to_vec(), false);
@@ -165,15 +120,12 @@ fn build_models() -> (Model, Model) {
     old.add_file("tcd/inner.txt", b"was a dir".to_vec(), false);
     new.add_file("tcd", b"now a file".to_vec(), true);
 
-    
     new.add_file("brand-new.bin", prng_bytes(5001, 64 * KIB), false);
     new.add_dir("n");
     new.add_file("n/x.bin", prng_bytes(5002, 130 * KIB), true);
 
     (old, new)
 }
-
-
 
 fn seed_target(target: &Path, model: &Model) {
     if target.exists() {
@@ -206,13 +158,10 @@ fn set_exec(p: &Path, exec: bool) {
 #[cfg(not(unix))]
 fn set_exec(_p: &Path, _exec: bool) {}
 
-
-
 fn store_model(w: &WorldRoot, model: &Model) -> BlobId {
     let store = open_store(w);
     let mut child_trees: HashMap<String, BlobId> = HashMap::new();
 
-    
     let mut dirs_sorted: Vec<&String> = model.dirs.iter().collect();
     dirs_sorted.sort_by_key(|d| std::cmp::Reverse(d.split('/').count()));
 
@@ -270,8 +219,7 @@ fn store_model(w: &WorldRoot, model: &Model) -> BlobId {
     store
         .put_meta(BlobKind::TreeNode, &serialize_tree_node(&root))
         .unwrap();
-    
-    
+
     store.flush().unwrap();
     store.write_index_snapshot().unwrap();
     root_id
@@ -282,7 +230,7 @@ fn setup_world() -> WorldRoot {
     let store_folder = dir.path().join("folder");
     std::fs::create_dir_all(&store_folder).unwrap();
     let poly = generate_polynomial(&mut StdRng::seed_from_u64(7));
-    
+
     Store::create(&store_folder, FMK, Box::new(PassthroughCipher)).unwrap();
     WorldRoot {
         _dir: dir,
@@ -296,9 +244,6 @@ fn open_store(w: &WorldRoot) -> Store {
 }
 
 fn apply_once_path() -> PathBuf {
-    
-    
-    
     if let Ok(p) = std::env::var("CARGO_BIN_EXE_apply_once") {
         return PathBuf::from(p);
     }
@@ -322,10 +267,6 @@ fn apply_once_path() -> PathBuf {
         .expect("apply_once example binary not found; run cargo test once more")
 }
 
-
-
-
-
 fn chunk_ids(poly: u64, bytes: &[u8]) -> Vec<BlobId> {
     chunk(poly, bytes)
         .expect("fixture poly valid")
@@ -347,8 +288,6 @@ fn live_exec(md: &std::fs::Metadata) -> bool {
     }
 }
 
-
-
 fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> Result<(), String> {
     let mut stack = vec![target.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -361,13 +300,10 @@ fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> 
                     .unwrap()
                     .to_string_lossy()
                     .into_owned();
-                
-                
+
                 suffix.replace('\\', "/")
             };
             if is_temp_name(&name) {
-                
-                
                 continue;
             }
             let ft = entry.file_type().map_err(|e| e.to_string())?;
@@ -406,18 +342,13 @@ fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> 
                 }
                 continue;
             }
-            
-            
+
             let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
             let ids = chunk_ids(poly, &bytes);
             let exec = live_exec(&entry.metadata().map_err(|e| e.to_string())?);
             let matches = |m: &Model| match m.files.get(&rel) {
                 None => false,
                 Some(spec) => {
-                    
-                    
-                    
-                    
                     let exec_ok = !cfg!(unix) || spec.exec == exec;
                     chunk_ids(poly, &spec.bytes) == ids && exec_ok
                 }
@@ -438,7 +369,6 @@ fn verify_consistent(target: &Path, old_m: &Model, new_m: &Model, poly: u64) -> 
     }
     Ok(())
 }
-
 
 fn assert_equals_new(target: &Path, new_m: &Model, poly: u64) {
     verify_consistent(target, &Model::default(), new_m, poly)
@@ -463,12 +393,6 @@ impl Model {
 fn count_at_depth(items: &[&String]) -> usize {
     items.iter().filter(|r| !r.contains('/')).count()
 }
-
-
-
-
-
-
 
 #[test]
 fn kill_harness_no_kill_completes_to_exact_new_state() {
@@ -497,8 +421,6 @@ fn kill_harness_no_kill_completes_to_exact_new_state() {
     assert_equals_new(&target, &new_m, w.poly);
 }
 
-
-
 #[test]
 fn kill_harness_verifier_rejects_torn_bytes() {
     let w = setup_world();
@@ -520,7 +442,6 @@ fn kill_harness_verifier_rejects_torn_bytes() {
         .expect("failed to spawn apply_once");
     assert!(out.status.success());
 
-    
     let victim = target.join("mod0.bin");
     let bytes = std::fs::read(&victim).unwrap();
     std::fs::write(&victim, &bytes[..bytes.len() / 2]).unwrap();
@@ -530,10 +451,6 @@ fn kill_harness_verifier_rejects_torn_bytes() {
         "verifier must name the bad path: {err}"
     );
 }
-
-
-
-
 
 #[test]
 #[cfg(unix)]
@@ -551,13 +468,6 @@ fn kill9_mid_apply_leaves_old_or_new_state_never_torn() {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut offset_ms: u64 = rng.gen_range(15..=900);
 
-        
-        
-        
-        
-        
-        
-        
         let target = loop {
             let t = w._dir.path().join("target");
             seed_target(&t, &old_m);
@@ -600,12 +510,10 @@ fn kill9_mid_apply_leaves_old_or_new_state_never_torn() {
             panic!("iteration {i} (seed {seed}, offset {offset_ms}ms): inconsistent tree: {e}")
         });
 
-        
         let _ = std::fs::remove_dir_all(&target);
         i += 1;
     }
 
-    
     let min = *offsets_hit.iter().min().unwrap();
     let max = *offsets_hit.iter().max().unwrap();
     println!(

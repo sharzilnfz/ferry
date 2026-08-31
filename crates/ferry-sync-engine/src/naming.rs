@@ -1,37 +1,11 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::{Path, PathBuf};
 
 use ferry_store::format::hex;
 use unicode_normalization::UnicodeNormalization;
 
-
 pub fn device_short(device: &[u8; 32]) -> String {
     hex(device)[..8].to_string()
 }
-
-
-
-
-
-
-
 
 pub fn conflict_display_name(
     original_name: &str,
@@ -45,17 +19,6 @@ pub fn conflict_display_name(
         ferry_platform::time::fmt_compact(loser_mtime_sec)
     )
 }
-
-
-
-
-
-
-
-
-
-
-
 
 pub fn unique_conflict_dest(
     root: &Path,
@@ -96,9 +59,6 @@ mod tests {
 
     #[test]
     fn decomposed_names_normalize_to_one_conflict_name() {
-        
-        
-        
         let dev = [0xCD; 32];
         let decomposed = conflict_display_name("rapport-anne\u{301}e.md", &dev, 1_787_574_896);
         let composed = conflict_display_name("rapport-ann\u{e9}e.md", &dev, 1_787_574_896);
@@ -118,7 +78,6 @@ mod tests {
         )
         .unwrap();
 
-        
         let d1 = unique_conflict_dest(dir.path(), &[], "f.txt.ferry-conflict.aa-20000101-000000")
             .unwrap();
         assert_eq!(
@@ -126,7 +85,6 @@ mod tests {
             "f.txt.ferry-conflict.aa-20000101-000000-2"
         );
 
-        
         std::fs::write(&d1, b"y").unwrap();
         let d2 = unique_conflict_dest(dir.path(), &[], "f.txt.ferry-conflict.aa-20000101-000000")
             .unwrap();

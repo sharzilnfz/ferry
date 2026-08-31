@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,7 +13,6 @@ use ferry_ipc::protocol::{
 fn test_cold_start_latency_benchmark_sub_10ms() {
     let fake = Arc::new(FakeBackend::new());
 
-    
     let mut snap = EngineSnapshot::new(
         "/data/enterprise-monorepo",
         "folder-monorepo-999",
@@ -41,17 +33,13 @@ fn test_cold_start_latency_benchmark_sub_10ms() {
     for _ in 0..100 {
         let start = Instant::now();
 
-        
         let mut app = GuiApp::new_headless(fake.clone());
 
-        
         let ctx = Context::default();
         Theme::apply(&ctx);
 
-        
         app.handle_event(UiEvent::State(snap.clone()));
 
-        
         let _ = ctx.run(RawInput::default(), |ctx| {
             app.update_ui(ctx);
         });
@@ -68,7 +56,6 @@ fn test_cold_start_latency_benchmark_sub_10ms() {
 
     eprintln!("Cold start benchmark: avg = {avg:?}, p99 = {p99:?}, max = {max:?}");
 
-    
     let avg_threshold = if cfg!(debug_assertions) {
         Duration::from_millis(100)
     } else {
@@ -94,14 +81,12 @@ async fn test_zero_cpu_idle_verification() {
     let fake = Arc::new(FakeBackend::new());
     let mut stream = fake.subscribe_events().await.unwrap();
 
-    
     let idle_timeout = tokio::time::timeout(Duration::from_millis(50), stream.recv()).await;
     assert!(
         idle_timeout.is_err(),
         "Expected zero wakeups during idle period, but received an event"
     );
 
-    
     fake.emit_event(UiEvent::StateChanged {
         state: "syncing".to_string(),
         manifest_id: "m-wakeup-test".to_string(),
@@ -118,7 +103,6 @@ async fn test_zero_cpu_idle_verification() {
         Ok(UiEvent::StateChanged { ref manifest_id, .. }) if manifest_id == "m-wakeup-test"
     ));
 
-    
     let subsequent_idle = tokio::time::timeout(Duration::from_millis(50), stream.recv()).await;
     assert!(
         subsequent_idle.is_err(),
@@ -133,12 +117,10 @@ fn test_idle_frame_execution_efficiency() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);
     });
 
-    
     let start = Instant::now();
     for _ in 0..60 {
         let _ = ctx.run(RawInput::default(), |ctx| {
@@ -150,7 +132,6 @@ fn test_idle_frame_execution_efficiency() {
 
     eprintln!("60 idle frames completed in {duration:?} (avg {per_frame:?} per frame)");
 
-    
     let threshold = if cfg!(debug_assertions) {
         Duration::from_millis(10)
     } else {
@@ -167,7 +148,6 @@ fn test_large_snapshot_memory_projection() {
     let fake = Arc::new(FakeBackend::new());
     let mut app = GuiApp::new_headless(fake);
 
-    
     for i in 0..200 {
         let offset = i64::from(i);
         app.conflicts.push(ConflictEntry {
@@ -192,7 +172,6 @@ fn test_large_snapshot_memory_projection() {
     let ctx = Context::default();
     Theme::apply(&ctx);
 
-    
     app.show_conflicts_modal = true;
     let _ = ctx.run(RawInput::default(), |ctx| {
         app.update_ui(ctx);

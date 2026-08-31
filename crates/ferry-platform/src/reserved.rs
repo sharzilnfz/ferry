@@ -1,34 +1,9 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", 
-    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-
-
 const _: () = assert!(RESERVED.len() == 22);
-
-
-
 
 pub fn is_reserved_device_name(component: &str) -> bool {
     let base = component.split('.').next().unwrap_or(component);
@@ -47,7 +22,7 @@ mod tests {
         ] {
             assert!(is_reserved_device_name(n), "{n}");
         }
-        
+
         assert!(!is_reserved_device_name("COM0"));
         assert!(!is_reserved_device_name("LPT0"));
         assert!(!is_reserved_device_name("COM10"));

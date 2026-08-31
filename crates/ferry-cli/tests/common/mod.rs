@@ -1,6 +1,3 @@
-
-
-
 pub struct Env {
     _home: tempfile::TempDir,
     _work: tempfile::TempDir,
@@ -10,8 +7,6 @@ pub struct Env {
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Env {
-    
-    
     pub fn new(_label: &str) -> Env {
         let guard =
             std::sync::Mutex::lock(&ENV_LOCK).unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -29,10 +24,8 @@ impl Env {
         self._work.path().to_path_buf()
     }
 
-    
-    
     #[allow(dead_code)]
-    #[allow(clippy::unused_self)] 
+    #[allow(clippy::unused_self)]
     pub fn switch_home_to(&self, dir: &std::path::Path) {
         std::env::set_var("FERRY_HOME", dir);
     }

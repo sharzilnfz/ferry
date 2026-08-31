@@ -61,16 +61,14 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
     let root = tmp.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
 
-    
     for i in 0..9 {
         std::fs::create_dir(root.join(format!("dir_{i:02}"))).unwrap();
         std::fs::write(root.join(format!("file_{i:02}.txt")), b"hello").unwrap();
     }
-    
+
     let git_dir = root.join("dir_05");
     std::fs::create_dir(git_dir.join(".git")).unwrap();
 
-    
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(root.join("dir_01"), root.join("link_to_dir")).unwrap();
@@ -90,7 +88,6 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         resp.entries.len()
     );
 
-    
     let mut is_dir_seen_false = false;
     let mut last_name = String::new();
     let mut last_is_dir = true;
@@ -107,12 +104,10 @@ async fn in_process_lists_real_temp_dir_with_symlink_and_git() {
         last_is_dir = e.is_dir;
     }
 
-    
     let git_entry = resp.entries.iter().find(|e| e.name == "dir_05").unwrap();
     assert!(git_entry.is_dir);
     assert!(git_entry.is_git_repo, "dir_05 should be git repo");
 
-    
     #[cfg(unix)]
     {
         let link = resp
@@ -148,7 +143,6 @@ async fn in_process_already_synced_detection() {
     let other = root.join("other");
     std::fs::create_dir_all(&other).unwrap();
 
-    
     let folders_toml = format!(
         r#"[[folders]]
 folder_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -163,11 +157,10 @@ added_at = "2026-08-28T12:00:00Z"
     let resp = adapter.list_directory(Some(root.clone())).await.unwrap();
     let a = resp.entries.iter().find(|e| e.name == "project_a").unwrap();
     assert!(a.is_already_synced, "project_a should be already_synced");
-    
-    
+
     let b = resp.entries.iter().find(|e| e.name == "project_b").unwrap();
     assert!(!b.is_already_synced);
-    
+
     std::fs::create_dir(child_a.join("sub")).unwrap();
     let resp2 = adapter.list_directory(Some(child_a.clone())).await.unwrap();
     let sub = resp2.entries.iter().find(|e| e.name == "sub").unwrap();
@@ -175,9 +168,7 @@ added_at = "2026-08-28T12:00:00Z"
         sub.is_already_synced,
         "sub inside synced folder should be already_synced"
     );
-    
 
-    
     match orig {
         Some(v) => std::env::set_var("FERRY_HOME", v),
         None => std::env::remove_var("FERRY_HOME"),
@@ -214,7 +205,6 @@ async fn path_traversal_protection() {
         }
     }
 
-    
     let auto = AutoBackend::new(PathBuf::from("/tmp/nonexistent.sock")).with_fallback(root.clone());
     let err = auto
         .list_directory(Some(PathBuf::from("/tmp/../etc/passwd")))
@@ -222,14 +212,12 @@ async fn path_traversal_protection() {
         .unwrap_err();
     assert_eq!(err.code, "path-traversal");
 
-    
     let err = adapter
         .list_directory(Some(root.join("file.txt")))
         .await
         .unwrap_err();
     assert_eq!(err.code, "not-a-directory");
 
-    
     let err = adapter
         .list_directory(Some(root.join("nope")))
         .await
@@ -260,10 +248,9 @@ async fn none_path_defaults_to_ferry_home_or_cwd() {
 
 #[tokio::test]
 async fn daemon_ipc_adapter_forwards_without_re_reading() {
-    
     let (tmp, tree, identity, engine, folder_id) = rig_with_engine();
     let root = tree.clone();
-    
+
     let list_root = tmp.path().join("list_root");
     std::fs::create_dir_all(&list_root).unwrap();
     for i in 0..5 {
@@ -281,10 +268,10 @@ async fn daemon_ipc_adapter_forwards_without_re_reading() {
         tx,
     ));
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&tree);
-    
+
     let _ = std::fs::remove_file(&socket_path);
     let server = spawn_ipc_server(socket_path.clone(), Arc::clone(&daemon_state)).expect("spawn");
-    
+
     tokio::time::sleep(Duration::from_millis(80)).await;
 
     let ipc_client = DaemonClient::new(socket_path.clone());
@@ -298,7 +285,6 @@ async fn daemon_ipc_adapter_forwards_without_re_reading() {
         assert!(resp.entries.iter().any(|e| e.name == format!("f{i}.txt")));
     }
 
-    
     let direct = InProcessAdapter::new(PathBuf::from("/tmp"));
     let direct_resp = direct
         .list_directory(Some(list_root.clone()))
@@ -306,7 +292,6 @@ async fn daemon_ipc_adapter_forwards_without_re_reading() {
         .unwrap();
     assert_eq!(direct_resp.entries.len(), resp.entries.len());
 
-    
     let err = ipc_client
         .list_directory(Some(PathBuf::from("/tmp/../etc/passwd")))
         .await
@@ -328,7 +313,7 @@ async fn auto_backend_fallback_offline() {
 
     let auto =
         AutoBackend::new(PathBuf::from("/tmp/no_such_daemon.sock")).with_fallback(root.clone());
-    
+
     let resp = auto
         .list_directory(Some(root.clone()))
         .await

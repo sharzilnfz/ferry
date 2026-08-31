@@ -1,8 +1,3 @@
-
-
-
-
-
 use ferry_cli::commands::daemon::{status_in, stop_in};
 
 fn temp_home() -> tempfile::TempDir {
@@ -60,8 +55,7 @@ fn status_reports_stopped_when_pid_file_points_at_a_dead_process() {
 #[test]
 fn status_refuses_a_reused_pid_whose_token_belongs_to_another_instance() {
     let home = temp_home();
-    
-    
+
     let mut child = ferry_platform::spawn_sleeper(30).unwrap();
     let token = ferry_platform::process_start_token(child.id()).map(|t| t.wrapping_add(1));
     std::fs::write(home.path().join("daemon.pid"), stamp(child.id(), token)).unwrap();

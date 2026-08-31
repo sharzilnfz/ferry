@@ -1,20 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -39,7 +22,6 @@ fn poly() -> ferry_store::chunker::ValidatedPoly {
 }
 
 fn open_store(dir: &Path) -> Arc<Store> {
-    
     let identity = DeviceIdentity::from_secret_bytes(&[0xA1u8; 32]);
     ferry_folder::open_or_create_test_store(dir, &identity).unwrap()
 }
@@ -86,8 +68,6 @@ fn pair_stores(
     (Arc::new(store_a), Arc::new(store_b))
 }
 
-
-
 fn ident(tag: &str) -> DeviceIdentity {
     let mut sk = [0u8; 32];
     for (i, b) in sk.iter_mut().enumerate() {
@@ -96,7 +76,6 @@ fn ident(tag: &str) -> DeviceIdentity {
     }
     DeviceIdentity::from_secret_bytes(&sk)
 }
-
 
 fn snapshot_tree(store: &Store, tree: &Path, who: &DeviceIdentity, sec: i64) -> RootManifest {
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
@@ -117,7 +96,6 @@ fn snapshot_tree(store: &Store, tree: &Path, who: &DeviceIdentity, sec: i64) -> 
         .manifest
 }
 
-
 fn snapshot_empty(store: &Store, tree: &Path, who: &DeviceIdentity) -> RootManifest {
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     fs::create_dir_all(tree).unwrap();
@@ -125,7 +103,7 @@ fn snapshot_empty(store: &Store, tree: &Path, who: &DeviceIdentity) -> RootManif
         folder_id: DEFAULT_FOLDER_ID,
         device_id: *who.device_id(),
         parent_manifest_id: [0; 32],
-        created_sec: 1_700_000_001, 
+        created_sec: 1_700_000_001,
         created_nsec: 0,
     };
     snapshot_dir(store, poly(), tree, &identity)
@@ -137,13 +115,11 @@ fn manifest_id_of(m: &RootManifest) -> [u8; 32] {
     *blake3::hash(&ferry_store::manifest::serialize_manifest(m)).as_bytes()
 }
 
-
 struct TestHost {
     tree_root: PathBuf,
     adopted: Mutex<Vec<[u8; 32]>>,
     agreed: Mutex<Option<[u8; 32]>>,
-    
-    
+
     ledger_dot: Option<PathBuf>,
 }
 
@@ -233,9 +209,6 @@ fn ferry_sync_stack_interops_with_reference_engine() {
         &id_my,
     );
 
-    
-    
-    
     let ref_manifest = snapshot_tree(&store_ref, &ref_tree, &id_ref, 1_700_000_000);
     let ref_manifest_id = manifest_id_of(&ref_manifest);
     let my_empty = snapshot_empty(&store_my, &my_tree, &id_my);
@@ -296,7 +269,6 @@ fn ferry_sync_stack_interops_with_reference_engine() {
     )
     .expect("our v1 conversation completes against the reference engine");
 
-    
     let report = server.join().unwrap().expect("reference engine ok");
     assert!(report.encrypted);
     assert_eq!(
@@ -305,17 +277,14 @@ fn ferry_sync_stack_interops_with_reference_engine() {
         "reference recorded agreement on its own manifest"
     );
 
-    
     assert_eq!(*host.agreed.lock().unwrap(), Some(ref_manifest_id));
     assert_eq!(
         host.adopted.lock().unwrap().last(),
         Some(&ref_manifest.root_tree_id)
     );
 
-    
     assert!(trees_identical(&ref_tree, &my_tree), "working trees match");
 
-    
     let rb =
         fs::read(ledger_path(&ref_dot, *id_my.device_id())).expect("reference-side ledger exists");
     let mb = fs::read(ledger_path(&my_dot, *id_ref.device_id())).expect("our-side ledger exists");
@@ -343,9 +312,6 @@ fn reference_initiator_ferry_sync_responder_interop() {
         &id_my,
     );
 
-    
-    
-    
     let my_manifest = snapshot_tree(&store_my, &my_tree, &id_my, 1_700_000_010);
     let my_manifest_id = manifest_id_of(&my_manifest);
 
@@ -383,7 +349,7 @@ fn reference_initiator_ferry_sync_responder_interop() {
     .expect("handshake");
 
     let host = TestHost {
-        tree_root: my_tree.clone(), 
+        tree_root: my_tree.clone(),
         adopted: Mutex::new(Vec::new()),
         agreed: Mutex::new(None),
         ledger_dot: None,
@@ -405,18 +371,16 @@ fn reference_initiator_ferry_sync_responder_interop() {
 
     let report = server.join().unwrap().expect("reference engine ok");
     assert!(report.encrypted);
-    
-    
+
     assert_eq!(report.folders[0].agreement_recorded, Some(my_manifest_id));
     assert_eq!(report.folders[0].local_manifest_after, Some(my_manifest_id));
     assert_eq!(*host.agreed.lock().unwrap(), Some(my_manifest_id));
 
-    
     for kind in [
         ferry_store::BlobKind::Manifest,
         ferry_store::BlobKind::TreeNode,
     ] {
-        let _ = kind; 
+        let _ = kind;
     }
     let man_bytes = store_ref
         .get(
@@ -429,10 +393,6 @@ fn reference_initiator_ferry_sync_responder_interop() {
         ferry_sync::format::hex(&my_manifest_id)
     );
 }
-
-
-
-
 
 struct TamperNthWrite {
     inner: DuplexHalf,
@@ -492,7 +452,7 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
 
     let mut link = RawLink(TamperNthWrite {
         inner: la,
-        n: 3, 
+        n: 3,
         seen: 0,
     });
     let mut est: Established = establish(
@@ -504,8 +464,6 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
     )
     .expect("handshake must succeed before tampering");
 
-    
-    
     let payload = ferry_proto::codec::FolderOffer {
         folder_id: DEFAULT_FOLDER_ID,
         manifest_id: [0; 32],
@@ -516,8 +474,6 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
         .send_frame(ferry_proto::codec::MSG_FOLDER_OFFER, payload)
         .unwrap();
 
-    
-    
     std::thread::sleep(std::time::Duration::from_millis(200));
     drop(est);
     drop(link);
@@ -535,9 +491,6 @@ fn tampered_post_auth_byte_fails_authentication_cross_implementation() {
         "reference rejected the tampered frame: {res:?}"
     );
 }
-
-
-
 
 #[test]
 fn unknown_message_type_is_a_clean_protocol_violation() {
@@ -557,7 +510,7 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
             Err(e) => Err(e),
             Ok(mut est) => match est.io.recv_frame() {
                 Err(e) => Err(e),
-                Ok(_) => Ok(()), 
+                Ok(_) => Ok(()),
             },
         }
     });
@@ -572,8 +525,6 @@ fn unknown_message_type_is_a_clean_protocol_violation() {
     )
     .unwrap();
 
-    
-    
     est.io.send_frame(0x7F, vec![1, 2, 3]).unwrap();
 
     let Err(got) = hb.join().unwrap() else {

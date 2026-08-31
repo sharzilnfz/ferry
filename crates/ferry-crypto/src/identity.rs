@@ -1,25 +1,9 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use rand::rngs::OsRng;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-
 
 pub type DeviceId = [u8; 32];
 
@@ -44,15 +28,10 @@ pub enum IdentityError {
     DegeneratePeerKey,
 }
 
-
-
-
-
 #[derive(Clone)]
 pub struct DeviceIdentity {
     sk: StaticSecret,
-    
-    
+
     pk: DeviceId,
 }
 
@@ -65,13 +44,10 @@ impl fmt::Debug for DeviceIdentity {
 }
 
 impl DeviceIdentity {
-    
     pub fn generate() -> Self {
         Self::from_static(StaticSecret::random_from_rng(OsRng))
     }
 
-    
-    
     pub fn from_secret_bytes(secret: &[u8; 32]) -> Self {
         Self::from_static(StaticSecret::from(*secret))
     }
@@ -82,18 +58,14 @@ impl DeviceIdentity {
         DeviceIdentity { sk, pk }
     }
 
-    
     pub fn device_id(&self) -> &DeviceId {
         &self.pk
     }
 
-    
     pub fn public(&self) -> &DeviceId {
         &self.pk
     }
 
-    
-    
     pub fn diffie_hellman(
         &self,
         peer_public: &DeviceId,
@@ -107,7 +79,6 @@ impl DeviceIdentity {
         Ok(Zeroizing::new(out))
     }
 
-    
     pub fn to_file_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(FILE_LEN);
         out.extend_from_slice(&MAGIC);
@@ -143,9 +114,6 @@ impl DeviceIdentity {
     }
 }
 
-
-
-
 pub fn default_identity_root() -> Result<PathBuf, IdentityError> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -160,19 +128,13 @@ pub fn default_identity_root() -> Result<PathBuf, IdentityError> {
     Ok(home.join(".ferry").join("identity"))
 }
 
-
-
-
-
-
 pub fn load_or_create(root: &Path) -> Result<DeviceIdentity, IdentityError> {
     let file = root.join(FILE_NAME);
     match std::fs::read(&file) {
         Ok(bytes) => DeviceIdentity::from_file_bytes(&file, &bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             create_identity(root, &file)?;
-            
-            
+
             let bytes = std::fs::read(&file).expect("just written");
             DeviceIdentity::from_file_bytes(&file, &bytes)
         }
@@ -213,10 +175,6 @@ fn create_identity(root: &Path, file: &Path) -> Result<(), IdentityError> {
     write_identity_file(root, file, &DeviceIdentity::generate())
 }
 
-
-
-
-
 pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity, IdentityError> {
     let file = root.join(FILE_NAME);
     match std::fs::metadata(&file) {
@@ -230,7 +188,7 @@ pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let id = DeviceIdentity::from_secret_bytes(secret);
             write_identity_file(root, &file, &id)?;
-            
+
             let bytes = std::fs::read(&file).expect("just written");
             DeviceIdentity::from_file_bytes(&file, &bytes)
         }
@@ -242,7 +200,6 @@ pub fn import_identity(root: &Path, secret: &[u8; 32]) -> Result<DeviceIdentity,
 mod tests {
     use super::*;
 
-    
     const ALICE_SK: [u8; 32] = [
         0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66,
         0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9,
@@ -275,7 +232,7 @@ mod tests {
         assert_eq!(alice.device_id(), &ALICE_PK);
         let bob = DeviceIdentity::from_secret_bytes(&BOB_SK);
         assert_eq!(bob.device_id(), &BOB_PK);
-        
+
         assert_eq!(*alice.diffie_hellman(&BOB_PK).unwrap(), SHARED);
         assert_eq!(*bob.diffie_hellman(&ALICE_PK).unwrap(), SHARED);
     }
@@ -287,7 +244,7 @@ mod tests {
         let parsed =
             DeviceIdentity::from_file_bytes(Path::new("<mem>"), &id.to_file_bytes()).unwrap();
         assert_eq!(parsed.device_id(), id.device_id());
-        
+
         let probe = DeviceIdentity::generate();
         let a = parsed.diffie_hellman(probe.public()).unwrap();
         let b = probe.diffie_hellman(parsed.public()).unwrap();
@@ -300,15 +257,14 @@ mod tests {
         let first = load_or_create(tmp.path()).unwrap();
         let again = load_or_create(tmp.path()).unwrap();
         assert_eq!(first.device_id(), again.device_id());
-        
+
         assert_eq!(first.to_file_bytes(), again.to_file_bytes());
     }
 
     #[test]
     fn fresh_identity_gets_restrictive_permissions_on_unix() {
         let tmp = tempfile::tempdir().unwrap();
-        
-        
+
         let root = tmp.path().join("identity");
         load_or_create(&root).unwrap();
         #[cfg(unix)]
@@ -324,7 +280,6 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            
             assert!(root.join(FILE_NAME).exists());
         }
     }
@@ -341,7 +296,6 @@ mod tests {
             assert!(matches!(e, IdentityError::Corrupted { .. }), "{e}");
         };
 
-        
         let garbage = vec![0xEE; 40];
         std::fs::write(&file, &garbage).unwrap();
         expect_corrupt(&file);
@@ -351,14 +305,11 @@ mod tests {
             "must not regenerate"
         );
 
-        
         let trunc = good[..good.len() - 1].to_vec();
         std::fs::write(&file, &trunc).unwrap();
         expect_corrupt(&file);
         assert_eq!(std::fs::read(&file).unwrap(), trunc, "must not regenerate");
 
-        
-        
         let mut evil_pk = good.clone();
         evil_pk[40] ^= 0x01;
         std::fs::write(&file, &evil_pk).unwrap();
@@ -369,7 +320,6 @@ mod tests {
             "must not regenerate"
         );
 
-        
         let mut evil_ver = good.clone();
         evil_ver[4] = 99;
         std::fs::write(&file, &evil_ver).unwrap();
@@ -380,8 +330,6 @@ mod tests {
             "must not regenerate"
         );
 
-        
-        
         std::fs::write(&file, &good).unwrap();
         let repaired = load_or_create(tmp.path()).unwrap();
         assert_eq!(repaired.device_id(), original.device_id());
@@ -397,15 +345,12 @@ mod tests {
 
     #[test]
     fn debug_output_never_contains_secret_material() {
-        
-        
         let secret = [0xA5u8; 32];
         let id = DeviceIdentity::from_secret_bytes(&secret);
         let rendered = format!("{id:?}");
         assert!(!rendered.contains("secret"));
         assert!(!rendered.to_lowercase().contains("a5a5a5"));
-        
-        
+
         assert_eq!(
             DeviceIdentity::from_file_bytes(Path::new("<m>"), &id.to_file_bytes())
                 .unwrap()
@@ -417,7 +362,7 @@ mod tests {
     #[test]
     fn degenerate_peer_key_is_rejected() {
         let id = DeviceIdentity::generate();
-        
+
         let zero = [0u8; 32];
         assert!(matches!(
             id.diffie_hellman(&zero),

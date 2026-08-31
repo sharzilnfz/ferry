@@ -1,15 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -18,29 +6,26 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::policy::FerryIgnore;
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarningClass {
-    
     EnvFile,
-    
+
     PrivateKeyFile,
-    
+
     CredentialsJson,
-    
+
     Npmrc,
-    
+
     AwsKey,
-    
+
     OpenAiKey,
-    
+
     GitHubToken,
-    
+
     SlackToken,
-    
+
     PrivateKeyHeader,
-    
+
     GenericAssignment,
 }
 
@@ -61,8 +46,6 @@ impl WarningClass {
     }
 }
 
-
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Warning {
     pub path: Vec<String>,
@@ -72,7 +55,6 @@ pub struct Warning {
 }
 
 impl Warning {
-    
     pub fn message(&self) -> String {
         let loc = match self.line {
             Some(n) => format!(":{n} "),
@@ -88,14 +70,12 @@ impl Warning {
     }
 }
 
-
 pub fn classify_path(basename: &str) -> Option<WarningClass> {
     let name = basename.rsplit('/').next().unwrap_or(basename);
     if name == ".env" || (name.starts_with(".env.") && name.len() > ".env.".len()) {
         return Some(WarningClass::EnvFile);
     }
-    
-    
+
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if name.ends_with(".pem") || name.ends_with(".key") || name.starts_with("id_rsa") {
         return Some(WarningClass::PrivateKeyFile);
@@ -108,10 +88,6 @@ pub fn classify_path(basename: &str) -> Option<WarningClass> {
     }
     None
 }
-
-
-
-
 
 fn content_patterns() -> &'static [(WarningClass, Regex)] {
     static PATTERNS: LazyLock<Vec<(WarningClass, Regex)>> = LazyLock::new(|| {
@@ -148,20 +124,9 @@ fn content_patterns() -> &'static [(WarningClass, Regex)] {
     &PATTERNS
 }
 
-
-
 const MAX_CONTENT_WARNINGS_PER_FILE: usize = 32;
 
-
-
-
 const SCAN_BYTE_CAP: u64 = 8 * 1024 * 1024;
-
-
-
-
-
-
 
 pub fn scan_for_secrets(rules: &FerryIgnore, root: &Path) -> Vec<Warning> {
     let mut out = Vec::new();
@@ -170,7 +135,6 @@ pub fn scan_for_secrets(rules: &FerryIgnore, root: &Path) -> Vec<Warning> {
 }
 
 fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Warning>) {
-    
     let Ok(entries) = std::fs::read_dir(abs) else {
         return;
     };
@@ -184,23 +148,19 @@ fn walk(rules: &FerryIgnore, abs: &Path, rel: &mut Vec<String>, out: &mut Vec<Wa
         let component: String = name.nfc().collect();
         let mut child_abs = abs.to_path_buf();
         child_abs.push(&name);
-        
+
         let Ok(meta) = std::fs::symlink_metadata(&child_abs) else {
             continue;
         };
         rel.push(component.clone());
         if meta.is_dir() {
-            
-            
-            
-            
             if !rules.decided(rel, true) {
                 walk(rules, &child_abs, rel, out);
             }
         } else if meta.is_file() {
             scan_file_if_risky(rules, rel, &child_abs, &meta, out);
         }
-        
+
         rel.pop();
     }
 }
@@ -213,13 +173,12 @@ fn scan_file_if_risky(
     out: &mut Vec<Warning>,
 ) {
     if rules.decided(rel, false) {
-        return; 
+        return;
     }
     let Some(path_class) = rel.last().and_then(|n| classify_path(n)) else {
         return;
     };
 
-    
     out.push(Warning {
         path: rel.to_vec(),
         line: None,
@@ -231,7 +190,6 @@ fn scan_file_if_risky(
         ),
     });
 
-    
     let Ok(mut bytes) = std::fs::read(abs) else {
         return;
     };
@@ -256,7 +214,6 @@ fn scan_file_if_risky(
     }
 }
 
-
 fn redact(matched: &str) -> String {
     let total = matched.chars().count();
     let head: String = matched.chars().take(4).collect();
@@ -268,7 +225,7 @@ mod tests {
     use super::*;
     use crate::config::IgnoreConfig;
 
-    const AWS: &str = "AKIAIOSFODNN7EXAMPLE"; 
+    const AWS: &str = "AKIAIOSFODNN7EXAMPLE";
     const OPENAI: &str = "sk-proj0123456789abcdefghij0123";
     const GH: &str = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234";
     const SLACK: &str = "xoxb-123456789012-ABCDEFabcdef";
@@ -306,7 +263,7 @@ mod tests {
         assert!(classes(&ws).contains(&WarningClass::EnvFile), "{ws:?}");
         assert!(classes(&ws).contains(&WarningClass::AwsKey), "{ws:?}");
         assert!(classes(&ws).contains(&WarningClass::OpenAiKey), "{ws:?}");
-        
+
         let aws = ws.iter().find(|w| w.class == WarningClass::AwsKey).unwrap();
         assert_eq!(aws.line, Some(1));
         assert_eq!(aws.path, vec![".env".to_string()]);

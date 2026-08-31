@@ -1,27 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use crate::identity::{DeviceId, DeviceIdentity};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
@@ -32,7 +8,6 @@ use rand::{CryptoRng, RngCore};
 use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 
 pub const KEYWRAP_INFO: &[u8] = b"ferry/v1/keywrap";
 
@@ -50,7 +25,6 @@ pub enum FolderKeyError {
     DegeneratePeerKey,
 }
 
-
 pub fn generate_fmk() -> Fmk {
     let mut fmk: Fmk = [0u8; 32];
     use rand::RngCore;
@@ -65,9 +39,6 @@ fn hkdf_wrap_key(shared: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
         .expect("32-byte OKM is always valid");
     okm
 }
-
-
-
 
 pub fn derive_wrap_key(
     shared: &[u8; 32],
@@ -117,9 +88,6 @@ fn open_fmk(
     Ok(Zeroizing::new(fmk))
 }
 
-
-
-
 pub fn wrap_folder_key_with_rng(
     fmk: &Fmk,
     folder_id: &[u8; 16],
@@ -146,7 +114,6 @@ pub fn wrap_folder_key_with_rng(
     Ok(out)
 }
 
-
 pub fn wrap_folder_key(
     fmk: &Fmk,
     folder_id: &[u8; 16],
@@ -154,9 +121,6 @@ pub fn wrap_folder_key(
 ) -> Result<[u8; WRAPPED_LEN], FolderKeyError> {
     wrap_folder_key_with_rng(fmk, folder_id, device_pub, rand::rngs::OsRng)
 }
-
-
-
 
 pub fn unwrap_folder_key(
     wrapped: &[u8; WRAPPED_LEN],
@@ -193,11 +157,6 @@ mod tests {
 
     #[test]
     fn wrap_key_schedule_matches_independent_hkdf_reference() {
-        
-        
-        
-        
-        
         let shared: [u8; 32] = unhex(RFC_SHARED_HEX).unwrap();
         let eph_pub: DeviceId = unhex(BOB_PK_HEX).unwrap();
         let dev_pub: DeviceId = unhex(ALICE_PK_HEX).unwrap();
@@ -206,7 +165,7 @@ mod tests {
             ferry_store::format::hex(wk.as_ref()),
             "e3c1787d10dcaadf06c5d907bd5796b2a260d057f471cea8a54ad30a4dfe71b4"
         );
-        
+
         let swapped = derive_wrap_key(&shared, &dev_pub, &eph_pub);
         assert_ne!(wk, swapped);
     }
@@ -220,8 +179,7 @@ mod tests {
         let wrapped = wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), rng).unwrap();
         assert_eq!(wrapped.len(), WRAPPED_LEN);
         assert_eq!(wrapped.len(), 80, "spec: wrapped_len MUST be 80");
-        
-        
+
         assert_eq!(&wrapped[..32], &unhex::<32>(BOB_PK_HEX).unwrap());
     }
 
@@ -255,8 +213,6 @@ mod tests {
         let folder_id = [2u8; 16];
         let good = wrap_folder_key(&fmk, &folder_id, alice.public()).unwrap();
 
-        
-        
         for idx in [0usize, 40, 79] {
             let mut evil = good;
             evil[idx] ^= 0x01;
@@ -283,10 +239,6 @@ mod tests {
 
     #[test]
     fn deterministic_rng_pins_full_envelope_bytes() {
-        
-        
-        
-        
         let alice = DeviceIdentity::from_secret_bytes(&unhex(ALICE_SK_HEX).unwrap());
         let fmk: Fmk = core::array::from_fn(|i| i as u8 + 1);
         let folder_id: [u8; 16] = core::array::from_fn(|i| i as u8);
@@ -295,9 +247,7 @@ mod tests {
             wrap_folder_key_with_rng(&fmk, &folder_id, alice.public(), FixedRng::new(BOB_SK_HEX))
                 .unwrap();
         assert_eq!(wrapped.len(), 80);
-        
-        
-        
+
         assert_eq!(
             ferry_store::format::hex(&wrapped),
             "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f\
@@ -305,7 +255,7 @@ mod tests {
              e835e64c6ec363b6ff0f670500b7cb59be",
             "envelope bytes drifted from the pinned vector"
         );
-        
+
         assert_eq!(
             *unwrap_folder_key(&wrapped, &folder_id, &alice).unwrap(),
             fmk

@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::codec::{self, Bye, FrameBody, Hello, HelloAck, IndexAdvert, FLAG_EXTENSION_AWARE};
@@ -60,8 +54,6 @@ fn major_version_mismatch_is_a_clean_bye_disconnect() {
         )
     });
 
-    
-    
     let hello = Hello {
         version: ProtocolVersion::new(2, 0),
         flags: FLAG_EXTENSION_AWARE,
@@ -90,9 +82,6 @@ fn major_version_mismatch_is_a_clean_bye_disconnect() {
 
 #[test]
 fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
-    
-    
-    
     let responder = test_identity(2);
     let real_owner = test_identity(3);
     let stranger = test_identity(4);
@@ -117,7 +106,7 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
         version: ProtocolVersion::V1_0,
         flags: FLAG_EXTENSION_AWARE,
         eph_pub: fresh_ephemeral(),
-        stat_pub: *stranger.device_id(), 
+        stat_pub: *stranger.device_id(),
         nonce: [9; 32],
     };
     write_frame(
@@ -134,22 +123,13 @@ fn stranger_identity_fails_the_handshake_before_any_secrets_move() {
 
     let err = server.join().unwrap().unwrap_err();
     assert!(
-        matches!(
-            err,
-            ProtoError::IdentityMismatch { .. } | ProtoError::Io(_) 
-        ),
+        matches!(err, ProtoError::IdentityMismatch { .. } | ProtoError::Io(_)),
         "{err}"
     );
 }
 
 #[test]
 fn replayed_hello_cannot_complete_authentication() {
-    
-    
-    
-    
-    
-    
     let responder = test_identity(5);
     let peer = test_identity(6);
     let peer_id = *peer.device_id();
@@ -186,22 +166,16 @@ fn replayed_hello_cannot_complete_authentication() {
     let ack = HelloAck::parse(&ack_fb.payload).unwrap();
     assert_eq!(ack.agreed, ProtocolVersion::V1_0);
 
-    
     dial.close();
     let err = server.join().unwrap().unwrap_err();
     assert!(matches!(err, ProtoError::Io(_)), "{err}");
 }
-
-
-
-
 
 fn policy_session(
     io: DuplexHalf,
     peer_max: ProtocolVersion,
     peer_flags: u64,
 ) -> SecureSession<DuplexHalf> {
-    
     SecureSession::from_parts(
         io,
         ProtocolVersion::V1_0,
@@ -231,10 +205,9 @@ fn unknown_type_higher_minor_with_unknown_flags_is_skipped() {
     let mut sess = policy_session(
         inbox,
         ProtocolVersion::new(1, 5),
-        FLAG_EXTENSION_AWARE | (1 << 6), 
+        FLAG_EXTENSION_AWARE | (1 << 6),
     );
-    
-    
+
     write_frame(
         &mut inject,
         &FrameBody::new(0x7F, ProtocolVersion::new(1, 5), vec![]),
@@ -260,8 +233,6 @@ fn unknown_type_higher_minor_without_new_flags_still_violates() {
 
 #[test]
 fn skipped_unknown_types_must_be_sealed_correctly_too() {
-    
-    
     let (mut inject, inbox) = duplex_pair();
     let (_, _, prk) = kdf_handshake(&[0; 32], &[1; 32], &[2; 32], &[3; 32]);
     let th_final = transcript_hash(&[]);
@@ -275,27 +246,18 @@ fn skipped_unknown_types_must_be_sealed_correctly_too() {
         Some(kb.cipher()),
         Some(ka.cipher()),
     );
-    
-    
+
     let body = FrameBody::new(0x7F, ProtocolVersion::V1_0, vec![1u8; 64]).encode();
     write_body(&mut inject, &body).unwrap();
     let err = sess.recv_frame().unwrap_err();
     assert!(matches!(err, ProtoError::Auth(_)), "{err}");
 }
 
-
-
 #[test]
 fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
-    
-    
-    
     let (mut inject, inbox) = duplex_pair();
     let mut sess = policy_session(inbox, ProtocolVersion::V1_0, FLAG_EXTENSION_AWARE);
 
-    
-    
-    
     let entries_for = |frame: usize| -> Vec<ferry_store::index::IndexEntry> {
         (0..IndexAdvert::MAX_ROWS)
             .map(|j| {
@@ -312,7 +274,7 @@ fn endless_more_one_adverts_hit_resource_limit_instead_of_unbounded_growth() {
             })
             .collect()
     };
-    
+
     let frames = MAX_ADVERT_ROWS_TOTAL / IndexAdvert::MAX_ROWS + 1;
     for f in 0..frames {
         write_frame(
@@ -350,8 +312,6 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
         .unwrap(),
     );
 
-    
-    
     let body: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
     let chunk_id = *blake3::hash(&body).as_bytes();
     let entries = vec![ferry_store::pack::FooterEntry {
@@ -371,9 +331,6 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
     )
     .unwrap();
 
-    
-    
-    
     let s2 = Arc::clone(&store);
     let b2 = bytes.clone();
     let racer = std::thread::spawn(move || ingest_pack(&s2, &b2));
@@ -387,8 +344,6 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
     assert_eq!(*blake3::hash(&on_disk).as_bytes(), here);
     assert_eq!(on_disk, bytes);
 
-    
-    
     assert_eq!(
         store
             .get(ferry_store::format::BlobKind::DataChunk, &chunk_id)
@@ -396,9 +351,6 @@ fn concurrent_ingest_of_the_same_pack_yields_one_valid_named_pack_and_no_residue
         body
     );
 
-    
-    
-    
     let residue: Vec<_> = std::fs::read_dir(store_dir.join("tmp"))
         .unwrap()
         .flatten()

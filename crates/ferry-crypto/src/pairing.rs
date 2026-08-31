@@ -1,51 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use crate::base32::{self, Base32Error};
 use crate::crc32::crc32;
 use crate::folder_key::{wrap_folder_key, Fmk, FolderKeyError, WRAPPED_LEN};
@@ -61,7 +13,6 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::Zeroizing;
-
 
 pub const OFFER_MAGIC: [u8; 4] = *b"FRPO";
 
@@ -103,16 +54,10 @@ pub enum GrantError {
     Auth,
     #[error("offer bytes truncated: need {need}, have {have}")]
     OfferTruncated { need: usize, have: usize },
-    
-    
-    
+
     #[error("internal crypto failure (unreachable for these inputs)")]
     Internal,
 }
-
-
-
-
 
 struct Reader<'a> {
     bytes: &'a [u8],
@@ -140,15 +85,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-
-
-
-
-
-
-
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TransportHints(pub u16);
 
@@ -163,11 +99,6 @@ impl TransportHints {
         TransportHints(u16::from_le_bytes(b))
     }
 }
-
-
-
-
-
 
 pub struct PairingOffer {
     pub folder_id: [u8; 16],
@@ -187,12 +118,10 @@ impl std::fmt::Debug for PairingOffer {
 }
 
 impl PairingOffer {
-    
     pub fn create(folder_id: [u8; 16], initiator: &DeviceIdentity, now_sec: i64) -> Self {
         Self::create_with_rng(folder_id, initiator, now_sec, rand::rngs::OsRng)
     }
 
-    
     pub fn create_with_rng(
         folder_id: [u8; 16],
         initiator: &DeviceIdentity,
@@ -209,12 +138,10 @@ impl PairingOffer {
         }
     }
 
-    
     pub fn one_time_secret(&self) -> &[u8; 32] {
         &self.secret
     }
 
-    
     pub fn serialize(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(OFFER_LEN);
         out.extend_from_slice(&OFFER_MAGIC);
@@ -227,7 +154,6 @@ impl PairingOffer {
         out
     }
 
-    
     pub fn parse(bytes: &[u8]) -> Result<Self, PairingError> {
         if bytes.len() != OFFER_LEN {
             return Err(PairingError::Truncated {
@@ -256,26 +182,18 @@ impl PairingOffer {
         })
     }
 
-    
     pub fn short_code(&self, hints: TransportHints) -> String {
         short_code_for(&self.serialize(), hints)
     }
 
-    
-    
     pub fn qr_content(&self) -> Vec<u8> {
         self.serialize()
     }
 
-    
-    
     pub fn qr_code(&self) -> Result<qrcode::QrCode, qrcode::types::QrError> {
         qrcode::QrCode::new(self.qr_content())
     }
 }
-
-
-
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PairingResponse {
@@ -295,9 +213,6 @@ impl std::fmt::Debug for PairingResponse {
 }
 
 impl PairingResponse {
-    
-    
-    
     pub fn compute_mac(
         offer_bytes: &[u8],
         one_time_secret: &[u8; 32],
@@ -345,24 +260,18 @@ impl PairingResponse {
         })
     }
 
-    
-    
-    
     pub fn verify(&self, offer: &PairingOffer, offer_bytes: &[u8]) -> Result<(), PairingError> {
         let expect = Self::compute_mac(offer_bytes, offer.one_time_secret(), &self.responder_pub);
         if bool::from(expect.ct_ne(&self.mac)) {
             return Err(PairingError::MacMismatch);
         }
-        
-        
-        
+
         if offer.serialize() != offer_bytes {
             return Err(PairingError::MacMismatch);
         }
         Ok(())
     }
 }
-
 
 pub fn respond(offer: &PairingOffer, responder: &DeviceIdentity, now_sec: i64) -> PairingResponse {
     let offer_bytes = offer.serialize();
@@ -377,19 +286,14 @@ pub fn respond(offer: &PairingOffer, responder: &DeviceIdentity, now_sec: i64) -
     }
 }
 
-
 #[derive(Debug)]
 pub struct CompletedPairing {
-    
     pub peer_pub: DeviceId,
-    
+
     pub wrapped_for_self: [u8; WRAPPED_LEN],
-    
+
     pub wrapped_for_peer: [u8; WRAPPED_LEN],
 }
-
-
-
 
 pub fn complete_pairing(
     offer: &PairingOffer,
@@ -408,9 +312,6 @@ pub fn complete_pairing(
     })
 }
 
-
-
-
 const GRANT_INFO: &[u8] = b"ferry/v1/pair-grant";
 
 const GRANT_SALT: &[u8] = b"ferry/v1/pair-grant-salt";
@@ -421,11 +322,6 @@ pub const GRANT_VERSION: u8 = 1;
 
 const GRANT_NONCE_LEN: usize = 12;
 
-
-
-
-
-
 pub fn derive_pair_grant_key(one_time_secret: &[u8]) -> Result<[u8; 32], GrantError> {
     let hk = Hkdf::<Sha256>::new(Some(GRANT_SALT), one_time_secret);
     let mut okm = [0u8; 32];
@@ -433,8 +329,6 @@ pub fn derive_pair_grant_key(one_time_secret: &[u8]) -> Result<[u8; 32], GrantEr
         .map_err(|_| GrantError::Internal)?;
     Ok(okm)
 }
-
-
 
 fn offer_one_time_secret(offer_bytes: &[u8]) -> Result<&[u8], GrantError> {
     offer_bytes.get(53..85).ok_or(GrantError::OfferTruncated {
@@ -444,21 +338,9 @@ fn offer_one_time_secret(offer_bytes: &[u8]) -> Result<&[u8], GrantError> {
 }
 
 fn grant_cipher(key: &[u8; 32]) -> ChaCha20Poly1305 {
-    
-    
-    
     use chacha20poly1305::aead::KeyInit;
     ChaCha20Poly1305::new(key.into())
 }
-
-
-
-
-
-
-
-
-
 
 pub fn seal_pair_grant(offer_bytes: &[u8], body: &[u8]) -> Result<Vec<u8>, GrantError> {
     let secret = offer_one_time_secret(offer_bytes)?;
@@ -484,10 +366,6 @@ pub fn seal_pair_grant(offer_bytes: &[u8], body: &[u8]) -> Result<Vec<u8>, Grant
     Ok(out)
 }
 
-
-
-
-
 pub fn open_pair_grant(offer_bytes: &[u8], raw: &[u8]) -> Result<Vec<u8>, GrantError> {
     const HEADER_LEN: usize = 4 + 1 + GRANT_NONCE_LEN;
     if raw.len() < HEADER_LEN || raw[..4] != GRANT_MAGIC || raw[4] != GRANT_VERSION {
@@ -510,8 +388,6 @@ pub fn open_pair_grant(offer_bytes: &[u8], raw: &[u8]) -> Result<Vec<u8>, GrantE
         .map_err(|_| GrantError::Auth)
 }
 
-
-
 fn code_payload(offer_bytes: &[u8], hints: TransportHints) -> ([u8; 10], u16) {
     let digest = blake3::hash(offer_bytes);
     let mut data = [0u8; 10];
@@ -521,12 +397,11 @@ fn code_payload(offer_bytes: &[u8], hints: TransportHints) -> ([u8; 10], u16) {
     (data, (crc >> 16) as u16)
 }
 
-
 pub fn short_code_for(offer_bytes: &[u8], hints: TransportHints) -> String {
     let (data, check) = code_payload(offer_bytes, hints);
-    let main = base32::encode(&data); 
+    let main = base32::encode(&data);
     let check_be = check.to_be_bytes();
-    let tail = base32::encode(&check_be); 
+    let tail = base32::encode(&check_be);
     format!(
         "{}-{}-{}-{}-{}",
         &main[0..4],
@@ -537,16 +412,10 @@ pub fn short_code_for(offer_bytes: &[u8], hints: TransportHints) -> String {
     )
 }
 
-
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedCode {
     pub hints: TransportHints,
 }
-
-
-
 
 pub fn verify_short_code(code: &str, offer_bytes: &[u8]) -> Result<VerifiedCode, PairingError> {
     let cleaned: String = code.chars().filter(|c| *c != '-' && *c != ' ').collect();
@@ -606,7 +475,7 @@ mod tests {
         assert_eq!(bytes[4], 1);
         assert_eq!(&bytes[5..21], &[3u8; 16]);
         assert_eq!(&bytes[21..53], &alice().device_id()[..]);
-        
+
         assert_eq!(&bytes[53..85], &(0u8..=0x1f).collect::<Vec<u8>>()[..]);
         assert_eq!(&bytes[85..], &1_700_000_000i64.to_le_bytes());
     }
@@ -637,7 +506,7 @@ mod tests {
             PairingOffer::parse(&evil),
             Err(PairingError::Truncated { need: 93, have: 92 })
         ));
-        
+
         assert!(PairingOffer::parse(&[7u8; 93]).is_err());
     }
 
@@ -677,7 +546,7 @@ mod tests {
 
         for pos in 0..symbols.len() {
             let original = symbols[pos].1;
-            
+
             for sub in ALPHABET_TEST {
                 if *sub == original {
                     continue;
@@ -693,11 +562,10 @@ mod tests {
                     ),
                     "typo '{original}'->'{sub}' gave {err:?}"
                 );
-                break; 
+                break;
             }
         }
 
-        
         for bad in ['0', '1', 'I', 'O'] {
             let mut typed: Vec<char> = code.chars().collect();
             typed[0] = bad;
@@ -707,7 +575,6 @@ mod tests {
             ));
         }
 
-        
         assert!(verify_short_code("ABCD", &bytes).is_err());
         assert!(verify_short_code(&code.replace('-', ""), &bytes).is_ok());
     }
@@ -721,9 +588,9 @@ mod tests {
     fn code_binds_to_its_exact_payload() {
         let (_offer, bytes) = test_offer();
         let code = short_code_for(&bytes, TransportHints::default());
-        
+
         let mut other = bytes.clone();
-        other[70] ^= 1; 
+        other[70] ^= 1;
         assert!(matches!(
             verify_short_code(&code, &other),
             Err(PairingError::CodeHashMismatch)
@@ -732,8 +599,6 @@ mod tests {
 
     #[test]
     fn mac_verify_match_passes_and_single_bit_flip_fails() {
-        
-        
         let (offer, offer_bytes) = test_offer();
         let responder = DeviceIdentity::generate();
         let resp = respond(&offer, &responder, 1_700_000_050);
@@ -758,28 +623,27 @@ mod tests {
         let resp = respond(&offer, &responder, 1_700_000_100);
         resp.verify(&offer, &offer_bytes).unwrap();
 
-        
         let mut evil = resp.clone();
         evil.responder_pub[0] ^= 1;
         assert!(matches!(
             evil.verify(&offer, &offer_bytes),
             Err(PairingError::MacMismatch)
         ));
-        
+
         let mut evil = resp.clone();
         evil.mac[31] ^= 1;
         assert!(matches!(
             evil.verify(&offer, &offer_bytes),
             Err(PairingError::MacMismatch)
         ));
-        
+
         let mut evil_bytes = offer_bytes.clone();
         evil_bytes[5] ^= 1;
         assert!(matches!(
             resp.verify(&offer, &evil_bytes),
             Err(PairingError::MacMismatch)
         ));
-        
+
         let rt = PairingResponse::parse(&resp.serialize()).unwrap();
         rt.verify(&offer, &offer_bytes).unwrap();
     }
@@ -806,10 +670,9 @@ mod tests {
         let (offer, bytes) = test_offer();
         assert_eq!(offer.qr_content(), bytes);
         let qr = offer.qr_code().unwrap();
-        
-        
+
         assert!(qr.width() >= 21);
-        
+
         let colors = qr.to_colors();
         assert_eq!(colors.len(), qr.width() * qr.width());
         assert!(colors.contains(&qrcode::Color::Dark));
@@ -824,24 +687,20 @@ mod tests {
         let sealed = seal_pair_grant(&offer_bytes, body).unwrap();
         assert_eq!(&sealed[..4], &GRANT_MAGIC, "FRGR magic");
         assert_eq!(sealed[4], GRANT_VERSION);
-        
+
         assert_eq!(sealed.len(), 4 + 1 + 12 + body.len() + 16);
         assert_eq!(
             open_pair_grant(&offer_bytes, &sealed).unwrap(),
             body.as_slice()
         );
 
-        
-        
-        
         let mut other_bytes = offer_bytes.clone();
-        other_bytes[70] ^= 1; 
+        other_bytes[70] ^= 1;
         assert!(matches!(
             open_pair_grant(&other_bytes, &sealed),
             Err(GrantError::Auth)
         ));
 
-        
         for idx in [5usize, 12, sealed.len() - 1] {
             let mut evil = sealed.clone();
             evil[idx] ^= 0x80;
@@ -851,7 +710,6 @@ mod tests {
             ));
         }
 
-        
         assert!(matches!(
             open_pair_grant(&offer_bytes, &sealed[..16]),
             Err(GrantError::Malformed { .. })
@@ -863,8 +721,6 @@ mod tests {
             Err(GrantError::Malformed { .. })
         ));
 
-        
-        
         let k1 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
         let k2 = derive_pair_grant_key(&offer_bytes[53..85]).unwrap();
         assert_eq!(k1, k2);
@@ -882,7 +738,6 @@ mod tests {
         let offer_bytes = offer.serialize();
         let b = crate::identity::load_or_create(responder_dir.path()).unwrap();
 
-        
         let code = offer.short_code(TransportHints(TransportHints::DIRECT_LAN));
         let verified = verify_short_code(&code, &offer_bytes).unwrap();
         assert_eq!(verified.hints, TransportHints(TransportHints::DIRECT_LAN));

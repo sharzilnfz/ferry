@@ -1,18 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -20,16 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use crate::lock::lock;
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
-    
     pub endpoint_id: [u8; 32],
-    
-    
+
     pub ip_hints: Vec<SocketAddr>,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteScope {
@@ -37,12 +18,9 @@ pub enum RouteScope {
     Directory,
 }
 
-
 pub type RouteKey = SocketAddr;
 
 static SYNTH_PORT: AtomicU16 = AtomicU16::new(45601);
-
-
 
 #[derive(Debug, Clone)]
 pub struct RouteTable {
@@ -57,7 +35,6 @@ impl Default for RouteTable {
 }
 
 impl RouteTable {
-    
     pub fn new() -> Self {
         RouteTable {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -65,8 +42,6 @@ impl RouteTable {
         }
     }
 
-    
-    
     pub fn publish_route(&self, key: RouteKey, route: Route) {
         let mut bp = lock(&self.by_peer);
         bp.entry(route.endpoint_id).or_insert_with(|| route.clone());
@@ -74,8 +49,6 @@ impl RouteTable {
         t.entry(key).or_insert((route, RouteScope::Directory));
     }
 
-    
-    
     pub fn register_explicit_route(&self, key: RouteKey, route: Route) {
         let mut bp = lock(&self.by_peer);
         bp.insert(route.endpoint_id, route.clone());
@@ -83,7 +56,6 @@ impl RouteTable {
         t.insert(key, (route, RouteScope::Explicit));
     }
 
-    
     pub fn register_peer(&self, endpoint_id: [u8; 32], ip_hints: Vec<SocketAddr>) -> RouteKey {
         let key = self.next_synth_key(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         self.register_explicit_route(
@@ -96,22 +68,18 @@ impl RouteTable {
         key
     }
 
-    
     pub fn resolve_route(&self, key: &RouteKey) -> Option<(Route, RouteScope)> {
         lock(&self.inner).get(key).cloned()
     }
 
-    
     pub fn resolve_peer(&self, endpoint_id: &[u8; 32]) -> Option<Route> {
         lock(&self.by_peer).get(endpoint_id).cloned()
     }
 
-    
     pub fn contains_key(&self, key: &RouteKey) -> bool {
         lock(&self.inner).contains_key(key)
     }
 
-    
     pub fn next_synth_key(&self, ip: std::net::IpAddr) -> RouteKey {
         loop {
             let cur = SYNTH_PORT.fetch_add(1, Ordering::SeqCst);
@@ -148,7 +116,6 @@ mod tests {
         assert_eq!(got.0.endpoint_id, id(1));
         assert_eq!(got.1, RouteScope::Directory);
 
-        
         table.publish_route(
             k,
             Route {
@@ -158,7 +125,6 @@ mod tests {
         );
         assert_eq!(table.resolve_route(&k).unwrap().0.endpoint_id, id(1));
 
-        
         table.register_explicit_route(
             k,
             Route {

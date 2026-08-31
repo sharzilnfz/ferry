@@ -1,19 +1,9 @@
-
-
-
-
-
-
-
-
-
-
 use std::fmt::Write as _;
 use std::path::Path;
 
-use ferry_sync_engine::pin::PinManager;
 use ferry_store::format::hex;
 use ferry_sync_engine::list_conflicts;
+use ferry_sync_engine::pin::PinManager;
 use serde_json::json;
 
 use crate::error::{CliError, CliResult};
@@ -31,7 +21,6 @@ pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
         paths.to_vec()
     };
 
-    
     let ipc_res = crate::ipc::send_command(
         folder,
         ferry_ipc::ClientCommand::StartPin {
@@ -117,7 +106,6 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
     let state_dir = opened.state_dir();
     let pin_mgr = PinManager::new(&state_dir);
 
-    
     let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
     let existed = match ipc_res {
         Some(ferry_ipc::DaemonMessage::Ack { message, .. }) => {
@@ -126,7 +114,6 @@ pub fn stop(folder: &Path) -> CliResult<Output> {
         _ => pin_mgr.stop_session().map_err(pin_error)?,
     };
 
-    
     let summary = pin_mgr.summary().map_err(pin_error)?;
     let mut by_peer = serde_json::Map::new();
     for (peer, paths) in &summary.held_by_peer {
@@ -161,8 +148,6 @@ pub fn release(folder: &Path) -> CliResult<Output> {
     let state_dir = opened.state_dir();
     let pin_mgr = PinManager::new(&state_dir);
 
-    
-    
     let scan = crate::commands::status::scan_now(&opened)?;
 
     let now = ferry_platform::time::now_unix();
@@ -183,7 +168,6 @@ pub fn release(folder: &Path) -> CliResult<Output> {
         }));
     }
 
-    
     let ipc_res = crate::ipc::send_command(folder, ferry_ipc::ClientCommand::ReleasePin);
     let ended = match ipc_res {
         Some(ferry_ipc::DaemonMessage::Ack { .. }) => true,
@@ -241,8 +225,6 @@ pub fn status(folder: &Path) -> CliResult<Output> {
 
     let started_at = summary.started_sec.map(ferry_platform::time::fmt_rfc3339);
 
-    
-    
     let mut held_by_peer = serde_json::Map::new();
     for (peer, list) in &summary.held_by_peer {
         held_by_peer.insert(peer.clone(), json!(list));
@@ -312,7 +294,6 @@ fn cli(code: &'static str, e: impl std::fmt::Display) -> CliError {
         ),
     }
 }
-
 
 fn pin_error(e: ferry_sync_engine::pin::PinError) -> CliError {
     use ferry_sync_engine::pin::PinError as E;

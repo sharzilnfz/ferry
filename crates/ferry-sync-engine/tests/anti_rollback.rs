@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -81,8 +75,6 @@ impl TestNode {
     }
 }
 
-
-
 fn transfer_snapshot(from: &Store, to: &Store, out: &SnapshotOutput) {
     if to.get(BlobKind::Manifest, &out.manifest_id).is_err() {
         let bytes = from.get(BlobKind::Manifest, &out.manifest_id).unwrap();
@@ -118,17 +110,14 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    
     a.write_file("file1.txt", b"initial content 1");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
     let m1_id = snap_m1.manifest_id;
 
-    
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
     b.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    
     a.write_file("file2.txt", b"important local data 2");
     a.write_file("file3.txt", b"important local data 3");
     let snap_m2 = a.snapshot(m1_id, 2_000_000);
@@ -136,9 +125,6 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
 
     a.store.put_meta(BlobKind::Manifest, &m2_bytes).unwrap();
 
-    
-    
-    
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let res = engine
         .converge(
@@ -148,8 +134,6 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
         )
         .unwrap();
 
-    
-    
     assert!(a.tree.join("file1.txt").is_file(), "file1.txt must exist");
     assert!(
         a.tree.join("file2.txt").is_file(),
@@ -168,7 +152,6 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
         b"important local data 3"
     );
 
-    
     assert!(
         !res.send.is_empty(),
         "winner files must be sent to rolled-back peer"
@@ -179,20 +162,17 @@ fn test_peer_rollback_does_not_delete_untouched_local_files() {
 fn test_peer_rollback_does_not_overwrite_newer_file_with_stale_content() {
     let a = TestNode::new(DEV_A);
 
-    
     a.write_file("file1.txt", b"v1 original");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
     let m1_id = snap_m1.manifest_id;
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    
     a.write_file("file1.txt", b"v2 updated live");
     let snap_m2 = a.snapshot(m1_id, 2_000_000);
     let m2_bytes = serialize_manifest(&snap_m2.manifest);
     a.store.put_meta(BlobKind::Manifest, &m2_bytes).unwrap();
 
-    
     let mut engine = ConvergenceEngine::new(&a.store, &a.tree).state_dir(&a.state);
     let _res = engine
         .converge(
@@ -202,7 +182,6 @@ fn test_peer_rollback_does_not_overwrite_newer_file_with_stale_content() {
         )
         .unwrap();
 
-    
     assert_eq!(
         fs::read(a.tree.join("file1.txt")).unwrap(),
         b"v2 updated live",
@@ -215,7 +194,6 @@ fn test_local_rollback_preserves_restored_local_files() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    
     a.write_file("file1.txt", b"base v1");
     let snap_m1 = a.snapshot([0; 32], 1_000_000);
     let m1_bytes = serialize_manifest(&snap_m1.manifest);
@@ -223,16 +201,11 @@ fn test_local_rollback_preserves_restored_local_files() {
     a.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
     b.store.put_meta(BlobKind::Manifest, &m1_bytes).unwrap();
 
-    
     b.write_file("file1.txt", b"remote v2");
     b.write_file("file2.txt", b"remote addition");
     let snap_m2 = b.snapshot(m1_id, 2_000_000);
     transfer_snapshot(&b.store, &a.store, &snap_m2);
 
-    
-    
-    
-    
     a.write_file("file1.txt", b"restored local edit");
     let snap_local = a.snapshot([0; 32], 3_000_000);
 
@@ -245,20 +218,17 @@ fn test_local_rollback_preserves_restored_local_files() {
         )
         .unwrap();
 
-    
-    
     assert_eq!(
         fs::read(a.tree.join("file1.txt")).unwrap(),
         b"restored local edit",
         "locally restored file must survive its own broken lineage"
     );
-    
+
     assert_eq!(
         fs::read(a.tree.join("file2.txt")).unwrap(),
         b"remote addition"
     );
-    
-    
+
     assert!(
         !res.send.is_empty(),
         "restored local content must be on the send list"
@@ -270,11 +240,8 @@ fn test_broken_lineage_on_both_sides_degrades_to_empty_base() {
     let a = TestNode::new(DEV_A);
     let b = TestNode::new(DEV_B);
 
-    
     let snap_base = a.snapshot([0; 32], 500_000);
 
-    
-    
     a.write_file("local-only.txt", b"a data");
     let snap_a = a.snapshot([0; 32], 1_000_000);
     b.write_file("remote-only.txt", b"b data");
@@ -290,8 +257,6 @@ fn test_broken_lineage_on_both_sides_degrades_to_empty_base() {
         )
         .unwrap();
 
-    
-    
     assert_eq!(fs::read(a.tree.join("local-only.txt")).unwrap(), b"a data");
     assert_eq!(fs::read(a.tree.join("remote-only.txt")).unwrap(), b"b data");
     assert!(

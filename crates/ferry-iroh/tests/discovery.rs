@@ -1,14 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
 use std::time::{Duration, Instant};
 
 use ferry_iroh::{IrohConfig, IrohTransport};
@@ -31,8 +20,6 @@ fn mdns_transport(seed_byte: u8, service: String) -> IrohTransport {
 
 #[test]
 fn two_same_host_endpoints_discover_each_other_and_dial_by_key() {
-    
-    
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -42,8 +29,6 @@ fn two_same_host_endpoints_discover_each_other_and_dial_by_key() {
     let a = mdns_transport(0x2A, service.clone());
     let b = mdns_transport(0x2B, service);
 
-    
-    
     let lst = a
         .listen("127.0.0.1:0".parse().unwrap())
         .expect("A listens (announces via mdns)");
@@ -56,7 +41,6 @@ fn two_same_host_endpoints_discover_each_other_and_dial_by_key() {
         c.send_frame(b"by public key alone").unwrap();
     });
 
-    
     let target_id = a.endpoint_id();
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut conn = None;
@@ -77,7 +61,6 @@ fn two_same_host_endpoints_discover_each_other_and_dial_by_key() {
     drop(conn);
     server.join().unwrap();
 
-    
     assert!(
         a.routes().resolve_route(&addr_for_frames).is_some(),
         "listener still publishes its own directory entry"

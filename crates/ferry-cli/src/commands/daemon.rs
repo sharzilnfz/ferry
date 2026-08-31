@@ -1,6 +1,3 @@
-
-
-
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -75,15 +72,9 @@ pub fn stop() -> CliResult<Output> {
     stop_in(&crate::home::ferry_home()?)
 }
 
-
-
-
 pub fn stop_in(home: &Path) -> CliResult<Output> {
     stop_with_deadline(home, TERMINATE_DEADLINE)
 }
-
-
-
 
 fn socket_path_for_home(home: &Path) -> PathBuf {
     #[cfg(windows)]
@@ -140,9 +131,6 @@ pub fn status() -> CliResult<Output> {
     status_in(&crate::home::ferry_home()?)
 }
 
-
-
-
 pub fn status_in(home: &Path) -> CliResult<Output> {
     let socket_path = socket_path_for_home(home);
     match ferry_platform::running_pid(home) {
@@ -165,14 +153,12 @@ mod tests {
     use super::*;
     use std::process::Command;
 
-    
-    
     fn spawn_term_immune_sleeper() -> std::process::Child {
         let child = Command::new("sh")
             .args(["-c", "trap \"\" TERM; sleep 30"])
             .spawn()
             .expect("spawn TERM-immune sleeper");
-        
+
         std::thread::sleep(Duration::from_millis(100));
         child
     }
@@ -224,8 +210,6 @@ fn check_transport(kind: &str) -> CliResult<()> {
         )),
     }
 }
-
-
 
 fn render_daemon_error(e: ferry_daemon::device_daemon::DeviceDaemonError) -> CliError {
     use ferry_daemon::device_daemon::DeviceDaemonError as DaemonError;
