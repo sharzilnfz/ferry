@@ -25,6 +25,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 axum = { workspace = true, optional = true }
+percent-encoding.workspace = true
 
 [features]
 default = ["web-ui"]
@@ -43,6 +44,7 @@ path = "src/main.rs"
 tempfile.workspace = true
 axum = { workspace = true }
 ferry-folder = { path = "../ferry-folder", features = ["test-util"] }
+ferry-ipc = { path = "../ferry-ipc", features = ["test-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 [lints]

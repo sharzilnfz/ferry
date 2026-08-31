@@ -13,6 +13,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "sync", "macros", "rt", "time"] }
 tokio-stream = { workspace = true }
 
+[features]
+test-util = []
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "io-util"] }

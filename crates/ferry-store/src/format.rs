@@ -217,25 +217,20 @@ impl<'a> Reader<'a> {
 
 
 pub fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit(u32::from(b >> 4), 16).unwrap());
-        s.push(char::from_digit(u32::from(b & 0xf), 16).unwrap());
-    }
-    s
+    hex::encode(bytes)
 }
 
+pub fn short_hex(bytes: &[u8], chars: usize) -> String {
+    let full = hex::encode(bytes);
+    full[..chars.min(full.len())].to_string()
+}
 
 pub fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
-    if s.len() != N * 2 {
+    let decoded = hex::decode(s).ok()?;
+    if decoded.len() != N {
         return None;
     }
     let mut out = [0u8; N];
-    let b = s.as_bytes();
-    for i in 0..N {
-        let hi = (b[2 * i] as char).to_digit(16)?;
-        let lo = (b[2 * i + 1] as char).to_digit(16)?;
-        out[i] = ((hi << 4) | lo) as u8;
-    }
+    out.copy_from_slice(&decoded);
     Some(out)
 }

@@ -2018,7 +2018,7 @@ pub(crate) fn validate_components(path: &[String]) -> Result<(), MaterializeErro
             || c.contains('/')
             || c.contains('\\')
             || c.contains('\0')
-            || c.contains(':')
+            || (cfg!(windows) && c.contains(':'))
             
             
             
@@ -2775,7 +2775,11 @@ mod tests {
     fn traversal_defense_rejects_bad_stored_components() {
         let (w, target) = World::new(13);
 
-        for bad in ["..", ".", "a/b", "a\\b", "", "C:x", "C:\\x", "a:b", "/abs"] {
+        let mut bads = vec!["..", ".", "a/b", "a\\b", "", "/abs"];
+        if cfg!(windows) {
+            bads.extend(["C:x", "C\\x", "a:b"]);
+        }
+        for bad in bads {
             let cs = ChangeSet {
                 added: vec![Added {
                     path: vec![bad.to_string()],

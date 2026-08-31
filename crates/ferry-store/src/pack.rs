@@ -619,8 +619,11 @@ mod tests {
     }
 }
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+
+use lru::LruCache;
 
 use rand::{Rng, RngCore};
 use thiserror::Error;
@@ -966,25 +969,16 @@ pub const DEFAULT_PACK_CACHE_CAPACITY: usize = 64;
 
 
 pub struct PackCache {
-    capacity: usize,
-    inner: Mutex<InnerPackCache>,
-}
-
-struct InnerPackCache {
-    entries: HashMap<PackId, VerifiedPack>,
-    order: VecDeque<PackId>,
+    inner: Mutex<LruCache<PackId, VerifiedPack>>,
 }
 
 pub const MAX_CACHED_PACK_BYTES: usize = 2 * 1024 * 1024;
 
 impl PackCache {
     pub fn new(capacity: usize) -> Self {
+        let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
         PackCache {
-            capacity: capacity.max(1),
-            inner: Mutex::new(InnerPackCache {
-                entries: HashMap::new(),
-                order: VecDeque::new(),
-            }),
+            inner: Mutex::new(LruCache::new(cap)),
         }
     }
 
@@ -993,15 +987,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(pack) = inner.entries.get(pack_id).cloned() {
-            if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push_back(*pack_id);
-            Some(pack)
-        } else {
-            None
-        }
+        inner.get(pack_id).cloned()
     }
 
     pub fn insert(&self, pack: VerifiedPack) {
@@ -1012,26 +998,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = pack.pack_id;
-        if let std::collections::hash_map::Entry::Occupied(mut e) = inner.entries.entry(id) {
-            e.insert(pack);
-            if let Some(pos) = inner.order.iter().position(|p| p == &id) {
-                inner.order.remove(pos);
-            }
-            inner.order.push_back(id);
-            return;
-        }
-
-        while inner.entries.len() >= self.capacity {
-            if let Some(oldest) = inner.order.pop_front() {
-                inner.entries.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-
-        inner.entries.insert(id, pack);
-        inner.order.push_back(id);
+        inner.put(pack.pack_id, pack);
     }
 
     pub fn remove(&self, pack_id: &PackId) {
@@ -1039,10 +1006,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.remove(pack_id);
-        if let Some(pos) = inner.order.iter().position(|id| id == pack_id) {
-            inner.order.remove(pos);
-        }
+        inner.pop(pack_id);
     }
 
     pub fn clear(&self) {
@@ -1050,8 +1014,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.clear();
-        inner.order.clear();
+        inner.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -1059,7 +1022,7 @@ impl PackCache {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.len()
+        inner.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1275,11 +1238,15 @@ impl StagingPools {
         }
     }
 
-    
-    
-    
-    pub fn offer(
-        &mut self,
+    fn pool(&self, is_meta: bool) -> &Vec<StagingPack> {
+        if is_meta { &self.meta } else { &self.data }
+    }
+
+    fn pool_mut(&mut self, is_meta: bool) -> &mut Vec<StagingPack> {
+        if is_meta { &mut self.meta } else { &mut self.data }
+    }
+
+    pub fn offer(&mut self,
         kind: BlobKind,
         id: BlobId,
         bytes: &[u8],
@@ -1291,65 +1258,53 @@ impl StagingPools {
         let is_meta = kind.is_meta();
         let mut sealed = Vec::new();
         loop {
-            let pool_len = if is_meta {
-                self.meta.len()
-            } else {
-                self.data.len()
-            };
-            if pool_len == 0 {
+            if self.pool(is_meta).is_empty() {
                 let fresh = StagingPack::new(container, rng);
-                if is_meta {
-                    self.meta.push(fresh);
-                } else {
-                    self.data.push(fresh);
-                }
+                self.pool_mut(is_meta).push(fresh);
             }
-            let pool_len = if is_meta {
-                self.meta.len()
-            } else {
-                self.data.len()
-            };
+            let pool_len = self.pool(is_meta).len();
             let idx = rng.gen_range(0..pool_len);
             let overflow = {
-                let pool = if is_meta { &self.meta } else { &self.data };
-                let sp = &pool[idx];
+                let sp = &self.pool(is_meta)[idx];
                 !sp.entries.is_empty() && sp.body.len() + bytes.len() > target
             };
             if overflow {
-                let pool = if is_meta {
-                    &mut self.meta
-                } else {
-                    &mut self.data
-                };
-                let sp = pool.remove(idx);
+                let sp = self.pool_mut(is_meta).remove(idx);
                 
                 for entry in &sp.entries {
                     self.index.remove(&(entry.kind, entry.id));
                 }
                 
-                for (pack_i, remaining_sp) in pool.iter().enumerate().skip(idx) {
-                    for entry in &remaining_sp.entries {
-                        self.index.insert(
-                            (entry.kind, entry.id),
-                            (is_meta, pack_i, entry.plain_off, entry.plain_len),
-                        );
-                    }
+                let to_reindex: Vec<(BlobKind, BlobId, usize, u64, u64)> = self
+                    .pool(is_meta)
+                    .iter()
+                    .enumerate()
+                    .skip(idx)
+                    .flat_map(|(pack_i, sp)| {
+                        sp.entries
+                            .iter()
+                            .map(move |e| (e.kind, e.id, pack_i, e.plain_off, e.plain_len))
+                    })
+                    .collect();
+                for (k, id2, pack_i, off, len) in to_reindex {
+                    self.index.insert((k, id2), (is_meta, pack_i, off, len));
                 }
                 sealed.push(sp);
                 continue;
             }
 
-            let pool = if is_meta {
-                &mut self.meta
-            } else {
-                &mut self.data
-            };
-            let plain_off = pool[idx].body.len() as u64;
+            let plain_off;
+            let pool_len;
+            {
+                let pool = self.pool_mut(is_meta);
+                plain_off = pool[idx].body.len() as u64;
+                pool[idx].push(kind, id, bytes);
+                pool_len = pool.len();
+            }
             let plain_len = bytes.len() as u64;
-            pool[idx].push(kind, id, bytes);
             self.index
                 .insert((kind, id), (is_meta, idx, plain_off, plain_len));
-            debug_assert!(pool.len() <= max_open.max(1));
+            debug_assert!(pool_len <= max_open.max(1));
             break;
         }
         sealed
@@ -1371,11 +1326,7 @@ impl StagingPools {
 
     
     pub fn open_count(&self, kind: BlobKind) -> usize {
-        if kind.is_meta() {
-            self.meta.len()
-        } else {
-            self.data.len()
-        }
+        self.pool(kind.is_meta()).len()
     }
 
     
@@ -1387,7 +1338,7 @@ impl StagingPools {
     
     pub fn staged_bytes(&self, kind: BlobKind, id: &BlobId) -> Option<Vec<u8>> {
         let &(is_meta, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
-        let pool = if is_meta { &self.meta } else { &self.data };
+        let pool = self.pool(is_meta);
         let sp = pool.get(pack_idx)?;
         let start = plain_off as usize;
         let end = start + plain_len as usize;

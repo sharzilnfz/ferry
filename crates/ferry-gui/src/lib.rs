@@ -16,8 +16,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use activity::ActivityEntry;
-pub use app::{format_bytes, BackendAction, GuiApp, GuiTransferState};
-pub use beacon::BeaconState;
+pub use app::{BackendAction, GuiApp, GuiTransferState};
+pub use beacon::{beacon_color, beacon_label, render_pulsating_beacon, status_beacon_ui};
+pub use ferry_platform::format_bytes;
+pub use ferry_platform::SyncState;
+pub use ferry_platform::SyncState as BeaconState;
 use eframe::NativeOptions;
 use ferry_ipc::backend::{connect_auto, UiBackend};
 pub use theme::{colors, Theme};

@@ -27,10 +27,12 @@
 
 
 pub mod casefold;
+pub mod human;
 pub mod links;
 pub mod lock;
 pub mod procs;
 pub mod reserved;
+pub mod sync_state;
 pub mod time;
 pub mod winpath;
 
@@ -41,9 +43,11 @@ pub use lock::{
     TerminateOutcome, PID_FILENAME, TERMINATE_DEADLINE,
 };
 pub use procs::{process_start_token, spawn_sleeper};
+pub use human::format_bytes;
 pub use reserved::is_reserved_device_name;
+pub use sync_state::SyncState;
 pub use time::{
-    civil_from_days, civil_utc, current_time_str, days_from_civil, fmt_compact, fmt_rfc3339,
-    fmt_time_utc, join_unix, now_unix, parse_rfc3339_to_unix, split_unix,
+    civil_utc, current_time_str, fmt_compact, fmt_rfc3339, fmt_time_utc, join_unix, now_unix,
+    parse_rfc3339_to_unix, split_unix,
 };
 pub use winpath::{extend_path, needs_extended_length, MAX_PATH};

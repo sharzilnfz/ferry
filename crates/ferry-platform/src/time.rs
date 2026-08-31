@@ -1,14 +1,4 @@
-
-
-
-
-
-
-
-
 use std::time::{Duration, SystemTime};
-
-
 
 pub fn split_unix(t: SystemTime) -> (i64, u32) {
     match t.duration_since(SystemTime::UNIX_EPOCH) {
@@ -24,7 +14,6 @@ pub fn split_unix(t: SystemTime) -> (i64, u32) {
     }
 }
 
-
 pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
     let total = i128::from(sec) * 1_000_000_000 + i128::from(nsec);
     if total >= 0 {
@@ -34,98 +23,57 @@ pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
     }
 }
 
-
 pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
-    let days = secs.div_euclid(86_400);
-    let sod = secs.rem_euclid(86_400) as u32;
-    let (y, m, d) = civil_from_days(days);
-    (y, m, d, sod / 3600, (sod % 3600) / 60, sod % 60)
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid unix timestamp");
+    (
+        dt.year() as i64,
+        dt.month() as u8 as u32,
+        dt.day() as u32,
+        dt.hour() as u32,
+        dt.minute() as u32,
+        dt.second() as u32,
+    )
 }
 
-pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let secs = z * 86_400;
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid days");
+    (dt.year() as i64, dt.month() as u8 as u32, dt.day() as u32)
 }
 
-pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let m = i64::from(m);
-    let d = i64::from(d);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let month = time::Month::try_from(m as u8).expect("valid month");
+    let date = time::Date::from_calendar_date(y as i32, month, d as u8).expect("valid date");
+    date.midnight().assume_utc().unix_timestamp() / 86_400
 }
-
 
 pub fn fmt_compact(secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil_utc(secs);
     format!("{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}")
 }
 
-
 pub fn fmt_time_utc(secs: i64) -> String {
     let (_, _, _, h, mi, s) = civil_utc(secs);
     format!("{h:02}:{mi:02}:{s:02}")
 }
-
 
 pub fn current_time_str() -> String {
     let (secs, _) = now_unix();
     fmt_time_utc(secs)
 }
 
-
 pub fn fmt_rfc3339(secs: i64) -> String {
-    let (y, mo, d, h, mi, s) = civil_utc(secs);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid timestamp");
+    let format = time::format_description::well_known::Rfc3339;
+    dt.format(&format).expect("format rfc3339")
 }
-
 
 pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
-    let ts = ts.trim();
-    if ts.len() < 20 {
-        return None;
-    }
-    let parts: Vec<&str> = ts.split('T').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let date_parts: Vec<&str> = parts[0].split('-').collect();
-    if date_parts.len() != 3 {
-        return None;
-    }
-    let year: i64 = date_parts[0].parse().ok()?;
-    let month: u32 = date_parts[1].parse().ok()?;
-    let day: u32 = date_parts[2].parse().ok()?;
-
-    let time_str = parts[1].trim_end_matches('Z');
-    let time_parts: Vec<&str> = time_str.split(':').collect();
-    if time_parts.len() != 3 {
-        return None;
-    }
-    let hour: u32 = time_parts[0].parse().ok()?;
-    let min: u32 = time_parts[1].parse().ok()?;
-    let sec: u32 = time_parts[2].split('.').next()?.parse().ok()?;
-
-    let days = days_from_civil(year, month, day);
-    let total_secs = days * 86_400 + i64::from(hour) * 3600 + i64::from(min) * 60 + i64::from(sec);
-    if total_secs >= 0 {
-        Some(total_secs as u64)
-    } else {
-        None
-    }
+    let format = time::format_description::well_known::Rfc3339;
+    let dt = time::OffsetDateTime::parse(ts.trim(), &format).ok()?;
+    let secs = dt.unix_timestamp();
+    if secs >= 0 { Some(secs as u64) } else { None }
 }
-
 
 pub fn now_unix() -> (i64, u32) {
     match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
@@ -141,9 +89,6 @@ pub fn now_unix() -> (i64, u32) {
 mod tests {
     use super::*;
 
-    
-    
-    
     const NS_GRAN: u32 = if cfg!(windows) { 100 } else { 1 };
     fn q(nsec: u32) -> u32 {
         nsec / NS_GRAN * NS_GRAN

@@ -5,40 +5,17 @@ use ferry_ipc::protocol::{
     ConflictEntry, DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
     TransferDirection,
 };
+pub use ferry_platform::format_bytes;
+pub use ferry_platform::SyncState;
 use ferry_platform::time::current_time_str;
 use std::collections::HashMap;
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SyncState {
-    #[default]
-    Offline,
-    Synced,
-    Syncing,
-    Conflict,
-    Pinned,
-    Idle,
-    Error,
+pub trait SyncStateBadge {
+    fn badge_color(&self) -> ratatui::style::Color;
 }
 
-impl SyncState {
-    
-    #[must_use]
-    pub const fn badge_text(&self) -> &'static str {
-        match self {
-            Self::Synced => "SYNCED",
-            Self::Syncing => "SYNCING",
-            Self::Conflict => "CONFLICT",
-            Self::Pinned => "PINNED",
-            Self::Idle => "IDLE",
-            Self::Error => "ERROR",
-            Self::Offline => "OFFLINE",
-        }
-    }
-
-    
-    #[must_use]
-    pub const fn badge_color(&self) -> ratatui::style::Color {
+impl SyncStateBadge for SyncState {
+    fn badge_color(&self) -> ratatui::style::Color {
         match self {
             Self::Synced => ratatui::style::Color::Green,
             Self::Syncing => ratatui::style::Color::Cyan,
@@ -61,24 +38,6 @@ pub struct TransferProgressState {
     pub total_chunks: Option<u64>,
     pub peer_device_id: Option<String>,
     pub direction: Option<TransferDirection>,
-}
-
-
-#[must_use]
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes < KB {
-        format!("{bytes} B")
-    } else if bytes < MB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else if bytes < GB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    }
 }
 
 

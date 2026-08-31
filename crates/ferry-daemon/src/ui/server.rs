@@ -581,59 +581,18 @@ async fn api_pin_release(
 }
 
 fn percent_decode_query_value(input: &str) -> Result<String, ApiError> {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hi = chars.next().ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            let lo = chars.next().ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            let hex = format!("{hi}{lo}");
-            let byte = u8::from_str_radix(&hex, 16).map_err(|_| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "invalid percent encoding in path",
-                    "use absolute path",
-                )
-            })?;
-            if byte == 0 {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "path contains null byte",
-                    "use absolute path",
-                ));
-            }
-            out.push(byte as char);
-        } else if c == '+' {
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
-    }
-    Ok(out)
-}
-
-async fn api_fs_ls(
-    State(server): State<DashboardServer>,
-    req: axum::extract::Request,
-) -> Result<Json<Value>, ApiError> {
-    let raw_query = req.uri().query().unwrap_or("").to_string();
-    if raw_query.to_ascii_lowercase().contains("%00") {
+    let replaced = input.replace('+', " ");
+    let decoded = percent_encoding::percent_decode_str(&replaced)
+        .decode_utf8()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-path",
+                "invalid percent encoding in path",
+                "use absolute path",
+            )
+        })?;
+    if decoded.contains(' ') {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "bad-path",
@@ -641,6 +600,14 @@ async fn api_fs_ls(
             "use absolute path",
         ));
     }
+    Ok(decoded.into_owned())
+}
+
+async fn api_fs_ls(
+    State(server): State<DashboardServer>,
+    req: axum::extract::Request,
+) -> Result<Json<Value>, ApiError> {
+    let raw_query = req.uri().query().unwrap_or("").to_string();
     let mut decoded_path: Option<String> = None;
     let mut found_path = false;
     for pair in raw_query.split('&') {
@@ -654,22 +621,6 @@ async fn api_fs_ls(
         if k_dec == "path" {
             found_path = true;
             let v_dec = percent_decode_query_value(v_raw)?;
-            if v_dec.contains('\0') {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad-path",
-                    "path contains null byte",
-                    "use absolute path",
-                ));
-            }
-            if v_raw.to_ascii_lowercase().contains("%2e") && v_dec.contains("..") {
-                return Err(ApiError::new(
-                    StatusCode::FORBIDDEN,
-                    "path-traversal",
-                    format!("path {v_dec} escapes allowed root"),
-                    "path escapes allowed root",
-                ));
-            }
             if v_dec.is_empty() {
                 decoded_path = None;
             } else {
@@ -683,25 +634,6 @@ async fn api_fs_ls(
     } else {
         None
     };
-    if let Some(ref p) = path_opt {
-        let s = p.to_string_lossy().to_string();
-        if s.contains('\0') {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad-path",
-                "path contains null byte",
-                "use absolute path",
-            ));
-        }
-        if s.contains("//") {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad-path",
-                format!("path {s} contains //"),
-                "use single slashes",
-            ));
-        }
-    }
     let resp = server.backend.list_directory(path_opt).await.map_err(|e| {
         let status = match e.code.as_str() {
             "path-traversal" => StatusCode::FORBIDDEN,
