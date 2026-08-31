@@ -12,6 +12,8 @@ blake3.workspace = true
 
 iroh.workspace = true
 iroh-mdns-address-lookup = "=0.5.0"
+libc.workspace = true
+socket2.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

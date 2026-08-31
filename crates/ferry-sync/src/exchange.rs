@@ -424,11 +424,10 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
             if outcome.held == 0 && !outcome.diverged {
                 self.adopt(target, man_bytes, man)?;
             } else if outcome.held > 0 {
-                
-                
-                
-                
-                
+                self.store
+                    .put_meta(BlobKind::Manifest, &man_bytes)
+                    .map_err(wire_store_err)?;
+                self.store.flush().map_err(wire_store_err)?;
                 self.status(&format!(
                     "pin: held {} path(s) from peer {} (release with `ferry pin release`)",
                     outcome.held,

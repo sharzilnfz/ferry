@@ -207,3 +207,237 @@ fn pin_start_fails_when_daemon_not_running() {
     assert!(err.message.contains("no active background daemon"));
     assert!(err.hint.contains("ferry daemon"));
 }
+
+fn write_file_with_mtime(path: &std::path::Path, bytes: &[u8], mtime_sec: u64) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, bytes).unwrap();
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    f.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime_sec)),
+    )
+    .unwrap();
+}
+
+fn transfer_snapshot(
+    from: &ferry_store::store::Store,
+    to: &ferry_store::store::Store,
+    snap: &ferry_store::snapshot::SnapshotOutput,
+) {
+    if to.get(BlobKind::Manifest, &snap.manifest_id).is_err() {
+        let b = from.get(BlobKind::Manifest, &snap.manifest_id).unwrap();
+        to.put_blob(BlobKind::Manifest, &b).unwrap();
+    }
+    let mut stack = vec![snap.root_tree_id];
+    while let Some(id) = stack.pop() {
+        if to.get(BlobKind::TreeNode, &id).is_ok() {
+            continue;
+        }
+        let b = from.get(BlobKind::TreeNode, &id).unwrap();
+        to.put_blob(BlobKind::TreeNode, &b).unwrap();
+        let node = ferry_store::manifest::parse_tree_node(&b).unwrap();
+        for e in node.entries {
+            match e.payload {
+                ferry_store::manifest::EntryPayload::Dir { child_tree_id } => {
+                    stack.push(child_tree_id);
+                }
+                ferry_store::manifest::EntryPayload::File { chunks, .. } => {
+                    for (cid, _) in chunks {
+                        if to.get(BlobKind::DataChunk, &cid).is_err() {
+                            let cb = from.get(BlobKind::DataChunk, &cid).unwrap();
+                            to.put_blob(BlobKind::DataChunk, &cb).unwrap();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    to.flush().unwrap();
+    to.write_index_snapshot().unwrap();
+}
+
+#[test]
+fn pin_release_applies_nonconflicting_and_quarantines_conflicting_held_edits() {
+    use ferry_store::agreement::{AgreedRecord, AgreementLedger};
+    use ferry_store::format::hex;
+    use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
+
+    let (env, proj, _daemon) = setup();
+    let dev_b: [u8; 32] = [0xB2; 32];
+    let dev_b_hex = hex(&dev_b);
+
+    // Initial files with fixed mtime 1000
+    write_file_with_mtime(&proj.join("src/a.rs"), b"fn main() {}\n", 1000);
+    write_file_with_mtime(&proj.join("README.md"), b"hi\n", 1000);
+    write_file_with_mtime(&proj.join("notes.txt"), b"notes-v0", 1000);
+    write_file_with_mtime(&proj.join("doc.txt"), b"doc-v0", 1000);
+
+    let opened = ferry_cli::folder::open_folder(&proj).unwrap();
+    let poly = ferry_store::chunker::ValidatedPoly::new(opened.poly).unwrap();
+    let base_snap = snapshot_dir(
+        &opened.store,
+        poly,
+        &proj,
+        &SnapshotIdentity {
+            folder_id: opened.folder_id,
+            device_id: [0xA1; 32],
+            parent_manifest_id: [0; 32],
+            created_sec: 1000,
+            created_nsec: 0,
+        },
+    )
+    .unwrap();
+    opened.store.flush().unwrap();
+    opened.store.write_index_snapshot().unwrap();
+
+    // Record baseline agreement with peer B
+    AgreementLedger::new(opened.state_dir())
+        .record(
+            &opened.folder_id,
+            &AgreedRecord {
+                peer_device_id: dev_b,
+                manifest_id: base_snap.manifest_id,
+                agreed_sec: 1000,
+                agreed_nsec: 0,
+            },
+        )
+        .unwrap();
+
+    // Start pin
+    commands::pin::start(&proj, &["*".to_string()], 8).unwrap();
+    let st = commands::pin::status(&proj).unwrap();
+    assert_eq!(st.json["state"], "active");
+    assert_eq!(st.json["holding"], true);
+
+    // Local edits notes.txt at mtime 2000 (later than remote)
+    write_file_with_mtime(&proj.join("notes.txt"), b"notes-v1-local", 2000);
+
+    // Simulate remote peer B: creates remote tree and store
+    let remote_temp = env.work().join("peer_b");
+    std::fs::create_dir_all(remote_temp.join("src")).unwrap();
+    write_file_with_mtime(&remote_temp.join("src/a.rs"), b"fn main() {}\n", 1000);
+    write_file_with_mtime(&remote_temp.join("README.md"), b"hi\n", 1000);
+    let remote_store_dir = env.work().join("peer_b_store");
+    std::fs::create_dir_all(&remote_store_dir).unwrap();
+    let remote_store = ferry_store::store::Store::create(
+        &remote_store_dir,
+        core::array::from_fn(|i| (i * 17 + 3) as u8),
+        Box::new(ferry_store::crypto::PassthroughCipher),
+    )
+    .unwrap();
+
+    // Remote peer B edits notes.txt (mtime 1500) and doc.txt (mtime 1500)
+    write_file_with_mtime(&remote_temp.join("notes.txt"), b"notes-v1-remote", 1500);
+    write_file_with_mtime(&remote_temp.join("doc.txt"), b"doc-v1-remote", 1500);
+
+    let remote_snap = snapshot_dir(
+        &remote_store,
+        poly,
+        &remote_temp,
+        &SnapshotIdentity {
+            folder_id: opened.folder_id,
+            device_id: dev_b,
+            parent_manifest_id: base_snap.manifest_id,
+            created_sec: 1500,
+            created_nsec: 0,
+        },
+    )
+    .unwrap();
+    remote_store.flush().unwrap();
+    remote_store.write_index_snapshot().unwrap();
+
+    // Transfer remote blobs into local store (simulating sync exchange hold)
+    transfer_snapshot(&remote_store, &opened.store, &remote_snap);
+
+    // Ledger the held entries
+    let ledger = HeldLedger::new(opened.state_dir());
+    ledger
+        .append(
+            &dev_b_hex,
+            &[
+                HeldEntry {
+                    held_sec: 1500,
+                    held_nsec: 0,
+                    path: "notes.txt".into(),
+                    device_id: dev_b_hex.clone(),
+                    remote_manifest_id: hex(&remote_snap.manifest_id),
+                    chunks: vec![],
+                    decision: "conflict".into(),
+                    conflict_winner: Some("local".into()),
+                },
+                HeldEntry {
+                    held_sec: 1500,
+                    held_nsec: 0,
+                    path: "doc.txt".into(),
+                    device_id: dev_b_hex.clone(),
+                    remote_manifest_id: hex(&remote_snap.manifest_id),
+                    chunks: vec![],
+                    decision: "remote_apply".into(),
+                    conflict_winner: None,
+                },
+            ],
+        )
+        .unwrap();
+
+    let st = commands::pin::status(&proj).unwrap();
+    assert_eq!(st.json["held_changes"], 2);
+
+    // Run pin release
+    let rel = commands::pin::release(&proj).unwrap();
+    eprintln!("DEBUG rel.json: {}", serde_json::to_string_pretty(&rel.json).unwrap());
+    let cf = ferry_sync_engine::list_conflicts(&ferry_cli::folder::state_dir(&proj)).unwrap();
+    eprintln!("DEBUG conflicts in log: {cf:#?}");
+    assert_eq!(rel.json["command"], "pin");
+    assert_eq!(rel.json["action"], "release");
+    assert_eq!(rel.json["pin_ended"], true);
+    assert_eq!(rel.json["quarantined"], 1);
+    assert_eq!(rel.json["conflicts_recorded"], 1);
+    assert!(rel.json["ops_applied"].as_u64().unwrap() >= 1);
+
+    // Verify non-conflicting change applied to working tree
+    assert_eq!(
+        std::fs::read_to_string(proj.join("doc.txt")).unwrap(),
+        "doc-v1-remote"
+    );
+
+    // Verify conflicting change kept local winner in working tree
+    assert_eq!(
+        std::fs::read_to_string(proj.join("notes.txt")).unwrap(),
+        "notes-v1-local"
+    );
+
+    // Verify quarantined conflict file exists with format <file>.ferry-conflict.<device>-<timestamp>
+    let mut conflict_files = Vec::new();
+    for entry in std::fs::read_dir(&proj).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains(".ferry-conflict.") {
+            conflict_files.push(name);
+        }
+    }
+    assert_eq!(
+        conflict_files.len(),
+        1,
+        "expected 1 conflict file: {conflict_files:?}"
+    );
+    assert!(conflict_files[0].starts_with("notes.txt.ferry-conflict."));
+    assert_eq!(
+        std::fs::read_to_string(proj.join(&conflict_files[0])).unwrap(),
+        "notes-v1-remote"
+    );
+
+    // Verify conflict entry in .ferry/conflicts.jsonl
+    let conflicts =
+        ferry_sync_engine::list_conflicts(&ferry_cli::folder::state_dir(&proj)).unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].path, "notes.txt");
+    assert_eq!(conflicts[0].loser.device, dev_b_hex);
+
+    // Verify held ledger is cleaned up
+    let st_after = commands::pin::status(&proj).unwrap();
+    assert_eq!(st_after.json["holding"], false);
+    assert_eq!(st_after.json["held_changes"], 0);
+}
+

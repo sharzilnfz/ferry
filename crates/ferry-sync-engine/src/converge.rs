@@ -462,13 +462,14 @@ impl<'a> ConvergenceEngine<'a> {
         if let Some(sd) = self.state_dir.or(Some(self.store.store_dir())) {
             append_entries(sd, &conflicts)?;
         }
-
-        
+        // 5. Append held ledger if any entries were held.
         if !held.is_empty() {
             let peer_hex = hex(&remote.device_id);
             let remote_bytes = serialize_manifest(remote);
             let remote_id = *blake3::hash(&remote_bytes).as_bytes();
             let remote_hex = hex(&remote_id);
+            self.store.put_meta(BlobKind::Manifest, &remote_bytes)?;
+            self.store.flush()?;
             let entries: Vec<HeldEntry> = held
                 .iter()
                 .map(|h| HeldEntry {

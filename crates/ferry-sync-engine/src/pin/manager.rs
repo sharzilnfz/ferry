@@ -216,7 +216,7 @@ impl PinManager {
             Some(_) => None,
             None => {
                 let rec = self.store.load()?;
-                rec.as_ref().and_then(|r| {
+                let from_pin = rec.as_ref().and_then(|r| {
                     r.base_agreements.get(peer_hex).and_then(|b_hex| {
                         crate::pin::release::load_manifest(
                             store,
@@ -226,6 +226,23 @@ impl PinManager {
                         )
                         .ok()
                     })
+                });
+                from_pin.or_else(|| {
+                    if let Some(peer_bytes) = ferry_store::format::unhex::<32>(peer_hex) {
+                        if let Ok(Some(rec)) = ferry_store::agreement::AgreementLedger::new(&self.state_dir)
+                            .get(&local_manifest.folder_id, &peer_bytes)
+                        {
+                            let b_hex = ferry_store::format::hex(&rec.manifest_id);
+                            return crate::pin::release::load_manifest(
+                                store,
+                                &b_hex,
+                                peer_hex,
+                                "loaded from agreement ledger".to_string(),
+                            )
+                            .ok();
+                        }
+                    }
+                    None
                 })
             }
         };
@@ -260,6 +277,7 @@ impl PinManager {
         for peer_hex in peers {
             let plan = self.release_peer(&peer_hex, store, root, local_manifest, None, now)?;
             if plan.held_entries == 0 {
+                self.clear_peer(&peer_hex)?;
                 continue;
             }
             self.clear_peer(&peer_hex)?;

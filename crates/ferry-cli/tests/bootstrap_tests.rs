@@ -187,7 +187,23 @@ fn share_and_join_json_round_trip_two_homes() {
     let head = ferry_crypto::config_head::parse_config_head(&cfg_bytes).unwrap();
     assert_eq!(ferry_store::format::hex(&head.folder_id), folder_id_a);
 
-    
+    let id_a = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_a.path())).unwrap();
+    let id_b = ferry_crypto::identity::load_or_create(&ferry_cli::home::identity_root(home_b.path())).unwrap();
+
+    let cfg_a = std::fs::read(proj_a.join(".ferry/config")).unwrap();
+    let head_a = ferry_crypto::config_head::parse_config_head(&cfg_a).unwrap();
+    assert_eq!(head_a.entries.len(), 2, "A's config must have 2 device wraps");
+    let pubs_a: Vec<_> = head_a.entries.iter().map(|e| e.device_pub).collect();
+    assert!(pubs_a.contains(id_a.public()));
+    assert!(pubs_a.contains(id_b.public()));
+
+    let cfg_b = std::fs::read(dest_b.join(".ferry/config")).unwrap();
+    let head_b = ferry_crypto::config_head::parse_config_head(&cfg_b).unwrap();
+    assert_eq!(head_b.entries.len(), 2, "B's config must have 2 device wraps");
+    let pubs_b: Vec<_> = head_b.entries.iter().map(|e| e.device_pub).collect();
+    assert!(pubs_b.contains(id_a.public()));
+    assert!(pubs_b.contains(id_b.public()));
+
     std::env::remove_var("FERRY_HOME");
 }
 

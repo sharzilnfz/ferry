@@ -10,9 +10,11 @@ ferry-crypto = { path = "../ferry-crypto" }
 ferry-ignore = { path = "../ferry-ignore" }
 ferry-scan = { path = "../ferry-scan" }
 ferry-platform = { workspace = true }
+libc.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+socket2.workspace = true
 subtle.workspace = true
 tempfile.workspace = true
 toml = "0.8"

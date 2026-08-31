@@ -1,27 +1,14 @@
-# Issue 1: Persist un-adopted remote manifests into Store during daemon holds
+# 01: Persist un-adopted remote manifests into store during holds and fix pin release
 
-Status: ready-for-agent
-Feature: `live-testing-fixes`
-Depends on: 
-Blocks: .scratch/live-testing-fixes/issues/02-short-code-pairing-rendezvous.md
+**What to build:** When a developer edits a project folder under an active session pin, incoming sync exchanges from remote peers are held rather than merged immediately. The incoming remote manifest bytes are stored in the local content-addressed blob store during the hold. When the developer runs the pin release command, the held remote manifest is retrieved and evaluated in a three-way reconciliation against the baseline and local manifest: non-conflicting modifications land in the working tree, conflicting changes are saved as quarantined conflict files with timestamped extensions, entries are appended to the conflict log, and the pin session ends cleanly without missing-manifest errors.
 
-## Context
-When an incoming sync exchange encounters paths matched by an active session pin on Device A, `ferry-sync::exchange::Exchange` holds the incoming changes and writes entries to `.ferry/held/<peer>.jsonl`. However, because `outcome.held > 0`, it skips `self.store.put_meta(BlobKind::Manifest, &man_bytes)`.
+**Blocked by:** None (can start immediately)
 
-When the user runs `ferry pin release`, `PinManager::release_peer` tries to retrieve the remote manifest via `store.get(BlobKind::Manifest, &id)`, which fails with:
-```text
-error: held manifest <hash> is missing from the store (code=held-manifest-missing)
-hint: the held change's manifest left the store; release cannot reconstruct it safely
-```
+**Status:** done
 
-## Target Files
-- `crates/ferry-sync/src/exchange.rs`
-- `crates/ferry-sync-engine/src/converge.rs`
-- `crates/ferry-sync-engine/src/pin/manager.rs`
-- `crates/ferry-cli/src/commands/pin.rs`
-
-## Requirements
-1. In `ferry-sync::exchange::Exchange::exchange_folder()`, ensure remote manifest bytes are stored via `self.store.put_meta(BlobKind::Manifest, &man_bytes)` whenever changes are held (`outcome.held > 0`).
-2. In `ferry-sync-engine::converge::ConvergenceEngine` / `PinManager`, ensure held manifests can be safely loaded from `Store` and reconciled against the base manifest during `pin release`.
-3. Ensure `PinManager::release` performs three-way reconciliation, creates `<file>.ferry-conflict.<device_short>-<timestamp>` for collisions, records to `.ferry/conflicts.jsonl`, deletes `.ferry/held/<peer>.jsonl`, and transitions pin state to ended.
-4. Add an automated test verifying `ferry pin start` -> remote edit -> `ferry pin release` produces quarantine files and logs to `conflicts.jsonl` with exit code 0.
+- [x] Incoming sync exchanges store remote manifest bytes in the store whenever changes are held by an active pin
+- [x] Running pin release loads held manifests from the store and reconciles them against baseline and local state
+- [x] Non-conflicting held modifications are applied to the working directory on pin release
+- [x] Conflicting held modifications produce quarantined conflict files with format `<file>.ferry-conflict.<device>-<timestamp>`
+- [x] Releasing a pin appends conflict entries to the conflict log and cleans up internal held peer state
+- [x] Automated tests verify that holding remote edits and executing pin release completes with exit code 0 and zero missing-manifest errors

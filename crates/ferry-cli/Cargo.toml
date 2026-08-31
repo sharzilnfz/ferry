@@ -36,6 +36,7 @@ lean = []
 
 [dev-dependencies]
 tempfile.workspace = true
+ferry-store = { path = "../ferry-store", features = ["test-util"] }
 ferry-folder = { workspace = true, features = ["test-util"] }
 ferry-platform = { path = "../ferry-platform" }
 axum = { workspace = true }

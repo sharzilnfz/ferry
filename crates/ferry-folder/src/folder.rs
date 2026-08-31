@@ -473,7 +473,7 @@ pub fn short_device(dev: &[u8; 32]) -> String {
 }
 
 
-pub(crate) fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> FolderResult<Fmk> {
+pub fn unwrap_own_fmk(opened: &OpenFolder, identity: &DeviceIdentity) -> FolderResult<Fmk> {
     let head_bytes = std::fs::read(dot_dir(&opened.root).join(CONFIG_FILE)).code(
         "config-corrupt",
         "the folder's key envelope is missing or unreadable",

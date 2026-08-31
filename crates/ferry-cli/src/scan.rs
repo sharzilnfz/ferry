@@ -29,18 +29,35 @@ pub struct OneShot {
 
 pub fn one_shot(opened: &OpenFolder, device_id: [u8; 32]) -> CliResult<OneShot> {
     let rules = folder_rules(opened)?;
-    let out = one_shot_raw(
+    let parent = {
+        let pin_rec = ferry_sync_engine::pin::PinStore::new(opened.state_dir())
+            .load()
+            .ok()
+            .flatten();
+        let base_from_pin = pin_rec.and_then(|r| {
+            r.base_agreements
+                .values()
+                .next()
+                .and_then(|h| ferry_store::format::unhex::<32>(h))
+        });
+        base_from_pin.or_else(|| {
+            ferry_store::agreement::AgreementLedger::new(opened.state_dir())
+                .list_folder(&opened.folder_id)
+                .ok()
+                .and_then(|recs| recs.into_iter().next().map(|(_, r)| r.manifest_id))
+        })
+    };
+    let out = one_shot_raw_with_parent(
         &opened.root,
         &opened.store,
         opened.poly,
         opened.folder_id,
         device_id,
         rules,
+        parent,
     )?;
     Ok(out)
 }
-
-
 
 pub fn one_shot_raw(
     root: &Path,
@@ -50,9 +67,18 @@ pub fn one_shot_raw(
     device_id: [u8; 32],
     ignore: Arc<dyn IgnorePolicy>,
 ) -> CliResult<OneShot> {
-    
-    
-    
+    one_shot_raw_with_parent(root, store, poly, folder_id, device_id, ignore, None)
+}
+
+pub fn one_shot_raw_with_parent(
+    root: &Path,
+    store: &Arc<ferry_store::store::Store>,
+    poly: u64,
+    folder_id: [u8; 16],
+    device_id: [u8; 32],
+    ignore: Arc<dyn IgnorePolicy>,
+    parent_manifest_id: Option<BlobId>,
+) -> CliResult<OneShot> {
     let poly = ValidatedPoly::try_from(poly).map_err(|e| {
         CliError::new(
             "poly-invalid",
@@ -66,8 +92,12 @@ pub fn one_shot_raw(
         folder_id,
         device_id,
     };
+    let cfg = ScanConfig {
+        parent_manifest_id,
+        ..ScanConfig::default()
+    };
     let engine =
-        ScanEngine::watch_with(root, handle, ScanConfig::default(), ignore).map_err(|e| {
+        ScanEngine::watch_with(root, handle, cfg, ignore).map_err(|e| {
             CliError::new(
                 "scan",
                 e.to_string(),

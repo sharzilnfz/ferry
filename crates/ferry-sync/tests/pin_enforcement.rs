@@ -122,7 +122,19 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     assert_eq!(notes.device_id, b_hex);
     assert_eq!(notes.decision, "remote_apply");
     assert!(!notes.chunks.is_empty(), "held bytes ride the fetch");
-    assert_eq!(unhex::<32>(&notes.remote_manifest_id).map(|_| ()), Some(()));
+    let remote_man_id = unhex::<32>(&notes.remote_manifest_id).unwrap();
+    let opened_a = ferry_folder::folder::open_folder(
+        &fx._dir.path().join("a/store"),
+        &engine::device_identity_for_tag(TAG_A),
+    )
+    .unwrap();
+    assert!(
+        opened_a
+            .store
+            .get(ferry_store::format::BlobKind::Manifest, &remote_man_id)
+            .is_ok(),
+        "held remote manifest must be stored in the content-addressed blob store during hold"
+    );
 
     
     

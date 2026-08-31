@@ -49,7 +49,10 @@
 
 
 use std::collections::HashMap;
+use std::io::{self, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -99,6 +102,7 @@ pub struct SessionRecord {
     pub poly: u64,
     pub expires_at: SystemTime,
     pub initiator_pub: [u8; 32],
+    pub server_stop: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for SessionRecord {
@@ -339,6 +343,57 @@ impl PairingRitual {
         let code = pc.as_str().to_string();
         let expires_at = pc.expires_at();
 
+        // Launch network rendezvous server for this pairing code
+        let identity_clone = self.identity.clone();
+        let record_folder_path = opened.root.clone();
+        let record_folder_id = opened.folder_id;
+        let record_fmk = fmk;
+        let record_poly = opened.poly;
+        let record_code = code_key(&code);
+        let rendezvous_clone = Arc::clone(&self.rendezvous);
+        let offer_bytes_for_server = offer_bytes.clone();
+
+        let server_stop = start_pairing_server(
+            code.clone(),
+            offer_bytes.clone(),
+            expires_at,
+            move |resp_bytes| {
+                let offer_parsed = PairingOffer::parse(&offer_bytes_for_server)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                let response = PairingResponse::parse(&resp_bytes)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                let done = complete_pairing(
+                    &offer_parsed,
+                    &offer_bytes_for_server,
+                    &response,
+                    &record_fmk,
+                    &identity_clone,
+                )
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+                let _ = append_wrap_entry_for(
+                    &record_folder_path,
+                    record_folder_id,
+                    &done.peer_pub,
+                    &done.wrapped_for_peer,
+                );
+
+                let grant_bytes = seal_grant(
+                    &offer_bytes_for_server,
+                    &done.wrapped_for_peer,
+                    record_poly,
+                )
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+                if let Ok(mut map) = rendezvous_clone.lock() {
+                    map.remove(&record_code);
+                }
+
+                Ok(grant_bytes)
+            },
+        )
+        .ok();
+
         let record = SessionRecord {
             code: code_key(&code),
             folder_id: opened.folder_id,
@@ -349,6 +404,7 @@ impl PairingRitual {
             poly: opened.poly,
             expires_at,
             initiator_pub: *self.identity.public(),
+            server_stop,
         };
         self.rendezvous
             .lock()
@@ -364,9 +420,8 @@ impl PairingRitual {
         })
     }
 
-    
-    
-    
+    /// Creates an offer given only an opened folder's 32-hex `folder_id`.
+    /// Resolves the folder path from overrides or `FolderInventory`.
     pub fn create_offer_for_folder(&self, folder_id_hex: &str) -> FolderResult<PendingOffer> {
         let hex = folder_id_hex.trim().to_ascii_lowercase();
         if ferry_store::format::unhex::<16>(&hex).is_none() {
@@ -387,10 +442,8 @@ impl PairingRitual {
         self.create_offer(&opened)
     }
 
-    
-    
-    
-    
+    /// Single poll step for an active offer; returns `Ok(Some(completed))`
+    /// if the other device has answered, or `Ok(None)` if still waiting.
     pub fn poll_offer(&self, opened: &OpenFolder) -> FolderResult<Option<PairingCompleted>> {
         poll_offer_at(
             opened,
@@ -399,18 +452,17 @@ impl PairingRitual {
         )
     }
 
-    
+    // ---------------------------------------------------------------------
+    // Accepting / joining an offer
+    // ---------------------------------------------------------------------
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    /// Accepts an offer in any supported shape:
+    /// 1. A 6-character short code (`XUM5CA`, `xum-5ca`, etc.)
+    /// 2. A sealed payload envelope string (`FERRY1:...`)
+    /// 3. A path to a payload file on disk (`.../pair-offer.ferry-pair`)
+    ///
+    /// If `target` is provided, that directory will be initialized; if `None`,
+    /// the current directory is used.
     pub fn accept_offer(
         &self,
         code_or_payload: &str,
@@ -428,11 +480,7 @@ impl PairingRitual {
         self.accept_payload(envelope, offer_file, target)
     }
 
-    
-    
-    
-    
-    
+    /// In-band acceptance of a 6-character short code.
     fn accept_code(&self, code: &str, target: Option<&Path>) -> FolderResult<PendingAcceptance> {
         let key = code_key(code);
         if !PairingCode::verify(code) {
@@ -442,46 +490,132 @@ impl PairingRitual {
                 "check the code and try again",
             ));
         }
-        let record = self.take_session(&key)?;
-        let accepted = self.join_via_session(&record, target)?;
+        if let Some(record) = self.peek_session(&key) {
+            let record = self.consume_expired(&record)?;
+            let accepted = self.join_via_session(&record, target)?;
+            return Ok(PendingAcceptance {
+                expected_short_code: record.code,
+                response_path: None,
+                target: accepted.folder.clone(),
+                grant_path: None,
+                offer_bytes: record.offer_bytes,
+                identity: self.identity.clone(),
+                done: Some(accepted),
+            });
+        }
+        let accepted = self.join_via_network(&key, target)?;
         Ok(PendingAcceptance {
-            expected_short_code: record.code,
+            expected_short_code: key,
             response_path: None,
             target: accepted.folder.clone(),
             grant_path: None,
-            offer_bytes: record.offer_bytes,
+            offer_bytes: vec![],
             identity: self.identity.clone(),
             done: Some(accepted),
         })
     }
 
-    
-    
     fn accept_envelope(
         &self,
         envelope: PayloadEnvelope,
         target: Option<&Path>,
     ) -> FolderResult<PendingAcceptance> {
-        match self.peek_session(&envelope.code) {
-            Some(record) => {
-                let record = self.consume_expired(&record)?;
-                let accepted = self.join_via_session(&record, target)?;
-                Ok(PendingAcceptance {
-                    expected_short_code: record.code,
-                    response_path: None,
-                    target: accepted.folder.clone(),
-                    grant_path: None,
-                    offer_bytes: record.offer_bytes,
-                    identity: self.identity.clone(),
-                    done: Some(accepted),
-                })
-            }
-            None => Err(FolderError::new(
-                "no-answer-channel",
-                "this offer has no shared location to answer beside",
-                "pass the path to the .ferry-pair payload file instead, or use the 6-character code",
-            )),
+        if expired(envelope.expires_at, SystemTime::now()) {
+            return Err(FolderError::new(
+                "pairing-expired",
+                format!("offer {} expired", envelope.code),
+                "ask the sharing device to create a new code",
+            ));
         }
+        if let Some(record) = self.peek_session(&envelope.code) {
+            let record = self.consume_expired(&record)?;
+            let accepted = self.join_via_session(&record, target)?;
+            return Ok(PendingAcceptance {
+                expected_short_code: record.code,
+                response_path: None,
+                target: accepted.folder.clone(),
+                grant_path: None,
+                offer_bytes: record.offer_bytes,
+                identity: self.identity.clone(),
+                done: Some(accepted),
+            });
+        }
+        if let Ok(accepted) = self.join_via_network(&envelope.code, target) {
+            return Ok(PendingAcceptance {
+                expected_short_code: envelope.code,
+                response_path: None,
+                target: accepted.folder.clone(),
+                grant_path: None,
+                offer_bytes: envelope.offer_bytes,
+                identity: self.identity.clone(),
+                done: Some(accepted),
+            });
+        }
+        Err(FolderError::new(
+            "no-answer-channel",
+            "this offer has no shared location to answer beside",
+            "pass the path to the .ferry-pair payload file instead, or use the 6-character code",
+        ))
+    }
+
+    fn join_via_network(&self, key: &str, target: Option<&Path>) -> FolderResult<Accepted> {
+        let target = target.unwrap_or(Path::new("."));
+        if dot_dir(target).is_dir() {
+            return Err(FolderError::new(
+                "already-initialized",
+                format!("{} already contains a .ferry store", target.display()),
+                "pick an empty directory",
+            ));
+        }
+
+        let identity = self.identity.clone();
+        let target_buf = target.to_path_buf();
+
+        let accepted = client_discover_and_join(
+            key,
+            Duration::from_secs(3),
+            move |offer_bytes| {
+                let offer = PairingOffer::parse(&offer_bytes)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                let now = ferry_platform::time::now_unix().0;
+                let response = respond(&offer, &identity, now);
+                let resp_bytes = response.serialize();
+
+                let grant_handler = move |grant_bytes: Vec<u8>| -> std::io::Result<Accepted> {
+                    let (folder_id, poly, wrapped) = open_grant(&offer_bytes, &grant_bytes)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                    let fmk = *unwrap_folder_key(&wrapped, &folder_id, &identity)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+
+                    let accepted = adopt_and_record(
+                        &target_buf,
+                        &identity,
+                        folder_id,
+                        &fmk,
+                        poly,
+                        &offer_bytes,
+                    )
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+                    Ok(accepted)
+                };
+
+                Ok((resp_bytes, grant_handler))
+            },
+        )
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                FolderError::new(
+                    "pairing-not-found",
+                    format!("pairing code {key} not found"),
+                    "check the code and try again",
+                )
+            } else {
+                FolderError::new("pairing-failed", e.to_string(), "retry pairing")
+            }
+        })?;
+
+        Ok(accepted)
     }
 
     
@@ -543,19 +677,11 @@ impl PairingRitual {
 
     
     
-    fn take_session(&self, key: &str) -> FolderResult<SessionRecord> {
-        let record = self.peek_session(key).ok_or_else(|| {
-            FolderError::new(
-                "pairing-not-found",
-                format!("pairing code {key} not found"),
-                "check the code and try again",
-            )
-        })?;
-        self.consume_expired(&record)
-    }
-
     fn consume_expired(&self, record: &SessionRecord) -> FolderResult<SessionRecord> {
         if expired(record.expires_at, SystemTime::now()) {
+            if let Some(ref stop) = record.server_stop {
+                stop.store(true, Ordering::SeqCst);
+            }
             self.rendezvous
                 .lock()
                 .expect("rendezvous map")
@@ -640,6 +766,9 @@ impl PairingRitual {
         );
 
         
+        if let Some(ref stop) = record.server_stop {
+            stop.store(true, Ordering::SeqCst);
+        }
         self.rendezvous
             .lock()
             .expect("rendezvous map")
@@ -1102,4 +1231,261 @@ fn poll_offer_at(
         offer_path: offer_path.to_path_buf(),
         grant_path,
     }))
+}
+
+// ---------------------------------------------------------------------
+// Network Rendezvous Protocol over UDP Discovery & TCP Handshake
+// ---------------------------------------------------------------------
+
+pub const DISCOVERY_PORT: u16 = 44556;
+pub const MULTICAST_ADDR: &str = "239.255.42.99";
+pub const MAX_PAIRING_FRAME_LEN: usize = 1024 * 1024;
+
+pub fn topic_for_code(code: &str) -> String {
+    let clean: String = code.chars().filter(|c| *c != '-' && *c != ' ').collect();
+    format!("ferry-pair-{}", clean.to_ascii_lowercase())
+}
+
+pub fn service_name_for_code(code: &str) -> String {
+    let clean: String = code.chars().filter(|c| *c != '-' && *c != ' ').collect();
+    format!("ferry-pair-{}", clean.to_ascii_uppercase())
+}
+
+pub fn send_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
+    if payload.len() > MAX_PAIRING_FRAME_LEN {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "frame too large"));
+    }
+    let len = (payload.len() as u32).to_le_bytes();
+    writer.write_all(&len)?;
+    if !payload.is_empty() {
+        writer.write_all(payload)?;
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+pub fn recv_frame<R: Read>(reader: &mut R) -> io::Result<Vec<u8>> {
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf)?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > MAX_PAIRING_FRAME_LEN {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+    }
+    let mut buf = vec![0u8; len];
+    if len > 0 {
+        reader.read_exact(&mut buf)?;
+    }
+    Ok(buf)
+}
+
+pub fn bind_discovery_socket(port: u16) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    let _ = socket.set_reuse_address(true);
+    #[cfg(unix)]
+    unsafe {
+        use std::os::fd::AsRawFd;
+        let optval: libc::c_int = 1;
+        let _ = libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            std::ptr::addr_of!(optval).cast::<libc::c_void>(),
+            std::mem::size_of_val(&optval) as libc::socklen_t,
+        );
+    }
+    let _ = socket.set_broadcast(true);
+    let _ = socket.set_multicast_loop_v4(true);
+    let bind_addr: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    socket.bind(&bind_addr.into())?;
+    if let Ok(mcast_ip) = MULTICAST_ADDR.parse::<Ipv4Addr>() {
+        let _ = socket.join_multicast_v4(&mcast_ip, &Ipv4Addr::UNSPECIFIED);
+    }
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
+}
+
+pub fn start_pairing_server<F>(
+    code: String,
+    offer_bytes: Vec<u8>,
+    expires_at: SystemTime,
+    on_response: F,
+) -> io::Result<Arc<AtomicBool>>
+where
+    F: FnOnce(Vec<u8>) -> io::Result<Vec<u8>> + Send + 'static,
+{
+    let tcp_listener = TcpListener::bind("0.0.0.0:0")?;
+    tcp_listener.set_nonblocking(true)?;
+    let tcp_port = tcp_listener.local_addr()?.port();
+
+    let udp_socket = bind_discovery_socket(DISCOVERY_PORT).ok();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let srv_stopped = Arc::clone(&stopped);
+    let service_name = service_name_for_code(&code);
+
+    std::thread::spawn(move || {
+        let mut on_response_opt = Some(on_response);
+        let mut buf = [0u8; 1024];
+
+        while !srv_stopped.load(Ordering::SeqCst) {
+            if SystemTime::now() > expires_at {
+                break;
+            }
+
+            // 1. Check UDP discovery probes
+            if let Some(ref udp) = udp_socket {
+                while let Ok((n, src)) = udp.recv_from(&mut buf) {
+                    if let Ok(msg) = std::str::from_utf8(&buf[..n]) {
+                        let trimmed = msg.trim();
+                        if let Some(requested_svc) = trimmed.strip_prefix("FERRY_DISCOVER:") {
+                            if requested_svc == service_name {
+                                let reply = format!("FERRY_OFFER:{service_name}:{tcp_port}\n");
+                                let _ = udp.send_to(reply.as_bytes(), src);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Check TCP incoming connections
+            match tcp_listener.accept() {
+                Ok((mut stream, _peer_addr)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+
+                    // Step 1: Send offer
+                    if send_frame(&mut stream, &offer_bytes).is_err() {
+                        continue;
+                    }
+
+                    // Step 2: Receive response
+                    let response_bytes = match recv_frame(&mut stream) {
+                        Ok(b) => b,
+                        Err(_) => continue,
+                    };
+
+                    // Step 3: Execute callback
+                    if let Some(cb) = on_response_opt.take() {
+                        match cb(response_bytes) {
+                            Ok(grant_bytes) => {
+                                let _ = send_frame(&mut stream, &grant_bytes);
+                                srv_stopped.store(true, Ordering::SeqCst);
+                                break;
+                            }
+                            Err(_) => {
+                                let _ = send_frame(&mut stream, &[]);
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(_) => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    });
+
+    Ok(stopped)
+}
+
+pub fn client_discover_and_join<H, G, R>(
+    code: &str,
+    timeout: Duration,
+    perform_handshake: H,
+) -> io::Result<R>
+where
+    H: FnOnce(Vec<u8>) -> io::Result<(Vec<u8>, G)>,
+    G: FnOnce(Vec<u8>) -> io::Result<R>,
+{
+    let service_name = service_name_for_code(code);
+    let probe = format!("FERRY_DISCOVER:{service_name}\n");
+
+    let udp_socket = UdpSocket::bind("0.0.0.0:0")?;
+    udp_socket.set_broadcast(true)?;
+    udp_socket.set_nonblocking(true)?;
+
+    let deadline = Instant::now() + timeout;
+    let mut discovered_addr: Option<SocketAddr> = None;
+    let mut buf = [0u8; 1024];
+
+    while Instant::now() < deadline && discovered_addr.is_none() {
+        // Send probes to loopback, LAN broadcast, and multicast
+        let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::from(([127, 0, 0, 1], DISCOVERY_PORT)));
+        let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)));
+        if let Ok(mcast_ip) = MULTICAST_ADDR.parse::<Ipv4Addr>() {
+            let _ = udp_socket.send_to(probe.as_bytes(), SocketAddr::new(IpAddr::V4(mcast_ip), DISCOVERY_PORT));
+        }
+
+        // Wait for reply
+        let poll_end = Instant::now() + Duration::from_millis(150);
+        while Instant::now() < poll_end {
+            match udp_socket.recv_from(&mut buf) {
+                Ok((n, src)) => {
+                    if let Ok(reply) = std::str::from_utf8(&buf[..n]) {
+                        let trimmed = reply.trim();
+                        if let Some(rest) = trimmed.strip_prefix("FERRY_OFFER:") {
+                            let mut parts = rest.split(':');
+                            if let (Some(svc), Some(port_str)) = (parts.next(), parts.next()) {
+                                if svc == service_name {
+                                    if let Ok(port) = port_str.parse::<u16>() {
+                                        let target_ip = if src.ip().is_unspecified() {
+                                            IpAddr::V4(Ipv4Addr::LOCALHOST)
+                                        } else {
+                                            src.ip()
+                                        };
+                                        discovered_addr = Some(SocketAddr::new(target_ip, port));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    let tcp_addr = discovered_addr.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("no pairing offer discovered for code {code} within {timeout:?}"),
+        )
+    })?;
+
+    let mut stream = TcpStream::connect_timeout(&tcp_addr, Duration::from_secs(5))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    // Step 1: Read offer
+    let offer_bytes = recv_frame(&mut stream)?;
+    if offer_bytes.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty offer received"));
+    }
+
+    // Step 2: Run client handshake
+    let (response_bytes, grant_handler) = perform_handshake(offer_bytes)?;
+
+    // Step 3: Send response
+    send_frame(&mut stream, &response_bytes)?;
+
+    // Step 4: Receive grant
+    let grant_bytes = recv_frame(&mut stream)?;
+    if grant_bytes.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty grant received"));
+    }
+
+    // Step 5: Process grant
+    grant_handler(grant_bytes)
 }

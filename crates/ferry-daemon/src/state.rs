@@ -180,7 +180,9 @@ impl DaemonState {
 
     
     pub fn release_pin(&self) -> Result<bool, PinError> {
-        PinManager::new(self.state_dir()).stop_session()
+        let res = PinManager::new(self.state_dir()).stop_session();
+        self.handle.trigger_scan();
+        res
     }
 
     

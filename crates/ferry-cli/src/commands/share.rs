@@ -73,11 +73,10 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
     }
 
     
-    if let Some(out) = try_pairing_code_share(&opened, &findings) {
+    if let Some(out) = try_pairing_code_share(&opened, &findings, timeout_secs) {
         return out;
     }
 
-    
     let identity = {
         let home = crate::home::ferry_home()?;
         ferry_crypto::identity::load_or_create(&crate::home::identity_root(&home)).map_err(|e| {
@@ -122,6 +121,7 @@ pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> 
 fn try_pairing_code_share(
     opened: &folder::OpenFolder,
     findings: &[Finding],
+    timeout_secs: u64,
 ) -> Option<CliResult<Output>> {
     let home = crate::home::ferry_home().ok()?;
     let identity =
@@ -180,6 +180,25 @@ fn try_pairing_code_share(
             human
         );
     }
+
+    if timeout_secs > 0 {
+        use std::io::Write;
+        println!("{}", serde_json::to_string(&json_doc).unwrap());
+        let _ = std::io::stdout().flush();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let key: String = code.chars().filter(|c| *c != '-' && *c != ' ').collect();
+        while std::time::Instant::now() < deadline {
+            let map = ferry_folder::pairing::shared_rendezvous();
+            if let Ok(guard) = map.lock() {
+                if !guard.contains_key(&key) {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     Some(Ok(Output::new(json_doc, human)))
 }
 
