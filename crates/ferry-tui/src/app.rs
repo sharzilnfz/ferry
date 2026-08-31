@@ -17,6 +17,14 @@ use crate::terminal::TerminalEvents;
 use crate::ui;
 use ferry_platform::time::current_time_str;
 
+enum KeyOutcome {
+    Handled,
+    Command(ClientCommand),
+    OpenPicker,
+    PickerEnter(std::path::PathBuf),
+    PickerSpace,
+}
+
 
 
 pub struct TuiApp {
@@ -192,167 +200,18 @@ impl TuiApp {
         }
     }
 
-    
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<ClientCommand> {
-        
+    fn handle_key_inner(&mut self, key: KeyEvent) -> KeyOutcome {
         if key.kind == KeyEventKind::Release {
-            return None;
+            return KeyOutcome::Handled;
         }
-
-        
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if let KeyCode::Char('c' | 'C') = key.code {
                 self.state.should_quit = true;
-                return None;
+                return KeyOutcome::Handled;
             }
         }
-
-        
-        if let Some(ref mut picker) = self.picker {
-            match key.code {
-                KeyCode::Esc => {
-                    if picker.has_filter() {
-                        picker.clear_filter();
-                    } else {
-                        self.picker = None;
-                    }
-                    return None;
-                }
-                KeyCode::Up => {
-                    picker.move_up();
-                    return None;
-                }
-                KeyCode::Down => {
-                    picker.move_down();
-                    return None;
-                }
-                KeyCode::Backspace => {
-                    picker.pop_filter_char();
-                    return None;
-                }
-                KeyCode::Enter => {
-                    if let Some(target) = picker.enter() {
-                        let mut next = PickerState::new();
-                        next.open(Some(target));
-                        next.loading = true;
-                        self.picker = Some(next);
-                    }
-                    return None;
-                }
-                KeyCode::Char(' ') => {
-                    match picker.try_select() {
-                        PickerSelectResult::AlreadySynced(_) => {
-                            let hint = "already synced".to_string();
-                            if let Some(p) = self.picker.as_mut() {
-                                p.hint = Some(hint.clone());
-                            }
-                            self.state
-                                .activity_log
-                                .push_warn(current_time_str(), "already synced");
-                        }
-                        PickerSelectResult::NotInitialized(entry) => {
-                            let err = ferry_folder::FolderError::not_initialized(&entry.path);
-                            let msg = format!("{} — {}", err.message, err.hint);
-                            if let Some(p) = self.picker.as_mut() {
-                                p.hint = Some(msg.clone());
-                            }
-                            self.state.activity_log.push_warn(current_time_str(), msg);
-                        }
-                        PickerSelectResult::Selected(_) => {
-                            self.state.activity_log.push_info(
-                                current_time_str(),
-                                "folder selected (sync handle pending backend)",
-                            );
-                        }
-                        PickerSelectResult::Nothing => {}
-                    }
-                    return None;
-                }
-                KeyCode::BackTab | KeyCode::Tab => {
-                    return None;
-                }
-                KeyCode::Left | KeyCode::Right => {
-                    return None;
-                }
-                KeyCode::Char(c) => {
-                    if !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT)
-                    {
-                        picker.push_filter_char(c);
-                        return None;
-                    }
-                }
-                _ => return None,
-            }
-        }
-
-        
-        if self.state.show_conflicts_modal {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q' | 'Q' | 'c' | 'C') => {
-                    self.state.show_conflicts_modal = false;
-                    return None;
-                }
-                _ => return None,
-            }
-        }
-
-        match key.code {
-            KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
-                self.state.should_quit = true;
-                None
-            }
-            KeyCode::Char('a' | 'A' | 'o' | 'O') => {
-                if self.is_headless() {
-                    let err = picker::headless_error();
-                    self.state
-                        .activity_log
-                        .push_error(current_time_str(), format!("Picker error: {err}"));
-                    return None;
-                }
-                let mut p = PickerState::new();
-                p.open(None);
-                p.loading = true;
-                self.picker = Some(p);
-                None
-            }
-            KeyCode::Char('p' | 'P') => {
-                if self.state.pin.holding || self.state.engine_state == SyncState::Pinned {
-                    Some(ClientCommand::ReleasePin)
-                } else {
-                    Some(ClientCommand::StartPin {
-                        paths: Vec::new(),
-                        duration_hours: None,
-                    })
-                }
-            }
-            KeyCode::Char('r' | 'R') => Some(ClientCommand::TriggerScan),
-            KeyCode::Char('c' | 'C') => {
-                self.state.show_conflicts_modal = true;
-                Some(ClientCommand::ListConflicts)
-            }
-            _ => None,
-        }
-    }
-
-    
-    pub async fn handle_key_action(&mut self, backend: &Arc<dyn UiBackend>, key: KeyEvent) {
-        if key.kind == KeyEventKind::Release {
-            return;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char('c' | 'C') = key.code {
-                self.state.should_quit = true;
-                return;
-            }
-        }
-
-        
         if self.picker.is_some() {
-            
-            let code = key.code;
-            match code {
+            match key.code {
                 KeyCode::Esc => {
                     let has_filter = self.picker.as_ref().is_some_and(PickerState::has_filter);
                     if has_filter {
@@ -362,157 +221,178 @@ impl TuiApp {
                     } else {
                         self.picker = None;
                     }
-                    return;
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Up => {
                     if let Some(p) = self.picker.as_mut() {
                         p.move_up();
                     }
-                    return;
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Down => {
                     if let Some(p) = self.picker.as_mut() {
                         p.move_down();
                     }
-                    return;
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Backspace => {
                     if let Some(p) = self.picker.as_mut() {
                         p.pop_filter_char();
                     }
-                    return;
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Enter => {
-                    let target = self.picker.as_ref().and_then(PickerState::enter);
-                    if let Some(path) = target {
-                        let mut next = PickerState::new();
-                        next.open(Some(path.clone()));
-                        match next.load(backend.as_ref()).await {
-                            Ok(()) => self.picker = Some(next),
-                            Err(e) => {
-                                self.state.activity_log.push_error(
-                                    current_time_str(),
-                                    format!("Picker load error: {e}"),
-                                );
-                                
-                            }
-                        }
+                    if let Some(target) = self.picker.as_ref().and_then(PickerState::enter) {
+                        return KeyOutcome::PickerEnter(target);
                     }
-                    return;
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Char(' ') => {
-                    let result = self.picker.as_mut().map(PickerState::try_select);
-                    match result {
-                        Some(PickerSelectResult::Selected(entry)) => {
-                            if !entry.is_initialized {
-                                let err = ferry_folder::FolderError::not_initialized(&entry.path);
-                                self.state.activity_log.push_warn(
-                                    current_time_str(),
-                                    format!("{} — {}", err.message, err.hint),
-                                );
-                                return;
-                            }
-                            match backend.register_folder(entry.path.clone()).await {
-                                Ok(rec) => {
-                                    self.state.activity_log.push_info(
-                                        current_time_str(),
-                                        format!("Folder registered: {}", rec.path.display()),
-                                    );
-                                    self.picker = None;
-                                }
-                                Err(e) => {
-                                    self.state.activity_log.push_error(
-                                        current_time_str(),
-                                        format!("Register folder error: {e}"),
-                                    );
-                                }
-                            }
-                        }
-                        Some(PickerSelectResult::AlreadySynced(_)) => {
-                            self.state
-                                .activity_log
-                                .push_warn(current_time_str(), "already synced");
-                        }
-                        Some(PickerSelectResult::NotInitialized(entry)) => {
-                            let err = ferry_folder::FolderError::not_initialized(&entry.path);
-                            self.state.activity_log.push_warn(
-                                current_time_str(),
-                                format!("{} — {}", err.message, err.hint),
-                            );
-                        }
-                        Some(PickerSelectResult::Nothing) | None => {}
-                    }
-                    return;
+                    return KeyOutcome::PickerSpace;
+                }
+                KeyCode::BackTab | KeyCode::Tab => {
+                    return KeyOutcome::Handled;
+                }
+                KeyCode::Left | KeyCode::Right => {
+                    return KeyOutcome::Handled;
                 }
                 KeyCode::Char(c) => {
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
                         && !key.modifiers.contains(KeyModifiers::ALT)
                     {
-                        
-                        
                         if let Some(p) = self.picker.as_mut() {
-                            
-                            
-                            
                             p.push_filter_char(c);
                         }
-                        return;
                     }
+                    return KeyOutcome::Handled;
                 }
-                _ => {
-                    return;
-                }
+                _ => return KeyOutcome::Handled,
             }
         }
-
         if self.state.show_conflicts_modal {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q' | 'Q' | 'c' | 'C') => {
                     self.state.show_conflicts_modal = false;
-                    return;
+                    return KeyOutcome::Handled;
                 }
-                _ => return,
+                _ => return KeyOutcome::Handled,
             }
         }
-
         match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => {
                 self.state.should_quit = true;
+                KeyOutcome::Handled
             }
             KeyCode::Char('a' | 'A' | 'o' | 'O') => {
-                if let Err(e) = self.open_picker(backend, None).await {
-                    
-                    let _ = e;
-                }
-            }
-            KeyCode::Char('r' | 'R') => {
-                if let Err(e) = backend.trigger_scan().await {
+                if self.is_headless() {
+                    let err = picker::headless_error();
                     self.state
                         .activity_log
-                        .push_error(current_time_str(), format!("Trigger scan error: {e}"));
-                } else {
-                    self.state
-                        .activity_log
-                        .push_info(current_time_str(), "Scan triggered");
+                        .push_error(current_time_str(), format!("Picker error: {err}"));
+                    return KeyOutcome::Handled;
                 }
+                KeyOutcome::OpenPicker
             }
             KeyCode::Char('p' | 'P') => {
                 if self.state.pin.holding || self.state.engine_state == SyncState::Pinned {
-                    match backend.release_pin().await {
-                        Ok(summary) => {
-                            self.state.activity_log.push_info(
-                                current_time_str(),
-                                format!("Pin released: {}", summary.status),
-                            );
-                        }
-                        Err(e) => {
-                            self.state
-                                .activity_log
-                                .push_error(current_time_str(), format!("Release pin error: {e}"));
-                        }
-                    }
+                    KeyOutcome::Command(ClientCommand::ReleasePin)
                 } else {
-                    match backend.start_pin(Vec::new(), None).await {
+                    KeyOutcome::Command(ClientCommand::StartPin {
+                        paths: Vec::new(),
+                        duration_hours: None,
+                    })
+                }
+            }
+            KeyCode::Char('r' | 'R') => KeyOutcome::Command(ClientCommand::TriggerScan),
+            KeyCode::Char('c' | 'C') => {
+                self.state.show_conflicts_modal = true;
+                KeyOutcome::Command(ClientCommand::ListConflicts)
+            }
+            _ => KeyOutcome::Handled,
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) -> Option<ClientCommand> {
+        match self.handle_key_inner(key) {
+            KeyOutcome::Handled => None,
+            KeyOutcome::Command(cmd) => Some(cmd),
+            KeyOutcome::OpenPicker => {
+                let mut p = PickerState::new();
+                p.open(None);
+                p.loading = true;
+                self.picker = Some(p);
+                None
+            }
+            KeyOutcome::PickerEnter(target) => {
+                let mut next = PickerState::new();
+                next.open(Some(target));
+                next.loading = true;
+                self.picker = Some(next);
+                None
+            }
+            KeyOutcome::PickerSpace => {
+                let result = self.picker.as_mut().map(PickerState::try_select);
+                match result {
+                    Some(PickerSelectResult::AlreadySynced(_)) => {
+                        let hint = "already synced".to_string();
+                        if let Some(p) = self.picker.as_mut() {
+                            p.hint = Some(hint.clone());
+                        }
+                        self.state
+                            .activity_log
+                            .push_warn(current_time_str(), "already synced");
+                    }
+                    Some(PickerSelectResult::NotInitialized(entry)) => {
+                        let err = ferry_folder::FolderError::not_initialized(&entry.path);
+                        let msg = format!("{} — {}", err.message, err.hint);
+                        if let Some(p) = self.picker.as_mut() {
+                            p.hint = Some(msg.clone());
+                        }
+                        self.state.activity_log.push_warn(current_time_str(), msg);
+                    }
+                    Some(PickerSelectResult::Selected(_)) => {
+                        self.state.activity_log.push_info(
+                            current_time_str(),
+                            "folder selected (sync handle pending backend)",
+                        );
+                    }
+                    Some(PickerSelectResult::Nothing) | None => {}
+                }
+                None
+            }
+        }
+    }
+
+    pub async fn handle_key_action(&mut self, backend: &Arc<dyn UiBackend>, key: KeyEvent) {
+        match self.handle_key_inner(key) {
+            KeyOutcome::Handled => {}
+            KeyOutcome::Command(cmd) => match cmd {
+                ClientCommand::TriggerScan => {
+                    if let Err(e) = backend.trigger_scan().await {
+                        self.state
+                            .activity_log
+                            .push_error(current_time_str(), format!("Trigger scan error: {e}"));
+                    } else {
+                        self.state
+                            .activity_log
+                            .push_info(current_time_str(), "Scan triggered");
+                    }
+                }
+                ClientCommand::ReleasePin => match backend.release_pin().await {
+                    Ok(summary) => {
+                        self.state.activity_log.push_info(
+                            current_time_str(),
+                            format!("Pin released: {}", summary.status),
+                        );
+                    }
+                    Err(e) => {
+                        self.state
+                            .activity_log
+                            .push_error(current_time_str(), format!("Release pin error: {e}"));
+                    }
+                },
+                ClientCommand::StartPin { paths, duration_hours } => {
+                    match backend.start_pin(paths, duration_hours).await {
                         Ok(record) => {
                             self.state.activity_log.push_info(
                                 current_time_str(),
@@ -526,10 +406,7 @@ impl TuiApp {
                         }
                     }
                 }
-            }
-            KeyCode::Char('c' | 'C') => {
-                self.state.show_conflicts_modal = true;
-                match backend.list_conflicts().await {
+                ClientCommand::ListConflicts => match backend.list_conflicts().await {
                     Ok(entries) => {
                         self.state.conflict_entries = entries;
                         self.state.conflicts =
@@ -541,9 +418,72 @@ impl TuiApp {
                             .activity_log
                             .push_error(current_time_str(), format!("List conflicts error: {e}"));
                     }
+                },
+                other => {
+                    let _ = other;
+                }
+            },
+            KeyOutcome::OpenPicker => {
+                if let Err(e) = self.open_picker(backend, None).await {
+                    let _ = e;
                 }
             }
-            _ => {}
+            KeyOutcome::PickerEnter(target) => {
+                let mut next = PickerState::new();
+                next.open(Some(target.clone()));
+                match next.load(backend.as_ref()).await {
+                    Ok(()) => self.picker = Some(next),
+                    Err(e) => {
+                        self.state.activity_log.push_error(
+                            current_time_str(),
+                            format!("Picker load error: {e}"),
+                        );
+                    }
+                }
+            }
+            KeyOutcome::PickerSpace => {
+                let result = self.picker.as_mut().map(PickerState::try_select);
+                match result {
+                    Some(PickerSelectResult::Selected(entry)) => {
+                        if !entry.is_initialized {
+                            let err = ferry_folder::FolderError::not_initialized(&entry.path);
+                            self.state.activity_log.push_warn(
+                                current_time_str(),
+                                format!("{} — {}", err.message, err.hint),
+                            );
+                            return;
+                        }
+                        match backend.register_folder(entry.path.clone()).await {
+                            Ok(rec) => {
+                                self.state.activity_log.push_info(
+                                    current_time_str(),
+                                    format!("Folder registered: {}", rec.path.display()),
+                                );
+                                self.picker = None;
+                            }
+                            Err(e) => {
+                                self.state.activity_log.push_error(
+                                    current_time_str(),
+                                    format!("Register folder error: {e}"),
+                                );
+                            }
+                        }
+                    }
+                    Some(PickerSelectResult::AlreadySynced(_)) => {
+                        self.state
+                            .activity_log
+                            .push_warn(current_time_str(), "already synced");
+                    }
+                    Some(PickerSelectResult::NotInitialized(entry)) => {
+                        let err = ferry_folder::FolderError::not_initialized(&entry.path);
+                        self.state.activity_log.push_warn(
+                            current_time_str(),
+                            format!("{} — {}", err.message, err.hint),
+                        );
+                    }
+                    Some(PickerSelectResult::Nothing) | None => {}
+                }
+            }
         }
     }
 

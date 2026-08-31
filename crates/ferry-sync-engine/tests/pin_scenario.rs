@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
-use ferry_sync_engine::hold_matcher;
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
@@ -526,7 +525,7 @@ fn orphaned_writer_leaves_a_stale_pin_that_surfaces_but_does_not_hold() {
     
     
     let local = a.snap().manifest;
-    assert!(hold_matcher(&a.state).unwrap().is_none());
+    assert!(!pin_store.load().unwrap().unwrap().holding());
     let _ = local;
 
     

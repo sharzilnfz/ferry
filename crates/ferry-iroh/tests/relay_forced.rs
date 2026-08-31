@@ -64,16 +64,18 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
         let mut seed = [0u8; 32];
         seed[0] = seed_byte;
         seed[31] = 0x77;
-        let mut cfg = IrohConfig::builder()
-            .secret(seed)
-            .routes(shared.clone());
-        if let Some(url) = &relay_url {
-            cfg = cfg.relays(ferry_iroh::RelaySetting::Custom(vec![url.clone()]));
-        }
-        if force_relay {
-            cfg = cfg.force_relay(true);
-        }
-        let cfg = cfg.dial_timeout(Duration::from_secs(15)).build();
+        let cfg = IrohConfig {
+            secret: Some(seed),
+            routes: Some(shared.clone()),
+            relays: if let Some(url) = &relay_url {
+                ferry_iroh::RelaySetting::Custom(vec![url.clone()])
+            } else {
+                ferry_iroh::RelaySetting::Disabled
+            },
+            force_relay,
+            dial_timeout: Duration::from_secs(15),
+            ..Default::default()
+        };
         IrohTransport::new(cfg).expect("transport")
     };
 

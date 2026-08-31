@@ -1380,6 +1380,46 @@ impl SyncEngine {
             tag: self.cfg.tag,
         }
     }
+    pub fn open_watched_folder(
+        folder_path: &std::path::Path,
+        identity: &ferry_crypto::identity::DeviceIdentity,
+        transport: std::sync::Arc<dyn crate::transport::Transport>,
+        bind_addr: Option<std::net::SocketAddr>,
+        connect_to: Option<std::net::SocketAddr>,
+        poll_interval: Option<std::time::Duration>,
+        opportunistic_every: Option<u32>,
+    ) -> Result<(EngineHandle, ferry_folder::inventory::FolderRecord, [u8; 16]), EngineError> {
+        let opened = ferry_folder::folder::open_folder(folder_path, identity)
+            .map_err(|e| EngineError::Other(format!("{}: {}", e.code, e.message)))?;
+        let poly = ferry_store::chunker::ValidatedPoly::try_from(opened.poly)
+            .map_err(|e| EngineError::Other(format!("poly-invalid: invalid poly: {e}")))?;
+        let folder_id_hex = ferry_store::format::hex(&opened.folder_id);
+        let tag = format!("ferry-{}", &folder_id_hex[..8.min(folder_id_hex.len())]);
+        let cfg = EngineConfig {
+            tag,
+            store_dir: opened.root.clone(),
+            tree_dir: opened.root.clone(),
+            poly,
+            folder_id: opened.folder_id,
+            poll_interval: poll_interval.unwrap_or(std::time::Duration::from_millis(200)),
+            opportunistic_every: opportunistic_every.unwrap_or(50),
+            bind_addr,
+            connect_to,
+            allow_trust_on_first_use: false,
+            pin_state_dir: Some(opened.state_dir()),
+            quiet: true,
+        };
+        let mut engine = SyncEngine::with_store(cfg, transport, std::sync::Arc::clone(&opened.store))?;
+        engine.set_identity(identity.clone());
+        engine.set_ignore_policy(opened.ignore_policy());
+        let handle = engine.start();
+        let record = ferry_folder::inventory::FolderRecord {
+            folder_id: folder_id_hex,
+            path: opened.root,
+            added_at: String::new(),
+        };
+        Ok((handle, record, opened.folder_id))
+    }
 }
 
 

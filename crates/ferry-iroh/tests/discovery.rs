@@ -17,14 +17,15 @@ use ferry_sync::Transport as _;
 fn mdns_transport(seed_byte: u8, service: String) -> IrohTransport {
     let mut seed = [seed_byte; 32];
     seed[1] = seed_byte.wrapping_mul(7);
-    let cfg = IrohConfig::builder()
-        .secret(seed)
-        .mdns(ferry_iroh::MdnsSetting {
+    let cfg = IrohConfig {
+        secret: Some(seed),
+        mdns: Some(ferry_iroh::MdnsSetting {
             service_name: service,
             advertise: true,
-        })
-        .dial_timeout(Duration::from_secs(5))
-        .build();
+        }),
+        dial_timeout: Duration::from_secs(5),
+        ..Default::default()
+    };
     IrohTransport::new(cfg).expect("mdns transport")
 }
 

@@ -365,22 +365,25 @@ fn run_daemon(d: DaemonArgs) -> Result<(), String> {
             Arc::new(ferry_sync::TcpTransport)
         }
         TransportKind::Iroh => {
-            
-            
-            let mut builder = ferry_iroh::IrohConfig::builder().device_identity(&device);
-            if !d.relays.is_empty() {
-                builder = builder.relays(ferry_iroh::RelaySetting::Custom(d.relays.clone()));
-            }
-            if d.mdns {
-                builder = builder.mdns(ferry_iroh::MdnsSetting {
-                    service_name: "ferry-sync".into(),
-                    advertise: true,
-                });
-            }
-            if d.force_relay {
-                builder = builder.force_relay(true);
-            }
-            let t = ferry_iroh::IrohTransport::new(builder.build())
+            let cfg_iroh = ferry_iroh::IrohConfig {
+                device_identity: Some(device.clone()),
+                relays: if d.relays.is_empty() {
+                    ferry_iroh::RelaySetting::Disabled
+                } else {
+                    ferry_iroh::RelaySetting::Custom(d.relays.clone())
+                },
+                mdns: if d.mdns {
+                    Some(ferry_iroh::MdnsSetting {
+                        service_name: "ferry-sync".into(),
+                        advertise: true,
+                    })
+                } else {
+                    None
+                },
+                force_relay: d.force_relay,
+                ..Default::default()
+            };
+            let t = ferry_iroh::IrohTransport::new(cfg_iroh)
                 .map_err(|e| format!("iroh transport: {e}"))?;
 
             let endpoint_hex = hex(&t.endpoint_id());

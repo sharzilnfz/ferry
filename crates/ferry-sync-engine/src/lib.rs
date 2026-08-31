@@ -71,8 +71,6 @@
 
 pub mod converge;
 pub mod held;
-pub mod hold;
-pub mod matcher;
 mod naming;
 pub mod pin;
 pub mod pin_error;
@@ -87,8 +85,6 @@ pub use converge::{
 };
 pub use ferry_platform::time as timefmt;
 pub use held::{distinct_paths, HeldChunk, HeldEntry, HeldLedger};
-pub use hold::{hold_matcher, record_held};
-pub use matcher::PathMatcher;
 pub use naming::{conflict_display_name, device_short, unique_conflict_dest};
 pub use pin::{
     HeldSummary, Liveness, PinManager, PinRecord, PinStore, ReleasePeerPlan, ReleasePeerResult,
