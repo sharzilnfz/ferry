@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferry_daemon::ui::server::{generate_token, DashboardServer};
-use ferry_daemon::ui::AutoBackend;
+use ferry_daemon::ui::backend::{FolderBackend, FsStateSource};
 use ferry_ipc::backend::FakeBackend;
 use ferry_ipc::protocol::{ConflictEntry, DeviceStamp};
 use serde_json::Value;
@@ -240,9 +240,11 @@ async fn test_dashboard_server_with_auto_backend() {
     ferry_folder::folder::save_settings(&tree_dir, &settings).unwrap();
 
     let socket_path = ferry_ipc::paths::socket_path_for_dir(&tree_dir);
-    let auto = AutoBackend::new(socket_path)
+    let fs_src = FsStateSource::new(tree_dir.clone()).with_identity(identity.clone());
+    let fb = FolderBackend::from_source(fs_src);
+    let auto = ferry_ipc::backend::AutoBackend::new(socket_path)
         .with_fallback(tree_dir.clone())
-        .with_identity(identity.clone());
+        .with_fallback_backend(Arc::new(fb));
 
     let token = generate_token();
     let server = DashboardServer::new(Arc::new(auto)).with_token(&token);

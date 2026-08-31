@@ -22,9 +22,12 @@ use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;
 
 pub use backend::{
-    snapshot_to_status_doc, AutoBackend, BoxFuture, DashboardBackend, DirectBackend,
-    InProcessAdapter, IpcBackend,
+    engine_backend, fs_backend, snapshot_to_status_doc, BoxFuture, DashboardBackend,
+    EngineBackend, EngineStateSource, FolderBackend, FsBackend, FsStateSource, IpcBackend,
+    StateSource,
 };
+pub use backend::{DirectBackend, InProcessAdapter};
+pub type AutoBackend = ferry_ipc::backend::AutoBackend;
 #[cfg(feature = "web-ui")]
 pub use error::{status_for_code, ApiError, OpError};
 #[cfg(not(feature = "web-ui"))]
@@ -96,7 +99,7 @@ impl UiState {
 
 #[cfg(feature = "web-ui")]
 pub fn spawn(addr: std::net::SocketAddr, state: Arc<UiState>) -> Result<(), String> {
-    DashboardServer::new(Arc::new(DirectBackend::new(state))).spawn(addr)
+    DashboardServer::new(Arc::new(engine_backend(state))).spawn(addr)
 }
 
 #[cfg(all(test, feature = "web-ui"))]
