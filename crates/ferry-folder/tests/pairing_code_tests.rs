@@ -100,11 +100,6 @@ fn codes_are_six_base32_symbols_with_matching_checksums() {
             [(ferry_crypto::crc32::crc32(data.as_bytes()) % 32) as usize];
         assert_eq!(checksum.as_bytes()[0], expected, "{code}");
         seen.insert(code.clone());
-        
-        
-        let _ = std::fs::remove_file(
-            std::env::temp_dir().join(format!("ferry-rendezvous-{code}.json")),
-        );
     }
     assert!(seen.len() > 900, "got {}", seen.len());
 }
