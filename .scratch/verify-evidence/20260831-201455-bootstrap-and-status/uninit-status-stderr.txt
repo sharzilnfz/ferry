@@ -1,0 +1,1 @@
+{"code":"not-a-folder","error":"/tmp/ferry-bs-verify.14vwzY/project is not a Ferry folder (no .ferry directory)","hint":"run `ferry init` there first, or pass the folder path explicitly"}

@@ -1,0 +1,7 @@
+Initialized Ferry folder .
+  folder id  ecdd10163b3fe934e113a7cc55f0c076
+  device     fdec1dc413ce97efbec5581c701c60205d080183dda11b78dee3b92c5938a22a
+  rules      ferry.ignore (defaults active; `ferry ignore --list`)
+
+Next: `ferry pair` to connect another device and start syncing.
+Or run `ferry --help` for the full five-minute walkthrough.

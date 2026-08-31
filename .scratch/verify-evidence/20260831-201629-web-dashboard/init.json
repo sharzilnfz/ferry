@@ -1,0 +1,7 @@
+Initialized Ferry folder /tmp/ferry-ui-verify.DgFyJv/tree
+  folder id  9606e5325b58efbdc882e0029ff2e087
+  device     08b56167c20be00fbd250dc126b986a29f1c70997cfb0d32534f4543ac501917
+  rules      ferry.ignore (defaults active; `ferry ignore --list`)
+
+Next: `ferry pair` to connect another device and start syncing.
+Or run `ferry --help` for the full five-minute walkthrough.

@@ -78,80 +78,85 @@ The dashboard splits the terminal window into four clear regions:
 
 ---
 
-## 5. Step-by-Step Dual-Machine Testing Guide (For Tomorrow)
+## 5. Step-by-Step Dual-Machine Testing Guide
 
 ### Build Binaries
-Ensure the release binary is built on both machines:
+Build the debug or release binary on both machines:
 ```bash
-cargo build --release
+cargo build -p ferry-cli              # Fast debug build -> ./target/debug/ferry
+# Or: cargo build --release -p ferry-cli -> ./target/release/ferry
 ```
 
 ---
 
-### Step 1: Initialize and Pair via CLI
+### Step 1: Initialize and Pair via Offer Flow
 
-1. **On Machine A (Offering Device):**
-   ```bash
-   cd ~/my-sync-folder
-   target/release/ferry init
-   target/release/ferry share
-   ```
-   *Note the 6-character code (e.g. `K9X2M4`).*
+> **Pairing note:** Use `ferry pair` and `ferry pair --accept` (the offer-file flow). The short-code `share`/`join` path does not complete key-wrap allow-lists on the sharer in this build (issue T-016).
 
-2. **On Machine B (Joining Device):**
+1. **On Machine A (e.g. Mac):**
    ```bash
-   mkdir -p ~/my-sync-folder && cd ~/my-sync-folder
-   target/release/ferry join K9X2M4
+   mkdir -p /tmp/ferry-sync-demo && cd /tmp/ferry-sync-demo
+   ./target/debug/ferry init
+   ./target/debug/ferry pair
    ```
+   *Leaves offer file at `.ferry/pair-offer.ferry-pair` and waits for response.*
+
+2. **On Machine B (e.g. Arch Linux):**
+   ```bash
+   mkdir -p /tmp/ferry-sync-demo && cd /tmp/ferry-sync-demo
+   # Copy offer file from Machine A (via scp):
+   scp mac:/tmp/ferry-sync-demo/.ferry/pair-offer.ferry-pair /tmp/pair-offer.ferry-pair
+   ./target/debug/ferry pair --accept /tmp/pair-offer.ferry-pair /tmp/ferry-sync-demo
+   ```
+   *Writes `/tmp/pair-response.ferry-pair`.*
+
+3. **Complete the 2-way roundtrip:**
+   - Copy response from Machine B to Machine A:
+     ```bash
+     scp arch:/tmp/pair-response.ferry-pair /tmp/ferry-sync-demo/.ferry/pair-response.ferry-pair
+     ```
+     *(Machine A completes and creates `.ferry/pair-grant.ferry-grant`)*
+   - Copy grant from Machine A to Machine B:
+     ```bash
+     scp /tmp/ferry-sync-demo/.ferry/pair-grant.ferry-grant arch:/tmp/pair-grant.ferry-grant
+     ```
+     *(Machine B completes)*
 
 ---
 
-### Step 2: Launch TUI Dashboards on Both Machines
+### Step 2: Start Background Daemons and Launch TUI
 
-1. **On Machine A:**
+1. **On Machine A (Listener):**
    ```bash
-   cd ~/my-sync-folder
-   target/release/ferry tui
+   ./target/debug/ferry daemon --listen 0.0.0.0:44001 /tmp/ferry-sync-demo
    ```
 
-2. **On Machine B:**
+2. **On Machine B (Dialer in background + TUI in foreground):**
    ```bash
-   cd ~/my-sync-folder
-   target/release/ferry tui
+   nohup ./target/debug/ferry daemon --peer-url <MACHINE_A_IP>:44001 --interval-secs 1 /tmp/ferry-sync-demo > /tmp/ferry-daemon.log 2>&1 &
+   ./target/debug/ferry tui /tmp/ferry-sync-demo
    ```
-
-Both terminals will render the live Ferry dashboard side by side.
 
 ---
 
 ### Step 3: Run Verification Scenarios
 
 1. **Observe Peer Discovery:**
-   - Within seconds, both screens show each other in the Peers table on the right.
-   - The status badge in the header turns green (`SYNCED`).
+   - Within a second, the TUI shows the connected peer in the Connected Peers table.
+   - The status badge in the header displays `IDLE` (synced and listening).
 
 2. **Test Real-Time File Sync:**
-   - In a third terminal window on Machine A, create a test file:
+   - On Machine A, create a test file:
      ```bash
-     echo "Testing terminal sync" > ~/my-sync-folder/terminal-test.txt
+     echo "Testing terminal sync" > /tmp/ferry-sync-demo/terminal-test.txt
      ```
-   - Watch the TUI on Machine B. The Transfer Progress bar will flash, the activity log records the received chunks, and the status badge transitions smoothly.
+   - Watch the TUI on Machine B: the scan updates, chunk counts increment, and the activity log shows updated manifest hashes.
 
-3. **Test Session Pinning (Agent Hold Mode):**
-   - On Machine A, press `p`.
-   - The status badge changes to magenta (`PINNED`), and the activity log announces edit hold mode.
-   - In another terminal on Machine B, modify a file:
-     ```bash
-     echo "Remote edit" >> ~/my-sync-folder/terminal-test.txt
-     ```
-   - Machine A holds the incoming change in `.ferry/held/` without overwriting the local working tree.
-   - Press `p` again on Machine A. The engine releases and reconciles the held changes immediately.
-
-4. **Inspect Conflicts Modal:**
-   - Trigger a concurrent edit on both sides.
-   - The status badge turns yellow-on-red (`CONFLICT`).
-   - Press `c` on either machine to open the Conflicts inspection popup.
-   - Review the loser copy and quarantine details, then press `Esc` to return to the main dashboard.
+3. **Test In-TUI Rescan & Modals:**
+   - Press **`R`**: Activity log immediately records `[INFO] Scan triggered`.
+   - Press **`C`**: Opens the Quarantined Conflicts modal. Press `Esc` or `C` to return.
+   - Press **`P`**: Toggles session hold/pinning.
+   - Press **`Q`**: Closes TUI cleanly.
 
 ---
 

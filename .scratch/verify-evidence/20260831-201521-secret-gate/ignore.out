@@ -1,0 +1,3 @@
+Added "!.env" to ./ferry.ignore (layer: your ferry.ignore).
+Note: it cannot override built-in defaults for paths under an excluded directory.
+Next: `ferry ignore --list` to verify.

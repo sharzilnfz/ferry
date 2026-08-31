@@ -1,0 +1,7 @@
+Initialized Ferry folder /tmp/ferry-bs-verify.d0AEeJ/project
+  folder id  ccb1951529f33a105ae880323155de60
+  device     f2ba6a3ccd0e4fc1656dba7e480d5456cb659e58d2d44d54885dcfe4f2e19511
+  rules      ferry.ignore (defaults active; `ferry ignore --list`)
+
+Next: `ferry pair` to connect another device and start syncing.
+Or run `ferry --help` for the full five-minute walkthrough.

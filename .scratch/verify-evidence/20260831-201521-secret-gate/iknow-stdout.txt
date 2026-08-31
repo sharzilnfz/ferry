@@ -1,0 +1,6 @@
+Proceeding WITH 2 flagged secret risk(s) (--i-know given):
+  [env-file-included] .env
+  [aws-access-key] .env
+---
+Share code: 84AN-TX (expires in 10m)
+Folder: /var/folders/y9/hnkm2lv91n5chc4116wp_hf40000gn/T//ferry-gate-test.jYaY57/tree

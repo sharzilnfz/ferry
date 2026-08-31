@@ -1,0 +1,4 @@
+error: 2 secret risk(s) would SYNC to other devices:
+  SECRET RISK [env-file-included] .env — .env included in sync (86 bytes)
+  SECRET RISK [aws-access-key] .env:1 — AKIA…(20 chars) (code=secrets-found)
+hint: review each path: exclude it (`ferry ignore '<pattern>'`) or accept the risk with --i-know

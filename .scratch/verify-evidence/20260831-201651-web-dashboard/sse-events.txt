@@ -1,0 +1,2 @@
+event: state
+data: {"command":"status","conflicts":0,"device_id":"d7b4e784d0d4559b6a782f638abee19ff3ed757db06d66bbd6ec0c2fef8c246d","folder":"/tmp/ferry-ui-verify.Rm9UhV/tree","folder_id":"126bccc021e91c69a22361be1556f6c0","held_by_peer":{},"held_changes":0,"manifest_id":"6e0cc031e448701cb6381214b2ff95ef0a52f34e22e82a70f6931b6b966be0ae","peers":[],"pending_changes":null,"pin":{"holding":false,"paths":[],"state":"none"},"scanned":{"bytes_chunked":506,"dirs":0,"files":1,"symlinks":0}}

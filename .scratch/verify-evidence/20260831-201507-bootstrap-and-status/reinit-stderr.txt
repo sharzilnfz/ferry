@@ -1,0 +1,2 @@
+error: /tmp/ferry-bs-verify.d0AEeJ/project already contains a .ferry store (code=already-initialized)
+hint: run `ferry status` to inspect it, or pick another directory

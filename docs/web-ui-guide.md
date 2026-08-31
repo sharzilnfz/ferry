@@ -71,73 +71,69 @@ When `ferry ui --web` starts, it generates a 32-character hexadecimal token. The
 Follow these steps to test Ferry between Machine A (Offering Device) and Machine B (Joining Device).
 
 ### Prerequisites
-Both machines must have the repository built:
+Build the binary on both machines:
 ```bash
-cargo build --release
-# Binary will be at target/release/ferry
+cargo build -p ferry-cli              # Fast debug build -> ./target/debug/ferry
+# Or: cargo build --release -p ferry-cli -> ./target/release/ferry
 ```
 
 ---
 
-### Step 1: Initialize and Share on Machine A
+### Step 1: Initialize and Pair Devices
 
-1. Navigate to the project directory on Machine A:
-   ```bash
-   cd ~/my-test-project
-   ```
+Initialize and pair your demo folder using the offer-file flow:
+```bash
+# On Machine A:
+mkdir -p /tmp/ferry-sync-demo && cd /tmp/ferry-sync-demo
+./target/debug/ferry init
+./target/debug/ferry pair
 
-2. Initialize Ferry if the directory is not already tracked:
-   ```bash
-   target/release/ferry init
-   ```
+# On Machine B:
+mkdir -p /tmp/ferry-sync-demo && cd /tmp/ferry-sync-demo
+scp mac:/tmp/ferry-sync-demo/.ferry/pair-offer.ferry-pair /tmp/pair-offer.ferry-pair
+./target/debug/ferry pair --accept /tmp/pair-offer.ferry-pair /tmp/ferry-sync-demo
 
-3. Launch the Web UI:
-   ```bash
-   target/release/ferry ui --web
-   ```
-   *Tip: To access the Web UI from another device over your local network, bind to all interfaces:*
-   ```bash
-   target/release/ferry ui --web --host 0.0.0.0 --port 8080
-   ```
-
-4. The browser will open automatically at `http://127.0.0.1:<PORT>/?token=<TOKEN>`.
-
-5. In the Web UI:
-   - Click the **Share** button in the header or action bar.
-   - The Share Modal will display a **6-character pairing code** (e.g. `K9X2M4`) and a QR code.
-   - Keep this modal open. The code is active for 10 minutes.
+# Finish roundtrip:
+scp arch:/tmp/pair-response.ferry-pair /tmp/ferry-sync-demo/.ferry/pair-response.ferry-pair
+scp /tmp/ferry-sync-demo/.ferry/pair-grant.ferry-grant arch:/tmp/pair-grant.ferry-grant
+```
 
 ---
 
-### Step 2: Join on Machine B
+### Step 2: Start Daemon and Launch Web UI
 
-1. On Machine B, create an empty destination directory:
+1. **On Machine A (Start Sync Server + Web UI):**
    ```bash
-   mkdir -p ~/my-test-project
-   cd ~/my-test-project
+   ./target/debug/ferry daemon --listen 0.0.0.0:44001 /tmp/ferry-sync-demo &
+   ./target/debug/ferry ui --web --port 8080 /tmp/ferry-sync-demo
    ```
+   *(The terminal prints the URL with the one-time token: `http://127.0.0.1:8080/?token=<hex>`)*
 
-2. Launch the Web UI on Machine B:
+2. **On Machine B (Connect Peer Daemon):**
    ```bash
-   target/release/ferry ui --web
+   ./target/debug/ferry daemon --peer-url <MACHINE_A_IP>:44001 --interval-secs 1 /tmp/ferry-sync-demo
    ```
-
-3. In the Web UI on Machine B:
-   - Click the **Pair / Join** button.
-   - Enter the 6-character code displayed on Machine A (e.g. `K9X2M4`).
-   - Click **Join Folder**.
 
 ---
 
-### Step 3: Observe Real-Time Convergence
+### Step 3: Observe Real-Time Dashboard Updates
 
-1. **Beacon Status:** Both dashboards will transition from `Connecting` &rarr; `Syncing` (pulsing blue) &rarr; `Synced` (steady green).
+1. **Dashboard Overview:**
+   - Open `http://127.0.0.1:8080/?token=<token>` in your browser.
+   - Storage statistics, connected fleet peers, and folder manifest hashes render in real-time.
+
 2. **Test File Sync:**
-   - Create a file on Machine A:
-     ```bash
-     echo "Hello from Machine A" > ~/my-test-project/test.txt
-     ```
-   - Watch Machine B. Within sub-seconds, `test.txt` will appear on disk, and the Web UI counter will update live via SSE.
+   - Create a file in `/tmp/ferry-sync-demo/test.txt` on either machine.
+   - The Web UI updates the file count and manifest live via Server-Sent Events (SSE) without a page refresh.
+
+3. **Verify Token Security:**
+   ```bash
+   # Blocked without token (403 Forbidden):
+   curl -i "http://127.0.0.1:8080/api/status"
+
+   # Allowed with token (200 OK):
+   curl -i "http://127.0.0.1:8080/api/status?token=<token>"
+   ```
 3. **Test Session Pinning (Agent Hold Mode):**
    - On Machine A, click **Hold Edits** in the Web UI.
    - Modify a file on Machine B.
