@@ -284,13 +284,13 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
             }
             Err(e) => {
                 let code = match &e {
-                    ferry_pin::PinError::PinActive { .. } => "pin-active",
-                    ferry_pin::PinError::BadPattern { .. } => "bad-pattern",
-                    ferry_pin::PinError::Corrupt { .. } => "pin-state-corrupt",
-                    ferry_pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
-                    ferry_pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
-                    ferry_pin::PinError::StructuralSplit { .. } => "structural-split",
-                    ferry_pin::PinError::Converge(_) => "pin-release-reconcile",
+                    ferry_sync_engine::pin::PinError::PinActive { .. } => "pin-active",
+                    ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
+                    ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
+                    ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
+                    ferry_sync_engine::pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
+                    ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
+                    ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
                     _ => "pin_error",
                 };
                 DaemonMessage::Error {
@@ -653,7 +653,7 @@ async fn run_state_watcher(
         )
     });
     let mut last_pending = state.handle().pending_changes();
-    let mut last_pin_holding = ferry_pin::PinManager::new(state.state_dir())
+    let mut last_pin_holding = ferry_sync_engine::pin::PinManager::new(state.state_dir())
         .is_holding()
         .unwrap_or(false);
 
@@ -687,7 +687,7 @@ async fn run_state_watcher(
                     ScanStatsView::new(s.files as u64, s.dirs as u64, s.symlinks as u64, s.bytes_chunked)
                 });
                 let cur_pending = state.handle().pending_changes();
-                let cur_pin_holding = ferry_pin::PinManager::new(state.state_dir())
+                let cur_pin_holding = ferry_sync_engine::pin::PinManager::new(state.state_dir())
                     .is_holding()
                     .unwrap_or(false);
 

@@ -96,7 +96,7 @@ pub(crate) fn load_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferry_pin_testutil::*;
+    use pin_testutil::*;
 
     #[test]
     fn missing_held_manifest_is_a_loud_error_naming_peer_and_id() {
@@ -127,7 +127,7 @@ mod tests {
 }
 
 #[cfg(test)]
-pub(crate) mod ferry_pin_testutil {
+pub(crate) mod pin_testutil {
     use ferry_store::crypto::{PassthroughCipher, KEY_LEN};
     use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
     use ferry_store::store::Store;

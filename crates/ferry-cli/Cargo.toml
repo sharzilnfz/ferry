@@ -12,7 +12,6 @@ ferry-ignore = { path = "../ferry-ignore" }
 ferry-folder.workspace = true
 ferry-sync = { path = "../ferry-sync" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
-ferry-pin = { path = "../ferry-pin" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-tui = { path = "../ferry-tui", optional = true }
 ferry-gui = { path = "../ferry-gui", optional = true }

@@ -217,11 +217,11 @@ fn pin_documents_are_stable_across_the_lifecycle() {
     opened.store.flush().unwrap();
     opened.store.write_index_snapshot().unwrap();
     let state_dir = ferry_cli::folder::state_dir(&proj);
-    let ledger = ferry_pin::HeldLedger::new(&state_dir);
+    let ledger = ferry_sync_engine::pin::HeldLedger::new(&state_dir);
     ledger
         .append(
             &"b".repeat(32),
-            &[ferry_pin::HeldEntry {
+            &[ferry_sync_engine::pin::HeldEntry {
                 held_sec: 1_787_574_000,
                 held_nsec: 0,
                 path: "src/a.rs".into(),

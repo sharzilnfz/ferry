@@ -21,7 +21,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use ferry_pin::{hold_matcher, release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
+use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
+use ferry_sync_engine::hold_matcher;
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
@@ -368,7 +369,7 @@ fn pin_holds_concurrent_peer_edits_and_release_reconciles_per_adr0004() {
         assert_eq!(e.remote_manifest_id, manifest_hex);
     }
     assert_eq!(
-        ferry_pin::distinct_paths(&entries),
+        ferry_sync_engine::distinct_paths(&entries),
         held_paths,
         "status surface sees exactly the held set"
     );

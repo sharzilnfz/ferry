@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ferry_crypto::identity::DeviceIdentity;
 use ferry_ipc::{DaemonMessage, EngineSnapshot, PeerStatusView, PinView, ScanStatsView};
-use ferry_pin::{HeldSummary, PinError, PinManager, PinRecord};
+use ferry_sync_engine::pin::{HeldSummary, PinError, PinManager, PinRecord};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 use ferry_sync::EngineHandle;

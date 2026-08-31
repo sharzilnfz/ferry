@@ -11,7 +11,6 @@ ferry-crypto = { path = "../ferry-crypto" }
 ferry-store = { path = "../ferry-store" }
 ferry-folder = { workspace = true }
 ferry-ignore = { path = "../ferry-ignore" }
-ferry-pin = { path = "../ferry-pin" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 ferry-ipc = { path = "../ferry-ipc" }
 ferry-scan = { path = "../ferry-scan" }

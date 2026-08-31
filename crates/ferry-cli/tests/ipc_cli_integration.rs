@@ -203,11 +203,11 @@ fn test_pin_ownership_and_liveness_across_cli_queries() {
     assert_eq!(recorded_pid, u64::from(std::process::id()));
 
     
-    let pin_mgr = ferry_pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
+    let pin_mgr = ferry_sync_engine::pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
     let rec = pin_mgr.record().unwrap().expect("pin record exists");
     assert_eq!(rec.pid, std::process::id());
     assert!(rec.proc_start_token.is_some());
-    assert_eq!(rec.liveness(), ferry_pin::Liveness::Alive);
+    assert_eq!(rec.liveness(), ferry_sync_engine::pin::Liveness::Alive);
     assert!(rec.holding());
 
     
@@ -302,7 +302,7 @@ fn test_pin_duration_hours_and_expiration() {
     let start_out = commands::pin::start(&proj, &["src/**".to_string()], 12).unwrap();
     assert_eq!(start_out.json["command"], "pin");
 
-    let pin_mgr = ferry_pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
+    let pin_mgr = ferry_sync_engine::pin::PinManager::new(ferry_cli::folder::state_dir(&proj));
     let rec = pin_mgr.record().unwrap().expect("pin record exists");
     assert_eq!(rec.expires_sec, Some(rec.started_sec + 12 * 3600));
     assert!(rec.holding());

@@ -1831,7 +1831,6 @@ dependencies = [
  "ferry-gui",
  "ferry-ignore",
  "ferry-ipc",
- "ferry-pin",
  "ferry-platform",
  "ferry-scan",
  "ferry-store",
@@ -1878,7 +1877,6 @@ dependencies = [
  "ferry-ignore",
  "ferry-ipc",
  "ferry-iroh",
- "ferry-pin",
  "ferry-platform",
  "ferry-scan",
  "ferry-store",
@@ -2001,24 +1999,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferry-pin"
-version = "0.1.0"
-dependencies = [
- "ferry-materialize",
- "ferry-platform",
- "ferry-store",
- "ferry-sync-engine",
- "ignore",
- "libc",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "ferry-platform"
 version = "0.1.0"
 dependencies = [
@@ -2106,7 +2086,6 @@ dependencies = [
  "ferry-ignore",
  "ferry-iroh",
  "ferry-materialize",
- "ferry-pin",
  "ferry-platform",
  "ferry-proto",
  "ferry-scan",

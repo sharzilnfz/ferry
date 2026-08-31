@@ -6,7 +6,7 @@ mod common;
 
 use common::{Env, RunningDaemon};
 use ferry_cli::commands;
-use ferry_pin::{HeldEntry, HeldLedger};
+use ferry_sync_engine::pin::{HeldEntry, HeldLedger};
 use ferry_store::format::BlobKind;
 use std::collections::BTreeMap;
 
@@ -155,10 +155,10 @@ fn stale_pin_surfaces_then_a_new_start_replaces_it() {
         child.id()
     };
 
-    let store = ferry_pin::PinStore::new(ferry_cli::folder::state_dir(&proj));
+    let store = ferry_sync_engine::pin::PinStore::new(ferry_cli::folder::state_dir(&proj));
     store
-        .start(&ferry_pin::PinRecord {
-            format_version: ferry_pin::PIN_FORMAT_VERSION,
+        .start(&ferry_sync_engine::pin::PinRecord {
+            format_version: ferry_sync_engine::pin::PIN_FORMAT_VERSION,
             device_id: "a".repeat(32),
             pid: dead_pid,
             started_sec: 1_787_574_000,

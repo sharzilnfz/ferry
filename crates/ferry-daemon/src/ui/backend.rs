@@ -14,7 +14,7 @@ use ferry_ipc::backend::{
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, PinView, ScanStatsView,
 };
-use ferry_pin::{PinError, PinManager};
+use ferry_sync_engine::pin::{PinError, PinManager};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex as hex_str;
 use serde_json::{json, Value};

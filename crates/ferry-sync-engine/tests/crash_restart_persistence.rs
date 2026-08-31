@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ferry_pin::PinManager;
+use ferry_sync_engine::pin::PinManager;
 use ferry_store::agreement::{AgreedRecord, AgreementLedger};
 use ferry_store::crypto::PassthroughCipher;
 use ferry_store::format::{hex, BlobId, BlobKind};
@@ -326,7 +326,7 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
         .unwrap();
 
     let fake_remote_manifest = "ee".repeat(32);
-    let held_entry = ferry_pin::HeldEntry {
+    let held_entry = ferry_sync_engine::pin::HeldEntry {
         held_sec: 1500,
         held_nsec: 0,
         path: "src/lib.rs".to_string(),
@@ -342,7 +342,7 @@ fn failed_release_preserves_held_ledger_for_restart_recovery() {
     let err = pin_mgr
         .release(&a_store, &a_tree, &sa.manifest, NOW)
         .unwrap_err();
-    assert!(matches!(err, ferry_pin::PinError::ManifestMissing { .. }));
+    assert!(matches!(err, ferry_sync_engine::pin::PinError::ManifestMissing { .. }));
 
     
     let peers = pin_mgr.held_peers().unwrap();

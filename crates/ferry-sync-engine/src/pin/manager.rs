@@ -327,7 +327,7 @@ impl PinManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pin::release::ferry_pin_testutil::*;
+    use crate::pin::release::pin_testutil::*;
 
     #[test]
     fn new_and_summary_empty() {

@@ -11,7 +11,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use ferry_pin::PinManager;
+use ferry_sync_engine::pin::PinManager;
 use ferry_store::format::hex;
 use ferry_sync_engine::list_conflicts;
 use serde_json::json;
@@ -314,8 +314,8 @@ fn cli(code: &'static str, e: impl std::fmt::Display) -> CliError {
 }
 
 
-fn pin_error(e: ferry_pin::PinError) -> CliError {
-    use ferry_pin::PinError as E;
+fn pin_error(e: ferry_sync_engine::pin::PinError) -> CliError {
+    use ferry_sync_engine::pin::PinError as E;
     let (code, hint) = match &e {
         E::PinActive { .. } => (
             "pin-active",

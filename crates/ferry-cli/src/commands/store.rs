@@ -103,7 +103,7 @@ fn live_roots(folder_root: &Path, folder_id: &[u8; 16]) -> CliResult<Vec<BlobId>
     })? {
         roots.insert(rec.manifest_id);
     }
-    let held = ferry_pin::HeldLedger::new(&state_dir);
+    let held = ferry_sync_engine::pin::HeldLedger::new(&state_dir);
     for peer in held.peers().code("store", "held ledger unreadable")? {
         for e in held
             .load_peer(&peer)

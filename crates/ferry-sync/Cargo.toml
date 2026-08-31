@@ -10,7 +10,6 @@ ferry-proto = { path = "../ferry-proto" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-folder = { path = "../ferry-folder" }
 ferry-ignore = { path = "../ferry-ignore" }
-ferry-pin = { path = "../ferry-pin" }
 blake3.workspace = true
 rand.workspace = true
 serde.workspace = true

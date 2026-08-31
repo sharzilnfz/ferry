@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::Duration;
 
-use ferry_pin::PinManager;
+use ferry_sync_engine::pin::PinManager;
 use ferry_platform::time::fmt_rfc3339;
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use rand::SeedableRng;
 
-use ferry_pin::{HeldLedger, PinRecord, PinStore};
+use ferry_sync_engine::pin::{release_peer, HeldLedger, PinRecord, PinStore, PIN_FORMAT_VERSION};
 use ferry_store::agreement::AgreementLedger;
 use ferry_store::snapshot::{snapshot_dir, SnapshotIdentity};
 use ferry_sync::format::{hex, unhex};
@@ -72,7 +72,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
     let (sec, nsec) = ferry_platform_time();
     PinStore::new(&a_ferry)
         .start(&PinRecord {
-            format_version: ferry_pin::PIN_FORMAT_VERSION,
+            format_version: PIN_FORMAT_VERSION,
             device_id: hex(engine::device_identity_for_tag(TAG_A).device_id()),
             pid: std::process::id(),
             started_sec: sec,
@@ -206,7 +206,7 @@ fn engine_holds_pinned_peer_changes_and_release_recovers_them() {
         .expect("base manifest blob present");
     let base = ferry_store::manifest::parse_manifest(&base_bytes).unwrap();
     let (rel_sec, rel_nsec) = ferry_platform_time();
-    let released = ferry_pin::release_peer(
+    let released = release_peer(
         &store,
         &fx.tree_a(),
         &a_ferry,
