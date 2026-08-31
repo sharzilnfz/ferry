@@ -11,13 +11,12 @@
 use std::sync::Arc;
 
 use ferry_daemon::ui::backend::snapshot_to_status_doc;
-use ferry_gui::beacon::BeaconState;
+use ferry_platform::SyncState;
 use ferry_gui::GuiApp;
 use ferry_ipc::backend::{FakeBackend, SessionDomain, StatusDomain, UiEvent};
 use ferry_ipc::protocol::{
     ConflictEntry, DeviceStamp, EngineSnapshot, PeerStatusView, ScanStatsView, TransferDirection,
 };
-use ferry_tui::state::SyncState;
 use ferry_tui::TuiApp;
 
 #[tokio::test]
@@ -69,7 +68,7 @@ async fn test_four_frontends_synced_state_consistency() {
     
     let mut gui_app = GuiApp::new_headless(fake.clone());
     gui_app.handle_event(UiEvent::State(cli_snap));
-    assert_eq!(gui_app.beacon_state(), BeaconState::Synced);
+    assert_eq!(gui_app.beacon_state(), SyncState::Synced);
     assert_eq!(gui_app.current_badge().0, "SYNCED");
     assert_eq!(
         gui_app.snapshot.as_ref().unwrap().folder,
@@ -151,7 +150,7 @@ async fn test_four_frontends_transfer_progress_and_syncing_transition() {
 
     
     gui_app.handle_event(transfer_event);
-    assert_eq!(gui_app.beacon_state(), BeaconState::Syncing);
+    assert_eq!(gui_app.beacon_state(), SyncState::Syncing);
     assert_eq!(gui_app.current_badge().0, "SYNCING");
     let transfer = gui_app.active_transfer.as_ref().unwrap();
     assert_eq!(transfer.bytes_transferred, 4_000_000);
@@ -203,8 +202,8 @@ async fn test_four_frontends_pin_hold_and_release_transition() {
 
     
     gui_app.handle_event(pin_event);
-    assert_eq!(gui_app.beacon_state(), BeaconState::Holding);
-    assert_eq!(gui_app.current_badge().0, "HOLDING");
+    assert_eq!(gui_app.beacon_state(), SyncState::Pinned);
+    assert_eq!(gui_app.current_badge().0, "PINNED");
     assert!(gui_app.snapshot.as_ref().unwrap().pin.holding);
     assert_eq!(gui_app.snapshot.as_ref().unwrap().held_changes, 5);
 
@@ -235,7 +234,7 @@ async fn test_four_frontends_pin_hold_and_release_transition() {
 
     
     gui_app.handle_event(release_event);
-    assert_eq!(gui_app.beacon_state(), BeaconState::Synced);
+    assert_eq!(gui_app.beacon_state(), SyncState::Synced);
     assert_eq!(gui_app.current_badge().0, "SYNCED");
     assert!(!gui_app.snapshot.as_ref().unwrap().pin.holding);
     assert_eq!(gui_app.snapshot.as_ref().unwrap().held_changes, 0);
@@ -292,7 +291,7 @@ async fn test_four_frontends_conflict_lifecycle_transition() {
 
     
     gui_app.handle_event(conflict_event);
-    assert_eq!(gui_app.beacon_state(), BeaconState::Conflict);
+    assert_eq!(gui_app.beacon_state(), SyncState::Conflict);
     assert_eq!(gui_app.current_badge().0, "CONFLICT");
     assert_eq!(gui_app.conflicts.len(), 1);
     assert_eq!(gui_app.conflicts[0].path, "src/engine.rs");
@@ -312,7 +311,7 @@ async fn test_four_frontends_conflict_lifecycle_transition() {
     
     gui_app.handle_event(resolved_event);
     gui_app.conflicts.clear();
-    assert_eq!(gui_app.beacon_state(), BeaconState::Synced);
+    assert_eq!(gui_app.beacon_state(), SyncState::Synced);
     assert_eq!(gui_app.current_badge().0, "SYNCED");
     assert_eq!(gui_app.conflicts.len(), 0);
 }

@@ -13,10 +13,12 @@ pub mod protocol;
 pub mod transport;
 
 pub use backend::{
-    connect_auto, AutoBackend, BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult,
-    PinRecord, PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus,
-    StatusDomain, UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
+    connect_auto, AutoBackend, BoxFuture, InventoryDomain, OpError, PairResult, PinRecord,
+    PinReleaseSummary, PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain,
+    UiBackend, UiEvent, UiEventStream, DAEMON_UNREACHABLE,
 };
+#[cfg(any(test, debug_assertions, feature = "test-util"))]
+pub use backend::FakeBackend;
 pub use client::{DaemonClient, ReconnectPolicy};
 pub use error::IpcError;
 

@@ -11,6 +11,10 @@
 
 
 
+/// Custom 32-symbol alphabet for 6-char pairing codes: digits 2-9 then A-Z without
+/// I/O (ambiguous with 1/0). Diverges from RFC4648 `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`
+/// deliberately for typeability and single-character typo resistance via CRC-32 checksum.
+/// Bit packing (5-bit groups) is standard RFC4648.
 pub const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]

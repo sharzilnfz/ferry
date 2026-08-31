@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Context, RawInput};
-use ferry_gui::beacon::BeaconState;
+use ferry_platform::SyncState;
 use ferry_gui::format_bytes;
 use ferry_gui::modals::render_share_modal;
 use ferry_gui::theme::Theme;
@@ -93,8 +93,8 @@ fn test_edge_case_held_pins_and_multi_peer_holds() {
 
     app.handle_event(UiEvent::State(snap));
 
-    assert_eq!(app.beacon_state(), BeaconState::Holding);
-    assert_eq!(app.current_badge().0, "HOLDING");
+    assert_eq!(app.beacon_state(), SyncState::Pinned);
+    assert_eq!(app.current_badge().0, "PINNED");
     assert_eq!(app.snapshot.as_ref().unwrap().held_changes, 42);
     assert_eq!(app.snapshot.as_ref().unwrap().pin.paths.len(), 3);
     assert_eq!(app.snapshot.as_ref().unwrap().held_by_peer.len(), 2);
@@ -130,7 +130,7 @@ fn test_edge_case_active_transfers_boundary_values() {
         direction: None,
     });
 
-    assert_eq!(app.beacon_state(), BeaconState::Syncing);
+    assert_eq!(app.beacon_state(), SyncState::Syncing);
     let transfer = app.active_transfer.as_ref().unwrap();
     assert_eq!(transfer.bytes_transferred, 0);
     assert_eq!(transfer.total_bytes, 0);

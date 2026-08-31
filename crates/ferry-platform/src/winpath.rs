@@ -1,36 +1,11 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 use std::path::Path;
-
-
 
 pub const MAX_PATH: usize = 260;
 
 const EXTENDED_PREFIX: &str = "\\\\?\\";
 const EXTENDED_UNC_PREFIX: &str = "\\\\?\\UNC\\";
 
-
+#[cfg(windows)]
 pub fn is_extended_length(p: &Path) -> bool {
     let Some(s) = p.to_str() else {
         return false;
@@ -38,10 +13,12 @@ pub fn is_extended_length(p: &Path) -> bool {
     s.starts_with(EXTENDED_PREFIX)
 }
 
+#[cfg(not(windows))]
+pub fn is_extended_length(_p: &Path) -> bool {
+    false
+}
 
-
-
-
+#[cfg(windows)]
 pub fn needs_extended_length(p: &Path) -> bool {
     match windows_shape(p) {
         Some(_) => p.to_str().is_some_and(|s| s.chars().count() >= MAX_PATH),
@@ -49,33 +26,30 @@ pub fn needs_extended_length(p: &Path) -> bool {
     }
 }
 
+#[cfg(not(windows))]
+pub fn needs_extended_length(_p: &Path) -> bool {
+    false
+}
 
-
+#[cfg(windows)]
 fn windows_shape(p: &Path) -> Option<bool> {
     let s = p.to_str()?;
     if s.starts_with(EXTENDED_PREFIX) {
-        return None; 
+        return None;
     }
     let bytes = s.as_bytes();
     if bytes.len() >= 2 && bytes[0] == b'\\' && bytes[1] == b'\\' {
-        return Some(true); 
+        return Some(true);
     }
     if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        
-        
         let absolute = bytes.len() >= 3 && (bytes[2] == b'\\' || bytes[2] == b'/');
         return if absolute { Some(false) } else { None };
     }
     None
 }
 
-
-
-
-
-
+#[cfg(windows)]
 pub fn extend_path(p: &Path) -> std::path::PathBuf {
-    
     let Some(s) = p.to_str() else {
         return p.to_path_buf();
     };
@@ -86,7 +60,6 @@ pub fn extend_path(p: &Path) -> std::path::PathBuf {
         return p.to_path_buf();
     }
     if unc {
-        
         let body = s.trim_start_matches('\\').replace('/', "\\");
         format!("{EXTENDED_UNC_PREFIX}{body}").into()
     } else {
@@ -95,13 +68,17 @@ pub fn extend_path(p: &Path) -> std::path::PathBuf {
     }
 }
 
+#[cfg(not(windows))]
+pub fn extend_path(p: &Path) -> std::path::PathBuf {
+    p.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
     fn win(components: &[&str]) -> PathBuf {
-        
         let joined = components.join("\\");
         PathBuf::from(joined)
     }
@@ -121,25 +98,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn boundary_at_260_chars_gets_prefix_259_does_not() {
-        
         let stem = "d".repeat(256);
         let short = format!(r"C:\{stem}");
         assert_eq!(short.chars().count(), 259);
         assert_eq!(extend_path(Path::new(&short)), Path::new(&short));
 
-        
         let long = format!(r"C:\{stem}x");
         assert_eq!(long.chars().count(), 260);
         let got = extend_path(Path::new(&long));
         assert_eq!(got, PathBuf::from(format!(r"\\?\C:\{stem}x")));
         assert!(needs_extended_length(Path::new(&long)));
-        
+
         assert_eq!(extend_path(&got), got);
         assert!(!needs_extended_length(&got));
     }
 
     #[test]
+    #[cfg(windows)]
     fn deep_nesting_past_the_cap_is_prefixed_and_normalized() {
         let mut parts: Vec<String> = vec![r"C:\work".to_string()];
         for i in 0..12 {
@@ -157,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn unc_paths_become_unc_extended_form() {
         let mut s = String::from(r"\\server\share");
         while s.chars().count() < 280 {
@@ -179,12 +157,12 @@ mod tests {
         assert_eq!(extend_path(Path::new(&posix_long)), Path::new(&posix_long));
         assert!(!needs_extended_length(Path::new(&posix_long)));
 
-        
         let drive_rel = format!("C:{}", "d".repeat(400));
         assert_eq!(extend_path(Path::new(&drive_rel)), Path::new(&drive_rel));
     }
 
     #[test]
+    #[cfg(windows)]
     fn already_prefixed_paths_are_recognized() {
         let pre = Path::new(r"\\?\C:\anything\even\short");
         assert!(is_extended_length(pre));

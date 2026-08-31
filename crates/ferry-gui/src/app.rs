@@ -12,8 +12,10 @@ use ferry_ipc::backend::{PinRecord, ShareOffer, ShareStatus, UiBackend, UiEvent}
 use ferry_ipc::protocol::{ConflictEntry, EngineSnapshot, TransferDirection};
 
 use crate::activity::{render_activity_stream, ActivityEntry};
-use crate::beacon::{status_beacon_ui, BeaconState};
+use crate::beacon::{beacon_color, beacon_label, status_beacon_ui};
 use crate::fleet::render_fleet_table;
+use ferry_platform::SyncState;
+pub use ferry_platform::format_bytes;
 use crate::modals::{
     render_conflicts_modal, render_pair_modal, render_pin_modal, render_share_modal,
 };
@@ -55,22 +57,7 @@ pub struct GuiTransferState {
 }
 
 
-#[must_use]
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
 
-    if bytes < KB {
-        format!("{bytes} B")
-    } else if bytes < MB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else if bytes < GB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    }
-}
 
 
 pub struct GuiApp {
@@ -350,29 +337,29 @@ impl GuiApp {
 
     
     #[must_use]
-    pub fn beacon_state(&self) -> BeaconState {
+    pub fn beacon_state(&self) -> SyncState {
         if !self.is_connected {
-            return BeaconState::Offline;
+            return SyncState::Offline;
         }
         let Some(ref snap) = self.snapshot else {
-            return BeaconState::Offline;
+            return SyncState::Offline;
         };
 
         if snap.pin.holding || snap.state.eq_ignore_ascii_case("pinned") {
-            BeaconState::Holding
+            SyncState::Pinned
         } else if snap.conflicts > 0
             || !self.conflicts.is_empty()
             || snap.state.eq_ignore_ascii_case("conflict")
         {
-            BeaconState::Conflict
+            SyncState::Conflict
         } else if snap.state.eq_ignore_ascii_case("syncing") || self.active_transfer.is_some() {
-            BeaconState::Syncing
+            SyncState::Syncing
         } else if snap.state.eq_ignore_ascii_case("synced") {
-            BeaconState::Synced
+            SyncState::Synced
         } else if snap.state.eq_ignore_ascii_case("idle") {
-            BeaconState::Idle
+            SyncState::Idle
         } else {
-            BeaconState::Offline
+            SyncState::Offline
         }
     }
 
@@ -380,14 +367,14 @@ impl GuiApp {
     #[must_use]
     pub fn current_badge(&self) -> (&'static str, Color32, Color32) {
         let b_state = self.beacon_state();
-        let bg = b_state.color();
+        let bg = beacon_color(b_state);
         let fg = match b_state {
-            BeaconState::Synced => Color32::BLACK,
-            BeaconState::Idle => colors::TEXT_PRIMARY,
-            BeaconState::Offline => colors::TEXT_MUTED,
+            SyncState::Synced => Color32::BLACK,
+            SyncState::Idle => colors::TEXT_PRIMARY,
+            SyncState::Offline => colors::TEXT_MUTED,
             _ => Color32::WHITE,
         };
-        (b_state.label(), bg, fg)
+        (beacon_label(b_state), bg, fg)
     }
 
     

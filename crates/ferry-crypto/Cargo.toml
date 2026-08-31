@@ -18,6 +18,7 @@ argon2 = "0.5"
 zeroize.workspace = true
 qrcode.workspace = true
 thiserror.workspace = true
+crc32fast.workspace = true
 
 [dev-dependencies]
 ferry-store = { path = "../ferry-store", features = ["test-util"] }
