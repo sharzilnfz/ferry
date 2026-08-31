@@ -96,13 +96,13 @@ fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
 
 
 
-pub(crate) type HandshakeKeys = (
+pub type HandshakeKeys = (
     Zeroizing<[u8; KEY_LEN]>,
     Zeroizing<[u8; KEY_LEN]>,
     Box<[u8; KEY_LEN]>,
 );
 
-pub(crate) fn kdf_handshake(
+pub fn kdf_handshake(
     transcript: &[u8; 32],
     e1: &[u8; 32],
     m1: &[u8; 32],
@@ -129,6 +129,10 @@ impl SessionKey {
     pub fn cipher(self) -> SessionCipher {
         SessionCipher::new(self)
     }
+
+    pub fn from_bytes(key: [u8; KEY_LEN]) -> Self {
+        SessionKey(Zeroizing::new(key))
+    }
 }
 
 
@@ -136,7 +140,7 @@ impl SessionKey {
 
 
 
-pub(crate) fn traffic_keys(
+pub fn traffic_keys(
     prk: &[u8; KEY_LEN],
     final_transcript: &[u8; 32],
 ) -> (SessionKey, SessionKey) {
@@ -200,7 +204,7 @@ pub struct SessionCipher {
 }
 
 impl SessionCipher {
-    pub(crate) fn new(key: SessionKey) -> Self {
+    pub fn new(key: SessionKey) -> Self {
         SessionCipher { key, seq: 0 }
     }
 

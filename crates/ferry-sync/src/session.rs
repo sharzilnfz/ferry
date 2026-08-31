@@ -31,18 +31,15 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
-use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
 
 use ferry_crypto::identity::{DeviceId, DeviceIdentity};
 use ferry_proto::codec::{self, AuthProof, Bye, FrameBody, Hello, HelloAck};
 use ferry_proto::error::{ByeReason, ProtoError};
 use ferry_proto::secure::{
-    transcript_hash, INFO_HANDSHAKE, INFO_HTK_I2R, INFO_HTK_R2I, INFO_TK_I2R, INFO_TK_R2I, KEY_LEN,
+    kdf_handshake, traffic_keys, transcript_hash, SessionCipher, KEY_LEN,
 };
 use ferry_proto::version::{negotiate, ProtocolVersion};
 
@@ -50,8 +47,6 @@ use ferry_proto::version::{negotiate, ProtocolVersion};
 pub const MAX_FRAME_BODY: usize = ferry_proto::frame::MAX_FRAME_BODY;
 
 const NONCE_LEN: usize = 12;
-
-const TRAFFIC_NONCE_PREFIX: [u8; 4] = *b"FPN1";
 
 
 
@@ -134,121 +129,7 @@ fn wire_image(body: &[u8]) -> Vec<u8> {
 
 
 
-pub struct DirectionCipher {
-    key: Zeroizing<[u8; KEY_LEN]>,
-    seq: u64,
-}
 
-impl DirectionCipher {
-    pub fn new(key: [u8; KEY_LEN]) -> Self {
-        DirectionCipher {
-            key: Zeroizing::new(key),
-            seq: 0,
-        }
-    }
-
-    
-    
-    fn next_nonce(&mut self) -> Result<[u8; NONCE_LEN], ProtoError> {
-        if self.seq == u64::MAX {
-            return Err(ProtoError::CounterExhausted);
-        }
-        let mut n = [0u8; NONCE_LEN];
-        n[..4].copy_from_slice(&TRAFFIC_NONCE_PREFIX);
-        n[4..].copy_from_slice(&self.seq.to_be_bytes());
-        self.seq += 1;
-        Ok(n)
-    }
-
-    fn cipher(&self) -> ChaCha20Poly1305 {
-        ChaCha20Poly1305::new(Key::from_slice(self.key.as_ref()))
-    }
-
-    
-    pub fn seal(&mut self, len_prefix: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
-        let nonce = self.next_nonce()?;
-        self.cipher()
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: body,
-                    aad: &len_prefix.to_be_bytes(),
-                },
-            )
-            .map_err(|_| ProtoError::ProtocolViolation("frame seal failure"))
-    }
-
-    
-    
-    pub fn open(&mut self, len_prefix: u32, ct: &[u8]) -> Result<Vec<u8>, ProtoError> {
-        if ct.len() < 16 {
-            return Err(ProtoError::ProtocolViolation("sealed body too short"));
-        }
-        let nonce = self.next_nonce()?;
-        self.cipher()
-            .decrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: ct,
-                    aad: &len_prefix.to_be_bytes(),
-                },
-            )
-            .map_err(|_| ProtoError::Auth("post-auth frame failed tag verification"))
-    }
-}
-
-
-
-fn expand_from(prk: &[u8], info: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
-    let hk = Hkdf::<Sha256>::from_prk(prk).expect("prk is a valid SHA-256 length");
-    let mut okm = Zeroizing::new([0u8; KEY_LEN]);
-    hk.expand(info, okm.as_mut())
-        .expect("32-byte OKM always valid");
-    okm
-}
-
-
-type HandshakeKeys = (
-    Zeroizing<[u8; KEY_LEN]>,
-    Zeroizing<[u8; KEY_LEN]>,
-    Box<[u8; KEY_LEN]>,
-);
-
-
-
-fn kdf_handshake(th: &[u8; 32], e1: &[u8; 32], m1: &[u8; 32], m2: &[u8; 32]) -> HandshakeKeys {
-    let mut ikm = Zeroizing::new([0u8; 96]);
-    ikm[..32].copy_from_slice(e1);
-    ikm[32..64].copy_from_slice(m1);
-    ikm[64..].copy_from_slice(m2);
-    let ext = Hkdf::<Sha256>::new(Some(th), ikm.as_ref());
-    let mut prk = Box::new([0u8; KEY_LEN]);
-    ext.expand(INFO_HANDSHAKE, prk.as_mut())
-        .expect("valid prk length");
-    let htk_i2r = expand_from(prk.as_slice(), INFO_HTK_I2R);
-    let htk_r2i = expand_from(prk.as_slice(), INFO_HTK_R2I);
-    (htk_i2r, htk_r2i, prk)
-}
-
-
-
-
-
-
-
-fn traffic_keys(prk: &[u8; KEY_LEN], th_final: &[u8; 32]) -> (DirectionCipher, DirectionCipher) {
-    let ext = Hkdf::<Sha256>::new(Some(th_final), prk);
-    let mut root = Zeroizing::new([0u8; KEY_LEN]);
-    ext.expand(b"ferry/v1/traffic", root.as_mut())
-        .expect("valid root length");
-    let tk_i2r = expand_from(root.as_slice(), INFO_TK_I2R);
-    let tk_r2i = expand_from(root.as_slice(), INFO_TK_R2I);
-    let mut i2r = [0u8; KEY_LEN];
-    let mut r2i = [0u8; KEY_LEN];
-    i2r.copy_from_slice(tk_i2r.as_ref());
-    r2i.copy_from_slice(tk_r2i.as_ref());
-    (DirectionCipher::new(i2r), DirectionCipher::new(r2i))
-}
 
 
 
@@ -350,8 +231,8 @@ pub struct Established<'a> {
 pub struct SessionIo<'a> {
     link: &'a mut dyn Link,
     version: ProtocolVersion,
-    tx: Option<DirectionCipher>,
-    rx: Option<DirectionCipher>,
+    tx: Option<SessionCipher>,
+    rx: Option<SessionCipher>,
     peer_max: ProtocolVersion,
     peer_flags: u64,
 }
@@ -363,7 +244,7 @@ impl SessionIo<'_> {
         match self.tx.as_mut() {
             Some(c) => {
                 let len = (body.len() + 16) as u32;
-                let ct = c.seal(len, &body)?;
+                let ct = c.seal_frame(len, &body)?;
                 self.link.send_body(&ct)
             }
             None => self.link.send_body(&body),
@@ -378,7 +259,7 @@ impl SessionIo<'_> {
         loop {
             let raw = self.link.recv_body()?;
             let plain = match self.rx.as_mut() {
-                Some(c) => c.open(raw.len() as u32, &raw)?,
+                Some(c) => c.open_frame(raw.len() as u32, &raw)?,
                 None => raw,
             };
             let fb = FrameBody::parse(&plain)?;
@@ -526,8 +407,8 @@ struct HandshakeData {
     peer: DeviceId,
     peer_max: ProtocolVersion,
     peer_flags: u64,
-    tx: Option<DirectionCipher>,
-    rx: Option<DirectionCipher>,
+    tx: Option<SessionCipher>,
+    rx: Option<SessionCipher>,
 }
 
 fn handshake_core<L: Link>(
@@ -695,7 +576,9 @@ fn handshake_core<L: Link>(
         &proof_wires[0],
         &proof_wires[1],
     ]);
-    let (tk_i2r, tk_r2i) = traffic_keys(&prk, &th_final);
+    let (tk_i2r_key, tk_r2i_key) = traffic_keys(&prk, &th_final);
+    let tk_i2r = tk_i2r_key.cipher();
+    let tk_r2i = tk_r2i_key.cipher();
 
     let (tx, rx) = match role {
         ferry_proto::Role::Initiator => (tk_i2r, tk_r2i),
@@ -1096,7 +979,7 @@ mod tests {
     impl SessionIo<'_> {
         
         fn seal_for_test(&mut self, len: u32, body: &[u8]) -> Result<Vec<u8>, ProtoError> {
-            self.tx.as_mut().unwrap().seal(len, body)
+            self.tx.as_mut().unwrap().seal_frame(len, body)
         }
         
         fn link_recv_raw_for_test(&mut self) -> Vec<u8> {

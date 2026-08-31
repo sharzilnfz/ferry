@@ -21,9 +21,6 @@ ferry-scan = { path = "../ferry-scan" }
 ferry-sync-engine = { path = "../ferry-sync-engine" }
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true
-hkdf.workspace = true
-sha2.workspace = true
-zeroize.workspace = true
 
 [dev-dependencies]
 ferry-iroh = { path = "../ferry-iroh" }
