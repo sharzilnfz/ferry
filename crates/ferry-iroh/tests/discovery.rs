@@ -78,7 +78,7 @@ fn two_same_host_endpoints_discover_each_other_and_dial_by_key() {
 
     
     assert!(
-        ferry_iroh::resolve_route(&addr_for_frames).is_some(),
+        a.routes().resolve_route(&addr_for_frames).is_some(),
         "listener still publishes its own directory entry"
     );
 }

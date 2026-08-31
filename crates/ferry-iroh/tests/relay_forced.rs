@@ -59,11 +59,14 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
     let dir = tempfile::tempdir().expect("tempdir");
     let poly = ferry_store::chunker::generate_polynomial(&mut StdRng::seed_from_u64(0xBEEF));
 
+    let shared = ferry_iroh::RouteTable::new();
     let mk_transport = |seed_byte: u8| {
         let mut seed = [0u8; 32];
         seed[0] = seed_byte;
         seed[31] = 0x77;
-        let mut cfg = IrohConfig::builder().secret(seed);
+        let mut cfg = IrohConfig::builder()
+            .secret(seed)
+            .routes(shared.clone());
         if let Some(url) = &relay_url {
             cfg = cfg.relays(ferry_iroh::RelaySetting::Custom(vec![url.clone()]));
         }

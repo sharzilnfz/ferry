@@ -234,25 +234,14 @@ impl IrohTransport {
             endpoint_id,
             ip_hints: Vec::new(),
         };
-        self.inner
-            .routes
-            .register_explicit_route(key, route.clone());
-        crate::directory::register_explicit_route(key, route);
+        self.inner.routes.register_explicit_route(key, route);
         self
     }
 
     
     
     pub fn register_peer(&self, endpoint_id: [u8; 32]) -> SocketAddr {
-        let key = self.inner.routes.register_peer(endpoint_id, Vec::new());
-        crate::directory::register_explicit_route(
-            key,
-            Route {
-                endpoint_id,
-                ip_hints: Vec::new(),
-            },
-        );
-        key
+        self.inner.routes.register_peer(endpoint_id, Vec::new())
     }
 
     
@@ -457,12 +446,7 @@ fn latch_selected_paths(conn: &IrohConn, obs: &PathObservation) {
 
 impl Transport for IrohTransport {
     fn dial(&self, addr: SocketAddr) -> io::Result<Box<dyn DynConnection>> {
-        let route = self
-            .inner
-            .routes
-            .resolve_route(&addr)
-            .or_else(|| crate::directory::resolve_route(&addr));
-        let Some((route, _scope)) = route else {
+        let Some((route, _scope)) = self.inner.routes.resolve_route(&addr) else {
             return Err(DialFailure::NoRoute(addr).into_io());
         };
         self.dial_endpoint(route.endpoint_id, route.ip_hints)
@@ -490,8 +474,7 @@ impl Transport for IrohTransport {
             endpoint_id: *self.inner.my_id.as_bytes(),
             ip_hints: direct_hints(&self.inner.ep),
         };
-        self.inner.routes.publish_route(key, route.clone());
-        crate::directory::publish_route(key, route);
+        self.inner.routes.publish_route(key, route);
         Ok(Box::new(IrohListener {
             inner: Arc::clone(&self.inner),
             key,
@@ -672,6 +655,15 @@ mod tests {
         IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
     }
 
+    fn test_transport_with_routes(seed_byte: u8, routes: RouteTable) -> IrohTransport {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        seed[1] = seed_byte;
+        rand::thread_rng().fill_bytes(&mut seed[2..]);
+        IrohTransport::new(IrohConfig::builder().secret(seed).routes(routes).build())
+            .expect("transport builds")
+    }
+
     #[test]
     fn synchronous_calls_work_inside_multithread_tokio_runtime() {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -681,8 +673,9 @@ mod tests {
             .unwrap();
 
         rt.block_on(async {
-            let a = test_transport(0x31);
-            let b = test_transport(0x32);
+            let shared = RouteTable::new();
+            let a = test_transport_with_routes(0x31, shared.clone());
+            let b = test_transport_with_routes(0x32, shared.clone());
 
             let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
             let addr = lst.local_addr().unwrap();
@@ -711,8 +704,9 @@ mod tests {
             .unwrap();
 
         rt.block_on(async {
-            let a = test_transport(0x41);
-            let b = test_transport(0x42);
+            let shared = RouteTable::new();
+            let a = test_transport_with_routes(0x41, shared.clone());
+            let b = test_transport_with_routes(0x42, shared.clone());
 
             let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
             let addr = lst.local_addr().unwrap();
@@ -735,12 +729,13 @@ mod tests {
 
     #[test]
     fn connection_and_listener_survive_transport_drop() {
-        let a = test_transport(0x51);
-        let b = test_transport(0x52);
+        let shared = RouteTable::new();
+        let a = test_transport_with_routes(0x51, shared.clone());
+        let b = test_transport_with_routes(0x52, shared.clone());
 
         let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
         let addr = lst.local_addr().unwrap();
-        drop(a); 
+        drop(a);
 
         let server = std::thread::spawn(move || {
             let mut c = lst.accept().unwrap();
@@ -751,7 +746,7 @@ mod tests {
         });
 
         let mut cli = b.dial(addr).unwrap();
-        drop(b); 
+        drop(b);
 
         cli.send_frame(b"survived-transport-drop").unwrap();
         let reply = cli.recv_frame().unwrap();

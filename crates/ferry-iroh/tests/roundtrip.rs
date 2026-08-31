@@ -17,19 +17,32 @@ fn test_transport(seed_byte: u8) -> IrohTransport {
     IrohTransport::new(IrohConfig::builder().secret(seed).build()).expect("transport builds")
 }
 
+fn test_transport_with_routes(seed_byte: u8, routes: ferry_iroh::RouteTable) -> IrohTransport {
+    let mut seed = [0u8; 32];
+    seed[0] = seed_byte;
+    seed[1] = seed_byte;
+    rand::thread_rng().fill_bytes(&mut seed[2..]);
+    IrohTransport::new(
+        IrohConfig::builder()
+            .secret(seed)
+            .routes(routes)
+            .build(),
+    )
+    .expect("transport builds")
+}
+
 #[test]
 fn frames_round_trip_over_iroh_including_empty_and_multi() {
-    let a = test_transport(0xA0);
-    let b = test_transport(0xB0);
+    let shared = ferry_iroh::RouteTable::new();
+    let a = test_transport_with_routes(0xA0, shared.clone());
+    let b = test_transport_with_routes(0xB0, shared.clone());
 
     let lst = a
         .listen("127.0.0.1:0".parse().unwrap())
         .expect("listen publishes a route");
     let addr = lst.local_addr().unwrap();
 
-    
-    
-    let route = ferry_iroh::resolve_route(&addr).expect("route published");
+    let route = a.routes().resolve_route(&addr).expect("route published");
     assert_eq!(route.0.endpoint_id, a.endpoint_id());
 
     let server = std::thread::spawn(move || {
@@ -58,8 +71,9 @@ fn large_frames_survive_the_quic_path() {
     let payload: Vec<u8> = (0..3 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
     let payload_hash = blake3_hash(&payload);
 
-    let a = test_transport(0xA1);
-    let b = test_transport(0xB1);
+    let shared = ferry_iroh::RouteTable::new();
+    let a = test_transport_with_routes(0xA1, shared.clone());
+    let b = test_transport_with_routes(0xB1, shared.clone());
     let lst = a.listen("127.0.0.1:0".parse().unwrap()).unwrap();
     let addr = lst.local_addr().unwrap();
 
@@ -100,7 +114,8 @@ fn wrong_key_dial_fails_cleanly_typed() {
     rand::thread_rng().fill_bytes(&mut ghost_key);
 
     let alias: SocketAddr = "127.0.0.1:49771".parse().unwrap();
-    ferry_iroh::register_explicit_route(
+    let shared = ferry_iroh::RouteTable::new();
+    shared.register_explicit_route(
         alias,
         ferry_iroh::Route {
             endpoint_id: ghost_key,
@@ -112,6 +127,7 @@ fn wrong_key_dial_fails_cleanly_typed() {
         IrohConfig::builder()
             .secret([9u8; 32])
             .dial_timeout(Duration::from_secs(2))
+            .routes(shared)
             .build(),
     )
     .unwrap();
