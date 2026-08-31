@@ -22,7 +22,7 @@ use ferry_sync::transport::{
 use ferry_sync::Transport;
 use iroh::endpoint::{presets, Connection as IrohConn};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, TransportAddr, Watcher as _};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 use crate::config::{IrohConfig, RelaySetting};
 use crate::directory::{Route, RouteTable};
@@ -149,6 +149,10 @@ impl std::fmt::Debug for IrohTransport {
 }
 
 impl IrohTransport {
+    /// Creates a transport with an owned Tokio runtime. The runtime is intentionally leaked
+    /// (via `mem::forget`) so the stored `Handle` remains valid for the transport's lifetime.
+    /// Prefer `new_with_handle` with a caller-provided runtime when the caller owns the runtime
+    /// lifecycle and wants clean shutdown via `shutdown()`.
     pub fn new(cfg: IrohConfig) -> io::Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -160,6 +164,7 @@ impl IrohTransport {
         Self::new_with_handle(cfg, handle)
     }
 
+    /// Caller-provided runtime must outlive the transport; the transport keeps only a Handle.
     pub fn new_with_handle(cfg: IrohConfig, handle: Handle) -> io::Result<Self> {
         let seed = cfg.resolve_secret().ok_or_else(|| {
             io::Error::new(

@@ -684,13 +684,13 @@ fn gate_plan(
         });
     }
 
-    let held_chunk_ids: BTreeSet<BlobId> = held.iter().flat_map(|h| h.chunks.iter().map(|(id, _)| *id)).collect();
-    let send: Vec<(BlobId, u64)> = plan
-        .send
-        .iter()
-        .filter(|(id, _)| !held_chunk_ids.contains(id))
-        .copied()
-        .collect();
+    // Held chunks are not withheld from `send`: a chunk may be shared between a
+    // held path and a non-held path (deduplicated by BlobId). Without the full
+    // chunk→path map (removed with `chunk_path_map` DFS), we cannot prove a
+    // chunk is held-only. Withholding by flat_map would starve non-held files
+    // that share the chunk. The store fetch dedups on the remote side, so
+    // keeping all send entries is correct and preserves the single-BFS budget.
+    let send = plan.send.clone();
 
     let apply = ActionPlan {
         materialize: plan

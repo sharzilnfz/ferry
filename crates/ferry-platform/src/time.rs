@@ -24,7 +24,8 @@ pub fn join_unix(sec: i64, nsec: u32) -> SystemTime {
 }
 
 pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid unix timestamp");
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (
         dt.year() as i64,
         dt.month() as u8 as u32,
@@ -37,13 +38,20 @@ pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
 
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let secs = z * 86_400;
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid days");
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (dt.year() as i64, dt.month() as u8 as u32, dt.day() as u32)
 }
 
 fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let month = time::Month::try_from(m as u8).expect("valid month");
-    let date = time::Date::from_calendar_date(y as i32, month, d as u8).expect("valid date");
+    let month = match time::Month::try_from(m as u8) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let date = match time::Date::from_calendar_date(y as i32, month, d as u8) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     date.midnight().assume_utc().unix_timestamp() / 86_400
 }
 
@@ -63,9 +71,11 @@ pub fn current_time_str() -> String {
 }
 
 pub fn fmt_rfc3339(secs: i64) -> String {
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs).expect("valid timestamp");
+    let dt = time::OffsetDateTime::from_unix_timestamp(secs)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     let format = time::format_description::well_known::Rfc3339;
-    dt.format(&format).expect("format rfc3339")
+    dt.format(&format)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
 pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {

@@ -1238,12 +1238,12 @@ impl StagingPools {
         }
     }
 
-    fn pool(&self, is_meta: bool) -> &Vec<StagingPack> {
-        if is_meta { &self.meta } else { &self.data }
+    fn pool(&self, kind: BlobKind) -> &Vec<StagingPack> {
+        if kind.is_meta() { &self.meta } else { &self.data }
     }
 
-    fn pool_mut(&mut self, is_meta: bool) -> &mut Vec<StagingPack> {
-        if is_meta { &mut self.meta } else { &mut self.data }
+    fn pool_mut(&mut self, kind: BlobKind) -> &mut Vec<StagingPack> {
+        if kind.is_meta() { &mut self.meta } else { &mut self.data }
     }
 
     pub fn offer(&mut self,
@@ -1258,25 +1258,25 @@ impl StagingPools {
         let is_meta = kind.is_meta();
         let mut sealed = Vec::new();
         loop {
-            if self.pool(is_meta).is_empty() {
+            if self.pool(kind).is_empty() {
                 let fresh = StagingPack::new(container, rng);
-                self.pool_mut(is_meta).push(fresh);
+                self.pool_mut(kind).push(fresh);
             }
-            let pool_len = self.pool(is_meta).len();
+            let pool_len = self.pool(kind).len();
             let idx = rng.gen_range(0..pool_len);
             let overflow = {
-                let sp = &self.pool(is_meta)[idx];
+                let sp = &self.pool(kind)[idx];
                 !sp.entries.is_empty() && sp.body.len() + bytes.len() > target
             };
             if overflow {
-                let sp = self.pool_mut(is_meta).remove(idx);
+                let sp = self.pool_mut(kind).remove(idx);
                 
                 for entry in &sp.entries {
                     self.index.remove(&(entry.kind, entry.id));
                 }
                 
                 let to_reindex: Vec<(BlobKind, BlobId, usize, u64, u64)> = self
-                    .pool(is_meta)
+                    .pool(kind)
                     .iter()
                     .enumerate()
                     .skip(idx)
@@ -1296,7 +1296,7 @@ impl StagingPools {
             let plain_off;
             let pool_len;
             {
-                let pool = self.pool_mut(is_meta);
+                let pool = self.pool_mut(kind);
                 plain_off = pool[idx].body.len() as u64;
                 pool[idx].push(kind, id, bytes);
                 pool_len = pool.len();
@@ -1326,7 +1326,7 @@ impl StagingPools {
 
     
     pub fn open_count(&self, kind: BlobKind) -> usize {
-        self.pool(kind.is_meta()).len()
+        self.pool(kind).len()
     }
 
     
@@ -1337,8 +1337,8 @@ impl StagingPools {
     
     
     pub fn staged_bytes(&self, kind: BlobKind, id: &BlobId) -> Option<Vec<u8>> {
-        let &(is_meta, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
-        let pool = self.pool(is_meta);
+        let &(_, pack_idx, plain_off, plain_len) = self.index.get(&(kind, *id))?;
+        let pool = self.pool(kind);
         let sp = pool.get(pack_idx)?;
         let start = plain_off as usize;
         let end = start + plain_len as usize;

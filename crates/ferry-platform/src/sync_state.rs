@@ -51,9 +51,8 @@ impl SyncState {
     }
 }
 
-pub const HOLDING_ALIAS: SyncState = SyncState::Pinned;
-
 impl SyncState {
+    #[allow(non_upper_case_globals)]
     pub const Holding: Self = Self::Pinned;
 }
 
