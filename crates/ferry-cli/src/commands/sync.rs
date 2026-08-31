@@ -20,6 +20,10 @@ pub struct SyncArgs<'a> {
 }
 
 pub fn run(args: SyncArgs<'_>) -> CliResult<Output> {
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     if args.transport != "tcp" {
         return Err(CliError::new(
             "transport-unavailable",

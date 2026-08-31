@@ -92,6 +92,9 @@ impl DashboardServer {
             .route("/api/pair/accept", post(api_pair_accept))
             .route("/api/pair/create", post(api_pair_create))
             .route("/api/pair/join", post(api_pair_join))
+            .route("/api/pair/device", post(api_pair_device))
+            .route("/api/devices", get(api_devices))
+            .route("/api/devices/discovered", get(api_devices))
             .route("/api/pin/start", post(api_pin_start))
             .route("/api/pin/stop", post(api_pin_stop))
             .route("/api/pin/release", post(api_pin_release))
@@ -242,6 +245,18 @@ async fn auth_and_activity_middleware(
 }
 
 #[must_use]
+pub fn generate_ascii_qr(payload: &str) -> String {
+    if let Ok(code) = qrcode::QrCode::new(payload.as_bytes()) {
+        code.render::<char>()
+            .quiet_zone(false)
+            .module_dimensions(2, 1)
+            .build()
+    } else {
+        format!("[QR: {payload}]")
+    }
+}
+
+#[must_use]
 pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
     match path {
         "/" | "/index.html" | "/index" => Some((INDEX_HTML, "text/html; charset=utf-8")),
@@ -330,12 +345,14 @@ async fn api_share(
         .map(PathBuf::from);
     let i_know = body.get("i_know").and_then(Value::as_bool).unwrap_or(false);
     let offer = server.backend.share_initiate(folder, i_know).await?;
+    let qr_code = generate_ascii_qr(&offer.token);
     Ok(Json(json!({
         "command": "share",
         "role": "initiate",
         "status": "pending",
         "folder": offer.folder,
         "short_code": offer.token,
+        "qr_code": qr_code,
         "offer_file": offer.payload_path.map(|p| p.display().to_string()),
         "warnings": offer.secret_warnings,
     })))
@@ -362,12 +379,14 @@ async fn api_share_status(
         .offer
         .as_ref()
         .and_then(|o| o.payload_path.as_ref().map(|p| p.display().to_string()));
+    let qr_code = short_code.as_deref().map(generate_ascii_qr);
     let mut doc = json!({
         "command": "share",
         "role": "initiate",
         "status": st.status,
         "folder": st.folder,
         "short_code": short_code,
+        "qr_code": qr_code,
         "offer_file": offer_file,
     });
     if let Some(peer) = st.peer_device_id {
@@ -385,6 +404,7 @@ async fn api_pair_accept(
     let code_or_payload = body
         .get("code_or_payload")
         .or_else(|| body.get("payload_path"))
+        .or_else(|| body.get("code"))
         .and_then(Value::as_str);
     let Some(code_or_payload) = code_or_payload else {
         return Err(ApiError::new(
@@ -394,11 +414,29 @@ async fn api_pair_accept(
             "pass the 6-character pairing code or the pair-offer file written by the sharing device",
         ));
     };
-    let dir = body.get("dir").and_then(Value::as_str).map(PathBuf::from);
-    let res = server
+    let dir = body
+        .get("dir")
+        .or_else(|| body.get("target_dir"))
+        .or_else(|| body.get("targetDir"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+
+    let res = match server
         .backend
-        .pair_accept(code_or_payload.to_string(), dir)
-        .await?;
+        .pair_accept(code_or_payload.to_string(), dir.clone())
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(target) = dir {
+                let req =
+                    ferry_ipc::pairing::JoinPairingRequest::new(code_or_payload.to_string(), target);
+                server.backend.join_pairing_session(req).await.map_err(|_| e)?
+            } else {
+                return Err(e.into());
+            }
+        }
+    };
     Ok(Json(json!({
         "command": "pair",
         "role": "accept",
@@ -428,11 +466,14 @@ async fn api_pair_create(
         })?;
     let req = ferry_ipc::pairing::CreatePairingRequest::new(folder_id.to_string());
     let resp = server.backend.create_pairing_session(req).await?;
+    let qr_code = generate_ascii_qr(&resp.code);
     Ok(Json(json!({
         "command": "pair",
         "role": "create",
         "status": "pending",
         "code": resp.code,
+        "short_code": resp.code,
+        "qr_code": qr_code,
         "expires_at": resp.expires_at,
     })))
 }
@@ -473,6 +514,59 @@ async fn api_pair_join(
         "folder": res.folder_path.display().to_string(),
         "folder_id": res.folder_id,
         "device_id": res.device_id,
+    })))
+}
+
+async fn api_pair_device(
+    State(server): State<DashboardServer>,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = payload.map_err(bad_body)?;
+    let device_id = body
+        .get("device_id")
+        .or_else(|| body.get("deviceId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad-request",
+                "device_id is required",
+                "pass the device_id of the discovered device to pair with",
+            )
+        })?;
+    let folder_id = body
+        .get("folder_id")
+        .or_else(|| body.get("folderId"))
+        .and_then(Value::as_str);
+
+    let fid = match folder_id {
+        Some(f) => f.to_string(),
+        None => {
+            let snap = server.backend.get_status().await?;
+            snap.folder_id
+        }
+    };
+    let req = ferry_ipc::pairing::CreatePairingRequest::new(fid);
+    let resp = server.backend.create_pairing_session(req).await?;
+    let qr_code = generate_ascii_qr(&resp.code);
+    Ok(Json(json!({
+        "command": "pair",
+        "role": "device",
+        "status": "pending",
+        "target_device_id": device_id,
+        "code": resp.code,
+        "short_code": resp.code,
+        "qr_code": qr_code,
+        "expires_at": resp.expires_at,
+        "message": format!("Pairing handshake initiated with device {device_id}"),
+    })))
+}
+
+async fn api_devices(State(server): State<DashboardServer>) -> Result<Json<Value>, ApiError> {
+    let devices = server.backend.list_discovered_devices().await?;
+    Ok(Json(json!({
+        "command": "devices",
+        "devices": devices,
     })))
 }
 

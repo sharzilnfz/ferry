@@ -7,10 +7,20 @@ use ferry_ipc::IpcClient;
 
 pub const IPC_TIMEOUT: Duration = Duration::from_millis(500);
 
-pub fn query_status(folder: &Path) -> Option<EngineSnapshot> {
+#[cfg(unix)]
+type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::UnixStream>;
+#[cfg(windows)]
+type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::windows::named_pipe::NamedPipeClient>;
+
+async fn connect_ipc(folder: &Path) -> Option<IpcConn> {
     let socket_path = socket_path_for_dir(folder);
+    IpcClient::connect(&socket_path).await.ok()
+}
+
+pub fn query_status(folder: &Path) -> Option<EngineSnapshot> {
+    let folder_owned = folder.to_path_buf();
     run_async(IPC_TIMEOUT, async move {
-        let mut conn = IpcClient::connect(&socket_path).await.ok()?;
+        let mut conn = connect_ipc(&folder_owned).await?;
 
         match tokio::time::timeout(IPC_TIMEOUT, conn.recv_message())
             .await
@@ -34,9 +44,9 @@ pub fn query_status(folder: &Path) -> Option<EngineSnapshot> {
 }
 
 pub fn send_command(folder: &Path, cmd: ClientCommand) -> Option<DaemonMessage> {
-    let socket_path = socket_path_for_dir(folder);
+    let folder_owned = folder.to_path_buf();
     run_async(IPC_TIMEOUT, async move {
-        let mut conn = IpcClient::connect(&socket_path).await.ok()?;
+        let mut conn = connect_ipc(&folder_owned).await?;
 
         let _ = tokio::time::timeout(Duration::from_millis(50), conn.recv_message()).await;
 
@@ -50,9 +60,9 @@ pub fn send_command(folder: &Path, cmd: ClientCommand) -> Option<DaemonMessage> 
 }
 
 pub fn query_conflicts(folder: &Path) -> Option<Vec<ferry_sync_engine::ConflictEntry>> {
-    let socket_path = socket_path_for_dir(folder);
+    let folder_owned = folder.to_path_buf();
     run_async(IPC_TIMEOUT, async move {
-        let mut conn = IpcClient::connect(&socket_path).await.ok()?;
+        let mut conn = connect_ipc(&folder_owned).await?;
 
         let _ = tokio::time::timeout(Duration::from_millis(20), conn.recv_message()).await;
 

@@ -138,23 +138,21 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     daemon.stop_ipc();
     std::thread::sleep(Duration::from_millis(50));
 
-    let err = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap_err();
-    assert_eq!(err.code, "daemon-not-running");
-    assert!(err.message.contains("no active background daemon"));
-    assert!(err.hint.contains("ferry daemon"));
+    let auto_out = commands::pin::start(&proj, &["src/**".to_string()], 8);
+    assert!(auto_out.is_ok(), "pin start should auto-spawn daemon and succeed");
 }
 
 #[test]
-fn test_pin_start_fails_when_no_daemon_active() {
+fn test_pin_start_autospawns_when_no_daemon_active() {
     let env = Env::new("pin-no-daemon");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     commands::init::run(&proj).unwrap();
 
-    let err = commands::pin::start(&proj, &["src/**".to_string()], 8).unwrap_err();
-    assert_eq!(err.code, "daemon-not-running");
-    assert!(err.message.contains("no active background daemon"));
-    assert!(err.hint.contains("ferry daemon"));
+    let out = commands::pin::start(&proj, &["src/**".to_string()], 8)
+        .expect("pin start should auto-spawn background daemon and succeed");
+    assert_eq!(out.json["command"], "pin");
+    assert_eq!(out.json["action"], "start");
 }
 
 #[test]

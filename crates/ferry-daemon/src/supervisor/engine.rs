@@ -8,7 +8,7 @@ use ferry_folder::inventory::FolderRecord;
 use ferry_ipc::backend::UiEvent;
 use ferry_ipc::protocol::{EngineSnapshot, ScanStatsView};
 use ferry_store::format::hex as hex_str;
-use ferry_sync::{EngineConfig, EngineHandle, SyncEngine};
+use ferry_sync::EngineHandle;
 use notify::Watcher as _;
 
 use super::SupervisorError;

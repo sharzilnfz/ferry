@@ -6,6 +6,10 @@ use ferry_ipc::backend::{connect_auto, UiBackend};
 use crate::error::CliResult;
 
 pub fn run(folder: Option<&Path>) -> CliResult<crate::out::Output> {
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     let rt = tokio::runtime::Runtime::new().map_err(|e| {
         crate::error::CliError::new(
             "runtime-error",

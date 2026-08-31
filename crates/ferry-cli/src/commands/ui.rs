@@ -21,6 +21,16 @@ use crate::error::{CliError, CliResult};
 use crate::out::Output;
 
 pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(600);
+pub const WEB_SESSION_FILE: &str = "web_session.json";
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WebSession {
+    pub pid: u32,
+    pub host: String,
+    pub port: u16,
+    pub token: String,
+    pub url: String,
+}
 
 pub struct UiArgs<'a> {
     pub folder: Option<&'a Path>,
@@ -228,11 +238,32 @@ fn run_web_mode(
         let socket_path = ferry_ipc::paths::socket_path_for_dir(&folder_owned);
         let fs_back = ferry_daemon::ui::fs_backend(folder_owned.clone());
         let backend = ferry_daemon::ui::AutoBackend::new(socket_path)
-            .with_fallback(folder_owned)
+            .with_fallback(folder_owned.clone())
             .with_fallback_backend(Arc::new(fs_back));
         let server = DashboardServer::new(Arc::new(backend))
             .with_token(token.clone())
             .with_inactivity_timeout(INACTIVITY_TIMEOUT);
+
+        let session_file = folder_owned.join(".ferry").join(WEB_SESSION_FILE);
+        let session = WebSession {
+            pid: std::process::id(),
+            host: local_addr.ip().to_string(),
+            port: local_addr.port(),
+            token: token.clone(),
+            url: url.clone(),
+        };
+        let _ = std::fs::create_dir_all(folder_owned.join(".ferry"));
+        if let Ok(data) = serde_json::to_string_pretty(&session) {
+            let _ = std::fs::write(&session_file, data);
+        }
+
+        struct SessionGuard(PathBuf);
+        impl Drop for SessionGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _guard = SessionGuard(session_file);
 
         if test {
             return Ok(Output::new(
@@ -305,6 +336,67 @@ fn run_web_mode(
             "Ferry UI server closed.\n",
         ))
     })
+}
+
+pub fn read_web_session(session_file: &Path) -> Option<WebSession> {
+    let content = std::fs::read_to_string(session_file).ok()?;
+    let session: WebSession = serde_json::from_str(&content).ok()?;
+    let is_alive = ferry_platform::read_pid(&session_file.parent().unwrap_or(session_file))
+        .map(|r| r.pid == session.pid)
+        .unwrap_or(false)
+        || is_pid_alive(session.pid);
+
+    if is_alive {
+        Some(session)
+    } else {
+        let _ = std::fs::remove_file(session_file);
+        None
+    }
+}
+
+fn is_pid_alive(pid: u32) -> bool {
+    ferry_platform::process_start_token(pid).is_some()
+}
+
+pub fn query_token(folder: Option<&Path>) -> CliResult<WebSession> {
+    let target = match folder {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+
+    let session_file = target.join(".ferry").join(WEB_SESSION_FILE);
+    if let Some(session) = read_web_session(&session_file) {
+        return Ok(session);
+    }
+
+    if let Ok(home) = crate::home::ferry_home() {
+        let home_session_file = home.join(WEB_SESSION_FILE);
+        if let Some(session) = read_web_session(&home_session_file) {
+            return Ok(session);
+        }
+    }
+
+    Err(CliError::new(
+        "no-active-web-ui",
+        "No active Web UI session found",
+        "Start a Web UI server first with `ferry ui --web`",
+    ))
+}
+
+pub fn run_token(folder: Option<&Path>) -> CliResult<Output> {
+    let session = query_token(folder)?;
+    let human = format!("{}\n", session.url);
+    let json_doc = json!({
+        "command": "ui",
+        "subcommand": "token",
+        "status": "ok",
+        "url": session.url,
+        "token": session.token,
+        "host": session.host,
+        "port": session.port,
+        "pid": session.pid,
+    });
+    Ok(Output::new(json_doc, human))
 }
 
 pub fn run(args: UiArgs) -> CliResult<Output> {

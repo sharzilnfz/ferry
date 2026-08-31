@@ -145,6 +145,8 @@ pub struct EngineSnapshot {
     pub held_by_peer: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub peers: Vec<PeerStatusView>,
+    #[serde(default)]
+    pub discovered_devices: Vec<DiscoveredDeviceView>,
     pub conflicts: usize,
 }
 
@@ -168,6 +170,7 @@ impl EngineSnapshot {
             held_changes: 0,
             held_by_peer: HashMap::new(),
             peers: Vec::new(),
+            discovered_devices: Vec::new(),
             conflicts: 0,
         }
     }
@@ -239,6 +242,26 @@ impl PeerStatusView {
             last_agreed_manifest_id: None,
             agreed_at: None,
             connectivity: connectivity.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredDeviceView {
+    pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub status: String,
+}
+
+impl DiscoveredDeviceView {
+    #[must_use]
+    pub fn new(device_id: impl Into<String>, address: Option<String>) -> Self {
+        Self {
+            device_id: device_id.into(),
+            address,
+            status: "discovered".to_string(),
         }
     }
 }

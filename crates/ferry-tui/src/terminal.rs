@@ -104,4 +104,26 @@ impl TerminalEvents {
     pub async fn next(&mut self) -> Option<Event> {
         self.rx.recv().await
     }
+
+    #[must_use]
+    pub fn from_events(events: Vec<Event>) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        for e in events {
+            let _ = tx.send(e);
+        }
+        let worker = tokio::spawn(async {});
+        Self {
+            rx,
+            _worker: worker,
+        }
+    }
+
+    #[must_use]
+    pub fn from_channel(rx: UnboundedReceiver<Event>) -> Self {
+        Self {
+            rx,
+            _worker: tokio::spawn(async {}),
+        }
+    }
 }
+

@@ -6,6 +6,10 @@ use crate::error::{CliError, CliResult};
 use crate::out::Output;
 
 pub fn run(code: &str, dest: Option<&Path>) -> CliResult<Output> {
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     let normalized = code.trim().to_string();
     if normalized.is_empty() {
         return Err(CliError::new(

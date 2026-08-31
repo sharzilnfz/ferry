@@ -144,6 +144,7 @@ impl DaemonState {
             held_changes: held_total,
             held_by_peer,
             peers,
+            discovered_devices: Vec::new(),
             conflicts,
         }
     }

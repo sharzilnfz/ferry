@@ -53,36 +53,48 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let badge_text = state.engine_state.badge_text();
-    let badge_style = match state.engine_state {
-        SyncState::Synced => Style::default()
-            .fg(Color::Black)
-            .bg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Syncing => Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Conflict => Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::Red)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Pinned => Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Idle => Style::default()
-            .fg(Color::Black)
-            .bg(Color::Gray)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Error => Style::default()
-            .fg(Color::White)
-            .bg(Color::Red)
-            .add_modifier(Modifier::BOLD),
-        SyncState::Offline => Style::default()
-            .fg(Color::White)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
+    let (badge_text, badge_style) = if !state.is_connected {
+        (
+            "DISCONNECTED",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            state.engine_state.badge_text(),
+            match state.engine_state {
+                SyncState::Synced => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Syncing => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Conflict => Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Pinned => Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Idle => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Error => Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+                SyncState::Offline => Style::default()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            },
+        )
     };
 
     let badge_span = Span::styled(format!(" {badge_text} "), badge_style);

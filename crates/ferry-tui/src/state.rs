@@ -119,13 +119,24 @@ impl TuiState {
     }
 
     #[must_use]
+    pub fn is_pin_active(&self) -> bool {
+        if (self.pin.state.eq_ignore_ascii_case("none") || self.pin.state.eq_ignore_ascii_case("released"))
+            && !self.pin.holding
+            && !self.raw_state_str.eq_ignore_ascii_case("pinned")
+        {
+            return false;
+        }
+        self.pin.holding
+            || self.pin.state.eq_ignore_ascii_case("active")
+            || self.raw_state_str.eq_ignore_ascii_case("pinned")
+            || self.engine_state == SyncState::Pinned
+    }
+
+    #[must_use]
     pub fn resolve_sync_state(&self) -> SyncState {
         if !self.is_connected && self.raw_state_str.eq_ignore_ascii_case("offline") {
             SyncState::Offline
-        } else if self.pin.holding
-            || self.pin.state.eq_ignore_ascii_case("active")
-            || self.raw_state_str.eq_ignore_ascii_case("pinned")
-        {
+        } else if self.is_pin_active() {
             SyncState::Pinned
         } else if self.conflicts > 0 || self.raw_state_str.eq_ignore_ascii_case("conflict") {
             SyncState::Conflict
@@ -147,6 +158,9 @@ impl TuiState {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: EngineSnapshot) {
+        let is_initial = self.folder == "-" || !self.is_connected;
+        let prev_pin_active = self.is_pin_active();
+
         self.folder = snapshot.folder;
         self.folder_id = snapshot.folder_id;
         self.device_id = snapshot.device_id;
@@ -162,27 +176,50 @@ impl TuiState {
         self.is_connected = true;
         self.engine_state = self.resolve_sync_state();
         self.update_cached_strings();
-        self.activity_log.record_daemon_message(
-            current_time_str(),
-            &DaemonMessage::Snapshot(EngineSnapshot {
-                folder: self.folder.clone(),
-                folder_id: self.folder_id.clone(),
-                device_id: self.device_id.clone(),
-                manifest_id: if self.manifest_id.is_empty() {
-                    None
+
+        let new_pin_active = self.is_pin_active();
+
+        if is_initial {
+            self.activity_log.record_daemon_message(
+                current_time_str(),
+                &DaemonMessage::Snapshot(EngineSnapshot {
+                    folder: self.folder.clone(),
+                    folder_id: self.folder_id.clone(),
+                    device_id: self.device_id.clone(),
+                    manifest_id: if self.manifest_id.is_empty() {
+                        None
+                    } else {
+                        Some(self.manifest_id.clone())
+                    },
+                    state: self.raw_state_str.clone(),
+                    scanned: self.scanned,
+                    pending_changes: self.pending_changes,
+                    pin: self.pin.clone(),
+                    held_changes: self.held_changes,
+                    held_by_peer: self.held_by_peer.clone(),
+                    peers: self.peers.clone(),
+                    discovered_devices: Vec::new(),
+                    conflicts: self.conflicts,
+                }),
+            );
+        } else if prev_pin_active != new_pin_active {
+            if new_pin_active {
+                let status = if self.pin.state.is_empty() || self.pin.state == "none" {
+                    "active".to_string()
                 } else {
-                    Some(self.manifest_id.clone())
-                },
-                state: self.raw_state_str.clone(),
-                scanned: self.scanned,
-                pending_changes: self.pending_changes,
-                pin: self.pin.clone(),
-                held_changes: self.held_changes,
-                held_by_peer: self.held_by_peer.clone(),
-                peers: self.peers.clone(),
-                conflicts: self.conflicts,
-            }),
-        );
+                    self.pin.state.clone()
+                };
+                self.activity_log.push_info(
+                    current_time_str(),
+                    format!("Pin started: {status}"),
+                );
+            } else {
+                self.activity_log.push_info(
+                    current_time_str(),
+                    "Pin released: released",
+                );
+            }
+        }
     }
 
     pub fn apply_state_changed(
@@ -290,7 +327,11 @@ impl TuiState {
 
     pub fn apply_ack(&mut self, command: String, message: Option<String>) {
         self.is_connected = true;
-        if command == "list_conflicts" {
+        if command == "start_pin" {
+            self.pin.state = "active".to_string();
+        } else if command == "release_pin" || command == "stop_pin" {
+            self.pin = PinView::none();
+        } else if command == "list_conflicts" {
             if let Some(ref msg_json) = message {
                 if let Ok(entries) = serde_json::from_str::<Vec<ConflictEntry>>(msg_json) {
                     self.conflict_entries = entries;

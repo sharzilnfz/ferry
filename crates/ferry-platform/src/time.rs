@@ -36,25 +36,6 @@ pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     )
 }
 
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let secs = z * 86_400;
-    let dt =
-        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    (dt.year() as i64, dt.month() as u8 as u32, dt.day() as u32)
-}
-
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let month = match time::Month::try_from(m as u8) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-    let date = match time::Date::from_calendar_date(y as i32, month, d as u8) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-    date.midnight().assume_utc().unix_timestamp() / 86_400
-}
-
 pub fn fmt_compact(secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil_utc(secs);
     format!("{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}")
@@ -147,6 +128,18 @@ mod tests {
         let formatted = fmt_rfc3339(now_sec);
         let parsed = parse_rfc3339_to_unix(&formatted).expect("parsed");
         assert_eq!(parsed, now_sec as u64);
+    }
+
+    fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+        let month = match time::Month::try_from(m as u8) {
+            Ok(v) => v,
+            Err(_) => return 0,
+        };
+        let date = match time::Date::from_calendar_date(y as i32, month, d as u8) {
+            Ok(v) => v,
+            Err(_) => return 0,
+        };
+        date.midnight().assume_utc().unix_timestamp() / 86_400
     }
 
     #[test]

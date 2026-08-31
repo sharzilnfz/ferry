@@ -4,11 +4,11 @@
 
 **Blocked by:** 05: One-click pairing, short-code join, and discovered devices in Web UI and GUI
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Pressing `P` in the TUI when a pin is active dispatches a release command regardless of whether files are actively held
-- [ ] TUI activity feed displays a single clean status update on pin state transition
-- [ ] When the daemon is offline, the TUI event listener applies exponential backoff on retry attempts
-- [ ] Consecutive disconnect error messages are deduplicated from the visual activity feed
-- [ ] TUI header displays an explicit disconnected status banner when the backend stream is unreachable
-- [ ] Automated unit tests verify key event handling and reconnect throttle behavior
+- [x] Pressing `P` in the TUI when a pin is active dispatches a release command regardless of whether files are actively held
+- [x] TUI activity feed displays a single clean status update on pin state transition
+- [x] When the daemon is offline, the TUI event listener applies exponential backoff on retry attempts
+- [x] Consecutive disconnect error messages are deduplicated from the visual activity feed
+- [x] TUI header displays an explicit disconnected status banner when the backend stream is unreachable
+- [x] Automated unit tests verify key event handling and reconnect throttle behavior

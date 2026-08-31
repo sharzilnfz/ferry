@@ -2,7 +2,9 @@ use std::path::Path;
 
 pub const MAX_PATH: usize = 260;
 
+#[cfg(windows)]
 const EXTENDED_PREFIX: &str = "\\\\?\\";
+#[cfg(windows)]
 const EXTENDED_UNC_PREFIX: &str = "\\\\?\\UNC\\";
 
 #[cfg(windows)]

@@ -74,6 +74,39 @@ fn test_key_pin_toggle() {
 }
 
 #[test]
+fn test_key_pin_toggle_when_active_without_held_files() {
+    let mut app = TuiApp::default();
+    app.state.engine_state = SyncState::Idle;
+    app.state.pin = PinView {
+        state: "active".to_string(),
+        holding: false,
+        paths: Vec::new(),
+    };
+
+    assert!(app.state.is_pin_active());
+    let cmd = app.handle_key(make_key_event(KeyCode::Char('p'), KeyModifiers::NONE));
+    assert_eq!(cmd, Some(ClientCommand::ReleasePin));
+
+    let cmd_upper = app.handle_key(make_key_event(KeyCode::Char('P'), KeyModifiers::NONE));
+    assert_eq!(cmd_upper, Some(ClientCommand::ReleasePin));
+}
+
+#[test]
+fn test_key_pin_toggle_when_holding_true_dispatches_release() {
+    let mut app = TuiApp::default();
+    app.state.engine_state = SyncState::Pinned;
+    app.state.pin = PinView {
+        state: "active".to_string(),
+        holding: true,
+        paths: vec!["held_file.txt".to_string()],
+    };
+
+    assert!(app.state.is_pin_active());
+    let cmd = app.handle_key(make_key_event(KeyCode::Char('P'), KeyModifiers::NONE));
+    assert_eq!(cmd, Some(ClientCommand::ReleasePin));
+}
+
+#[test]
 fn test_key_rescan() {
     let mut app = TuiApp::default();
     let cmd = app.handle_key(make_key_event(KeyCode::Char('r'), KeyModifiers::NONE));

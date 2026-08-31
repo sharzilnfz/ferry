@@ -23,12 +23,57 @@ enum KeyOutcome {
     PickerSpace,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconnectBackoff {
+    pub min_delay: std::time::Duration,
+    pub max_delay: std::time::Duration,
+    pub factor: u32,
+    pub current_delay: std::time::Duration,
+    pub attempts: usize,
+}
+
+impl Default for ReconnectBackoff {
+    fn default() -> Self {
+        Self::new(
+            std::time::Duration::from_millis(250),
+            std::time::Duration::from_secs(8),
+            2,
+        )
+    }
+}
+
+impl ReconnectBackoff {
+    #[must_use]
+    pub fn new(min_delay: std::time::Duration, max_delay: std::time::Duration, factor: u32) -> Self {
+        Self {
+            min_delay,
+            max_delay,
+            factor: factor.max(1),
+            current_delay: min_delay,
+            attempts: 0,
+        }
+    }
+
+    pub fn next_delay(&mut self) -> std::time::Duration {
+        let delay = self.current_delay;
+        self.attempts += 1;
+        self.current_delay = self.current_delay.saturating_mul(self.factor).min(self.max_delay);
+        delay
+    }
+
+    pub fn reset(&mut self) {
+        self.current_delay = self.min_delay;
+        self.attempts = 0;
+    }
+}
+
 pub struct TuiApp {
     pub state: TuiState,
     pub backend: Option<Arc<dyn UiBackend>>,
     pub picker: Option<PickerState>,
 
     pub headless_override: Option<bool>,
+    pub backoff: ReconnectBackoff,
 }
 
 impl Default for TuiApp {
@@ -45,6 +90,7 @@ impl TuiApp {
             backend: None,
             picker: None,
             headless_override: None,
+            backoff: ReconnectBackoff::default(),
         }
     }
 
@@ -55,6 +101,7 @@ impl TuiApp {
             backend: Some(backend),
             picker: None,
             headless_override: None,
+            backoff: ReconnectBackoff::default(),
         }
     }
 
@@ -72,6 +119,12 @@ impl TuiApp {
     #[must_use]
     pub fn with_backend(mut self, backend: Arc<dyn UiBackend>) -> Self {
         self.backend = Some(backend);
+        self
+    }
+
+    #[must_use]
+    pub fn with_backoff(mut self, backoff: ReconnectBackoff) -> Self {
+        self.backoff = backoff;
         self
     }
 
@@ -279,7 +332,7 @@ impl TuiApp {
                 KeyOutcome::OpenPicker
             }
             KeyCode::Char('p' | 'P') => {
-                if self.state.pin.holding || self.state.engine_state == SyncState::Pinned {
+                if self.state.is_pin_active() {
                     KeyOutcome::Command(ClientCommand::ReleasePin)
                 } else {
                     KeyOutcome::Command(ClientCommand::StartPin {
@@ -365,6 +418,9 @@ impl TuiApp {
                 }
                 ClientCommand::ReleasePin => match backend.release_pin().await {
                     Ok(summary) => {
+                        self.state.pin = ferry_ipc::protocol::PinView::none();
+                        self.state.engine_state = self.state.resolve_sync_state();
+                        self.state.update_cached_strings();
                         self.state.activity_log.push_info(
                             current_time_str(),
                             format!("Pin released: {}", summary.status),
@@ -379,8 +435,15 @@ impl TuiApp {
                 ClientCommand::StartPin {
                     paths,
                     duration_hours,
-                } => match backend.start_pin(paths, duration_hours).await {
+                } => match backend.start_pin(paths.clone(), duration_hours).await {
                     Ok(record) => {
+                        self.state.pin = ferry_ipc::protocol::PinView {
+                            state: "active".to_string(),
+                            holding: false,
+                            paths,
+                        };
+                        self.state.engine_state = self.state.resolve_sync_state();
+                        self.state.update_cached_strings();
                         self.state.activity_log.push_info(
                             current_time_str(),
                             format!("Pin started: {}", record.status),
@@ -489,18 +552,42 @@ impl TuiApp {
         backend: Arc<dyn UiBackend>,
         mut events: TerminalEvents,
     ) -> Result<(), TuiError> {
+        let mut next_reconnect_at: Option<tokio::time::Instant> = None;
+
         match backend.get_status().await {
             Ok(snap) => {
-                self.state.apply_snapshot(snap);
+                if snap.state.eq_ignore_ascii_case("offline") {
+                    self.state.is_connected = false;
+                    self.state.engine_state = SyncState::Offline;
+                    self.state.activity_log.push_error(
+                        current_time_str(),
+                        "Daemon is offline",
+                    );
+                    let delay = self.backoff.next_delay();
+                    next_reconnect_at = Some(tokio::time::Instant::now() + delay);
+                } else {
+                    self.state.apply_snapshot(snap);
+                    self.state.is_connected = true;
+                    self.state.engine_state = self.state.resolve_sync_state();
+                    self.backoff.reset();
+                }
             }
             Err(e) => {
+                self.state.is_connected = false;
+                self.state.engine_state = SyncState::Offline;
                 self.state
                     .activity_log
-                    .push_warn(current_time_str(), format!("Initial status query: {e}"));
+                    .push_error(current_time_str(), format!("Daemon disconnected: {e}"));
+                let delay = self.backoff.next_delay();
+                next_reconnect_at = Some(tokio::time::Instant::now() + delay);
             }
         }
 
-        let mut stream = backend.subscribe_events().await.ok();
+        let mut stream = if self.state.is_connected {
+            backend.subscribe_events().await.ok()
+        } else {
+            None
+        };
 
         terminal.draw(|f| self.render(f))?;
 
@@ -519,12 +606,15 @@ impl TuiApp {
                             terminal.draw(|f| self.render(f))?;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            stream = None;
                             self.state.is_connected = false;
                             self.state.engine_state = SyncState::Offline;
                             self.state.activity_log.push_error(
                                 current_time_str(),
                                 "Backend event stream closed",
                             );
+                            let delay = self.backoff.next_delay();
+                            next_reconnect_at = Some(tokio::time::Instant::now() + delay);
                             terminal.draw(|f| self.render(f))?;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -534,6 +624,53 @@ impl TuiApp {
                             );
                         }
                     }
+                }
+                _ = async {
+                    if let Some(target) = next_reconnect_at {
+                        tokio::time::sleep_until(target).await;
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if stream.is_none() => {
+                    next_reconnect_at = None;
+                    match backend.subscribe_events().await {
+                        Ok(st) => {
+                            let status_res = backend.get_status().await;
+                            let is_online = match status_res {
+                                Ok(ref snap) => !snap.state.eq_ignore_ascii_case("offline"),
+                                Err(_) => false,
+                            };
+                            if is_online {
+                                if let Ok(snap) = status_res {
+                                    self.state.apply_snapshot(snap);
+                                }
+                                self.state.is_connected = true;
+                                self.state.engine_state = self.state.resolve_sync_state();
+                                self.backoff.reset();
+                                stream = Some(st);
+                                self.state.activity_log.push_info(
+                                    current_time_str(),
+                                    "Connected to daemon event stream",
+                                );
+                            } else {
+                                let delay = self.backoff.next_delay();
+                                next_reconnect_at = Some(tokio::time::Instant::now() + delay);
+                                self.state.activity_log.push_error(
+                                    current_time_str(),
+                                    "Daemon is offline",
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            let delay = self.backoff.next_delay();
+                            next_reconnect_at = Some(tokio::time::Instant::now() + delay);
+                            self.state.activity_log.push_error(
+                                current_time_str(),
+                                format!("Backend event stream unreachable: {e}"),
+                            );
+                        }
+                    }
+                    terminal.draw(|f| self.render(f))?;
                 }
                 event_opt = events.next() => {
                     if let Some(event) = event_opt {
@@ -599,13 +736,17 @@ impl TuiApp {
                                 "Daemon disconnected (IPC connection closed)",
                             );
                             terminal.draw(|f| self.render(f))?;
+                            break;
                         }
                         Err(e) => {
+                            self.state.is_connected = false;
+                            self.state.engine_state = SyncState::Offline;
                             self.state.activity_log.push_error(
                                 current_time_str(),
                                 format!("IPC receive error: {e}"),
                             );
                             terminal.draw(|f| self.render(f))?;
+                            break;
                         }
                     }
                 }

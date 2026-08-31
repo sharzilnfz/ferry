@@ -413,6 +413,57 @@ function renderConnectedDevices(peers, localManifestId) {
   }).join("");
 }
 
+// ---- Render Discovered Nearby Devices --------------------------------------
+function renderDiscoveredDevices(devices, peers) {
+  const list = $("discovered-list");
+  const badge = $("discovered-badge");
+  if (!list) return;
+
+  const connectedSet = new Set((peers || []).map((p) => p.device_id));
+  const unlinked = (devices || []).filter((d) => !connectedSet.has(d.device_id));
+
+  if (badge) {
+    badge.textContent = `${unlinked.length} nearby`;
+  }
+
+  if (unlinked.length === 0) {
+    list.innerHTML = `
+      <div class="flow-row" style="color: var(--text-3); font-size: 11.5px; justify-content: center; padding: 12px 8px;">
+        <span>No nearby unlinked devices detected</span>
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = unlinked.map((d) => {
+    const name = "Device " + shortDevice(d.device_id);
+    const addr = d.address || "Local Network (mDNS)";
+    return `
+      <div class="flow-row">
+        <div class="row-left">
+          <span class="peer-dot" style="background-color: var(--amber-warn); box-shadow: 0 0 6px rgba(245,158,11,0.4);"></span>
+          <div style="display: flex; flex-direction: column; gap: 1px;">
+            <span class="row-title">${esc(name)}</span>
+            <span class="row-subtitle font-mono">${esc(addr)}</span>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm btn-pair-device" data-device-id="${esc(d.device_id)}" type="button" style="font-size: 11px; padding: 2px 8px; color: var(--state-synced); border-color: rgba(48,209,88,0.3);">
+          + Pair
+        </button>
+      </div>
+    `;
+  }).join("");
+
+  list.querySelectorAll(".btn-pair-device").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const devId = btn.getAttribute("data-device-id");
+      if (devId) {
+        pairDiscoveredDevice(devId);
+      }
+    });
+  });
+}
+
 // ---- Render Status Document -----------------------------------------------
 function renderStatus(s) {
   lastStatus = s;
@@ -444,6 +495,7 @@ function renderStatus(s) {
 
   applyState(mode, s);
   renderConnectedDevices(peers, s.manifest_id);
+  renderDiscoveredDevices(s.discovered_devices || [], peers);
 }
 
 // ---- Load Status & Conflicts ----------------------------------------------
@@ -657,6 +709,8 @@ async function doCreateOffer(iKnow = false) {
   const anywayBtn = $("share-anyway");
   const offerBox = $("offer-box");
   const tokenDisplay = $("token-display");
+  const qrDisplay = $("share-qr-display");
+  const statusText = $("share-status-text");
 
   if (warnEl) warnEl.style.display = "none";
   if (resEl) resEl.style.display = "none";
@@ -676,24 +730,30 @@ async function doCreateOffer(iKnow = false) {
       }
     }
 
-    const payload = doc.short_code || doc.offer_file || JSON.stringify(doc);
+    const code = doc.short_code || doc.code || doc.token || "";
+    const payload = code || doc.offer_file || JSON.stringify(doc);
     if (tokenDisplay) tokenDisplay.value = payload;
+    if (qrDisplay) qrDisplay.textContent = doc.qr_code || "";
+    if (statusText) statusText.textContent = "Waiting for peer device to enter code…";
     if (offerBox) offerBox.style.display = "block";
     if (resEl) {
       resEl.style.display = "block";
-      resEl.textContent = `Pairing token created (Code: ${doc.short_code || "Generated"}). Waiting for peer.`;
+      resEl.textContent = `Pairing code generated: ${code || "Active"}. Waiting for peer.`;
     }
     playHapticFeedback("success");
-    addActivity("Pairing Token Created");
+    addActivity("Pairing Code Created: " + (code || "Active"));
 
     // Poll share status until connected
     sharePollTimer = setInterval(async () => {
       try {
         const s = await api("/api/share/status");
-        if (s && s.status === "completed") {
+        if (s && (s.status === "completed" || s.status === "paired")) {
           stopSharePolling();
           if (resEl) {
             resEl.textContent = "Pairing completed! Peer device connected.";
+          }
+          if (statusText) {
+            statusText.textContent = "Pairing completed! Peer device connected.";
           }
           playHapticFeedback("success");
           addActivity("Pairing Completed: Connected Peer");
@@ -723,6 +783,61 @@ async function doCreateOffer(iKnow = false) {
   }
 }
 
+async function pairDiscoveredDevice(devId) {
+  openPairModal();
+  stopSharePolling();
+  playHapticFeedback("snap");
+  addActivity("Initiating Pairing with " + shortDevice(devId) + "…");
+
+  const warnEl = $("share-warn");
+  const resEl = $("share-result");
+  const offerBox = $("offer-box");
+  const tokenDisplay = $("token-display");
+  const qrDisplay = $("share-qr-display");
+  const statusText = $("share-status-text");
+
+  if (warnEl) warnEl.style.display = "none";
+  if (resEl) resEl.style.display = "none";
+
+  try {
+    const doc = await api("/api/pair/device", { device_id: devId });
+    const code = doc.short_code || doc.code || "";
+    if (tokenDisplay) tokenDisplay.value = code;
+    if (qrDisplay) qrDisplay.textContent = doc.qr_code || "";
+    if (statusText) statusText.textContent = "Pairing handshake initiated with " + shortDevice(devId) + "…";
+    if (offerBox) offerBox.style.display = "block";
+    if (resEl) {
+      resEl.style.display = "block";
+      resEl.textContent = `Pairing code generated (${code}). Waiting for peer handshake.`;
+    }
+    playHapticFeedback("success");
+    addActivity("Pairing Offer Created for " + shortDevice(devId));
+
+    sharePollTimer = setInterval(async () => {
+      try {
+        const s = await api("/api/share/status");
+        if (s && (s.status === "completed" || s.status === "paired")) {
+          stopSharePolling();
+          if (statusText) statusText.textContent = "Pairing completed! Peer device connected.";
+          if (resEl) resEl.textContent = "Pairing completed! Peer device connected.";
+          playHapticFeedback("success");
+          addActivity("Pairing Completed with " + shortDevice(devId));
+          loadStatus();
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 1500);
+  } catch (err) {
+    if (warnEl) {
+      warnEl.style.display = "block";
+      warnEl.textContent = err.error || "Failed to initiate pairing with device.";
+    }
+    playHapticFeedback("alert");
+    addActivity("Pairing Failed: " + (err.error || err.code));
+  }
+}
+
 async function copyToken() {
   const tokenDisplay = $("token-display");
   const tokenVal = tokenDisplay ? tokenDisplay.value : "";
@@ -745,7 +860,9 @@ async function copyToken() {
 async function doAcceptPair() {
   playHapticFeedback("snap");
   const input = $("accept-input");
+  const destInput = $("join-dest-input");
   const val = input ? input.value.trim() : "";
+  const destVal = destInput ? destInput.value.trim() : "";
   const resEl = $("pair-result");
   const errEl = $("pair-err");
 
@@ -755,23 +872,29 @@ async function doAcceptPair() {
   if (!val) {
     if (errEl) {
       errEl.style.display = "block";
-      errEl.textContent = "Please enter an offer token or file path.";
+      errEl.textContent = "Please enter a 6-character pairing code or offer file path.";
     }
     playHapticFeedback("alert");
     return;
   }
 
-  addActivity("Accepting Pairing Offer…");
+  addActivity("Joining Remote Folder…");
 
   try {
-    const doc = await api("/api/pair/accept", { payload_path: val });
+    let doc;
+    if (destVal) {
+      doc = await api("/api/pair/join", { code: val, target_dir: destVal });
+    } else {
+      doc = await api("/api/pair/accept", { code_or_payload: val });
+    }
     if (resEl) {
       resEl.style.display = "block";
-      resEl.textContent = "Pairing accepted! Connected to " + (doc.folder || "folder");
+      resEl.textContent = "Joined folder! Connected to " + (doc.folder || "folder");
     }
     if (input) input.value = "";
+    if (destInput) destInput.value = "";
     playHapticFeedback("success");
-    addActivity("Pairing Accepted: Connected Peer");
+    addActivity("Folder Joined: " + (doc.folder || "folder"));
     await loadStatus();
     setTimeout(() => {
       closePairModal();
@@ -779,10 +902,10 @@ async function doAcceptPair() {
   } catch (err) {
     if (errEl) {
       errEl.style.display = "block";
-      errEl.textContent = err.error || "Failed to accept pairing offer.";
+      errEl.textContent = err.error || "Failed to join remote folder.";
     }
     playHapticFeedback("alert");
-    addActivity("Pair Accept Failed: " + (err.error || err.code));
+    addActivity("Pair Join Failed: " + (err.error || err.code));
   }
 }
 

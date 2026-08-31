@@ -140,29 +140,60 @@ where
     }
 }
 
+pub fn ensure_daemon_running() -> Result<PathBuf, BootstrapError> {
+    let home = crate::home::ferry_home()
+        .map_err(|e| BootstrapError::new("no-home", e.message, e.hint))?;
+    ensure_daemon(&home)
+}
+
 pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
     let socket = socket_path_for_home(home);
-    if try_ping_sync(&socket) {
-        return Ok(socket);
+
+    if ferry_platform::is_running(home) {
+        if try_ping_sync(&socket) {
+            return Ok(socket);
+        }
+        let mut waited = Duration::from_millis(0);
+        let wait_step = Duration::from_millis(50);
+        while waited < Duration::from_millis(3000) {
+            std::thread::sleep(wait_step);
+            waited += wait_step;
+            if try_ping_sync(&socket) {
+                return Ok(socket);
+            }
+            if !ferry_platform::is_running(home) {
+                break;
+            }
+        }
+        if try_ping_sync(&socket) {
+            return Ok(socket);
+        }
     }
+
     if socket.exists() {
         let _ = std::fs::remove_file(&socket);
     }
+
     let bin = ferry_bin();
     let mut cmd = std::process::Command::new(&bin);
     cmd.arg("daemon");
     cmd.env("FERRY_HOME", home);
     cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x00000008;
         cmd.creation_flags(DETACHED_PROCESS);
     }
-    #[cfg(not(windows))]
-    {}
+
     let spawn_res = cmd.spawn();
     if spawn_res.is_err() {
         return Err(BootstrapError::new(
@@ -182,8 +213,7 @@ pub fn ensure_daemon(home: &Path) -> Result<PathBuf, BootstrapError> {
         if try_ping_sync(&socket) {
             return Ok(socket);
         }
-        if socket.exists() {}
-        delay = std::cmp::min(delay * 2, Duration::from_millis(800));
+        delay = std::cmp::min(delay * 2, Duration::from_millis(400));
     }
 
     if try_ping_sync(&socket) {

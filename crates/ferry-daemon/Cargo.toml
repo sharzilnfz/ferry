@@ -26,6 +26,7 @@ tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 axum = { workspace = true, optional = true }
 percent-encoding.workspace = true
+qrcode.workspace = true
 
 [features]
 default = ["web-ui"]

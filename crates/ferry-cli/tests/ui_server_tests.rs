@@ -845,3 +845,59 @@ fn test_ui_gui_and_tui_dispatch_modes() {
     #[cfg(all(not(feature = "gui"), feature = "web-ui"))]
     assert_eq!(out_default.json["frontend"], "web");
 }
+
+#[test]
+fn test_ui_token_discovery_and_no_active_web_ui_error() {
+    let env = common::Env::new("ui_token_discovery");
+    let work = env.work();
+    ferry_cli::commands::init::run(&work).expect("init");
+
+    // 1. When no Web UI is running, query returns no-active-web-ui error
+    let err = ui::run_token(Some(&work)).unwrap_err();
+    assert_eq!(err.code, "no-active-web-ui");
+
+    // 2. Simulate an active web session metadata file
+    let session_file = work.join(".ferry").join(ui::WEB_SESSION_FILE);
+    let my_pid = std::process::id();
+    let session = ui::WebSession {
+        pid: my_pid,
+        host: "127.0.0.1".to_string(),
+        port: 43210,
+        token: "12345678901234567890123456789012".to_string(),
+        url: "http://127.0.0.1:43210/?token=12345678901234567890123456789012".to_string(),
+    };
+    std::fs::write(&session_file, serde_json::to_string(&session).unwrap()).unwrap();
+
+    // 3. When session is active with a live process, query_token returns full URL and credentials
+    let out = ui::run_token(Some(&work)).expect("token query succeeds");
+    assert_eq!(out.json["command"], "ui");
+    assert_eq!(out.json["subcommand"], "token");
+    assert_eq!(out.json["status"], "ok");
+    assert_eq!(out.json["token"], "12345678901234567890123456789012");
+    assert_eq!(
+        out.json["url"],
+        "http://127.0.0.1:43210/?token=12345678901234567890123456789012"
+    );
+    assert_eq!(
+        out.human.trim(),
+        "http://127.0.0.1:43210/?token=12345678901234567890123456789012"
+    );
+
+    // 4. When the recorded process is dead, the stale metadata file is cleaned up and error returned
+    let dead_session = ui::WebSession {
+        pid: 999_999_999, // Non-existent PID
+        host: "127.0.0.1".to_string(),
+        port: 43210,
+        token: "12345678901234567890123456789012".to_string(),
+        url: "http://127.0.0.1:43210/?token=12345678901234567890123456789012".to_string(),
+    };
+    std::fs::write(&session_file, serde_json::to_string(&dead_session).unwrap()).unwrap();
+    assert!(session_file.exists());
+
+    let dead_err = ui::run_token(Some(&work)).unwrap_err();
+    assert_eq!(dead_err.code, "no-active-web-ui");
+    assert!(
+        !session_file.exists(),
+        "stale session file must be cleaned up"
+    );
+}

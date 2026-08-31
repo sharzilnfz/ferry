@@ -15,6 +15,10 @@ struct Finding {
 }
 
 pub fn run(folder: &Path, i_know: bool, timeout_secs: u64) -> CliResult<Output> {
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     let opened = folder::open_folder(folder)?;
     let rules = folder::load_rules(&opened.root, &opened.settings)?;
     let warnings = ferry_ignore::secrets::scan_for_secrets(&rules, &opened.root);

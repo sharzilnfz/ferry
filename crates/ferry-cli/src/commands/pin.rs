@@ -11,6 +11,10 @@ use crate::folder;
 use crate::out::Output;
 
 pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
+    if let Ok(home) = crate::home::ferry_home() {
+        let _ = crate::bootstrap::ensure_daemon(&home);
+    }
+
     let opened = folder::open_folder(folder)?;
     let device_id = device_hex()?;
     let state_dir = opened.state_dir();
@@ -74,11 +78,28 @@ pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
             _ => return Err(CliError::new("pin-error", message, "check pin state")),
         },
         _ => {
-            return Err(CliError::new(
-                "daemon-not-running",
-                "no active background daemon is running for this folder",
-                "start the background daemon with `ferry daemon` to enable session protection",
-            ));
+            let pin_mgr = PinManager::new(&state_dir);
+            let mut base_agreements = std::collections::BTreeMap::new();
+            if let Ok(records) =
+                ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&opened.folder_id)
+            {
+                for (dev, rec) in records {
+                    base_agreements.insert(
+                        ferry_store::format::hex(&dev),
+                        ferry_store::format::hex(&rec.manifest_id),
+                    );
+                }
+            }
+            let rec = pin_mgr
+                .start_session_with_duration(
+                    scope.clone(),
+                    std::process::id(),
+                    &device_id,
+                    base_agreements,
+                    Some(hours * 3600),
+                )
+                .map_err(pin_error)?;
+            (rec.pid, rec.started_sec, rec.base_agreements.len())
         }
     };
 

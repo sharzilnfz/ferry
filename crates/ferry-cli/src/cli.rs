@@ -138,6 +138,9 @@ pub enum Command {
     },
 
     Ui {
+        #[command(subcommand)]
+        subcommand: Option<UiSubcommand>,
+
         folder: Option<PathBuf>,
 
         #[arg(long)]
@@ -160,6 +163,13 @@ pub enum Command {
 
         #[arg(long, hide = true)]
         test: bool,
+    },
+}
+
+#[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
+pub enum UiSubcommand {
+    Token {
+        folder: Option<PathBuf>,
     },
 }
 

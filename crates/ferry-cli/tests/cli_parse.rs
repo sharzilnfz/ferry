@@ -315,7 +315,9 @@ fn ui_flags_parse_web_gui_tui() {
             port,
             no_open,
             test,
+            subcommand,
         } => {
+            assert_eq!(subcommand, None);
             assert_eq!(folder, None);
             assert!(!gui);
             assert!(!web);
@@ -324,6 +326,28 @@ fn ui_flags_parse_web_gui_tui() {
             assert_eq!(port, 0);
             assert!(!no_open);
             assert!(!test);
+        }
+        other => panic!("{other:?}"),
+    }
+
+    match parse(&["ui", "token"]).command.unwrap() {
+        Command::Ui { subcommand, .. } => {
+            assert_eq!(
+                subcommand,
+                Some(ferry_cli::cli::UiSubcommand::Token { folder: None })
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+
+    match parse(&["ui", "token", "some/folder"]).command.unwrap() {
+        Command::Ui { subcommand, .. } => {
+            assert_eq!(
+                subcommand,
+                Some(ferry_cli::cli::UiSubcommand::Token {
+                    folder: Some(PathBuf::from("some/folder")),
+                })
+            );
         }
         other => panic!("{other:?}"),
     }

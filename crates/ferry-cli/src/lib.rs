@@ -10,6 +10,8 @@ pub mod ipc;
 pub mod out;
 pub mod scan;
 
+pub use bootstrap::{ensure_daemon, ensure_daemon_running};
+
 pub fn ensure_identity() -> error::CliResult<ferry_crypto::identity::DeviceIdentity> {
     let home = home::ferry_home()?;
     ferry_crypto::identity::load_or_create(&home::identity_root(&home)).map_err(|e| {

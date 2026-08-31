@@ -476,25 +476,117 @@ pub fn dispatch_supervisor_command(
                 },
             }
         }
-        other => dispatch_client_command_fallback(other),
-    }
-}
-
-fn dispatch_client_command_fallback(cmd: ClientCommand) -> DaemonMessage {
-    match cmd {
-        ClientCommand::CreatePairingSession { .. }
-        | ClientCommand::JoinPairingSession { .. }
-        | ClientCommand::StartPin { .. }
-        | ClientCommand::ReleasePin
-        | ClientCommand::TriggerScan
-        | ClientCommand::ListConflicts => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "single-folder command not supported in supervisor context".to_string(),
-        },
-        _ => DaemonMessage::Error {
-            code: "not-implemented".to_string(),
-            message: "unsupported command".to_string(),
-        },
+        ClientCommand::StartPin {
+            paths,
+            duration_hours,
+        } => {
+            let records = supervisor.inventory().list().unwrap_or_default();
+            let (state_dir, folder_id_bytes) = if let Some(engine) = supervisor.engines_map().values().next() {
+                (engine.record.path.join(".ferry"), Some(engine.folder_id_bytes))
+            } else if let Some(rec) = records.first() {
+                (rec.path.join(".ferry"), None)
+            } else {
+                (PathBuf::from(".ferry"), None)
+            };
+            let mut base_agreements = std::collections::BTreeMap::new();
+            if let Some(fid) = folder_id_bytes {
+                if let Ok(ledger) = ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&fid) {
+                    for (dev, rec) in ledger {
+                        base_agreements.insert(hex_str(&dev), hex_str(&rec.manifest_id));
+                    }
+                }
+            }
+            let duration_secs = duration_hours.map(|h| h * 3600);
+            match ferry_sync_engine::pin::PinManager::new(&state_dir).start_session_with_duration(
+                paths.clone(),
+                std::process::id(),
+                &hex_str(supervisor.identity().public()),
+                base_agreements,
+                duration_secs,
+            ) {
+                Ok(rec) => DaemonMessage::Ack {
+                    command: "start_pin".to_string(),
+                    message: Some(format!("pinned {} path(s)", rec.paths.len())),
+                },
+                Err(e) => {
+                    let code = match &e {
+                        ferry_sync_engine::pin::PinError::PinActive { .. } => "pin-active",
+                        ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
+                        ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
+                        ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
+                        ferry_sync_engine::pin::PinError::ManifestMissing { .. } => {
+                            "held-manifest-missing"
+                        }
+                        ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
+                        ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
+                        _ => "pin_error",
+                    };
+                    DaemonMessage::Error {
+                        code: code.to_string(),
+                        message: e.to_string(),
+                    }
+                }
+            }
+        }
+        ClientCommand::ReleasePin => {
+            let records = supervisor.inventory().list().unwrap_or_default();
+            let state_dir = if let Some(engine) = supervisor.engines_map().values().next() {
+                engine.handle.trigger_scan();
+                engine.record.path.join(".ferry")
+            } else if let Some(rec) = records.first() {
+                rec.path.join(".ferry")
+            } else {
+                PathBuf::from(".ferry")
+            };
+            match ferry_sync_engine::pin::PinManager::new(&state_dir).stop_session() {
+                Ok(was_active) => DaemonMessage::Ack {
+                    command: "release_pin".to_string(),
+                    message: Some(
+                        if was_active {
+                            "pin released"
+                        } else {
+                            "no active pin"
+                        }
+                        .to_string(),
+                    ),
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: "pin_error".to_string(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        ClientCommand::ListConflicts => {
+            let records = supervisor.inventory().list().unwrap_or_default();
+            let state_dir = if let Some(engine) = supervisor.engines_map().values().next() {
+                engine.record.path.join(".ferry")
+            } else if let Some(rec) = records.first() {
+                rec.path.join(".ferry")
+            } else {
+                PathBuf::from(".ferry")
+            };
+            match ferry_sync_engine::list_conflicts(&state_dir) {
+                Ok(conflicts) => DaemonMessage::Ack {
+                    command: "list_conflicts".to_string(),
+                    message: Some(
+                        serde_json::to_string(&conflicts).unwrap_or_else(|_| "[]".to_string()),
+                    ),
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: "conflict_log".to_string(),
+                    message: e.to_string(),
+                },
+            }
+        }
+        ClientCommand::TriggerScan => {
+            for engine in supervisor.engines_map().values() {
+                engine.handle.trigger_scan();
+            }
+            DaemonMessage::Ack {
+                command: "trigger_scan".to_string(),
+                message: Some("scan triggered".to_string()),
+            }
+        }
     }
 }
 

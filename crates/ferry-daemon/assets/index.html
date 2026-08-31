@@ -155,6 +155,15 @@
           <div id="fleet-list" class="flow-list">
             
           </div>
+
+          <div class="section-heading" style="margin-top: 16px;">
+            <h2 class="section-title">Discovered Nearby</h2>
+            <span id="discovered-badge" class="state-badge" style="font-size: 10px; padding: 2px 6px;">0 nearby</span>
+          </div>
+
+          <div id="discovered-list" class="flow-list">
+            
+          </div>
         </div>
 
         
@@ -178,16 +187,16 @@
   <div id="pair-modal" class="modal-backdrop" aria-hidden="true">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pair-modal-title">
       <div class="modal-header">
-        <h2 id="pair-modal-title" class="modal-title">Pair Device</h2>
+        <h2 id="pair-modal-title" class="modal-title">Pair Device & Share</h2>
         <button id="btn-close-modal" class="btn-icon" aria-label="Close modal" type="button">✕</button>
       </div>
 
       <div class="modal-content">
         <div class="modal-group">
           <span class="group-label">Share This Folder</span>
-          <p class="group-sub">Generate a one-time token to authorize a peer device. Scans for accidental secrets before sharing.</p>
+          <p class="group-sub">Generate a 6-character code to authorize and synchronize with a peer device.</p>
           <div class="btnrow">
-            <button id="btn-create-offer" class="btn btn-primary" style="width: 100%;" type="button">Create Pairing Token</button>
+            <button id="btn-create-offer" class="btn btn-primary" style="width: 100%;" type="button">Generate Pairing Code</button>
             <button id="share-anyway" class="btn btn-danger btn-sm" style="display: none; width: 100%; margin-top: 6px;" type="button">Share Anyway</button>
           </div>
           
@@ -195,9 +204,18 @@
           <div id="share-result" class="banner banner-success" style="display: none; margin-top: 6px;"></div>
 
           <div id="offer-box" class="token-reveal" style="display: none;">
+            <div style="font-size: 11px; color: var(--text-3); margin-bottom: 4px; font-weight: 500;">6-Character Pairing Code:</div>
             <div class="token-row">
-              <input id="token-display" class="minimal-input font-mono" readonly value="">
+              <input id="token-display" class="minimal-input font-mono" readonly value="" style="font-size: 16px; font-weight: bold; letter-spacing: 2px; text-align: center;">
               <button id="btn-copy-token" class="btn btn-ghost btn-sm" type="button">Copy</button>
+            </div>
+            <div id="share-qr-container" style="margin-top: 10px; display: flex; flex-direction: column; align-items: center;">
+              <div style="font-size: 11px; color: var(--text-3); margin-bottom: 4px;">Scan QR Representation:</div>
+              <pre id="share-qr-display" class="font-mono" style="font-size: 8px; line-height: 8px; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 6px; user-select: all; overflow-x: auto; max-width: 100%;"></pre>
+            </div>
+            <div id="share-live-status" class="banner banner-info" style="margin-top: 8px; font-size: 12px; display: flex; align-items: center; gap: 6px;">
+              <span class="beacon-dot" style="background-color: var(--state-syncing); width: 8px; height: 8px; display: inline-block;"></span>
+              <span id="share-status-text">Waiting for peer device to connect…</span>
             </div>
           </div>
         </div>
@@ -205,11 +223,18 @@
         <div class="modal-sep"></div>
 
         <div class="modal-group">
-          <span class="group-label">Accept Offer</span>
-          <p class="group-sub">Enter the offer payload or path from your peer.</p>
-          <div class="accept-row">
-            <input id="accept-input" class="minimal-input font-mono" placeholder="/path/to/ferry-pair.json" spellcheck="false" autocomplete="off">
-            <button id="btn-accept" class="btn btn-primary btn-sm" type="button">Accept</button>
+          <span class="group-label">Join Remote Folder</span>
+          <p class="group-sub">Enter the 6-character pairing code and optional destination folder path.</p>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div>
+              <label for="accept-input" style="display: block; font-size: 11px; color: var(--text-3); margin-bottom: 2px;">Pairing Code / Offer</label>
+              <input id="accept-input" class="minimal-input font-mono" placeholder="e.g. 7K9-PX2 or /path/to/ferry-pair.json" spellcheck="false" autocomplete="off">
+            </div>
+            <div>
+              <label for="join-dest-input" style="display: block; font-size: 11px; color: var(--text-3); margin-bottom: 2px;">Destination Folder (optional)</label>
+              <input id="join-dest-input" class="minimal-input font-mono" placeholder="/path/to/destination" spellcheck="false" autocomplete="off">
+            </div>
+            <button id="btn-accept" class="btn btn-primary btn-sm" style="align-self: flex-start; padding: 6px 14px;" type="button">Join Folder</button>
           </div>
           <div id="pair-result" class="banner banner-success" style="display: none; margin-top: 6px;"></div>
           <div id="pair-err" class="banner banner-error" style="display: none; margin-top: 6px;"></div>

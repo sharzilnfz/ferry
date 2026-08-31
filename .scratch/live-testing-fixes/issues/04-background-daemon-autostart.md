@@ -4,10 +4,10 @@
 
 **Blocked by:** 03: Automatic local network mDNS and mesh peer discovery in daemon supervisor
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Platform helper checks daemon process lock and IPC socket liveness before running CLI and UI commands
-- [ ] If the daemon is not running, the background daemon is launched as a detached child process
-- [ ] The command waits for socket readiness with a timeout before proceeding
-- [ ] Daemon status and stop commands correctly query and terminate the auto-spawned process
-- [ ] Automated integration tests verify that running commands in clean environments launches the daemon in the background and succeeds cleanly
+- [x] Platform helper checks daemon process lock and IPC socket liveness before running CLI and UI commands
+- [x] If the daemon is not running, the background daemon is launched as a detached child process
+- [x] The command waits for socket readiness with a timeout before proceeding
+- [x] Daemon status and stop commands correctly query and terminate the auto-spawned process
+- [x] Automated integration tests verify that running commands in clean environments launches the daemon in the background and succeeds cleanly

@@ -149,3 +149,94 @@ fn test_record_daemon_messages() {
     assert!(log.is_empty());
     assert_eq!(log.len(), 0);
 }
+
+#[test]
+fn test_deduplicate_consecutive_identical_messages() {
+    let mut log = ActivityLog::new(10);
+    log.push_info("12:00:00", "Same message");
+    log.push_info("12:00:01", "Same message");
+    log.push_info("12:00:02", "Same message");
+
+    assert_eq!(log.len(), 1);
+    assert_eq!(log.entries().front().unwrap().message, "Same message");
+
+    log.push_info("12:00:03", "Different message");
+    assert_eq!(log.len(), 2);
+
+    log.push_info("12:00:04", "Same message");
+    assert_eq!(log.len(), 3);
+}
+
+#[test]
+fn test_deduplicate_consecutive_disconnect_error_messages() {
+    let mut log = ActivityLog::new(10);
+    log.push_error("12:00:00", "Daemon is offline");
+    log.push_error("12:00:01", "Backend event stream unreachable: Connection refused");
+    log.push_error("12:00:02", "Backend event stream closed");
+    log.push_error("12:00:03", "Daemon disconnected");
+
+    // All consecutive disconnect error messages should be deduplicated to 1
+    assert_eq!(log.len(), 1);
+    assert_eq!(log.entries().front().unwrap().message, "Daemon is offline");
+
+    // Reconnection info event allows a new disconnect error to be recorded later
+    log.push_info("12:00:04", "Connected to daemon event stream");
+    assert_eq!(log.len(), 2);
+
+    log.push_error("12:00:05", "Backend event stream closed");
+    assert_eq!(log.len(), 3);
+
+    // Another consecutive disconnect error is again deduplicated
+    log.push_error("12:00:06", "Daemon is offline");
+    assert_eq!(log.len(), 3);
+}
+
+#[test]
+fn test_single_clean_status_update_on_pin_transition() {
+    use ferry_ipc::protocol::{EngineSnapshot, PinView};
+    use ferry_tui::state::TuiState;
+
+    let mut state = TuiState::default();
+    let initial_snap = EngineSnapshot::new("/home/user", "f1", "d1", "idle");
+    state.apply_snapshot(initial_snap);
+
+    let log_len_after_init = state.activity_log.len();
+
+    // Transition to active pin
+    let mut pinned_snap = EngineSnapshot::new("/home/user", "f1", "d1", "idle");
+    pinned_snap.pin = PinView::active(vec![]);
+    state.apply_snapshot(pinned_snap);
+
+    // Exactly 1 new message in the activity log for the pin transition
+    assert_eq!(state.activity_log.len(), log_len_after_init + 1);
+    assert!(state
+        .activity_log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Pin started: active"));
+
+    // Applying same state or ack does not duplicate the status update
+    let ack_msg = DaemonMessage::Ack {
+        command: "start_pin".to_string(),
+        message: Some("pinned 0 path(s)".to_string()),
+    };
+    state.activity_log.record_daemon_message("12:00:02", &ack_msg);
+    assert_eq!(state.activity_log.len(), log_len_after_init + 1);
+
+    // Release the pin
+    let mut released_snap = EngineSnapshot::new("/home/user", "f1", "d1", "idle");
+    released_snap.pin = PinView::none();
+    state.apply_snapshot(released_snap);
+
+    assert_eq!(state.activity_log.len(), log_len_after_init + 2);
+    assert!(state
+        .activity_log
+        .entries()
+        .back()
+        .unwrap()
+        .message
+        .contains("Pin released"));
+}
+

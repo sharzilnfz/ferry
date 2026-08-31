@@ -55,6 +55,11 @@ pub fn snapshot_to_status_doc(snap: &EngineSnapshot) -> Value {
             "agreed_at": p.agreed_at,
             "connectivity": p.connectivity,
         })).collect::<Vec<_>>(),
+        "discovered_devices": snap.discovered_devices.iter().map(|d| json!({
+            "device_id": d.device_id,
+            "address": d.address,
+            "status": d.status,
+        })).collect::<Vec<_>>(),
         "conflicts": snap.conflicts,
     })
 }

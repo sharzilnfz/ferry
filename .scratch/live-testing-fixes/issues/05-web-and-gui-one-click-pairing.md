@@ -6,8 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Web UI and GUI "Share Folder" dialogs render the 6-character pairing code, QR representation, and live completion status
-- [ ] Web UI and GUI provide a direct code-entry input for joining remote folders
-- [ ] Nearby discovered devices on the network are enumerated in the frontend device table
-- [ ] Clicking "Pair" next to a discovered device initiates the network pairing handshake
-- [ ] Automated UI backend tests verify short-code generation, network join endpoints, and discovered device listing
+- [x] Web UI and GUI "Share Folder" dialogs render the 6-character pairing code, QR representation, and live completion status
+- [x] Web UI and GUI provide a direct code-entry input for joining remote folders
+- [x] Nearby discovered devices on the network are enumerated in the frontend device table
+- [x] Clicking "Pair" next to a discovered device initiates the network pairing handshake
+- [x] Automated UI backend tests verify short-code generation, network join endpoints, and discovered device listing

@@ -14,7 +14,9 @@ use crate::backend::{
 use crate::error::IpcError;
 use crate::framing::{IpcReceiver, IpcSender};
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
-use crate::protocol::{ClientCommand, ConflictEntry, DaemonMessage, EngineSnapshot};
+use crate::protocol::{
+    ClientCommand, ConflictEntry, DaemonMessage, DiscoveredDeviceView, EngineSnapshot,
+};
 use crate::{validate_path, FolderRecord, ListDirectoryResponse};
 
 const SUPERVISOR_POLL: Duration = Duration::from_millis(500);
@@ -300,6 +302,11 @@ impl DaemonClient {
             }
         });
     }
+
+    pub async fn list_discovered_devices(&self) -> Result<Vec<DiscoveredDeviceView>, OpError> {
+        let snap = self.get_status().await?;
+        Ok(snap.discovered_devices)
+    }
 }
 
 async fn writer_task<W: AsyncWrite + Unpin + Send + 'static>(
@@ -493,6 +500,15 @@ impl StatusDomain for DaemonClient {
 
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         Box::pin(async move { self.event_stream().await })
+    }
+
+    fn list_discovered_devices(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+        Box::pin(async move {
+            let snap = self.get_status().await?;
+            Ok(snap.discovered_devices)
+        })
     }
 }
 

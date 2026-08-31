@@ -50,6 +50,18 @@ impl ActivityLog {
     }
 
     pub fn push(&mut self, entry: LogEntry) {
+        if let Some(last) = self.entries.back() {
+            if last.level == entry.level && last.message == entry.message {
+                return;
+            }
+            let is_disconnect = |e: &LogEntry| {
+                (e.level == LogLevel::Error || e.level == LogLevel::Warn)
+                    && is_disconnect_message(&e.message)
+            };
+            if is_disconnect(&entry) && is_disconnect(last) {
+                return;
+            }
+        }
         if self.entries.len() >= self.capacity {
             self.entries.pop_front();
         }
@@ -118,6 +130,9 @@ impl ActivityLog {
                 );
             }
             DaemonMessage::Ack { command, message } => {
+                if command == "start_pin" || command == "release_pin" || command == "stop_pin" {
+                    return;
+                }
                 let detail = message.as_deref().unwrap_or("ok");
                 self.push_info(ts, format!("Command '{command}' acknowledged: {detail}"));
             }
@@ -157,3 +172,13 @@ impl ActivityLog {
         self.entries.clear();
     }
 }
+
+fn is_disconnect_message(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("disconnect")
+        || lower.contains("connection closed")
+        || lower.contains("stream closed")
+        || lower.contains("unreachable")
+        || lower.contains("offline")
+}
+

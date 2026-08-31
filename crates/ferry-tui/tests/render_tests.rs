@@ -229,6 +229,25 @@ fn test_render_120x40_all_states() {
 }
 
 #[test]
+fn test_render_80x24_disconnected() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut state = setup_test_state(SyncState::Offline);
+    state.is_connected = false;
+    let app = TuiApp::new(state);
+
+    terminal.draw(|f| app.render(f)).unwrap();
+
+    let rendered = buffer_to_string(terminal.backend());
+    assert!(
+        rendered.contains("DISCONNECTED"),
+        "Missing DISCONNECTED status banner in header"
+    );
+    assert!(rendered.contains("Ferry Sync Engine"), "Missing title");
+}
+
+#[test]
 fn test_render_terminal_too_small() {
     let backend = TestBackend::new(30, 10);
     let mut terminal = Terminal::new(backend).unwrap();

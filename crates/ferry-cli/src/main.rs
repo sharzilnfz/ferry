@@ -248,6 +248,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
         #[cfg(feature = "tui")]
         Command::Tui { folder } => ferry_cli::commands::tui::run(folder.as_deref()),
         Command::Ui {
+            subcommand,
             folder,
             gui,
             web,
@@ -256,15 +257,23 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             port,
             no_open,
             test,
-        } => ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
-            folder: folder.as_deref(),
-            gui: *gui,
-            web: *web,
-            tui: *tui,
-            host,
-            port: *port,
-            no_open: *no_open,
-            test: *test,
-        }),
+        } => match subcommand {
+            Some(ferry_cli::cli::UiSubcommand::Token {
+                folder: sub_folder,
+            }) => {
+                let target = sub_folder.as_deref().or(folder.as_deref());
+                ferry_cli::commands::ui::run_token(target)
+            }
+            None => ferry_cli::commands::ui::run(ferry_cli::commands::ui::UiArgs {
+                folder: folder.as_deref(),
+                gui: *gui,
+                web: *web,
+                tui: *tui,
+                host,
+                port: *port,
+                no_open: *no_open,
+                test: *test,
+            }),
+        },
     }
 }

@@ -2,7 +2,7 @@ use egui::{
     epaint::Shadow, vec2, Align, Align2, Area, Color32, Frame, Layout, Margin, Order, RichText,
     Rounding, ScrollArea, Stroke,
 };
-use ferry_ipc::backend::ShareOffer;
+use ferry_ipc::backend::{ShareOffer, ShareStatus};
 use ferry_ipc::protocol::ConflictEntry;
 use qrcode::QrCode;
 
@@ -205,6 +205,7 @@ pub fn render_share_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
     active_offer: Option<&ShareOffer>,
+    share_status: Option<&ShareStatus>,
     secret_warnings: &[String],
     override_secrets: &mut bool,
     mut on_generate_offer: impl FnMut(bool),
@@ -216,6 +217,41 @@ pub fn render_share_modal(
         520.0,
         |ui, open| {
             if let Some(offer) = active_offer {
+                let is_completed = share_status.is_some_and(|s| s.status == "completed" || s.status == "paired");
+                if is_completed {
+                    let peer_info = share_status
+                        .and_then(|s| s.peer_device_id.as_deref())
+                        .map(|id| format!(" Connected to device {}", format_short_hex(Some(id))))
+                        .unwrap_or_default();
+                    Frame::none()
+                        .fill(colors::PANEL_BG)
+                        .stroke(Stroke::new(1.0f32, colors::FERRY_GREEN))
+                        .rounding(Rounding::same(6.0f32))
+                        .inner_margin(Margin::same(10.0f32))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(format!("✓ Pairing Completed!{peer_info}"))
+                                    .color(colors::FERRY_GREEN)
+                                    .strong()
+                                    .size(12.5),
+                            );
+                        });
+                } else {
+                    Frame::none()
+                        .fill(colors::PANEL_BG)
+                        .stroke(Stroke::new(1.0f32, colors::BLUE_SYNCING))
+                        .rounding(Rounding::same(6.0f32))
+                        .inner_margin(Margin::same(10.0f32))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("⌛ Waiting for peer device to enter pairing code…")
+                                    .color(colors::BLUE_SYNCING)
+                                    .size(12.0),
+                            );
+                        });
+                }
+                ui.add_space(8.0);
+
                 ui.label(RichText::new("Pairing offer is active! Scan QR code or copy the pairing token to the recipient device:").color(colors::TEXT_SECONDARY).size(12.5));
                 ui.add_space(8.0);
 
@@ -313,46 +349,40 @@ pub fn render_share_modal(
                             RichText::new(format!("⚠️ Security Warning: {} Unignored Secret(s) Detected", secret_warnings.len()))
                                 .color(colors::AMBER_WARN)
                                 .strong()
-                                .size(13.0),
+                                .size(12.5),
                         );
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new("Sharing this folder will grant the peer access to the following sensitive files:")
+                            RichText::new("The following paths match known secrets and will be sent unencrypted unless ignored:")
                                 .color(colors::TEXT_SECONDARY)
-                                .size(11.5),
+                                .size(11.0),
                         );
                         ui.add_space(4.0);
                         ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
-                            for w in secret_warnings {
-                                ui.monospace(RichText::new(format!("• {w}")).color(colors::AMBER_WARN).size(11.0));
+                            for warn in secret_warnings {
+                                ui.label(RichText::new(format!("• {warn}")).color(colors::AMBER_WARN).size(11.0));
                             }
                         });
-                        ui.add_space(6.0);
-                        ui.checkbox(
-                            override_secrets,
-                            RichText::new("I understand the risks of sharing unignored secrets (Override)").strong().size(12.0),
-                        );
+
+                        ui.add_space(8.0);
+                        ui.checkbox(override_secrets, RichText::new("I understand the risks; share anyway").color(colors::TEXT_PRIMARY).size(11.5));
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                 }
 
-                ui.horizontal(|ui| {
-                    let can_generate = secret_warnings.is_empty() || *override_secrets;
-                    let btn = egui::Button::new(
-                        RichText::new("Generate Pairing Offer")
-                            .color(if can_generate {
-                                Color32::BLACK
-                            } else {
-                                colors::TEXT_MUTED
-                            })
-                            .strong(),
-                    )
-                    .fill(if can_generate {
-                        colors::FERRY_GREEN
-                    } else {
-                        colors::PANEL_BG
-                    });
+                let can_generate = secret_warnings.is_empty() || *override_secrets;
+                let btn = egui::Button::new(
+                    RichText::new("Generate Pairing Token")
+                        .color(if can_generate { Color32::BLACK } else { colors::TEXT_MUTED })
+                        .strong(),
+                )
+                .fill(if can_generate {
+                    colors::FERRY_GREEN
+                } else {
+                    colors::PANEL_BG
+                });
 
+                ui.horizontal(|ui| {
                     if ui.add_enabled(can_generate, btn).clicked() {
                         on_generate_offer(*override_secrets);
                     }
@@ -369,27 +399,43 @@ pub fn render_share_modal(
 pub fn render_pair_modal(
     ctx: &egui::Context,
     is_open: &mut bool,
-    pair_input: &mut String,
-    mut on_accept_pair: impl FnMut(String),
+    code_input: &mut String,
+    dest_path_input: &mut String,
+    mut on_accept_pair: impl FnMut(String, Option<std::path::PathBuf>),
 ) {
     render_modal_frame(
         ctx,
-        "Pair Device (Accept Offer)",
+        "Join Remote Folder",
         is_open,
         480.0,
         |ui, open| {
             ui.label(
                 RichText::new(
-                    "Enter the 6-character pairing code, or the path to the incoming `.ferry-pair` offer payload file:",
+                    "Enter the 6-character pairing code to connect to a remote folder:",
                 )
                 .color(colors::TEXT_SECONDARY)
                 .size(12.5),
             );
             ui.add_space(6.0);
 
-            ui.text_edit_singleline(pair_input);
+            ui.text_edit_singleline(code_input);
             ui.label(
-                RichText::new("e.g. ABCD-EF or /home/user/downloads/pair-offer.ferry-pair")
+                RichText::new("e.g. 7K9-PX2 or /path/to/ferry-pair.json")
+                    .color(colors::TEXT_MUTED)
+                    .size(11.0),
+            );
+
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("Destination folder path (optional):")
+                    .color(colors::TEXT_SECONDARY)
+                    .size(12.5),
+            );
+            ui.add_space(4.0);
+
+            ui.text_edit_singleline(dest_path_input);
+            ui.label(
+                RichText::new("Leave empty to use the shared folder name")
                     .color(colors::TEXT_MUTED)
                     .size(11.0),
             );
@@ -397,9 +443,9 @@ pub fn render_pair_modal(
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
-                let is_valid = !pair_input.trim().is_empty();
+                let is_valid = !code_input.trim().is_empty();
                 let btn = egui::Button::new(
-                    RichText::new("Accept Pairing Offer")
+                    RichText::new("Join Folder")
                         .color(if is_valid {
                             Color32::BLACK
                         } else {
@@ -414,8 +460,13 @@ pub fn render_pair_modal(
                 });
 
                 if ui.add_enabled(is_valid, btn).clicked() {
-                    let input = pair_input.trim().to_string();
-                    on_accept_pair(input);
+                    let code = code_input.trim().to_string();
+                    let dest = if dest_path_input.trim().is_empty() {
+                        None
+                    } else {
+                        Some(std::path::PathBuf::from(dest_path_input.trim()))
+                    };
+                    on_accept_pair(code, dest);
                     *open = false;
                 }
 

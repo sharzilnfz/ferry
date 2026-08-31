@@ -7,7 +7,7 @@ pub mod terminal;
 pub mod ui;
 
 pub use activity_log::{ActivityLog, LogEntry, LogLevel};
-pub use app::TuiApp;
+pub use app::{ReconnectBackoff, TuiApp};
 pub use error::TuiError;
 pub mod timefmt {
     pub use ferry_platform::time::*;

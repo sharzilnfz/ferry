@@ -33,7 +33,12 @@ pub enum BackendAction {
     },
     AcceptPair {
         code_or_payload: String,
+        target_dir: Option<std::path::PathBuf>,
     },
+    PairDiscoveredDevice {
+        device_id: String,
+    },
+    FetchShareStatus,
     FetchStatus,
     FetchConflicts,
     RegisterFolder {
@@ -72,6 +77,7 @@ pub struct GuiApp {
 
     pub pin_paths_input: String,
     pub pair_path_input: String,
+    pub pair_dest_input: String,
     pub status_message: Option<(String, Instant, Color32)>,
 
     pub is_connected: bool,
@@ -103,6 +109,7 @@ impl GuiApp {
             show_pair_modal: false,
             pin_paths_input: String::new(),
             pair_path_input: String::new(),
+            pair_dest_input: String::new(),
             status_message: None,
             is_connected: false,
             should_quit: false,
@@ -202,8 +209,22 @@ impl GuiApp {
                             }
                         }
                     }
-                    BackendAction::AcceptPair { code_or_payload } => {
-                        match b_actions.pair_accept(code_or_payload, None).await {
+                    BackendAction::AcceptPair {
+                        code_or_payload,
+                        target_dir,
+                    } => {
+                        let res = match b_actions.pair_accept(code_or_payload.clone(), target_dir.clone()).await {
+                            Ok(res) => Ok(res),
+                            Err(e) => {
+                                if let Some(target) = target_dir {
+                                    let req = ferry_ipc::pairing::JoinPairingRequest::new(code_or_payload, target);
+                                    b_actions.join_pairing_session(req).await.map_err(|_| e)
+                                } else {
+                                    Err(e)
+                                }
+                            }
+                        };
+                        match res {
                             Ok(res) => {
                                 let _ = ev_tx_actions.send(UiEvent::Error {
                                     code: "pair_success".to_string(),
@@ -220,6 +241,34 @@ impl GuiApp {
                                 let _ = ev_tx_actions.send(UiEvent::Error {
                                     code: e.code,
                                     message: e.message,
+                                });
+                            }
+                        }
+                    }
+                    BackendAction::PairDiscoveredDevice { device_id } => {
+                        match b_actions.share_initiate(None, true).await {
+                            Ok(offer) => {
+                                if let Ok(json_str) = serde_json::to_string(&offer) {
+                                    let _ = ev_tx_actions.send(UiEvent::Error {
+                                        code: "share_offer".to_string(),
+                                        message: json_str,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: e.code,
+                                    message: format!("Failed to initiate pairing with {device_id}: {}", e.message),
+                                });
+                            }
+                        }
+                    }
+                    BackendAction::FetchShareStatus => {
+                        if let Ok(status) = b_actions.share_status(None).await {
+                            if let Ok(json_str) = serde_json::to_string(&status) {
+                                let _ = ev_tx_actions.send(UiEvent::Error {
+                                    code: "share_status".to_string(),
+                                    message: json_str,
                                 });
                             }
                         }
@@ -290,6 +339,7 @@ impl GuiApp {
             show_pair_modal: false,
             pin_paths_input: String::new(),
             pair_path_input: String::new(),
+            pair_dest_input: String::new(),
             status_message: None,
             is_connected: true,
             should_quit: false,
@@ -484,6 +534,12 @@ impl GuiApp {
                     if let Ok(offer) = serde_json::from_str::<ShareOffer>(&message) {
                         self.active_share = Some(offer);
                         self.share_secret_warnings.clear();
+                        self.show_share_modal = true;
+                        self.share_status = None;
+                    }
+                } else if code == "share_status" {
+                    if let Ok(status) = serde_json::from_str::<ShareStatus>(&message) {
+                        self.share_status = Some(status);
                     }
                 } else if code == "secrets-found" || code == "secret-detected" {
                     self.share_secret_warnings = vec![message.clone()];
@@ -939,12 +995,18 @@ impl GuiApp {
                             ui.add_space(12.0);
                         }
 
+                        let mut pair_discovered_id = None;
                         render_fleet_table(
                             ui,
                             &snap.peers,
+                            &snap.discovered_devices,
                             || fleet_open_pair = true,
                             || fleet_open_share = true,
+                            |dev_id| pair_discovered_id = Some(dev_id.to_string()),
                         );
+                        if let Some(dev_id) = pair_discovered_id {
+                            self.dispatch(BackendAction::PairDiscoveredDevice { device_id: dev_id });
+                        }
 
                         ui.add_space(12.0);
 
@@ -1011,6 +1073,7 @@ impl GuiApp {
                 ctx,
                 &mut self.show_share_modal,
                 self.active_share.as_ref(),
+                self.share_status.as_ref(),
                 &warnings,
                 &mut override_secrets,
                 |i_know| {
@@ -1025,13 +1088,22 @@ impl GuiApp {
 
         if self.show_pair_modal {
             let mut pair_action = None;
-            let mut pair_input = self.pair_path_input.clone();
-            render_pair_modal(ctx, &mut self.show_pair_modal, &mut pair_input, |input| {
-                pair_action = Some(BackendAction::AcceptPair {
-                    code_or_payload: input,
-                });
-            });
-            self.pair_path_input = pair_input;
+            let mut code_input = self.pair_path_input.clone();
+            let mut dest_input = self.pair_dest_input.clone();
+            render_pair_modal(
+                ctx,
+                &mut self.show_pair_modal,
+                &mut code_input,
+                &mut dest_input,
+                |code, dest| {
+                    pair_action = Some(BackendAction::AcceptPair {
+                        code_or_payload: code,
+                        target_dir: dest,
+                    });
+                },
+            );
+            self.pair_path_input = code_input;
+            self.pair_dest_input = dest_input;
             if let Some(act) = pair_action {
                 self.dispatch(act);
             }

@@ -5,18 +5,24 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
+#[cfg(any(test, feature = "test-util"))]
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 
+#[cfg(any(test, feature = "test-util"))]
 use std::collections::HashMap;
 
+#[cfg(any(test, feature = "test-util"))]
+use ferry_folder::inventory::{sort_entries, DirectoryEntry};
 use ferry_folder::inventory::{
-    ferry_home, sort_entries, validate_path, DirectoryEntry, FolderInventory, FolderRecord,
-    ListDirectoryResponse,
+    ferry_home, validate_path, FolderInventory, FolderRecord, ListDirectoryResponse,
 };
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
-use crate::protocol::{ConflictEntry, EngineSnapshot, ScanStatsView, TransferDirection};
+use crate::protocol::{
+    ConflictEntry, DiscoveredDeviceView, EngineSnapshot, ScanStatsView, TransferDirection,
+};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -242,6 +248,11 @@ pub trait StatusDomain: Send + Sync + 'static {
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
+    fn list_discovered_devices(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 pub trait InventoryDomain: Send + Sync + 'static {
@@ -305,6 +316,7 @@ pub struct FakeBackend {
     event_tx: broadcast::Sender<UiEvent>,
     fs_fixture: Arc<RwLock<HashMap<PathBuf, Vec<DirectoryEntry>>>>,
     pairing_sessions: Arc<std::sync::Mutex<HashMap<String, InMemPairingSession>>>,
+    discovered_devices: Arc<RwLock<Vec<DiscoveredDeviceView>>>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -332,6 +344,7 @@ impl FakeBackend {
             event_tx,
             fs_fixture: Arc::new(RwLock::new(HashMap::new())),
             pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            discovered_devices: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -374,6 +387,21 @@ impl FakeBackend {
         });
     }
 
+    pub async fn add_discovered_device(&self, device: DiscoveredDeviceView) {
+        let mut list = self.discovered_devices.write().await;
+        list.push(device);
+        let mut snap = self.snapshot.write().await;
+        snap.discovered_devices = list.clone();
+        let _ = self.event_tx.send(UiEvent::State(snap.clone()));
+    }
+
+    pub async fn set_discovered_devices(&self, devices: Vec<DiscoveredDeviceView>) {
+        *self.discovered_devices.write().await = devices.clone();
+        let mut snap = self.snapshot.write().await;
+        snap.discovered_devices = devices;
+        let _ = self.event_tx.send(UiEvent::State(snap.clone()));
+    }
+
     pub fn emit_event(&self, event: UiEvent) {
         let _ = self.event_tx.send(event);
     }
@@ -405,6 +433,13 @@ impl StatusDomain for FakeBackend {
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {
         let rx = self.event_tx.subscribe();
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
+    }
+
+    fn list_discovered_devices(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+        let devs = Arc::clone(&self.discovered_devices);
+        Box::pin(async move { Ok(devs.read().await.clone()) })
     }
 }
 
@@ -845,6 +880,23 @@ impl StatusDomain for AutoBackend {
                         Ok(UiEventStream::new(rx))
                     })
                 },
+            )
+            .await
+        })
+    }
+
+    fn list_discovered_devices(
+        &self,
+    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+        let client = self.client.clone();
+        let fallback = self.fallback.clone();
+        Box::pin(async move {
+            let res = client.list_discovered_devices().await;
+            transport_fallback(
+                res,
+                fallback,
+                |fb| Box::pin(async move { fb.list_discovered_devices().await }),
+                |_| Box::pin(async move { Ok(Vec::new()) }),
             )
             .await
         })

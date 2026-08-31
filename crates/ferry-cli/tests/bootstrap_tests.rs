@@ -227,3 +227,44 @@ fn headless_share_json_works_without_tty() {
     assert!(out.human.contains("Share code"));
     std::env::remove_var("FERRY_HOME");
 }
+
+#[test]
+fn clean_environment_autostarts_daemon_and_status_stop_work() {
+    let home = temp_home();
+    let work = tempfile::tempdir().unwrap();
+    let _lock = ENV_LOCK.lock().unwrap();
+    std::env::set_var("FERRY_HOME", home.path());
+
+    let proj = work.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    ferry_cli::commands::init::run(&proj).unwrap();
+
+    // Verify initially no daemon is running
+    let status_before = ferry_cli::commands::daemon::status_in(home.path()).unwrap();
+    assert_eq!(status_before.json["status"], "stopped");
+
+    // Running share should auto-spawn the daemon in the background
+    let out = ferry_cli::commands::share::run(&proj, false, 5).unwrap();
+    assert!(out.json["code"].is_string());
+
+    // Verify daemon is now running and recorded with pid
+    let status_running = ferry_cli::commands::daemon::status_in(home.path()).unwrap();
+    assert_eq!(status_running.json["status"], "running");
+    let spawned_pid = status_running.json["pid"].as_u64().expect("daemon pid");
+    assert!(spawned_pid > 0);
+
+    // Running pin start reuses the already running daemon
+    let pin_out = ferry_cli::commands::pin::start(&proj, &["src/**".to_string()], 1).unwrap();
+    assert_eq!(pin_out.json["command"], "pin");
+
+    // ferry daemon stop successfully terminates the auto-spawned daemon
+    let stop_out = ferry_cli::commands::daemon::stop_in(home.path()).unwrap();
+    assert_eq!(stop_out.json["status"], "stopped");
+    assert_eq!(stop_out.json["pid"].as_u64(), Some(spawned_pid));
+
+    // Verify status is now stopped
+    let status_after = ferry_cli::commands::daemon::status_in(home.path()).unwrap();
+    assert_eq!(status_after.json["status"], "stopped");
+
+    std::env::remove_var("FERRY_HOME");
+}

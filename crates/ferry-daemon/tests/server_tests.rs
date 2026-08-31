@@ -181,6 +181,8 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     assert_eq!(status, 200);
     assert_eq!(json["command"], "share");
     assert_eq!(json["status"], "pending");
+    assert!(json["short_code"].is_string());
+    assert!(json["qr_code"].is_string());
 
     let (status, json, _) = send_http(
         addr,
@@ -192,6 +194,8 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(json["command"], "share");
+    assert!(json["short_code"].is_string());
+    assert!(json["qr_code"].is_string());
 
     let (status, json, _) = send_http(
         addr,
@@ -204,6 +208,91 @@ async fn test_dashboard_server_with_fake_backend_full_lifecycle() {
     assert_eq!(status, 200);
     assert_eq!(json["command"], "pair");
     assert_eq!(json["status"], "paired");
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_one_click_pairing_and_device_discovery() {
+    let backend = Arc::new(FakeBackend::new());
+    let disc_dev = ferry_ipc::protocol::DiscoveredDeviceView::new(
+        "peer-device-discovered-99",
+        Some("192.168.1.150:9000".to_string()),
+    );
+    backend.add_discovered_device(disc_dev).await;
+
+    let token = generate_token();
+    let server = DashboardServer::new(backend).with_token(&token);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server_handle = tokio::spawn(async move {
+        server.serve(listener).await.unwrap();
+    });
+
+    // 1. Enumerate discovered devices
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/devices?token={token}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "devices");
+    let devices = json["devices"].as_array().expect("devices array");
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0]["device_id"], "peer-device-discovered-99");
+    assert_eq!(devices[0]["address"], "192.168.1.150:9000");
+
+    // 2. Enumerate via /api/devices/discovered
+    let (status, json, _) = send_http(
+        addr,
+        "GET",
+        &format!("/api/devices/discovered?token={token}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "devices");
+    assert_eq!(json["devices"].as_array().unwrap().len(), 1);
+
+    // 3. Initiate pair directly with discovered device
+    let (status, json, _) = send_http(
+        addr,
+        "POST",
+        &format!("/api/pair/device?token={token}"),
+        &[],
+        Some(r#"{"device_id": "peer-device-discovered-99"}"#),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "pair");
+    assert_eq!(json["role"], "device");
+    assert_eq!(json["target_device_id"], "peer-device-discovered-99");
+    assert!(json["code"].is_string());
+    assert!(json["short_code"].is_string());
+    assert!(json["qr_code"].is_string());
+    let pairing_code = json["code"].as_str().unwrap().to_string();
+
+    // 4. Test /api/pair/join with short-code
+    let (status, json, _) = send_http(
+        addr,
+        "POST",
+        &format!("/api/pair/join?token={token}"),
+        &[],
+        Some(&format!(
+            r#"{{"code": "{pairing_code}", "target_dir": "/tmp/test-join-folder"}}"#
+        )),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["command"], "pair");
+    assert_eq!(json["role"], "join");
+    assert_eq!(json["status"], "paired");
+    assert_eq!(json["folder"], "/tmp/test-join-folder");
 
     server_handle.abort();
 }
