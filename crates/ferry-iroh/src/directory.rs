@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::lock::lock;
 
@@ -40,19 +40,7 @@ pub enum RouteScope {
 
 pub type RouteKey = SocketAddr;
 
-static GLOBAL_SYNTH_PORT: AtomicU16 = AtomicU16::new(45601);
-
-
-pub fn next_global_synth_key(ip: std::net::IpAddr) -> RouteKey {
-    loop {
-        let cur = GLOBAL_SYNTH_PORT.fetch_add(1, Ordering::SeqCst);
-        let port = 45601 + (cur % 15000);
-        let key = SocketAddr::new(ip, port);
-        if global_table().resolve_route(&key).is_none() {
-            return key;
-        }
-    }
-}
+static SYNTH_PORT: AtomicU16 = AtomicU16::new(45601);
 
 
 
@@ -126,33 +114,14 @@ impl RouteTable {
     
     pub fn next_synth_key(&self, ip: std::net::IpAddr) -> RouteKey {
         loop {
-            let key = next_global_synth_key(ip);
+            let cur = SYNTH_PORT.fetch_add(1, Ordering::SeqCst);
+            let port = 45601 + (cur % 15000);
+            let key = SocketAddr::new(ip, port);
             if !self.contains_key(&key) {
                 return key;
             }
         }
     }
-}
-
-static GLOBAL_DIRECTORY: OnceLock<RouteTable> = OnceLock::new();
-
-fn global_table() -> &'static RouteTable {
-    GLOBAL_DIRECTORY.get_or_init(RouteTable::new)
-}
-
-
-pub fn publish_route(key: RouteKey, route: Route) {
-    global_table().publish_route(key, route);
-}
-
-
-pub fn register_explicit_route(key: RouteKey, route: Route) {
-    global_table().register_explicit_route(key, route);
-}
-
-
-pub fn resolve_route(key: &RouteKey) -> Option<(Route, RouteScope)> {
-    global_table().resolve_route(key)
 }
 
 #[cfg(test)]
