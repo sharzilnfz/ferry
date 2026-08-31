@@ -72,7 +72,10 @@ impl Default for IrohConfig {
             secret: None,
             device_identity: None,
             relays: RelaySetting::Disabled,
-            mdns: None,
+            mdns: Some(MdnsSetting {
+                service_name: "ferry-sync".into(),
+                advertise: true,
+            }),
             force_relay: false,
             dial_timeout: Duration::from_secs(10),
             routes: None,

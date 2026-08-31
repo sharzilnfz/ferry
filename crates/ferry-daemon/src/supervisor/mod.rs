@@ -46,6 +46,10 @@ impl Supervisor {
             Option<Arc<ferry_iroh::IrohTransport>>,
         ) = match ferry_iroh::IrohTransport::new(ferry_iroh::IrohConfig {
             device_identity: Some(identity.clone()),
+            mdns: Some(ferry_iroh::MdnsSetting {
+                service_name: "ferry-sync".into(),
+                advertise: true,
+            }),
             ..Default::default()
         }) {
             Ok(t) => {
@@ -220,6 +224,39 @@ impl Supervisor {
     pub fn tick(&mut self) {
         for engine in self.engines.values_mut() {
             engine.tick();
+        }
+        self.sync_discovered_routes();
+    }
+
+    fn sync_discovered_routes(&self) {
+        let Some(iroh) = self.iroh_transport.as_ref() else {
+            return;
+        };
+        let records = match self.inventory().list() {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        for rec in records {
+            let candidates = [
+                rec.path.join("config"),
+                rec.path.join(".ferry").join("config"),
+            ];
+            for path in &candidates {
+                if let Ok(bytes) = std::fs::read(path) {
+                    if let Ok(ch) = ferry_crypto::config_head::parse_config_head(&bytes) {
+                        for entry in ch.entries {
+                            if entry.device_pub == *self.identity.public() {
+                                continue;
+                            }
+                            let peer = entry.device_pub;
+                            if iroh.route_table().resolve_peer(&peer).is_none() {
+                                iroh.register_peer(peer);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 

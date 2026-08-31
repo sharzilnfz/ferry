@@ -948,7 +948,7 @@ impl Ctx {
                 }
             },
             Err(e) => {
-                if let [peer] = self.peer_policy.remote_peers(self.identity.public())[..] {
+                if let [peer] = self.current_policy().remote_peers(self.identity.public())[..] {
                     self.shared.record_peer_connectivity(peer, "unreachable");
                 }
                 self.status(&format!("SESSION dial error: {e}"));
@@ -965,6 +965,61 @@ impl Ctx {
         let millis = base_ms.saturating_mul(1 << shift).min(5_000);
         let next = Instant::now() + Duration::from_millis(millis);
         *guard = (failures, Some(next));
+    }
+
+    fn current_policy(&self) -> PeerPolicy {
+        let refreshed = resolve_peer_policy_from_disk(&self.cfg, &self.store);
+        if refreshed != PeerPolicy::default() || self.peer_policy == PeerPolicy::default() {
+            refreshed
+        } else {
+            self.peer_policy.clone()
+        }
+    }
+
+    fn dial_discovered_peers(&self) {
+        let policy = self.current_policy();
+        let peers = policy.remote_peers(self.identity.public());
+        if peers.is_empty() {
+            return;
+        }
+        {
+            let guard = self.dial_backoff.lock().unwrap();
+            if let Some(next) = guard.1 {
+                if Instant::now() < next {
+                    return;
+                }
+            }
+        }
+        let mut any_success = false;
+        let mut attempted = false;
+        for peer in peers {
+            attempted = true;
+            match self.transport.dial_peer(&peer) {
+                Ok(mut conn) => match run_session_v1(conn.as_mut(), self, true) {
+                    Ok(()) => {
+                        any_success = true;
+                        self.bump_ok();
+                        self.shared.record_peer_connectivity(peer, "reachable");
+                        break;
+                    }
+                    Err(e) => {
+                        self.note_session_failure(&e);
+                        self.status(&format!("SESSION failed (autonomous dial to {}): {e}", hex_short(&peer)));
+                        self.shared.record_peer_connectivity(peer, "unreachable");
+                    }
+                },
+                Err(e) => {
+                    self.shared.record_peer_connectivity(peer, "unreachable");
+                    self.status(&format!("SESSION autonomous dial to {} error: {e}", hex_short(&peer)));
+                }
+            }
+        }
+        if any_success {
+            let mut guard = self.dial_backoff.lock().unwrap();
+            *guard = (0, None);
+        } else if attempted {
+            self.record_dial_failure();
+        }
     }
 
     
@@ -999,8 +1054,9 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     };
 
     let ledger = PeerLedger::new(ctx.store.store_dir());
+    let policy = ctx.current_policy();
     let resolved =
-        ctx.peer_policy
+        policy
             .expected_peer(ctx.identity.public(), &ctx.cfg.folder_id, &ledger)?;
     let expect = match resolved {
         PeerExpectation::Refuse => {
@@ -1016,7 +1072,7 @@ fn run_session_v1(conn: &mut dyn Connection, ctx: &Ctx, dialer: bool) -> Result<
     let mut link = ConnLink(conn);
     let mut est: Established = session::establish(&mut link, role, &ctx.identity, expect, true)?;
 
-    if !ctx.peer_policy.admits(&est.peer) {
+    if !policy.admits(&est.peer) {
         let _ = est.io.send_bye(ferry_proto::error::ByeReason::AuthFailed);
         ctx.shared.record_peer_connectivity(est.peer, "unreachable");
         ctx.status(&format!(
@@ -1533,7 +1589,9 @@ fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Recei
             }
         }
 
-        if ctx.cfg.connect_to.is_some() {
+        let has_explicit = ctx.cfg.connect_to.is_some();
+        let has_peers = !ctx.current_policy().remote_peers(ctx.identity.public()).is_empty();
+        if has_explicit || has_peers {
             let diverged = ctx.folder.baseline_root() != ctx.folder.current_root();
             let backstop_due = last_backstop.elapsed() >= backstop_interval;
             if diverged || backstop_due {
@@ -1541,7 +1599,12 @@ fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Recei
                     last_backstop = Instant::now();
                 }
                 if let Ok(_guard) = ctx.session_lock.try_lock() {
-                    ctx.dial_and_run();
+                    if has_explicit {
+                        ctx.dial_and_run();
+                    }
+                    if has_peers {
+                        ctx.dial_discovered_peers();
+                    }
                 }
             }
         }
