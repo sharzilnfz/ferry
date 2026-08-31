@@ -725,13 +725,14 @@ impl SessionDomain for DaemonClient {
     fn share_status(&self, folder: Option<PathBuf>) -> BoxFuture<'_, Result<ShareStatus, OpError>> {
         let dir = folder.unwrap_or_else(|| PathBuf::from("."));
         Box::pin(async move {
-            Ok(ShareStatus {
-                folder: dir.display().to_string(),
-                status: "none".to_string(),
-                active: false,
-                peer_device_id: None,
-                offer: None,
-            })
+            Err(OpError::new(
+                "not-supported",
+                format!(
+                    "share_status for {} requires in-process or daemon ritual",
+                    dir.display()
+                ),
+                "use AutoBackend with fallback or run ferry share",
+            ))
         })
     }
 
