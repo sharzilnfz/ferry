@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use ferry_store::agreement::AgreementLedger;
 use ferry_store::format::hex;
 use ferry_sync_engine::list_conflicts;
 use ferry_sync_engine::pin::PinManager;
@@ -75,32 +77,24 @@ pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
                     "run `ferry pin stop` first (or `ferry pin status` to inspect)",
                 ));
             }
+            // Supervisor has no folder registered, or we never reached IPC: do the
+            // pin locally so offline starts keep working (ADR-0008).
+            "folder-not-found" | "no-folder" => local_pin_start(
+                &state_dir,
+                &opened.folder_id,
+                scope.clone(),
+                hours,
+                &device_id,
+            )?,
             _ => return Err(CliError::new("pin-error", message, "check pin state")),
         },
-        _ => {
-            let pin_mgr = PinManager::new(&state_dir);
-            let mut base_agreements = std::collections::BTreeMap::new();
-            if let Ok(records) = ferry_store::agreement::AgreementLedger::new(&state_dir)
-                .list_folder(&opened.folder_id)
-            {
-                for (dev, rec) in records {
-                    base_agreements.insert(
-                        ferry_store::format::hex(&dev),
-                        ferry_store::format::hex(&rec.manifest_id),
-                    );
-                }
-            }
-            let rec = pin_mgr
-                .start_session_with_duration(
-                    scope.clone(),
-                    std::process::id(),
-                    &device_id,
-                    base_agreements,
-                    Some(hours * 3600),
-                )
-                .map_err(pin_error)?;
-            (rec.pid, rec.started_sec, rec.base_agreements.len())
-        }
+        _ => local_pin_start(
+            &state_dir,
+            &opened.folder_id,
+            scope.clone(),
+            hours,
+            &device_id,
+        )?,
     };
 
     let json_doc = json!({
@@ -301,6 +295,35 @@ fn device_hex() -> CliResult<String> {
             )
         })?;
     Ok(hex(identity.public()))
+}
+
+// Start a pin session directly against the local pin store. Used as the
+// fallback when no daemon has the folder registered or when IPC is
+// unreachable; keeps `ferry pin start` usable offline per ADR-0008.
+fn local_pin_start(
+    state_dir: &Path,
+    folder_id: &[u8; 16],
+    scope: Vec<String>,
+    hours: u64,
+    device_id: &str,
+) -> CliResult<(u32, i64, usize)> {
+    let pin_mgr = PinManager::new(state_dir);
+    let mut base_agreements = BTreeMap::new();
+    if let Ok(records) = AgreementLedger::new(state_dir).list_folder(folder_id) {
+        for (dev, rec) in records {
+            base_agreements.insert(hex(&dev), hex(&rec.manifest_id));
+        }
+    }
+    let rec = pin_mgr
+        .start_session_with_duration(
+            scope,
+            std::process::id(),
+            device_id,
+            base_agreements,
+            Some(hours * 3600),
+        )
+        .map_err(pin_error)?;
+    Ok((rec.pid, rec.started_sec, rec.base_agreements.len()))
 }
 
 fn cli(code: &'static str, e: impl std::fmt::Display) -> CliError {
