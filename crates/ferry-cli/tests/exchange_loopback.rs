@@ -48,11 +48,15 @@ impl Drop for Daemon {
 
 fn wait_for_file(path: &Path, secs: u64) -> bool {
     let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut sleep_ms = 10u64;
     while Instant::now() < deadline {
         if path.exists() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
     false
 }
@@ -133,6 +137,7 @@ fn two_devices_pair_and_converge_over_localhost() {
     let hello_b = b.tree.join("hello.txt");
     let src_b = b.tree.join("src/main.py");
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut sleep_ms = 10u64;
     loop {
         let got_hello = std::fs::read(&hello_b).ok() == Some(b"hello from device A\n".to_vec());
         let got_src = src_b.is_file();
@@ -140,10 +145,14 @@ fn two_devices_pair_and_converge_over_localhost() {
             break;
         }
         assert!(Instant::now() < deadline, "B never converged: {addr}");
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 200 {
+            sleep_ms = (sleep_ms * 2).min(200);
+        }
     }
 
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut sleep_ms = 10u64;
     loop {
         let out = b.command(&["status", "--json"]).output().unwrap();
         let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -156,29 +165,38 @@ fn two_devices_pair_and_converge_over_localhost() {
             break;
         }
         assert!(Instant::now() < deadline, "agreement never settled: {doc}");
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 400 {
+            sleep_ms = (sleep_ms * 2).min(400);
+        }
     }
 
     std::fs::write(a.tree.join("late.txt"), b"written after start\n").unwrap();
     let late_b = b.tree.join("late.txt");
     let deadline = Instant::now() + Duration::from_secs(90);
+    let mut sleep_ms = 10u64;
     loop {
         if std::fs::read(&late_b).ok().as_deref() == Some(b"written after start\n".as_slice()) {
             break;
         }
         assert!(Instant::now() < deadline, "live change never reached B");
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 200 {
+            sleep_ms = (sleep_ms * 2).min(200);
+        }
     }
 
     std::fs::remove_file(a.tree.join("hello.txt")).unwrap();
     let mut timeline: Vec<String> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(10);
+    let mut sleep_ms = 10u64;
     loop {
         let a_has = hello_a_path.exists();
         let b_has = hello_b.exists();
         timeline.push(format!(
             "+{:>5}ms A={} B={}",
-            deadline.elapsed().as_millis() + 90_000,
+            start.elapsed().as_millis(),
             a_has,
             b_has
         ));
@@ -204,7 +222,7 @@ fn two_devices_pair_and_converge_over_localhost() {
                 )
             };
             panic!(
-                "deletion never reached B\nTIMELINE:\n{}\n=== A TREE: {}\n=== B TREE: {}\n=== A LOG:\n{}\n=== B LOG:\n{}",
+                "deletion never reached B within 10s (has_local_wins fix should land in <5s)\nTIMELINE:\n{}\n=== A TREE: {}\n=== B TREE: {}\n=== A LOG:\n{}\n=== B LOG:\n{}",
                 timeline.join("\n"),
                 list(&a.tree),
                 list(&b.tree),
@@ -212,7 +230,10 @@ fn two_devices_pair_and_converge_over_localhost() {
                 std::fs::read_to_string(log_dir.join("b.log")).unwrap_or_default(),
             );
         }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
 
     assert!(
@@ -251,18 +272,22 @@ fn wait_for(child: &mut Child, secs: u64) -> bool {
     }
 }
 
-fn read_listening<R: std::io::Read>(r: R, secs: u64) -> Option<String> {
-    let reader = BufReader::new(r);
-    let deadline = Instant::now() + Duration::from_secs(secs);
-    for line in reader.lines() {
-        if Instant::now() > deadline {
-            return None;
-        }
-        if let Ok(line) = line {
-            if let Some(addr) = line.strip_prefix("LISTENING ") {
-                return Some(addr.trim().to_string());
+fn read_listening<R: std::io::Read + Send + 'static>(r: R, secs: u64) -> Option<String> {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(r);
+        for line in reader.lines() {
+            match line {
+                Ok(l) if l.starts_with("LISTENING ") => {
+                    let addr = l["LISTENING ".len()..].trim().to_string();
+                    let _ = tx.send(addr);
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
             }
         }
-    }
-    None
+    });
+    rx.recv_timeout(Duration::from_secs(secs)).ok()
 }

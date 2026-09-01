@@ -96,6 +96,10 @@ impl Supervisor {
         &self.transport
     }
 
+    pub fn iroh_transport(&self) -> Option<&Arc<ferry_iroh::IrohTransport>> {
+        self.iroh_transport.as_ref()
+    }
+
     pub fn broadcast_tx(&self) -> &tokio::sync::broadcast::Sender<UiEvent> {
         &self.broadcast_tx
     }
@@ -228,32 +232,15 @@ impl Supervisor {
         self.sync_discovered_routes();
     }
 
-    fn sync_discovered_routes(&self) {
+    pub fn sync_discovered_routes(&self) {
         let Some(iroh) = self.iroh_transport.as_ref() else {
             return;
         };
-        let records = match self.inventory().list() {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        for rec in records {
-            let candidates = [
-                rec.path.join("config"),
-                rec.path.join(".ferry").join("config"),
-            ];
-            for path in &candidates {
-                if let Ok(bytes) = std::fs::read(path) {
-                    if let Ok(ch) = ferry_crypto::config_head::parse_config_head(&bytes) {
-                        for entry in ch.entries {
-                            if entry.device_pub == *self.identity.public() {
-                                continue;
-                            }
-                            let peer = entry.device_pub;
-                            if iroh.route_table().resolve_peer(&peer).is_none() {
-                                iroh.register_peer(peer);
-                            }
-                        }
-                        break;
+        for engine in self.engines.values() {
+            if let Ok(policy) = engine.peer_policy() {
+                for peer in policy.remote_peers(self.identity.public()) {
+                    if iroh.route_table().resolve_peer(&peer).is_none() {
+                        iroh.register_peer(peer);
                     }
                 }
             }

@@ -238,7 +238,87 @@ fn expires_rfc3339(t: std::time::SystemTime) -> String {
     ferry_platform::time::fmt_rfc3339(secs.as_secs() as i64)
 }
 
+fn pin_error_to_message(e: ferry_sync_engine::pin::PinError) -> DaemonMessage {
+    let code = match &e {
+        ferry_sync_engine::pin::PinError::PinActive { .. } => "pin-active",
+        ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
+        ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
+        ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
+        ferry_sync_engine::pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
+        ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
+        ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
+        _ => "pin_error",
+    };
+    DaemonMessage::Error {
+        code: code.to_string(),
+        message: e.to_string(),
+    }
+}
+
+pub fn dispatch_common_command(
+    home: &Path,
+    identity: &ferry_crypto::identity::DeviceIdentity,
+    cmd: &ClientCommand,
+) -> Option<DaemonMessage> {
+    match cmd {
+        ClientCommand::Ping => Some(DaemonMessage::Pong),
+        ClientCommand::ListDirectory { path } => {
+            let inv = FolderInventory::new(home);
+            Some(match inv.inspect_dir(path.clone()) {
+                Ok(resp) => DaemonMessage::DirectoryListing {
+                    entries: resp.entries,
+                    absolute_path: resp.absolute_path,
+                },
+                Err(e) => registry_error(e),
+            })
+        }
+        ClientCommand::CreatePairingSession { req } => {
+            let ritual = pairing_ritual(home.to_path_buf(), identity.clone());
+            Some(match ritual.create_offer_for_folder(&req.folder_id) {
+                Ok(pending) => DaemonMessage::PairingCreated {
+                    response: ferry_ipc::pairing::CreatePairingResponse::new(
+                        pending.short_code,
+                        expires_rfc3339(pending.expires_at),
+                    ),
+                },
+                Err(e) => DaemonMessage::Error {
+                    code: e.code.to_string(),
+                    message: e.message,
+                },
+            })
+        }
+        ClientCommand::JoinPairingSession { req } => {
+            let ritual = pairing_ritual(home.to_path_buf(), identity.clone());
+            Some(
+                match ritual
+                    .accept_offer(&req.code, Some(&req.target_dir))
+                    .and_then(|pending| pending.complete(0))
+                {
+                    Ok(accepted) => DaemonMessage::PairingJoined {
+                        result: ferry_ipc::backend::PairResult {
+                            folder_id: ferry_store::format::hex(&accepted.folder_id),
+                            device_id: ferry_store::format::hex(identity.public()),
+                            folder_path: accepted.folder,
+                            status: "paired".to_string(),
+                            message: Some("pairing completed over in-band transport".to_string()),
+                        },
+                    },
+                    Err(e) => DaemonMessage::Error {
+                        code: e.code.to_string(),
+                        message: e.message,
+                    },
+                },
+            )
+        }
+        _ => None,
+    }
+}
+
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
+    if let Some(resp) = dispatch_common_command(&ferry_home_for_registry(), state.identity(), &cmd)
+    {
+        return resp;
+    }
     match cmd {
         ClientCommand::GetStatus => DaemonMessage::Snapshot(state.snapshot()),
         ClientCommand::StartPin {
@@ -259,24 +339,7 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                     message: Some(format!("pinned {} path(s)", rec.paths.len())),
                 }
             }
-            Err(e) => {
-                let code = match &e {
-                    ferry_sync_engine::pin::PinError::PinActive { .. } => "pin-active",
-                    ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
-                    ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
-                    ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
-                    ferry_sync_engine::pin::PinError::ManifestMissing { .. } => {
-                        "held-manifest-missing"
-                    }
-                    ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
-                    ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
-                    _ => "pin_error",
-                };
-                DaemonMessage::Error {
-                    code: code.to_string(),
-                    message: e.to_string(),
-                }
-            }
+            Err(e) => pin_error_to_message(e),
         },
         ClientCommand::ReleasePin => match state.release_pin() {
             Ok(was_active) => {
@@ -324,17 +387,6 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 message: e.to_string(),
             },
         },
-        ClientCommand::Ping => DaemonMessage::Pong,
-        ClientCommand::ListDirectory { path } => {
-            let inv = FolderInventory::new(&ferry_home_for_registry());
-            match inv.inspect_dir(path) {
-                Ok(resp) => DaemonMessage::DirectoryListing {
-                    entries: resp.entries,
-                    absolute_path: resp.absolute_path,
-                },
-                Err(e) => registry_error(e),
-            }
-        }
         ClientCommand::ListFolders => {
             let inv = FolderInventory::new(&ferry_home_for_registry());
             match inv.list() {
@@ -356,43 +408,10 @@ pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> Daemo
                 Err(e) => registry_error(e),
             }
         }
-        ClientCommand::CreatePairingSession { req } => {
-            let ritual = pairing_ritual(ferry_home_for_registry(), state.identity().clone());
-            match ritual.create_offer_for_folder(&req.folder_id) {
-                Ok(pending) => DaemonMessage::PairingCreated {
-                    response: ferry_ipc::pairing::CreatePairingResponse::new(
-                        pending.short_code,
-                        expires_rfc3339(pending.expires_at),
-                    ),
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code.to_string(),
-                    message: e.message,
-                },
-            }
-        }
-        ClientCommand::JoinPairingSession { req } => {
-            let identity = state.identity().clone();
-            let ritual = pairing_ritual(ferry_home_for_registry(), identity.clone());
-            match ritual
-                .accept_offer(&req.code, Some(&req.target_dir))
-                .and_then(|pending| pending.complete(0))
-            {
-                Ok(accepted) => DaemonMessage::PairingJoined {
-                    result: ferry_ipc::backend::PairResult {
-                        folder_id: ferry_store::format::hex(&accepted.folder_id),
-                        device_id: ferry_store::format::hex(identity.public()),
-                        folder_path: accepted.folder,
-                        status: "paired".to_string(),
-                        message: Some("pairing completed over in-band transport".to_string()),
-                    },
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code.to_string(),
-                    message: e.message,
-                },
-            }
-        }
+        ClientCommand::Ping
+        | ClientCommand::ListDirectory { .. }
+        | ClientCommand::CreatePairingSession { .. }
+        | ClientCommand::JoinPairingSession { .. } => unreachable!(),
     }
 }
 
@@ -400,6 +419,9 @@ pub fn dispatch_supervisor_command(
     supervisor: &mut crate::supervisor::Supervisor,
     cmd: ClientCommand,
 ) -> DaemonMessage {
+    if let Some(resp) = dispatch_common_command(supervisor.home(), supervisor.identity(), &cmd) {
+        return resp;
+    }
     match cmd {
         ClientCommand::ListFolders => DaemonMessage::FolderList {
             folders: supervisor.list_folders(),
@@ -425,72 +447,27 @@ pub fn dispatch_supervisor_command(
                 message: e.message,
             },
         },
-        ClientCommand::Ping => DaemonMessage::Pong,
-        ClientCommand::ListDirectory { path } => {
-            let inv = FolderInventory::new(&ferry_home_for_registry());
-            match inv.inspect_dir(path) {
-                Ok(resp) => DaemonMessage::DirectoryListing {
-                    entries: resp.entries,
-                    absolute_path: resp.absolute_path,
-                },
-                Err(e) => registry_error(e),
-            }
-        }
-        ClientCommand::CreatePairingSession { req } => {
-            let ritual = pairing_ritual(
-                supervisor.home().to_path_buf(),
-                supervisor.identity().clone(),
-            );
-            match ritual.create_offer_for_folder(&req.folder_id) {
-                Ok(pending) => DaemonMessage::PairingCreated {
-                    response: ferry_ipc::pairing::CreatePairingResponse::new(
-                        pending.short_code,
-                        expires_rfc3339(pending.expires_at),
-                    ),
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code.to_string(),
-                    message: e.message,
-                },
-            }
-        }
-        ClientCommand::JoinPairingSession { req } => {
-            let identity = supervisor.identity().clone();
-            let ritual = pairing_ritual(supervisor.home().to_path_buf(), identity.clone());
-            match ritual
-                .accept_offer(&req.code, Some(&req.target_dir))
-                .and_then(|pending| pending.complete(0))
-            {
-                Ok(accepted) => DaemonMessage::PairingJoined {
-                    result: ferry_ipc::backend::PairResult {
-                        folder_id: ferry_store::format::hex(&accepted.folder_id),
-                        device_id: ferry_store::format::hex(identity.public()),
-                        folder_path: accepted.folder,
-                        status: "paired".to_string(),
-                        message: Some("pairing completed over in-band transport".to_string()),
-                    },
-                },
-                Err(e) => DaemonMessage::Error {
-                    code: e.code.to_string(),
-                    message: e.message,
-                },
-            }
-        }
         ClientCommand::StartPin {
             paths,
             duration_hours,
         } => {
             let records = supervisor.inventory().list().unwrap_or_default();
-            let (state_dir, folder_id_bytes) = if let Some(engine) = supervisor.engines_map().values().next() {
-                (engine.record.path.join(".ferry"), Some(engine.folder_id_bytes))
-            } else if let Some(rec) = records.first() {
-                (rec.path.join(".ferry"), None)
-            } else {
-                (PathBuf::from(".ferry"), None)
-            };
+            let (state_dir, folder_id_bytes) =
+                if let Some(engine) = supervisor.engines_map().values().next() {
+                    (
+                        engine.record.path.join(".ferry"),
+                        Some(engine.folder_id_bytes),
+                    )
+                } else if let Some(rec) = records.first() {
+                    (rec.path.join(".ferry"), None)
+                } else {
+                    (PathBuf::from(".ferry"), None)
+                };
             let mut base_agreements = std::collections::BTreeMap::new();
             if let Some(fid) = folder_id_bytes {
-                if let Ok(ledger) = ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&fid) {
+                if let Ok(ledger) =
+                    ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&fid)
+                {
                     for (dev, rec) in ledger {
                         base_agreements.insert(hex_str(&dev), hex_str(&rec.manifest_id));
                     }
@@ -508,24 +485,7 @@ pub fn dispatch_supervisor_command(
                     command: "start_pin".to_string(),
                     message: Some(format!("pinned {} path(s)", rec.paths.len())),
                 },
-                Err(e) => {
-                    let code = match &e {
-                        ferry_sync_engine::pin::PinError::PinActive { .. } => "pin-active",
-                        ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
-                        ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
-                        ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
-                        ferry_sync_engine::pin::PinError::ManifestMissing { .. } => {
-                            "held-manifest-missing"
-                        }
-                        ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
-                        ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
-                        _ => "pin_error",
-                    };
-                    DaemonMessage::Error {
-                        code: code.to_string(),
-                        message: e.to_string(),
-                    }
-                }
+                Err(e) => pin_error_to_message(e),
             }
         }
         ClientCommand::ReleasePin => {
@@ -587,6 +547,10 @@ pub fn dispatch_supervisor_command(
                 message: Some("scan triggered".to_string()),
             }
         }
+        ClientCommand::Ping
+        | ClientCommand::ListDirectory { .. }
+        | ClientCommand::CreatePairingSession { .. }
+        | ClientCommand::JoinPairingSession { .. } => unreachable!(),
     }
 }
 

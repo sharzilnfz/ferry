@@ -139,7 +139,10 @@ fn test_pin_lifecycle_over_ipc_with_fallback() {
     std::thread::sleep(Duration::from_millis(50));
 
     let auto_out = commands::pin::start(&proj, &["src/**".to_string()], 8);
-    assert!(auto_out.is_ok(), "pin start should auto-spawn daemon and succeed");
+    assert!(
+        auto_out.is_ok(),
+        "pin start should auto-spawn daemon and succeed"
+    );
 }
 
 #[test]

@@ -122,7 +122,7 @@ fn backend_inventory() -> ferry_folder::inventory::FolderInventory {
     ferry_folder::inventory::FolderInventory::new(&ferry_folder::inventory::ferry_home())
 }
 
-fn resolve_identity(identity: &Option<DeviceIdentity>) -> DeviceIdentity {
+fn resolve_identity(identity: Option<&DeviceIdentity>) -> DeviceIdentity {
     if let Some(id) = identity {
         return id.clone();
     }
@@ -374,7 +374,7 @@ impl FsStateSource {
         self
     }
     fn resolved_identity(&self) -> DeviceIdentity {
-        resolve_identity(&self.identity)
+        resolve_identity(self.identity.as_ref())
     }
 }
 
@@ -406,8 +406,7 @@ impl StateSource for FsStateSource {
     fn pin_state(&self) -> Result<ferry_sync_engine::pin::HeldSummary, OpError> {
         let opened = self
             .open_folder(None)
-            .map(|o| dot_dir(&o.root))
-            .unwrap_or_else(|_| dot_dir(&self.folder));
+            .map_or_else(|_| dot_dir(&self.folder), |o| dot_dir(&o.root));
         PinManager::new(&opened).summary().map_err(pin_err)
     }
     fn event_stream(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>> {

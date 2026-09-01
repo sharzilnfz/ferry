@@ -171,7 +171,10 @@ fn test_deduplicate_consecutive_identical_messages() {
 fn test_deduplicate_consecutive_disconnect_error_messages() {
     let mut log = ActivityLog::new(10);
     log.push_error("12:00:00", "Daemon is offline");
-    log.push_error("12:00:01", "Backend event stream unreachable: Connection refused");
+    log.push_error(
+        "12:00:01",
+        "Backend event stream unreachable: Connection refused",
+    );
     log.push_error("12:00:02", "Backend event stream closed");
     log.push_error("12:00:03", "Daemon disconnected");
 
@@ -222,7 +225,9 @@ fn test_single_clean_status_update_on_pin_transition() {
         command: "start_pin".to_string(),
         message: Some("pinned 0 path(s)".to_string()),
     };
-    state.activity_log.record_daemon_message("12:00:02", &ack_msg);
+    state
+        .activity_log
+        .record_daemon_message("12:00:02", &ack_msg);
     assert_eq!(state.activity_log.len(), log_len_after_init + 1);
 
     // Release the pin
@@ -239,4 +244,3 @@ fn test_single_clean_status_update_on_pin_transition() {
         .message
         .contains("Pin released"));
 }
-

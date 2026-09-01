@@ -1,6 +1,6 @@
 # ADR-0004: Conflicts quarantine; base-state tracking instead of last-writer-wins
 
-Status: proposed (2026-08-23)
+Status: accepted (2026-08-23)
 
 ## Context
 
@@ -19,8 +19,18 @@ three-way merge between two endpoint states and their common ancestor.
 - Never auto-merge file contents. Ever. Binary or text makes no difference.
 - Deletions versus edits conflict the same way: the edited file returns with
   a conflict marker rather than vanishing.
-- Agent-awareness (session pinning) layers on top later: while a device pins
+- Agent-awareness (session pinning) layers on top: while a device pins
   a session, competing remote edits are held and surfaced, not applied.
+
+## Amendment (2026-08-31): Held Manifest Persistence During Session Pinning
+
+When a session pin is active (`ferry pin start`), incoming remote modifications
+held by the engine must have their raw manifest payloads immediately persisted
+into the local blob store before returning the held outcome. On `ferry pin release`,
+the engine loads the persisted held manifest and performs full three-way
+reconciliation against the baseline and local working tree, cleanly applying
+non-conflicting modifications and quarantining true conflicts without
+`held-manifest-missing` errors.
 
 ## Consequences
 

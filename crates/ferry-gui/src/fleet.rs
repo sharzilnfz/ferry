@@ -131,14 +131,15 @@ fn render_discovered_row(
             ui.horizontal(|ui| {
                 let padding = vec2(6.0f32, 2.0f32);
                 let font_id = egui::FontId::proportional(11.0f32);
-                let galley = ui
-                    .painter()
-                    .layout_no_wrap("Nearby".to_string(), font_id, Color32::BLACK);
+                let galley =
+                    ui.painter()
+                        .layout_no_wrap("Nearby".to_string(), font_id, Color32::BLACK);
                 let (badge_rect, _) =
                     ui.allocate_exact_size(galley.size() + padding * 2.0f32, egui::Sense::hover());
                 ui.painter()
                     .rect_filled(badge_rect, Rounding::same(6.0f32), colors::AMBER_WARN);
-                ui.painter().galley(badge_rect.min + padding, galley, Color32::BLACK);
+                ui.painter()
+                    .galley(badge_rect.min + padding, galley, Color32::BLACK);
 
                 ui.add_space(8.0);
 

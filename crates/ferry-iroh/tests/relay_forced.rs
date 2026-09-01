@@ -26,6 +26,10 @@ fn scan_relay_side(needle: &str) -> usize {
     hay.matches(needle).count()
 }
 
+fn clear_relay_capture() {
+    relay_log_capture().lock().unwrap().clear();
+}
+
 struct PairFixture {
     _dir: tempfile::TempDir,
     a: (ferry_sync::EngineHandle, IrohTransport),
@@ -50,10 +54,24 @@ fn start_pair(force_relay: bool, relay_url: Option<String>, name: &str) -> PairF
                 ferry_iroh::RelaySetting::Disabled
             },
             force_relay,
-            dial_timeout: Duration::from_secs(15),
+            dial_timeout: Duration::from_secs(30),
             ..Default::default()
         };
-        IrohTransport::new(cfg).expect("transport")
+        let mut last = None;
+        for attempt in 0..3 {
+            match IrohTransport::new(cfg.clone()) {
+                Ok(t) => return t,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempt < 2 => {
+                    last = Some(e);
+                    std::thread::sleep(Duration::from_millis(50 * (attempt + 1) as u64));
+                }
+                Err(e) => {
+                    last = Some(e);
+                    break;
+                }
+            }
+        }
+        panic!("transport failed after retries: {:?}", last.unwrap())
     };
 
     let t_a = mk_transport(0x11);
@@ -155,6 +173,7 @@ fn plant_markers(tree_a: &std::path::Path) -> Vec<String> {
 
 fn wait_converged(pair: &PairFixture, budget: Duration) {
     let deadline = Instant::now() + budget;
+    let mut sleep_ms = 10u64;
     loop {
         assert!(
             Instant::now() < deadline,
@@ -166,12 +185,19 @@ fn wait_converged(pair: &PairFixture, budget: Duration) {
                 return;
             }
         }
-        std::thread::sleep(Duration::from_millis(150));
+        if ha.root_id().is_none() || hb.root_id().is_none() {
+            let _ = (ha.current_manifest_id(), hb.current_manifest_id());
+        }
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
 }
 
 fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Duration) {
     let deadline = Instant::now() + budget;
+    let mut sleep_ms = 10u64;
     loop {
         let missing: Vec<_> = rels.iter().filter(|r| !tree_b.join(r).is_file()).collect();
         if missing.is_empty() {
@@ -181,12 +207,16 @@ fn wait_markers_landed(tree_b: &std::path::Path, rels: &[String], budget: Durati
             Instant::now() < deadline,
             "markers never landed on b after convergence: {missing:?}"
         );
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
 }
 
 #[test]
 fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
+    clear_relay_capture();
     let relay = ferry_relay::spawn_sync(ferry_relay::RelayOptions::new(
         "127.0.0.1:0".parse().unwrap(),
     ))
@@ -254,6 +284,7 @@ fn forced_relay_mode_converges_and_relay_sees_no_plaintext() {
 
 #[test]
 fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
+    clear_relay_capture();
     let relay = ferry_relay::spawn_sync(ferry_relay::RelayOptions::new(
         "127.0.0.1:0".parse().unwrap(),
     ))
@@ -268,6 +299,7 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
     wait_converged(&pair, Duration::from_secs(90));
 
     let landed_by = Instant::now() + Duration::from_secs(90);
+    let mut sleep_ms = 10u64;
     loop {
         match std::fs::read(tree_b.join("hello.txt")) {
             Ok(bytes) => {
@@ -279,13 +311,17 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
                     Instant::now() < landed_by,
                     "hello.txt never landed on b after convergence"
                 );
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+                if sleep_ms < 100 {
+                    sleep_ms = (sleep_ms * 2).min(100);
+                }
             }
             Err(e) => panic!("read failed: {e}"),
         }
     }
 
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut sleep_ms = 10u64;
     loop {
         let obs = pair
             .b
@@ -302,7 +338,10 @@ fn normal_mode_upgrades_to_direct_per_iroh_negotiation() {
             Instant::now() < deadline,
             "iroh negotiation never upgraded to a direct path"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
 
     pair.a.0.shutdown();

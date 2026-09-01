@@ -533,3 +533,49 @@ async fn folder_engine_crash_recovery_and_backoff_escalation() {
 
     engine.shutdown();
 }
+
+#[tokio::test]
+async fn sync_discovered_routes_registers_authorized_remote_peers() {
+    let home = tmp_home();
+    let identity = DeviceIdentity::generate();
+    let peer_remote = DeviceIdentity::generate();
+
+    let dir = init_folder(&identity);
+    let config_path =
+        ferry_folder::folder::dot_dir(dir.path()).join(ferry_folder::folder::CONFIG_FILE);
+    let orig_bytes = std::fs::read(&config_path).expect("read config");
+    let mut head = ferry_crypto::config_head::parse_config_head(&orig_bytes).expect("parse config");
+    head.entries
+        .push(ferry_crypto::config_head::WrappedKeyEntry::new(
+            *peer_remote.public(),
+            [0u8; 80],
+        ));
+    let new_bytes = ferry_crypto::config_head::write_config_head(&head.folder_id, &head.entries);
+    std::fs::write(&config_path, new_bytes).expect("write config");
+
+    let mut sup = Supervisor::new(home.path().to_path_buf(), identity.clone());
+    let rec = sup
+        .handle_register(dir.path().to_path_buf())
+        .expect("register folder");
+    assert!(sup.wait_for_manifests(Duration::from_secs(5)));
+
+    let engine = sup.engines_map().get(&rec.folder_id).unwrap();
+    let policy = engine.peer_policy().expect("peer_policy");
+    assert_eq!(
+        policy.remote_peers(identity.public()),
+        vec![*peer_remote.public()]
+    );
+
+    let iroh_opt = sup.iroh_transport().cloned();
+    sup.tick();
+    if let Some(iroh) = iroh_opt {
+        assert!(
+            iroh.route_table()
+                .resolve_peer(peer_remote.public())
+                .is_some(),
+            "peer should be registered after tick syncs routes"
+        );
+    }
+
+    sup.shutdown();
+}

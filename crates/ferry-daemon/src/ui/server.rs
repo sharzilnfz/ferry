@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use ferry_ipc::backend::{UiBackend, UiEvent};
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use zeroize::Zeroizing;
 
 use super::backend::snapshot_to_status_doc;
 use super::error::ApiError;
@@ -245,14 +246,18 @@ async fn auth_and_activity_middleware(
 }
 
 #[must_use]
-pub fn generate_ascii_qr(payload: &str) -> String {
-    if let Ok(code) = qrcode::QrCode::new(payload.as_bytes()) {
-        code.render::<char>()
-            .quiet_zone(false)
-            .module_dimensions(2, 1)
-            .build()
+pub fn generate_ascii_qr(payload: &str) -> Zeroizing<String> {
+    let payload_bytes = Zeroizing::new(payload.as_bytes().to_vec());
+    if let Ok(code) = qrcode::QrCode::new(&payload_bytes[..]) {
+        Zeroizing::new(
+            code.render::<char>()
+                .quiet_zone(false)
+                .module_dimensions(2, 1)
+                .build(),
+        )
     } else {
-        format!("[QR: {payload}]")
+        // Fallback embeds payload; wrap in Zeroizing so the buffer is cleared on drop.
+        Zeroizing::new(format!("[QR: {payload}]"))
     }
 }
 
@@ -345,14 +350,15 @@ async fn api_share(
         .map(PathBuf::from);
     let i_know = body.get("i_know").and_then(Value::as_bool).unwrap_or(false);
     let offer = server.backend.share_initiate(folder, i_know).await?;
-    let qr_code = generate_ascii_qr(&offer.token);
+    let token_sec = Zeroizing::new(offer.token);
+    let qr_code_sec = generate_ascii_qr(&token_sec);
     Ok(Json(json!({
         "command": "share",
         "role": "initiate",
         "status": "pending",
         "folder": offer.folder,
-        "short_code": offer.token,
-        "qr_code": qr_code,
+        "short_code": &*token_sec,
+        "qr_code": &*qr_code_sec,
         "offer_file": offer.payload_path.map(|p| p.display().to_string()),
         "warnings": offer.secret_warnings,
     })))
@@ -374,12 +380,17 @@ async fn api_share_status(
         }
     }
     let st = server.backend.share_status(folder).await?;
-    let short_code = st.offer.as_ref().map(|o| o.token.clone());
+    // Wrap short_code in Zeroizing so intermediate heap buffer is cleared.
+    let short_code_sec = st.offer.as_ref().map(|o| Zeroizing::new(o.token.clone()));
+    let qr_code_sec = short_code_sec
+        .as_deref()
+        .map(|s| generate_ascii_qr(s.as_str()));
+    let short_code = short_code_sec.as_deref().cloned();
+    let qr_code = qr_code_sec.as_deref().cloned();
     let offer_file = st
         .offer
         .as_ref()
         .and_then(|o| o.payload_path.as_ref().map(|p| p.display().to_string()));
-    let qr_code = short_code.as_deref().map(generate_ascii_qr);
     let mut doc = json!({
         "command": "share",
         "role": "initiate",
@@ -421,17 +432,22 @@ async fn api_pair_accept(
         .and_then(Value::as_str)
         .map(PathBuf::from);
 
+    // Zeroize intermediate copy of the pairing code/payload.
+    let code_sec = Zeroizing::new(code_or_payload.to_string());
     let res = match server
         .backend
-        .pair_accept(code_or_payload.to_string(), dir.clone())
+        .pair_accept(code_sec.to_string(), dir.clone())
         .await
     {
         Ok(r) => r,
         Err(e) => {
             if let Some(target) = dir {
-                let req =
-                    ferry_ipc::pairing::JoinPairingRequest::new(code_or_payload.to_string(), target);
-                server.backend.join_pairing_session(req).await.map_err(|_| e)?
+                let req = ferry_ipc::pairing::JoinPairingRequest::new(code_sec.to_string(), target);
+                server
+                    .backend
+                    .join_pairing_session(req)
+                    .await
+                    .map_err(|_| e)?
             } else {
                 return Err(e.into());
             }
@@ -466,14 +482,15 @@ async fn api_pair_create(
         })?;
     let req = ferry_ipc::pairing::CreatePairingRequest::new(folder_id.to_string());
     let resp = server.backend.create_pairing_session(req).await?;
-    let qr_code = generate_ascii_qr(&resp.code);
+    let code_sec = Zeroizing::new(resp.code);
+    let qr_code_sec = generate_ascii_qr(&code_sec);
     Ok(Json(json!({
         "command": "pair",
         "role": "create",
         "status": "pending",
-        "code": resp.code,
-        "short_code": resp.code,
-        "qr_code": qr_code,
+        "code": &*code_sec,
+        "short_code": &*code_sec,
+        "qr_code": &*qr_code_sec,
         "expires_at": resp.expires_at,
     })))
 }
@@ -491,6 +508,7 @@ async fn api_pair_join(
             "pass the 6-character pairing code",
         )
     })?;
+    let code_sec = Zeroizing::new(code.to_string());
     let target_dir = body
         .get("target_dir")
         .or_else(|| body.get("targetDir"))
@@ -505,7 +523,7 @@ async fn api_pair_join(
                 "pass the directory to create the synced folder in",
             )
         })?;
-    let req = ferry_ipc::pairing::JoinPairingRequest::new(code.to_string(), target_dir);
+    let req = ferry_ipc::pairing::JoinPairingRequest::new(code_sec.to_string(), target_dir);
     let res = server.backend.join_pairing_session(req).await?;
     Ok(Json(json!({
         "command": "pair",
@@ -548,15 +566,16 @@ async fn api_pair_device(
     };
     let req = ferry_ipc::pairing::CreatePairingRequest::new(fid);
     let resp = server.backend.create_pairing_session(req).await?;
-    let qr_code = generate_ascii_qr(&resp.code);
+    let code_sec = Zeroizing::new(resp.code);
+    let qr_code_sec = generate_ascii_qr(&code_sec);
     Ok(Json(json!({
         "command": "pair",
         "role": "device",
         "status": "pending",
         "target_device_id": device_id,
-        "code": resp.code,
-        "short_code": resp.code,
-        "qr_code": qr_code,
+        "code": &*code_sec,
+        "short_code": &*code_sec,
+        "qr_code": &*qr_code_sec,
         "expires_at": resp.expires_at,
         "message": format!("Pairing handshake initiated with device {device_id}"),
     })))

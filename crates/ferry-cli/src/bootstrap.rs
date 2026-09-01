@@ -141,8 +141,8 @@ where
 }
 
 pub fn ensure_daemon_running() -> Result<PathBuf, BootstrapError> {
-    let home = crate::home::ferry_home()
-        .map_err(|e| BootstrapError::new("no-home", e.message, e.hint))?;
+    let home =
+        crate::home::ferry_home().map_err(|e| BootstrapError::new("no-home", e.message, e.hint))?;
     ensure_daemon(&home)
 }
 

@@ -1,6 +1,6 @@
 # ADR-0001: Sync stores and manifests, not trees
 
-Status: proposed (2026-08-23)
+Status: accepted (2026-08-23)
 
 ## Context
 
@@ -17,6 +17,15 @@ hash, plus manifests describing directory snapshots. The network layer
 exchanges manifests first, then only missing blobs. Each machine materializes
 its own tree from local store contents. Trees are never synced; they are
 projections.
+
+## Amendment (2026-08-31): Manifest Agreement Ledger & Pack Storage
+
+The store architecture tracks the last agreed manifest per paired peer via an
+`AgreementLedger`. Instead of ad-hoc two-way sync, exchanges execute a
+three-way reconciliation between local, remote, and the agreed baseline
+manifest. Blobs are grouped and stored into encrypted pack files (`.pack`)
+with indexed byte offsets, decoupling high-throughput storage I/O from
+individual chunk metadata transactions.
 
 ## Consequences
 

@@ -502,9 +502,7 @@ impl StatusDomain for DaemonClient {
         Box::pin(async move { self.event_stream().await })
     }
 
-    fn list_discovered_devices(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+    fn list_discovered_devices(&self) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
         Box::pin(async move {
             let snap = self.get_status().await?;
             Ok(snap.discovered_devices)

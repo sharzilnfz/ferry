@@ -107,6 +107,7 @@ pub struct ConvergenceResult {
     pub held: Vec<HeldPath>,
 
     pub agreed_manifest_id: Option<BlobId>,
+    pub has_local_wins: bool,
 }
 
 impl ConvergenceResult {
@@ -198,43 +199,42 @@ impl<'a> ConvergenceEngine<'a> {
                 let rec = PinStore::new(state_dir).load()?;
                 if let Some(rec) = rec {
                     if rec.holding() {
-                        let gate: Box<dyn Fn(&[String]) -> bool> =
-                            if rec.paths.iter().any(|p| p == "*") {
-                                Box::new(|_: &[String]| true)
-                            } else {
-                                let mut builder = ignore::gitignore::GitignoreBuilder::new("");
-                                for line in &rec.paths {
-                                    builder.add_line(None, line).map_err(|e| {
-                                        crate::pin_error::PinError::BadPattern {
-                                            line: line.clone(),
-                                            reason: e.to_string(),
-                                        }
-                                    })?;
-                                }
-                                let gi = builder.build().map_err(|e| {
+                        let gate: HoldGate<'_> = if rec.paths.iter().any(|p| p == "*") {
+                            Box::new(|_: &[String]| true)
+                        } else {
+                            let mut builder = ignore::gitignore::GitignoreBuilder::new("");
+                            for line in &rec.paths {
+                                builder.add_line(None, line).map_err(|e| {
                                     crate::pin_error::PinError::BadPattern {
-                                        line: rec.paths.join(", "),
+                                        line: line.clone(),
                                         reason: e.to_string(),
                                     }
                                 })?;
-                                let patterns = rec.paths.clone();
-                                Box::new(move |rel: &[String]| {
-                                    if matches!(
-                                        gi.matched_path_or_any_parents(
-                                            std::path::Path::new(&rel.join("/")),
-                                            false
-                                        ),
-                                        ignore::Match::Ignore(_)
-                                    ) {
-                                        return true;
-                                    }
-                                    let joined = rel.join("/");
-                                    patterns.iter().any(|pat| {
-                                        let clean_pat = pat.trim_start_matches('/');
-                                        clean_pat.starts_with(&format!("{joined}/"))
-                                    })
+                            }
+                            let gi = builder.build().map_err(|e| {
+                                crate::pin_error::PinError::BadPattern {
+                                    line: rec.paths.join(", "),
+                                    reason: e.to_string(),
+                                }
+                            })?;
+                            let patterns = rec.paths.clone();
+                            Box::new(move |rel: &[String]| {
+                                if matches!(
+                                    gi.matched_path_or_any_parents(
+                                        std::path::Path::new(&rel.join("/")),
+                                        false
+                                    ),
+                                    ignore::Match::Ignore(_)
+                                ) {
+                                    return true;
+                                }
+                                let joined = rel.join("/");
+                                patterns.iter().any(|pat| {
+                                    let clean_pat = pat.trim_start_matches('/');
+                                    clean_pat.starts_with(&format!("{joined}/"))
                                 })
-                            };
+                            })
+                        };
                         gate_plan(plan, gate.as_ref())?
                     } else {
                         (plan, Vec::new())
@@ -406,7 +406,11 @@ impl<'a> ConvergenceEngine<'a> {
         }
 
         let mut agreed_manifest_id = None;
-        if plan.conflicts.is_empty() && held.is_empty() && plan.send.is_empty() {
+        if plan.conflicts.is_empty()
+            && held.is_empty()
+            && plan.send.is_empty()
+            && !plan.has_local_wins
+        {
             let bytes = serialize_manifest(remote);
             let id = self.store.put_meta(BlobKind::Manifest, &bytes)?;
             AgreementLedger::new(self.store.store_dir()).record(
@@ -428,6 +432,7 @@ impl<'a> ConvergenceEngine<'a> {
             send: plan.send,
             held,
             agreed_manifest_id,
+            has_local_wins: plan.has_local_wins,
         })
     }
 }
@@ -588,6 +593,7 @@ fn gate_plan(
             .filter(|(_, h)| !**h)
             .map(|(c, _)| c.clone())
             .collect(),
+        has_local_wins: plan.has_local_wins,
     };
 
     Ok((apply, held))

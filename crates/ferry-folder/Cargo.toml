@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ferry-rendezvous = { path = "../ferry-rendezvous" }
 ferry-store = { path = "../ferry-store" }
 ferry-crypto = { path = "../ferry-crypto" }
 ferry-ignore = { path = "../ferry-ignore" }

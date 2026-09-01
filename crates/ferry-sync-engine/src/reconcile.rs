@@ -103,6 +103,7 @@ pub(crate) struct ActionPlan {
 
     pub(crate) fetch: Vec<(BlobId, u64)>,
     pub(crate) conflicts: Vec<PlannedConflict>,
+    pub(crate) has_local_wins: bool,
 }
 
 pub(crate) struct ReconcileInput<'a> {
@@ -592,12 +593,24 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
 
     conflicts.sort_by(|a, b| a.path.cmp(&b.path));
 
+    let has_local_wins = decided.iter().any(|(_, d, _, _)| {
+        matches!(
+            d,
+            Decision::KeepLocal
+                | Decision::Conflict {
+                    winner: Side::Local,
+                    ..
+                }
+        )
+    });
+
     Ok(ActionPlan {
         materialize,
         quarantine,
         send: send.into_iter().collect(),
         fetch: fetch.into_iter().collect(),
         conflicts,
+        has_local_wins,
     })
 }
 

@@ -9,8 +9,6 @@ const $$ = (sel) => document.querySelectorAll(sel);
 let currentState = "synced";
 let lastStatus = null;
 let lastManifestId = null;
-let soundEnabled = true;
-let audioCtx = null;
 
 let sse = null;
 let sseErrors = 0;
@@ -46,58 +44,6 @@ function friendlyTime(iso) {
   }
 }
 
-// ---- Micro-Haptic Audio Synthesizer (Issue 04) -----------------------------
-function playHapticFeedback(type = "tick") {
-  if (!soundEnabled) return;
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return;
-    if (!audioCtx) audioCtx = new AudioContextClass();
-    if (audioCtx.state === "suspended") audioCtx.resume();
-
-    const now = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-
-    if (type === "tick") {
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.exponentialRampToValueAtTime(240, now + 0.01);
-      gain.gain.setValueAtTime(0.035, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.01);
-      osc.start(now);
-      osc.stop(now + 0.012);
-    } else if (type === "snap") {
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(1100, now);
-      osc.frequency.exponentialRampToValueAtTime(320, now + 0.018);
-      gain.gain.setValueAtTime(0.05, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.018);
-      osc.start(now);
-      osc.stop(now + 0.02);
-    } else if (type === "success") {
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(560, now);
-      osc.frequency.exponentialRampToValueAtTime(1120, now + 0.035);
-      gain.gain.setValueAtTime(0.04, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
-      osc.start(now);
-      osc.stop(now + 0.04);
-    } else if (type === "alert") {
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(360, now);
-      osc.frequency.exponentialRampToValueAtTime(180, now + 0.08);
-      gain.gain.setValueAtTime(0.05, now);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
-      osc.start(now);
-      osc.stop(now + 0.09);
-    }
-  } catch {
-    // Graceful fallback for audio limitations
-  }
-}
 
 // ---- Authentication & Session Management (Issue 02) -----------------------
 function getToken() {
@@ -473,7 +419,6 @@ function renderStatus(s) {
   // Check manifest update
   if (lastManifestId && s.manifest_id && lastManifestId !== s.manifest_id) {
     addActivity("Manifest updated: changes synchronized");
-    playHapticFeedback("tick");
   }
   lastManifestId = s.manifest_id;
 
@@ -609,7 +554,6 @@ function startEvents() {
 
 // ---- Actions: Instant Sync (Issue 03) --------------------------------------
 async function doSync() {
-  playHapticFeedback("tick");
   const syncTrack = $("sync-track");
   if (syncTrack) syncTrack.classList.add("visible");
   addActivity("Sync Triggered");
@@ -617,11 +561,9 @@ async function doSync() {
   try {
     await loadStatus();
     await loadConflicts();
-    playHapticFeedback("success");
     addActivity("Sync Completed");
   } catch (err) {
     if (err && err.code === "forbidden") return;
-    playHapticFeedback("alert");
     addActivity("Sync Failed: " + (err.error || err.code || "Network error"));
   } finally {
     setTimeout(() => {
@@ -646,20 +588,16 @@ async function doPin(action) {
     }
 
     if (action === "start") {
-      playHapticFeedback("snap");
       addActivity("Work Protection Activated");
     } else if (action === "stop") {
-      playHapticFeedback("success");
       addActivity("Work Protection Stopped");
     } else {
-      playHapticFeedback("success");
       addActivity("Held Edits Released & Merged");
     }
     await loadStatus();
     await loadConflicts();
   } catch (err) {
     if (err && err.code === "forbidden") return;
-    playHapticFeedback("alert");
     addActivity("Pin Error: " + (err.error || err.code || "Unknown error"));
   }
 }
@@ -684,7 +622,6 @@ function stopSharePolling() {
 }
 
 function openPairModal() {
-  playHapticFeedback("tick");
   const modal = $("pair-modal");
   if (!modal) return;
   modal.classList.add("open");
@@ -692,7 +629,6 @@ function openPairModal() {
 }
 
 function closePairModal() {
-  playHapticFeedback("tick");
   const modal = $("pair-modal");
   if (!modal) return;
   modal.classList.remove("open");
@@ -702,7 +638,6 @@ function closePairModal() {
 
 async function doCreateOffer(iKnow = false) {
   stopSharePolling();
-  playHapticFeedback("snap");
 
   const warnEl = $("share-warn");
   const resEl = $("share-result");
@@ -740,7 +675,6 @@ async function doCreateOffer(iKnow = false) {
       resEl.style.display = "block";
       resEl.textContent = `Pairing code generated: ${code || "Active"}. Waiting for peer.`;
     }
-    playHapticFeedback("success");
     addActivity("Pairing Code Created: " + (code || "Active"));
 
     // Poll share status until connected
@@ -755,7 +689,6 @@ async function doCreateOffer(iKnow = false) {
           if (statusText) {
             statusText.textContent = "Pairing completed! Peer device connected.";
           }
-          playHapticFeedback("success");
           addActivity("Pairing Completed: Connected Peer");
           loadStatus();
         }
@@ -770,14 +703,12 @@ async function doCreateOffer(iKnow = false) {
         warnEl.textContent = err.error || "Sensitive secrets detected in folder.";
       }
       if (anywayBtn) anywayBtn.style.display = "block";
-      playHapticFeedback("alert");
       addActivity("Pairing Blocked: Secrets Detected");
     } else {
       if (warnEl) {
         warnEl.style.display = "block";
         warnEl.textContent = err.error || "Failed to create pairing token.";
       }
-      playHapticFeedback("alert");
       addActivity("Pairing Offer Failed: " + (err.error || err.code));
     }
   }
@@ -786,7 +717,6 @@ async function doCreateOffer(iKnow = false) {
 async function pairDiscoveredDevice(devId) {
   openPairModal();
   stopSharePolling();
-  playHapticFeedback("snap");
   addActivity("Initiating Pairing with " + shortDevice(devId) + "…");
 
   const warnEl = $("share-warn");
@@ -810,7 +740,6 @@ async function pairDiscoveredDevice(devId) {
       resEl.style.display = "block";
       resEl.textContent = `Pairing code generated (${code}). Waiting for peer handshake.`;
     }
-    playHapticFeedback("success");
     addActivity("Pairing Offer Created for " + shortDevice(devId));
 
     sharePollTimer = setInterval(async () => {
@@ -820,7 +749,6 @@ async function pairDiscoveredDevice(devId) {
           stopSharePolling();
           if (statusText) statusText.textContent = "Pairing completed! Peer device connected.";
           if (resEl) resEl.textContent = "Pairing completed! Peer device connected.";
-          playHapticFeedback("success");
           addActivity("Pairing Completed with " + shortDevice(devId));
           loadStatus();
         }
@@ -833,7 +761,6 @@ async function pairDiscoveredDevice(devId) {
       warnEl.style.display = "block";
       warnEl.textContent = err.error || "Failed to initiate pairing with device.";
     }
-    playHapticFeedback("alert");
     addActivity("Pairing Failed: " + (err.error || err.code));
   }
 }
@@ -850,7 +777,6 @@ async function copyToken() {
   const btn = $("btn-copy-token");
   if (btn) {
     btn.textContent = "Copied!";
-    playHapticFeedback("success");
     setTimeout(() => {
       btn.textContent = "Copy";
     }, 1500);
@@ -858,7 +784,6 @@ async function copyToken() {
 }
 
 async function doAcceptPair() {
-  playHapticFeedback("snap");
   const input = $("accept-input");
   const destInput = $("join-dest-input");
   const val = input ? input.value.trim() : "";
@@ -874,7 +799,6 @@ async function doAcceptPair() {
       errEl.style.display = "block";
       errEl.textContent = "Please enter a 6-character pairing code or offer file path.";
     }
-    playHapticFeedback("alert");
     return;
   }
 
@@ -893,7 +817,6 @@ async function doAcceptPair() {
     }
     if (input) input.value = "";
     if (destInput) destInput.value = "";
-    playHapticFeedback("success");
     addActivity("Folder Joined: " + (doc.folder || "folder"));
     await loadStatus();
     setTimeout(() => {
@@ -904,7 +827,6 @@ async function doAcceptPair() {
       errEl.style.display = "block";
       errEl.textContent = err.error || "Failed to join remote folder.";
     }
-    playHapticFeedback("alert");
     addActivity("Pair Join Failed: " + (err.error || err.code));
   }
 }
@@ -1000,7 +922,6 @@ function presetPath(name) {
 }
 
 async function handlePresetClick(name) {
-  playHapticFeedback("tick");
   const p = presetPath(name);
   if (p === null) {
     await loadPickerPath(null);
@@ -1046,7 +967,6 @@ function scheduleAutocomplete() {
 }
 
 function openFolderPicker() {
-  playHapticFeedback("tick");
   const modal = $("folder-picker-modal");
   if (!modal) return;
   modal.classList.add("open");
@@ -1061,7 +981,6 @@ function openFolderPicker() {
 }
 
 function closeFolderPicker() {
-  playHapticFeedback("tick");
   const modal = $("folder-picker-modal");
   if (!modal) return;
   modal.classList.remove("open");
@@ -1082,7 +1001,6 @@ async function doRegisterFolder(force) {
     if (warn) warn.style.display = "none";
     closeFolderPicker();
     addActivity("Folder registered: " + raw);
-    playHapticFeedback("success");
     await loadStatus();
     return doc;
   } catch (err) {
@@ -1092,7 +1010,6 @@ async function doRegisterFolder(force) {
         warn.textContent = (err.error || "Not an initialized Ferry folder") +
           " — " + (err.hint || "run `ferry init` or `ferry pair` first");
       }
-      playHapticFeedback("alert");
       addActivity("Folder register blocked: not initialized");
       return;
     }
@@ -1104,7 +1021,6 @@ async function doRegisterFolder(force) {
         const btn = warn.querySelector("#picker-share-anyway");
         if (btn) btn.addEventListener("click", () => doRegisterFolder(true));
       }
-      playHapticFeedback("alert");
       addActivity("Folder register blocked: secrets found");
       return;
     }
@@ -1112,7 +1028,6 @@ async function doRegisterFolder(force) {
       warn.style.display = "block";
       warn.textContent = (err && err.error) ? err.error : "Failed to register folder";
     }
-    playHapticFeedback("alert");
   }
 }
 
@@ -1134,14 +1049,9 @@ function initTheme() {
   const savedTheme = localStorage.getItem("ferry_theme") || "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
   updateThemeIcons(savedTheme);
-
-  const savedSound = localStorage.getItem("ferry_sound");
-  soundEnabled = savedSound !== "false";
-  updateSoundIcons();
 }
 
 function toggleTheme() {
-  playHapticFeedback("tick");
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", next);
@@ -1150,35 +1060,11 @@ function toggleTheme() {
   addActivity(`Theme switched to ${next} mode`);
 }
 
-function updateSoundIcons() {
-  const onIcon = $("icon-sound-on");
-  const offIcon = $("icon-sound-off");
-  if (!onIcon || !offIcon) return;
-  if (soundEnabled) {
-    onIcon.style.display = "block";
-    offIcon.style.display = "none";
-  } else {
-    onIcon.style.display = "none";
-    offIcon.style.display = "block";
-  }
-}
-
-function toggleSound() {
-  soundEnabled = !soundEnabled;
-  localStorage.setItem("ferry_sound", soundEnabled ? "true" : "false");
-  updateSoundIcons();
-  if (soundEnabled) playHapticFeedback("success");
-  addActivity(soundEnabled ? "Micro-Haptics Enabled" : "Micro-Haptics Muted");
-}
-
 // ---- Event Listeners & Initialization -------------------------------------
 function setupEventListeners() {
-  // Theme & Audio Controls
+  // Theme Controls
   const btnTheme = $("btn-theme");
   if (btnTheme) btnTheme.addEventListener("click", toggleTheme);
-
-  const btnSound = $("btn-sound");
-  if (btnSound) btnSound.addEventListener("click", toggleSound);
 
   // Actions
   const btnSync = $("btn-sync");
@@ -1220,7 +1106,6 @@ function setupEventListeners() {
   const btnClear = $("btn-clear");
   if (btnClear) {
     btnClear.addEventListener("click", () => {
-      playHapticFeedback("tick");
       const feed = $("activity-feed");
       if (feed) feed.innerHTML = "";
     });
@@ -1240,7 +1125,6 @@ function setupEventListeners() {
         const ok = await loadStatus();
         if (ok) {
           hideTokenModal();
-          playHapticFeedback("success");
           addActivity("Session Authenticated");
           startEvents();
           loadConflicts();
@@ -1250,7 +1134,6 @@ function setupEventListeners() {
             err.style.display = "block";
             err.textContent = "Invalid token. Please re-enter.";
           }
-          playHapticFeedback("alert");
         }
       } catch {
         const err = $("token-error");
@@ -1258,7 +1141,6 @@ function setupEventListeners() {
           err.style.display = "block";
           err.textContent = "Invalid token. Access denied.";
         }
-        playHapticFeedback("alert");
       }
     });
   }

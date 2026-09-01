@@ -178,16 +178,15 @@ fn status_command_shows_the_held_set_too() {
 }
 
 #[test]
-fn pin_start_fails_when_daemon_not_running() {
+fn pin_start_autostarts_daemon_when_not_running() {
     let env = Env::new("pin-no-daemon");
     let proj = env.work().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     commands::init::run(&proj).unwrap();
 
-    let err = commands::pin::start(&proj, &[], 8).unwrap_err();
-    assert_eq!(err.code, "daemon-not-running");
-    assert!(err.message.contains("no active background daemon"));
-    assert!(err.hint.contains("ferry daemon"));
+    let out = commands::pin::start(&proj, &[], 8).unwrap();
+    assert_eq!(out.json["action"], "start");
+    assert_eq!(out.json["command"], "pin");
 }
 
 fn write_file_with_mtime(path: &std::path::Path, bytes: &[u8], mtime_sec: u64) {
@@ -233,7 +232,7 @@ fn transfer_snapshot(
                         }
                     }
                 }
-                _ => {}
+                ferry_store::manifest::EntryPayload::Symlink { .. } => {}
             }
         }
     }

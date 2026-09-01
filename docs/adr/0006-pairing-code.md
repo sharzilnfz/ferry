@@ -28,6 +28,10 @@ Rejected 6-word wordlist: more user-friendly for dictation but requires vendorin
 
 The deep-architecture consolidation moved the code mechanics out of the public `ferry-crypto::pairing_code` module into the unified `PairingRitual` (`ferry-folder::pairing`, private to the ritual). Every guarantee above is unchanged — same format, same CRC32 checksum, same constant-time verification (`subtle::ct_eq`), same 24h expiry, same zeroization — but the ritual is now the only way to mint or answer a code: there is no parallel public code workflow callers could use instead of `create_offer` / `accept_offer`. On the accept path, alphabet + checksum verification runs before the rendezvous lookup; final equality is enforced by the lookup's exact match. ferry-crypto keeps the raw primitives (base32 alphabet, CRC-32) only.
 
+## Amendment (2026-09-01): Network Rendezvous Discovery & Mutual CONFIG_HEAD Commit
+
+The pairing workflow integrates with transport-level network rendezvous (UDP broadcast/multicast and P2P rendezvous topics derived from the 6-character code). Upon completion of the key exchange over the network, both the sharer and joiner atomically wrap the Folder Master Key for each other's device public key and commit the updated allow-list into `CONFIG_HEAD`, allowing subsequent background sync sessions to authorize without manual intervention.
+
 ## Consequences
 
 - No wordlist asset, no extra dependency.

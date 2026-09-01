@@ -17,6 +17,7 @@ tokio-stream = { workspace = true }
 test-util = []
 
 [dev-dependencies]
+ferry-ipc = { path = ".", features = ["test-util"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "io-util"] }
 toml = "0.8"

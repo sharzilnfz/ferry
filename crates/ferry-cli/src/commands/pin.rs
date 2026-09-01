@@ -80,8 +80,8 @@ pub fn start(folder: &Path, paths: &[String], hours: u64) -> CliResult<Output> {
         _ => {
             let pin_mgr = PinManager::new(&state_dir);
             let mut base_agreements = std::collections::BTreeMap::new();
-            if let Ok(records) =
-                ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&opened.folder_id)
+            if let Ok(records) = ferry_store::agreement::AgreementLedger::new(&state_dir)
+                .list_folder(&opened.folder_id)
             {
                 for (dev, rec) in records {
                     base_agreements.insert(

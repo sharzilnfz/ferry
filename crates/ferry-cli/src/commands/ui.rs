@@ -341,7 +341,17 @@ fn run_web_mode(
 pub fn read_web_session(session_file: &Path) -> Option<WebSession> {
     let content = std::fs::read_to_string(session_file).ok()?;
     let session: WebSession = serde_json::from_str(&content).ok()?;
-    let is_alive = ferry_platform::read_pid(&session_file.parent().unwrap_or(session_file))
+    let folder_root = session_file
+        .parent()
+        .and_then(|p| {
+            if p.file_name().and_then(|n| n.to_str()) == Some(".ferry") {
+                p.parent()
+            } else {
+                Some(p)
+            }
+        })
+        .unwrap_or_else(|| session_file.parent().unwrap_or(session_file));
+    let is_alive = ferry_platform::read_pid(folder_root)
         .map(|r| r.pid == session.pid)
         .unwrap_or(false)
         || is_pid_alive(session.pid);

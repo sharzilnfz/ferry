@@ -7,7 +7,8 @@ pub mod ui;
 
 pub use folder_engine::FolderEngine;
 pub use ipc::{
-    dispatch_client_command, handle_client_connection, spawn_ipc_server, IpcServerHandle,
+    dispatch_client_command, dispatch_common_command, dispatch_supervisor_command,
+    handle_client_connection, spawn_ipc_server, IpcServerHandle,
 };
 pub use state::DaemonState;
 pub use supervisor::{FolderId, Supervisor};

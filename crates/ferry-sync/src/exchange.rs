@@ -420,7 +420,8 @@ impl<H: ExchangeHost> Exchange<'_, '_, H> {
 
         let diverged = !result.quarantined.is_empty()
             || !result.conflicts.is_empty()
-            || !result.send.is_empty();
+            || !result.send.is_empty()
+            || result.has_local_wins;
 
         Ok(PullOutcome {
             held: held_count,

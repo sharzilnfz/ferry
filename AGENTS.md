@@ -31,6 +31,6 @@ as project `ferry-sync` and refresh after landing code. See
 2. `SPEC.md` — scope, milestones, risks
 3. `CONTEXT.md` — vocabulary
 4. `PRODUCT.md` — durable product truth for design work (impeccable reads it)
-5. `docs/adr/0001` through `0005` — settled decisions
+5. `docs/adr/0001` through `0008` — settled decisions
 6. `research/use-cases.md`, `research/landscape.md` — cited evidence
 7. `.scratch/v1/issues/` — tickets, blockers first

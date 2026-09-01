@@ -66,8 +66,11 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
     fs::write(tree_a.join("file.swp"), b"swap content\n").unwrap();
     fs::write(tree_a.join("backup~"), b"backup content\n").unwrap();
 
+    fx.a.trigger_scan();
     let tree_b = fx.tree_b();
     let deadline = std::time::Instant::now() + timeout;
+    let mut sleep_ms = 10u64;
+    let mut ticks = 0u32;
     let agreed = loop {
         assert!(
             std::time::Instant::now() < deadline,
@@ -83,7 +86,14 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
                 break a;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if ticks.is_multiple_of(5) {
+            fx.a.trigger_scan();
+        }
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
+        ticks += 1;
     };
 
     assert_eq!(
@@ -159,7 +169,10 @@ fn custom_ferry_ignore_rules_are_respected() {
     fs::write(tree_a.join("secrets/key.pem"), b"private key\n").unwrap();
 
     let tree_b = fx.tree_b();
+    fx.a.trigger_scan();
     let deadline = std::time::Instant::now() + timeout;
+    let mut sleep_ms = 10u64;
+    let mut ticks = 0u32;
     let _agreed = loop {
         assert!(
             std::time::Instant::now() < deadline,
@@ -174,7 +187,14 @@ fn custom_ferry_ignore_rules_are_respected() {
                 break a;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if ticks.is_multiple_of(5) {
+            fx.a.trigger_scan();
+        }
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
+        ticks += 1;
     };
 
     assert!(tree_b.join("README.md").is_file());
@@ -214,7 +234,10 @@ fn settings_presets_and_overrides_are_respected() {
     fs::write(tree_a.join("temp.cache"), b"cached data\n").unwrap();
 
     let tree_b = fx.tree_b();
+    fx.a.trigger_scan();
     let deadline = std::time::Instant::now() + timeout;
+    let mut sleep_ms = 10u64;
+    let mut ticks = 0u32;
     let _agreed = loop {
         assert!(
             std::time::Instant::now() < deadline,
@@ -230,7 +253,14 @@ fn settings_presets_and_overrides_are_respected() {
                 break a;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if ticks.is_multiple_of(5) {
+            fx.a.trigger_scan();
+        }
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
+        ticks += 1;
     };
 
     assert!(tree_b.join("CLAUDE.md").is_file());
@@ -262,7 +292,10 @@ fn quarantine_files_are_never_ignored() {
     fs::write(tree_a.join(quarantine_name), b"quarantined content\n").unwrap();
 
     let tree_b = fx.tree_b();
+    fx.a.trigger_scan();
     let deadline = std::time::Instant::now() + timeout;
+    let mut sleep_ms = 10u64;
+    let mut ticks = 0u32;
     let _agreed = loop {
         assert!(
             std::time::Instant::now() < deadline,
@@ -277,7 +310,14 @@ fn quarantine_files_are_never_ignored() {
                 break a;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if ticks.is_multiple_of(5) {
+            fx.a.trigger_scan();
+        }
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
+        ticks += 1;
     };
 
     assert!(

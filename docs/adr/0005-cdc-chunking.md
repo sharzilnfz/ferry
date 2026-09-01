@@ -1,6 +1,6 @@
 # ADR-0005: Content-defined chunking, with chunk-size leakage mitigated
 
-Status: proposed (2026-08-23)
+Status: accepted (2026-08-23)
 
 ## Context
 
@@ -18,6 +18,14 @@ schemes in Borg, restic, bupstash and others via chunk-length fingerprinting.
   files with randomized membership (restic 0.18's mitigation direction).
 - Benchmark fixed-vs-CDC on real dev directories before locking constants;
   revisit if a provably secure KCDC construction becomes practical.
+
+## Amendment (2026-08-30): FastCDC Parameters & Pack Pooling
+
+The implementation locks standard FastCDC parameters (minimum chunk 64 KiB,
+average/target chunk 1 MiB, maximum chunk 8 MiB) using gear-based rolling
+hashing. Pack files are encrypted with ChaCha20-Poly1305 and indexed by byte
+offset headers, achieving leak-resistant chunk deduplication without sacrificing
+high-speed tree scanning and streaming hydration.
 
 ## Consequences
 
