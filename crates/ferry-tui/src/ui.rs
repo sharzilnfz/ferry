@@ -53,15 +53,7 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let (badge_text, badge_style) = if !state.is_connected {
-        (
-            "DISCONNECTED",
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
+    let (badge_text, badge_style) = if state.is_connected {
         (
             state.engine_state.badge_text(),
             match state.engine_state {
@@ -94,6 +86,14 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect) {
                     .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD),
             },
+        )
+    } else {
+        (
+            "DISCONNECTED",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
         )
     };
 

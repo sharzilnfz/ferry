@@ -181,4 +181,3 @@ fn is_disconnect_message(msg: &str) -> bool {
         || lower.contains("unreachable")
         || lower.contains("offline")
 }
-

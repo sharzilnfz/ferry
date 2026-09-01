@@ -9,6 +9,7 @@ use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingReq
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum DaemonMessage {
     Snapshot(EngineSnapshot),
 

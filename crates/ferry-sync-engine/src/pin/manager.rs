@@ -342,6 +342,26 @@ impl PinManager {
     }
 }
 
+fn validate_pin_patterns(patterns: &[String]) -> Result<(), PinError> {
+    if patterns.iter().any(|p| p == "*") {
+        return Ok(());
+    }
+    let mut builder = ignore::gitignore::GitignoreBuilder::new("");
+    for line in patterns {
+        builder
+            .add_line(None, line)
+            .map_err(|e| PinError::BadPattern {
+                line: line.clone(),
+                reason: e.to_string(),
+            })?;
+    }
+    builder.build().map_err(|e| PinError::BadPattern {
+        line: patterns.join(", "),
+        reason: e.to_string(),
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,24 +508,4 @@ mod tests {
         assert_eq!(rec.expires_sec, Some(rec.started_sec + 3600));
         assert!(mgr.is_holding().unwrap());
     }
-}
-
-fn validate_pin_patterns(patterns: &[String]) -> Result<(), PinError> {
-    if patterns.iter().any(|p| p == "*") {
-        return Ok(());
-    }
-    let mut builder = ignore::gitignore::GitignoreBuilder::new("");
-    for line in patterns {
-        builder
-            .add_line(None, line)
-            .map_err(|e| PinError::BadPattern {
-                line: line.clone(),
-                reason: e.to_string(),
-            })?;
-    }
-    builder.build().map_err(|e| PinError::BadPattern {
-        line: patterns.join(", "),
-        reason: e.to_string(),
-    })?;
-    Ok(())
 }

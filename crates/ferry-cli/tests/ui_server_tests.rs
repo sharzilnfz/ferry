@@ -207,11 +207,8 @@ async fn test_token_auth_enforcement_and_static_assets() {
     let mut buf = vec![0u8; 1024];
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
-        if let Ok(Ok(n)) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            sse_stream.read(&mut buf),
-        )
-        .await
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), sse_stream.read(&mut buf)).await
         {
             if n == 0 {
                 break;

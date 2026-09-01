@@ -105,12 +105,10 @@ fn test_fleet_table_rendering() {
     let peer3 = PeerStatusView::new("99999999999999999999999999999999", "offline");
 
     let peers = vec![peer1, peer2, peer3];
-    let discovered = vec![
-        ferry_ipc::protocol::DiscoveredDeviceView::new(
-            "disc-1234567890abcdef",
-            Some("192.168.1.100:9000".to_string()),
-        ),
-    ];
+    let discovered = vec![ferry_ipc::protocol::DiscoveredDeviceView::new(
+        "disc-1234567890abcdef",
+        Some("192.168.1.100:9000".to_string()),
+    )];
     let mut pair_clicked = false;
     let mut share_clicked = false;
     let mut paired_disc_id = None;
@@ -229,7 +227,13 @@ fn test_modals_render() {
     let mut pair_code = "7K9-PX2".to_string();
     let mut pair_dest = "/tmp/joined-folder".to_string();
     let _ = ctx.run(RawInput::default(), |ctx| {
-        render_pair_modal(ctx, &mut show_pair, &mut pair_code, &mut pair_dest, |_, _| {});
+        render_pair_modal(
+            ctx,
+            &mut show_pair,
+            &mut pair_code,
+            &mut pair_dest,
+            |_, _| {},
+        );
     });
 
     let mut show_pin = true;

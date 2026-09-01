@@ -120,7 +120,8 @@ impl TuiState {
 
     #[must_use]
     pub fn is_pin_active(&self) -> bool {
-        if (self.pin.state.eq_ignore_ascii_case("none") || self.pin.state.eq_ignore_ascii_case("released"))
+        if (self.pin.state.eq_ignore_ascii_case("none")
+            || self.pin.state.eq_ignore_ascii_case("released"))
             && !self.pin.holding
             && !self.raw_state_str.eq_ignore_ascii_case("pinned")
         {
@@ -209,15 +210,11 @@ impl TuiState {
                 } else {
                     self.pin.state.clone()
                 };
-                self.activity_log.push_info(
-                    current_time_str(),
-                    format!("Pin started: {status}"),
-                );
+                self.activity_log
+                    .push_info(current_time_str(), format!("Pin started: {status}"));
             } else {
-                self.activity_log.push_info(
-                    current_time_str(),
-                    "Pin released: released",
-                );
+                self.activity_log
+                    .push_info(current_time_str(), "Pin released: released");
             }
         }
     }

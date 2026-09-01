@@ -432,9 +432,15 @@ async fn api_pair_accept(
         Ok(r) => r,
         Err(e) => {
             if let Some(target) = dir {
-                let req =
-                    ferry_ipc::pairing::JoinPairingRequest::new(code_or_payload.to_string(), target);
-                server.backend.join_pairing_session(req).await.map_err(|_| e)?
+                let req = ferry_ipc::pairing::JoinPairingRequest::new(
+                    code_or_payload.to_string(),
+                    target,
+                );
+                server
+                    .backend
+                    .join_pairing_session(req)
+                    .await
+                    .map_err(|_| e)?
             } else {
                 return Err(e.into());
             }

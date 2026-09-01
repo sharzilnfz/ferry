@@ -86,7 +86,7 @@ fn default_ignore_patterns_are_excluded_from_manifests_and_wire() {
                 break a;
             }
         }
-        if ticks % 5 == 0 {
+        if ticks.is_multiple_of(5) {
             fx.a.trigger_scan();
         }
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -187,7 +187,7 @@ fn custom_ferry_ignore_rules_are_respected() {
                 break a;
             }
         }
-        if ticks % 5 == 0 {
+        if ticks.is_multiple_of(5) {
             fx.a.trigger_scan();
         }
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -253,7 +253,7 @@ fn settings_presets_and_overrides_are_respected() {
                 break a;
             }
         }
-        if ticks % 5 == 0 {
+        if ticks.is_multiple_of(5) {
             fx.a.trigger_scan();
         }
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -310,7 +310,7 @@ fn quarantine_files_are_never_ignored() {
                 break a;
             }
         }
-        if ticks % 5 == 0 {
+        if ticks.is_multiple_of(5) {
             fx.a.trigger_scan();
         }
         std::thread::sleep(Duration::from_millis(sleep_ms));

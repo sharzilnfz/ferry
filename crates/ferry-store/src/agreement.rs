@@ -101,11 +101,10 @@ impl AgreementLedger {
 
     fn list_from_dir(
         &self,
-        dir: &std::path::Path,
         folder_id: &[u8; 16],
     ) -> Result<Vec<([u8; 32], AgreedRecord)>, AgreementError> {
         let prefix = format!("{}-", hex(folder_id));
-        let rd = match std::fs::read_dir(dir) {
+        let rd = match std::fs::read_dir(&self.dir) {
             Ok(rd) => rd,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e.into()),
@@ -132,7 +131,7 @@ impl AgreementLedger {
         &self,
         folder_id: &[u8; 16],
     ) -> Result<Vec<([u8; 32], AgreedRecord)>, AgreementError> {
-        let mut list = self.list_from_dir(&self.dir, folder_id)?;
+        let mut list = self.list_from_dir(folder_id)?;
         list.sort_by_key(|(peer, _)| *peer);
         Ok(list)
     }

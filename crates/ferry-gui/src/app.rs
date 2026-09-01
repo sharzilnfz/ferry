@@ -213,11 +213,17 @@ impl GuiApp {
                         code_or_payload,
                         target_dir,
                     } => {
-                        let res = match b_actions.pair_accept(code_or_payload.clone(), target_dir.clone()).await {
+                        let res = match b_actions
+                            .pair_accept(code_or_payload.clone(), target_dir.clone())
+                            .await
+                        {
                             Ok(res) => Ok(res),
                             Err(e) => {
                                 if let Some(target) = target_dir {
-                                    let req = ferry_ipc::pairing::JoinPairingRequest::new(code_or_payload, target);
+                                    let req = ferry_ipc::pairing::JoinPairingRequest::new(
+                                        code_or_payload,
+                                        target,
+                                    );
                                     b_actions.join_pairing_session(req).await.map_err(|_| e)
                                 } else {
                                     Err(e)
@@ -258,7 +264,10 @@ impl GuiApp {
                             Err(e) => {
                                 let _ = ev_tx_actions.send(UiEvent::Error {
                                     code: e.code,
-                                    message: format!("Failed to initiate pairing with {device_id}: {}", e.message),
+                                    message: format!(
+                                        "Failed to initiate pairing with {device_id}: {}",
+                                        e.message
+                                    ),
                                 });
                             }
                         }
@@ -1005,7 +1014,9 @@ impl GuiApp {
                             |dev_id| pair_discovered_id = Some(dev_id.to_string()),
                         );
                         if let Some(dev_id) = pair_discovered_id {
-                            self.dispatch(BackendAction::PairDiscoveredDevice { device_id: dev_id });
+                            self.dispatch(BackendAction::PairDiscoveredDevice {
+                                device_id: dev_id,
+                            });
                         }
 
                         ui.add_space(12.0);

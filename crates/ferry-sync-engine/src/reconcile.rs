@@ -593,10 +593,15 @@ pub(crate) fn reconcile(input: ReconcileInput<'_>) -> Result<ActionPlan, Reconci
 
     conflicts.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let has_local_wins = decided.iter().any(|(_, d, _, _)| match d {
-        Decision::KeepLocal => true,
-        Decision::Conflict { winner: Side::Local, .. } => true,
-        _ => false,
+    let has_local_wins = decided.iter().any(|(_, d, _, _)| {
+        matches!(
+            d,
+            Decision::KeepLocal
+                | Decision::Conflict {
+                    winner: Side::Local,
+                    ..
+                }
+        )
     });
 
     Ok(ActionPlan {

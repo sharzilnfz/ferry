@@ -244,9 +244,7 @@ fn pin_error_to_message(e: ferry_sync_engine::pin::PinError) -> DaemonMessage {
         ferry_sync_engine::pin::PinError::BadPattern { .. } => "bad-pattern",
         ferry_sync_engine::pin::PinError::Corrupt { .. } => "pin-state-corrupt",
         ferry_sync_engine::pin::PinError::LedgerCorrupt { .. } => "held-ledger-corrupt",
-        ferry_sync_engine::pin::PinError::ManifestMissing { .. } => {
-            "held-manifest-missing"
-        }
+        ferry_sync_engine::pin::PinError::ManifestMissing { .. } => "held-manifest-missing",
         ferry_sync_engine::pin::PinError::StructuralSplit { .. } => "structural-split",
         ferry_sync_engine::pin::PinError::Converge(_) => "pin-release-reconcile",
         _ => "pin_error",
@@ -317,8 +315,7 @@ pub fn dispatch_common_command(
 }
 
 pub fn dispatch_client_command(state: &DaemonState, cmd: ClientCommand) -> DaemonMessage {
-    if let Some(resp) =
-        dispatch_common_command(&ferry_home_for_registry(), state.identity(), &cmd)
+    if let Some(resp) = dispatch_common_command(&ferry_home_for_registry(), state.identity(), &cmd)
     {
         return resp;
     }
@@ -455,16 +452,22 @@ pub fn dispatch_supervisor_command(
             duration_hours,
         } => {
             let records = supervisor.inventory().list().unwrap_or_default();
-            let (state_dir, folder_id_bytes) = if let Some(engine) = supervisor.engines_map().values().next() {
-                (engine.record.path.join(".ferry"), Some(engine.folder_id_bytes))
-            } else if let Some(rec) = records.first() {
-                (rec.path.join(".ferry"), None)
-            } else {
-                (PathBuf::from(".ferry"), None)
-            };
+            let (state_dir, folder_id_bytes) =
+                if let Some(engine) = supervisor.engines_map().values().next() {
+                    (
+                        engine.record.path.join(".ferry"),
+                        Some(engine.folder_id_bytes),
+                    )
+                } else if let Some(rec) = records.first() {
+                    (rec.path.join(".ferry"), None)
+                } else {
+                    (PathBuf::from(".ferry"), None)
+                };
             let mut base_agreements = std::collections::BTreeMap::new();
             if let Some(fid) = folder_id_bytes {
-                if let Ok(ledger) = ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&fid) {
+                if let Ok(ledger) =
+                    ferry_store::agreement::AgreementLedger::new(&state_dir).list_folder(&fid)
+                {
                     for (dev, rec) in ledger {
                         base_agreements.insert(hex_str(&dev), hex_str(&rec.manifest_id));
                     }
