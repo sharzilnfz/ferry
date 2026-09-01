@@ -168,9 +168,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand, Clone, PartialEq, Eq)]
 pub enum UiSubcommand {
-    Token {
-        folder: Option<PathBuf>,
-    },
+    Token { folder: Option<PathBuf> },
 }
 
 #[derive(Debug, Subcommand)]

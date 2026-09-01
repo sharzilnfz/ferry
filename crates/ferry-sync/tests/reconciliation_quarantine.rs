@@ -24,7 +24,7 @@ fn await_convergence(what: &str, cond: impl Fn() -> bool) {
 }
 
 fn wait_until(what: &str, cond: impl Fn() -> bool) {
-    await_convergence(what, cond)
+    await_convergence(what, cond);
 }
 
 fn read_to_string(root: &Path, rel: &str) -> Option<String> {

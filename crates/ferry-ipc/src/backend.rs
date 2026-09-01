@@ -13,11 +13,11 @@ use tokio_stream::Stream;
 #[cfg(any(test, feature = "test-util"))]
 use std::collections::HashMap;
 
-#[cfg(any(test, feature = "test-util"))]
-use ferry_folder::inventory::{sort_entries, DirectoryEntry};
 use ferry_folder::inventory::{
     ferry_home, validate_path, FolderInventory, FolderRecord, ListDirectoryResponse,
 };
+#[cfg(any(test, feature = "test-util"))]
+use ferry_folder::inventory::{sort_entries, DirectoryEntry};
 
 use crate::pairing::{CreatePairingRequest, CreatePairingResponse, JoinPairingRequest};
 use crate::protocol::{
@@ -161,6 +161,7 @@ pub struct PairResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum UiEvent {
     State(EngineSnapshot),
     StateChanged {
@@ -248,9 +249,7 @@ pub trait StatusDomain: Send + Sync + 'static {
     fn list_conflicts(&self) -> BoxFuture<'_, Result<Vec<ConflictEntry>, OpError>>;
     fn trigger_scan(&self) -> BoxFuture<'_, Result<(), OpError>>;
     fn subscribe_events(&self) -> BoxFuture<'_, Result<UiEventStream, OpError>>;
-    fn list_discovered_devices(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+    fn list_discovered_devices(&self) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
 }
@@ -391,7 +390,7 @@ impl FakeBackend {
         let mut list = self.discovered_devices.write().await;
         list.push(device);
         let mut snap = self.snapshot.write().await;
-        snap.discovered_devices = list.clone();
+        snap.discovered_devices.clone_from(&list);
         let _ = self.event_tx.send(UiEvent::State(snap.clone()));
     }
 
@@ -435,9 +434,7 @@ impl StatusDomain for FakeBackend {
         Box::pin(async move { Ok(UiEventStream::new(rx)) })
     }
 
-    fn list_discovered_devices(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+    fn list_discovered_devices(&self) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
         let devs = Arc::clone(&self.discovered_devices);
         Box::pin(async move { Ok(devs.read().await.clone()) })
     }
@@ -885,9 +882,7 @@ impl StatusDomain for AutoBackend {
         })
     }
 
-    fn list_discovered_devices(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+    fn list_discovered_devices(&self) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
         let client = self.client.clone();
         let fallback = self.fallback.clone();
         Box::pin(async move {

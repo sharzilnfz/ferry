@@ -7,11 +7,11 @@ use ferry_ipc::backend::{
     BoxFuture, FakeBackend, InventoryDomain, OpError, PairResult, PinRecord, PinReleaseSummary,
     PinStopSummary, SessionDomain, ShareOffer, ShareStatus, StatusDomain, UiBackend, UiEventStream,
 };
+use ferry_ipc::protocol::{ConflictEntry, DiscoveredDeviceView, EngineSnapshot};
 use ferry_ipc::{
     CreatePairingRequest, CreatePairingResponse, FolderRecord, JoinPairingRequest,
     ListDirectoryResponse,
 };
-use ferry_ipc::protocol::{ConflictEntry, DiscoveredDeviceView, EngineSnapshot};
 use ferry_tui::app::ReconnectBackoff;
 use ferry_tui::state::SyncState;
 use ferry_tui::terminal::TerminalEvents;
@@ -21,11 +21,8 @@ use ratatui::Terminal;
 
 #[test]
 fn test_reconnect_backoff_policy_growth_and_reset() {
-    let mut backoff = ReconnectBackoff::new(
-        Duration::from_millis(100),
-        Duration::from_millis(800),
-        2,
-    );
+    let mut backoff =
+        ReconnectBackoff::new(Duration::from_millis(100), Duration::from_millis(800), 2);
     assert_eq!(backoff.attempts, 0);
 
     // Attempt 1: returns 100ms, advances to 200ms
@@ -54,7 +51,7 @@ fn test_reconnect_backoff_policy_growth_and_reset() {
     assert_eq!(backoff.next_delay(), Duration::from_millis(100));
 }
 
-/// A mock UiBackend that delegates to FakeBackend when online, and simulates offline errors when offline.
+/// A mock `UiBackend` that delegates to `FakeBackend` when online, and simulates offline errors when offline.
 #[derive(Clone)]
 struct MockOfflineBackend {
     inner: FakeBackend,
@@ -83,7 +80,11 @@ impl StatusDomain for MockOfflineBackend {
             self.inner.get_status()
         } else {
             Box::pin(async {
-                Err(OpError::new("daemon-offline", "daemon is offline", "start daemon"))
+                Err(OpError::new(
+                    "daemon-offline",
+                    "daemon is offline",
+                    "start daemon",
+                ))
             })
         }
     }
@@ -103,14 +104,16 @@ impl StatusDomain for MockOfflineBackend {
             self.inner.subscribe_events()
         } else {
             Box::pin(async {
-                Err(OpError::new("stream-unreachable", "cannot subscribe to offline daemon", "start daemon"))
+                Err(OpError::new(
+                    "stream-unreachable",
+                    "cannot subscribe to offline daemon",
+                    "start daemon",
+                ))
             })
         }
     }
 
-    fn list_discovered_devices(
-        &self,
-    ) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
+    fn list_discovered_devices(&self) -> BoxFuture<'_, Result<Vec<DiscoveredDeviceView>, OpError>> {
         self.inner.list_discovered_devices()
     }
 }
@@ -222,11 +225,8 @@ async fn test_offline_daemon_applies_backoff_and_header_shows_disconnected() {
     let trait_backend: Arc<dyn UiBackend> = mock.clone();
 
     // Fast backoff: 20ms -> 40ms -> 80ms
-    let fast_backoff = ReconnectBackoff::new(
-        Duration::from_millis(20),
-        Duration::from_millis(80),
-        2,
-    );
+    let fast_backoff =
+        ReconnectBackoff::new(Duration::from_millis(20), Duration::from_millis(80), 2);
 
     let mut app = TuiApp::new_with_backend(trait_backend.clone()).with_backoff(fast_backoff);
 
@@ -242,9 +242,7 @@ async fn test_offline_daemon_applies_backoff_and_header_shows_disconnected() {
         let _ = tx.send(make_key('q'));
     });
 
-    app.run(&mut terminal, trait_backend, events)
-        .await
-        .unwrap();
+    app.run(&mut terminal, trait_backend, events).await.unwrap();
 
     // Verify header rendered DISCONNECTED banner while offline
     let rendered = buffer_to_string(terminal.backend());
@@ -279,11 +277,8 @@ async fn test_offline_daemon_reconnects_and_clears_disconnected_status() {
     let mock = Arc::new(MockOfflineBackend::new(false));
     let trait_backend: Arc<dyn UiBackend> = mock.clone();
 
-    let fast_backoff = ReconnectBackoff::new(
-        Duration::from_millis(15),
-        Duration::from_millis(50),
-        2,
-    );
+    let fast_backoff =
+        ReconnectBackoff::new(Duration::from_millis(15), Duration::from_millis(50), 2);
 
     let mut app = TuiApp::new_with_backend(trait_backend.clone()).with_backoff(fast_backoff);
 
@@ -304,9 +299,7 @@ async fn test_offline_daemon_reconnects_and_clears_disconnected_status() {
         let _ = tx.send(make_key('q'));
     });
 
-    app.run(&mut terminal, trait_backend, events)
-        .await
-        .unwrap();
+    app.run(&mut terminal, trait_backend, events).await.unwrap();
 
     assert!(
         app.state.is_connected,

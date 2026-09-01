@@ -258,9 +258,7 @@ fn dispatch(cli: &Cli) -> Result<out::Output, CliError> {
             no_open,
             test,
         } => match subcommand {
-            Some(ferry_cli::cli::UiSubcommand::Token {
-                folder: sub_folder,
-            }) => {
+            Some(ferry_cli::cli::UiSubcommand::Token { folder: sub_folder }) => {
                 let target = sub_folder.as_deref().or(folder.as_deref());
                 ferry_cli::commands::ui::run_token(target)
             }

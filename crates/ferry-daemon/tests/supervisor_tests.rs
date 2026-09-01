@@ -544,15 +544,13 @@ async fn sync_discovered_routes_registers_authorized_remote_peers() {
     let config_path =
         ferry_folder::folder::dot_dir(dir.path()).join(ferry_folder::folder::CONFIG_FILE);
     let orig_bytes = std::fs::read(&config_path).expect("read config");
-    let mut head =
-        ferry_crypto::config_head::parse_config_head(&orig_bytes).expect("parse config");
+    let mut head = ferry_crypto::config_head::parse_config_head(&orig_bytes).expect("parse config");
     head.entries
         .push(ferry_crypto::config_head::WrappedKeyEntry::new(
             *peer_remote.public(),
             [0u8; 80],
         ));
-    let new_bytes =
-        ferry_crypto::config_head::write_config_head(&head.folder_id, &head.entries);
+    let new_bytes = ferry_crypto::config_head::write_config_head(&head.folder_id, &head.entries);
     std::fs::write(&config_path, new_bytes).expect("write config");
 
     let mut sup = Supervisor::new(home.path().to_path_buf(), identity.clone());
@@ -572,11 +570,12 @@ async fn sync_discovered_routes_registers_authorized_remote_peers() {
     sup.tick();
     if let Some(iroh) = iroh_opt {
         assert!(
-            iroh.route_table().resolve_peer(peer_remote.public()).is_some(),
+            iroh.route_table()
+                .resolve_peer(peer_remote.public())
+                .is_some(),
             "peer should be registered after tick syncs routes"
         );
     }
 
     sup.shutdown();
 }
-

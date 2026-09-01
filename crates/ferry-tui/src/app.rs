@@ -44,7 +44,11 @@ impl Default for ReconnectBackoff {
 
 impl ReconnectBackoff {
     #[must_use]
-    pub fn new(min_delay: std::time::Duration, max_delay: std::time::Duration, factor: u32) -> Self {
+    pub fn new(
+        min_delay: std::time::Duration,
+        max_delay: std::time::Duration,
+        factor: u32,
+    ) -> Self {
         Self {
             min_delay,
             max_delay,
@@ -57,7 +61,10 @@ impl ReconnectBackoff {
     pub fn next_delay(&mut self) -> std::time::Duration {
         let delay = self.current_delay;
         self.attempts += 1;
-        self.current_delay = self.current_delay.saturating_mul(self.factor).min(self.max_delay);
+        self.current_delay = self
+            .current_delay
+            .saturating_mul(self.factor)
+            .min(self.max_delay);
         delay
     }
 
@@ -559,10 +566,9 @@ impl TuiApp {
                 if snap.state.eq_ignore_ascii_case("offline") {
                     self.state.is_connected = false;
                     self.state.engine_state = SyncState::Offline;
-                    self.state.activity_log.push_error(
-                        current_time_str(),
-                        "Daemon is offline",
-                    );
+                    self.state
+                        .activity_log
+                        .push_error(current_time_str(), "Daemon is offline");
                     let delay = self.backoff.next_delay();
                     next_reconnect_at = Some(tokio::time::Instant::now() + delay);
                 } else {
@@ -625,11 +631,11 @@ impl TuiApp {
                         }
                     }
                 }
-                _ = async {
+                () = async {
                     if let Some(target) = next_reconnect_at {
                         tokio::time::sleep_until(target).await;
                     } else {
-                        std::future::pending().await
+                        std::future::pending::<()>().await;
                     }
                 }, if stream.is_none() => {
                     next_reconnect_at = None;

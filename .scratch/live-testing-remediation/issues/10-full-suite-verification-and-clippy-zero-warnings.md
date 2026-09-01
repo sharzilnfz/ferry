@@ -1,6 +1,6 @@
 # Ticket 10: Full-Suite Verification and Zero-Warning Hygiene
 
-Status: ready-for-agent
+Status: completed
 Depends on: 01, 02, 03, 04, 05, 06, 07, 08, 09
 Blocks:
 
@@ -21,9 +21,9 @@ Run full workspace verification and ensure zero compiler warnings, zero clippy w
 
 ## Acceptance
 
-- [ ] `cargo check --all-targets` produces 0 warnings.
-- [ ] `cargo clippy --workspace --all-targets` is clean.
-- [ ] `cargo test --workspace` is 100% green.
+- [x] `cargo check --all-targets` produces 0 warnings.
+- [x] `cargo clippy --workspace --all-targets` is clean.
+- [x] `cargo test --workspace` is 100% green.
 
 ## Comments
 

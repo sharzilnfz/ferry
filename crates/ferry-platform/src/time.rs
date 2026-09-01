@@ -27,12 +27,12 @@ pub fn civil_utc(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let dt =
         time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (
-        dt.year() as i64,
-        dt.month() as u8 as u32,
-        dt.day() as u32,
-        dt.hour() as u32,
-        dt.minute() as u32,
-        dt.second() as u32,
+        i64::from(dt.year()),
+        u32::from(dt.month() as u8),
+        u32::from(dt.day()),
+        u32::from(dt.hour()),
+        u32::from(dt.minute()),
+        u32::from(dt.second()),
     )
 }
 
@@ -131,13 +131,11 @@ mod tests {
     }
 
     fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-        let month = match time::Month::try_from(m as u8) {
-            Ok(v) => v,
-            Err(_) => return 0,
+        let Ok(month) = time::Month::try_from(m as u8) else {
+            return 0;
         };
-        let date = match time::Date::from_calendar_date(y as i32, month, d as u8) {
-            Ok(v) => v,
-            Err(_) => return 0,
+        let Ok(date) = time::Date::from_calendar_date(y as i32, month, d as u8) else {
+            return 0;
         };
         date.midnight().assume_utc().unix_timestamp() / 86_400
     }

@@ -1,7 +1,7 @@
 pub use ferry_rendezvous::{
-    bind_discovery_socket, client_discover_and_join, recv_frame, send_frame,
-    service_name_for_code, topic_for_code, PairingServerHandle, DISCOVERY_PORT, MAX_PAIRING_FRAME_LEN,
-    MULTICAST_ADDR, PAIRING_TOPIC_KEY,
+    bind_discovery_socket, client_discover_and_join, recv_frame, send_frame, service_name_for_code,
+    topic_for_code, PairingServerHandle, DISCOVERY_PORT, MAX_PAIRING_FRAME_LEN, MULTICAST_ADDR,
+    PAIRING_TOPIC_KEY,
 };
 
 pub fn start_pairing_server<F>(

@@ -266,9 +266,7 @@ impl PairingRitual {
 
                 let grant_bytes =
                     seal_grant(&offer_bytes_for_server, &done.wrapped_for_peer, record_poly)
-                        .map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                        })?;
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
                 if let Ok(mut map) = rendezvous_clone.lock() {
                     map.remove(&record_code);
@@ -472,15 +470,9 @@ impl PairingRitual {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
                 })?;
 
-                let accepted = adopt_and_record(
-                    &target_buf,
-                    &identity,
-                    folder_id,
-                    &fmk,
-                    poly,
-                    &offer_bytes,
-                )
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                let accepted =
+                    adopt_and_record(&target_buf, &identity, folder_id, &fmk, poly, &offer_bytes)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
                 Ok(accepted)
             };
@@ -1055,7 +1047,8 @@ pub fn start_pairing_server<F>(
 where
     F: FnOnce(Vec<u8>) -> io::Result<Vec<u8>> + Send + 'static,
 {
-    let handle = ferry_rendezvous::start_pairing_server(code, offer_bytes, expires_at, on_response)?;
+    let handle =
+        ferry_rendezvous::start_pairing_server(code, offer_bytes, expires_at, on_response)?;
     Ok(handle.stopped)
 }
 

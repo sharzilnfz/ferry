@@ -232,7 +232,7 @@ fn transfer_snapshot(
                         }
                     }
                 }
-                _ => {}
+                ferry_store::manifest::EntryPayload::Symlink { .. } => {}
             }
         }
     }

@@ -284,7 +284,7 @@ fn read_listening<R: std::io::Read + Send + 'static>(r: R, secs: u64) -> Option<
                     let _ = tx.send(addr);
                     break;
                 }
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(_) => break,
             }
         }
