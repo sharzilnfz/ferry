@@ -13,15 +13,22 @@ type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::UnixStream>;
 type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::windows::named_pipe::NamedPipeClient>;
 
 async fn connect_ipc(folder: &Path) -> Option<IpcConn> {
-    // Prefer device daemon (FERRY_HOME/daemon.sock) for persistent services (ticket 03),
-    // fallback to folder-specific socket for single-store daemon mode.
-    let default = ferry_ipc::paths::default_socket_path();
-    if let Ok(conn) = IpcClient::connect(&default).await {
+    // Probe whichever socket is actually present. Ticket 03 prefers the device
+    // daemon for persistent services, but tests (and any leftover single-store
+    // daemon) bind only to the per-folder socket — checking existence before
+    // connect avoids the order dependency entirely.
+    let folder_sock = socket_path_for_dir(folder);
+    let default_sock = ferry_ipc::paths::default_socket_path();
+    let (first, second) = if folder_sock.exists() {
+        (&folder_sock, &default_sock)
+    } else {
+        (&default_sock, &folder_sock)
+    };
+    if let Ok(conn) = IpcClient::connect(first).await {
         return Some(conn);
     }
-    let socket_path = socket_path_for_dir(folder);
-    if socket_path != default {
-        if let Ok(conn) = IpcClient::connect(&socket_path).await {
+    if first != second {
+        if let Ok(conn) = IpcClient::connect(second).await {
             return Some(conn);
         }
     }
@@ -98,27 +105,20 @@ where
     F: std::future::Future<Output = Option<T>> + Send + 'static,
     T: Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-            return tokio::task::block_in_place(|| {
-                handle.block_on(async { tokio::time::timeout(timeout, f).await.ok().flatten() })
-            });
-        }
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .ok()?;
-            rt.block_on(async { tokio::time::timeout(timeout, f).await.ok().flatten() })
-        })
-        .join()
-        .ok()
-        .flatten()
-    } else {
+    // Always run on a fresh current-thread runtime so callers in any context
+    // (sync main, multi-thread Tokio, current-thread Tokio) behave identically.
+    // Wrap `f` in `tokio::time::timeout` *inside* `block_on` so a hanging
+    // `connect_ipc` or `recv_message` is cancelled and the thread exits — the
+    // outer `recv_timeout` is just the caller-side gate.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .ok()?;
-        rt.block_on(async { tokio::time::timeout(timeout, f).await.ok().flatten() })
-    }
+        let res = rt.block_on(async { tokio::time::timeout(timeout, f).await.ok().flatten() });
+        let _ = tx.send(res);
+        Some(())
+    });
+    rx.recv_timeout(timeout).ok().flatten()
 }

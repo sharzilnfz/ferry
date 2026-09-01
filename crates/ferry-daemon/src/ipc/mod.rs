@@ -451,18 +451,10 @@ pub fn dispatch_supervisor_command(
             paths,
             duration_hours,
         } => {
-            let records = supervisor.inventory().list().unwrap_or_default();
-            let (state_dir, folder_id_bytes) =
-                if let Some(engine) = supervisor.engines_map().values().next() {
-                    (
-                        engine.record.path.join(".ferry"),
-                        Some(engine.folder_id_bytes),
-                    )
-                } else if let Some(rec) = records.first() {
-                    (rec.path.join(".ferry"), None)
-                } else {
-                    (PathBuf::from(".ferry"), None)
-                };
+            let (state_dir, folder_id_bytes) = match resolve_pin_state_dir(supervisor) {
+                Ok(v) => v,
+                Err(e) => return *e,
+            };
             let mut base_agreements = std::collections::BTreeMap::new();
             if let Some(fid) = folder_id_bytes {
                 if let Ok(ledger) =
@@ -489,14 +481,14 @@ pub fn dispatch_supervisor_command(
             }
         }
         ClientCommand::ReleasePin => {
-            let records = supervisor.inventory().list().unwrap_or_default();
-            let state_dir = if let Some(engine) = supervisor.engines_map().values().next() {
-                engine.handle.trigger_scan();
-                engine.record.path.join(".ferry")
-            } else if let Some(rec) = records.first() {
-                rec.path.join(".ferry")
-            } else {
-                PathBuf::from(".ferry")
+            let state_dir = match resolve_pin_state_dir(supervisor) {
+                Ok((d, _)) => {
+                    if let Some(engine) = supervisor.engines_map().values().next() {
+                        engine.handle.trigger_scan();
+                    }
+                    d
+                }
+                Err(e) => return *e,
             };
             match ferry_sync_engine::pin::PinManager::new(&state_dir).stop_session() {
                 Ok(was_active) => DaemonMessage::Ack {
@@ -517,13 +509,9 @@ pub fn dispatch_supervisor_command(
             }
         }
         ClientCommand::ListConflicts => {
-            let records = supervisor.inventory().list().unwrap_or_default();
-            let state_dir = if let Some(engine) = supervisor.engines_map().values().next() {
-                engine.record.path.join(".ferry")
-            } else if let Some(rec) = records.first() {
-                rec.path.join(".ferry")
-            } else {
-                PathBuf::from(".ferry")
+            let state_dir = match resolve_pin_state_dir(supervisor) {
+                Ok((d, _)) => d,
+                Err(e) => return *e,
             };
             match ferry_sync_engine::list_conflicts(&state_dir) {
                 Ok(conflicts) => DaemonMessage::Ack {
@@ -552,6 +540,27 @@ pub fn dispatch_supervisor_command(
         | ClientCommand::CreatePairingSession { .. }
         | ClientCommand::JoinPairingSession { .. } => unreachable!(),
     }
+}
+
+// Resolve which `.ferry` state directory a supervisor-side pin/conflicts command
+// should target. Prefer an active engine (knows its folder id, so the agreement
+// ledger is queryable); fall back to the first inventory record (folder id
+// unknown — release falls back to the held ledger at recovery time). When the
+// supervisor has neither, surface an explicit error so the CLI can fall back to
+// local pin instead of writing into a CWD-relative `.ferry` like the old code.
+fn resolve_pin_state_dir(
+    supervisor: &crate::supervisor::Supervisor,
+) -> Result<(PathBuf, Option<[u8; 16]>), Box<DaemonMessage>> {
+    if let Some(engine) = supervisor.engines_map().values().next() {
+        return Ok((engine.record.path.join(".ferry"), Some(engine.folder_id_bytes)));
+    }
+    if let Some(rec) = supervisor.inventory().list().unwrap_or_default().first() {
+        return Ok((rec.path.join(".ferry"), None));
+    }
+    Err(Box::new(DaemonMessage::Error {
+        code: "folder-not-found".to_string(),
+        message: "no registered folder found in supervisor".to_string(),
+    }))
 }
 
 pub async fn handle_supervisor_connection<S>(
