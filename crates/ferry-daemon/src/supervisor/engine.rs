@@ -279,15 +279,21 @@ impl FolderEngine {
     }
 
     pub fn peer_policy(&self) -> Result<PeerPolicy, SupervisorError> {
-        let path = ferry_folder::folder::dot_dir(&self.record.path)
-            .join(ferry_folder::folder::CONFIG_FILE);
-        let bytes = std::fs::read(&path).map_err(|e| SupervisorError {
-            code: "io".to_string(),
-            message: format!("could not read {}: {e}", path.display()),
-        })?;
+        let bytes =
+            ferry_folder::folder::load_config_head_bytes(&self.record.path).map_err(|e| {
+                SupervisorError {
+                    code: e.code.to_string(),
+                    message: e.message,
+                }
+            })?;
         PeerPolicy::from_config_head(&bytes).map_err(|e| SupervisorError {
             code: "config-corrupt".to_string(),
-            message: format!("invalid config in {}: {e}", path.display()),
+            message: format!(
+                "invalid config in {}: {e}",
+                ferry_folder::folder::dot_dir(&self.record.path)
+                    .join(ferry_folder::folder::CONFIG_FILE)
+                    .display()
+            ),
         })
     }
 }

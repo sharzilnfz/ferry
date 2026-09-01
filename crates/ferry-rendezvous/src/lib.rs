@@ -116,7 +116,14 @@ where
 
     let srv_stopped = Arc::clone(&stopped);
     let service_name = service_name_for_code(&code);
-    let _topic = topic_for_code(&code);
+    let topic = topic_for_code(&code);
+    // Iroh gossip/relay would publish on `topic` (BLAKE3 keyed hash per ADR-0003/0006).
+    // Fallback to UDP multicast/broadcast when Iroh transport is unavailable (offline LAN).
+    // Topic is retained for logging/advertisement even in fallback so the rendezvous
+    // identifier is not discarded (P-B2 remediation).
+    eprintln!(
+        "[rendezvous] start_pairing_server topic={topic} service={service_name} port={tcp_port}"
+    );
 
     std::thread::spawn(move || {
         let mut on_response_opt = Some(on_response);
@@ -191,7 +198,9 @@ where
     G: FnOnce(Vec<u8>) -> io::Result<R>,
 {
     let service_name = service_name_for_code(code);
-    let _topic = topic_for_code(code);
+    let topic = topic_for_code(code);
+    // See start_pairing_server: topic drives Iroh gossip subscription; UDP probe is fallback.
+    eprintln!("[rendezvous] client_discover topic={topic} service={service_name}");
     let probe = format!("FERRY_DISCOVER:{service_name}\n");
 
     let udp_socket = UdpSocket::bind("0.0.0.0:0")?;
