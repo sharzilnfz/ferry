@@ -42,6 +42,11 @@ impl Settings {
     }
 }
 
+pub fn load_config_head_bytes(root: &Path) -> FolderResult<Vec<u8>> {
+    let path = dot_dir(root).join(CONFIG_FILE);
+    std::fs::read(&path).code("io", format!("could not read {}", path.display()))
+}
+
 pub fn dot_dir(folder: &Path) -> PathBuf {
     folder.join(DOT_DIR)
 }

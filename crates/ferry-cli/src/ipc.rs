@@ -13,8 +13,19 @@ type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::UnixStream>;
 type IpcConn = ferry_ipc::framing::IpcConnection<tokio::net::windows::named_pipe::NamedPipeClient>;
 
 async fn connect_ipc(folder: &Path) -> Option<IpcConn> {
+    // Prefer device daemon (FERRY_HOME/daemon.sock) for persistent services (ticket 03),
+    // fallback to folder-specific socket for single-store daemon mode.
+    let default = ferry_ipc::paths::default_socket_path();
+    if let Ok(conn) = IpcClient::connect(&default).await {
+        return Some(conn);
+    }
     let socket_path = socket_path_for_dir(folder);
-    IpcClient::connect(&socket_path).await.ok()
+    if socket_path != default {
+        if let Ok(conn) = IpcClient::connect(&socket_path).await {
+            return Some(conn);
+        }
+    }
+    None
 }
 
 pub fn query_status(folder: &Path) -> Option<EngineSnapshot> {

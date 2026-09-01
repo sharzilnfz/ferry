@@ -462,6 +462,34 @@ impl FolderInventory {
         Ok(record)
     }
 
+    /// Ensure the registry contains `folder_id -> path` (used by daemon delegation
+    /// for pairing so the daemon can resolve a folder by its real id without
+    /// relying on the random-id `register` path). Idempotent.
+    pub fn ensure_registered(&self, folder_id: &str, path: &Path) -> FolderResult<()> {
+        std::fs::create_dir_all(&self.home).map_err(io_error)?;
+        let _lock = RegistryLock::acquire(&self.home)?;
+        let mut records = self.load_strict()?;
+        if let Some(existing) = records.iter().find(|r| r.folder_id == folder_id) {
+            if existing.path == path {
+                return Ok(());
+            }
+            // Update path for existing folder_id (e.g., moved folder)
+            records.retain(|r| r.folder_id != folder_id);
+        } else {
+            // Remove any overlapping entry for this path to keep non-overlap invariant.
+            records.retain(|r| !is_overlapping(&r.path, path) && !is_overlapping(path, &r.path));
+        }
+        let (secs, _) = ferry_platform::time::now_unix();
+        let added_at = ferry_platform::time::fmt_rfc3339(secs);
+        records.push(FolderRecord {
+            folder_id: folder_id.to_string(),
+            path: path.to_path_buf(),
+            added_at,
+        });
+        self.persist(&records)?;
+        Ok(())
+    }
+
     pub fn unregister(&self, folder_id: &str) -> FolderResult<()> {
         std::fs::create_dir_all(&self.home).map_err(io_error)?;
         let _lock = RegistryLock::acquire(&self.home)?;
