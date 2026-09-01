@@ -1,6 +1,6 @@
 # Ticket 09: Stabilize Flaky Sync-Convergence and Relay Test Suites
 
-Status: ready-for-agent
+Status: completed
 Depends on: 01, 04, 06, 08
 Blocks: 10
 
@@ -23,10 +23,10 @@ Stabilize test suites that exhibit intermittent timeouts or flaky convergence un
 
 ## Acceptance
 
-- [ ] `cargo test -p ferry-iroh --test relay_forced` passes 10 consecutive isolated runs.
-- [ ] `cargo test -p ferry-sync --test reconciliation_quarantine` passes 10 consecutive isolated runs.
-- [ ] `cargo test -p ferry-sync --test ignore_policy_sync` passes 10 consecutive isolated runs.
-- [ ] `cargo test -p ferry-cli --test exchange_loopback` passes 10 consecutive isolated runs.
+- [x] `cargo test -p ferry-iroh --test relay_forced` passes 10 consecutive isolated runs.
+- [x] `cargo test -p ferry-sync --test reconciliation_quarantine` passes 10 consecutive isolated runs.
+- [x] `cargo test -p ferry-sync --test ignore_policy_sync` passes 10 consecutive isolated runs.
+- [x] `cargo test -p ferry-cli --test exchange_loopback` passes 10 consecutive isolated runs.
 
 ## Comments
 

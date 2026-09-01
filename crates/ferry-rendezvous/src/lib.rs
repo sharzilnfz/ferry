@@ -151,9 +151,8 @@ where
                         continue;
                     }
 
-                    let response_bytes = match recv_frame(&mut stream) {
-                        Ok(b) => b,
-                        Err(_) => continue,
+                    let Ok(response_bytes) = recv_frame(&mut stream) else {
+                        continue;
                     };
 
                     if let Some(cb) = on_response_opt.take() {
@@ -165,7 +164,6 @@ where
                             }
                             Err(_) => {
                                 let _ = send_frame(&mut stream, &[]);
-                                continue;
                             }
                         }
                     }
