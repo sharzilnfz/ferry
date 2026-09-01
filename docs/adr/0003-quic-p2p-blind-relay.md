@@ -1,6 +1,6 @@
 # ADR-0003: QUIC peer-to-peer with a blind relay fallback
 
-Status: proposed (2026-08-23)
+Status: accepted (2026-08-23)
 
 ## Context
 
@@ -19,6 +19,14 @@ success). Building NAT traversal from scratch is a multi-month detour.
 - Ship a self-hostable relay server from v0. A hosted community relay may run
   later but is never required for function, only for convenience.
 - LAN discovery (multicast) shortcuts everything when devices share a network.
+
+## Amendment (2026-09-01): Default mDNS & Supervisor Autonomous Dialing
+
+Local network mDNS service advertisement/discovery is enabled by default on
+all sync transport endpoints. The background daemon supervisor inspects
+`CONFIG_HEAD` authorized peer keys and cross-references discovered routing
+tables, automatically initiating bidirectional sync sessions without
+requiring manual `--peer-url` or `--listen` CLI flags.
 
 ## Consequences
 

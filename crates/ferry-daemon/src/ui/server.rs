@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use ferry_ipc::backend::{UiBackend, UiEvent};
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use zeroize::Zeroizing;
 
 use super::backend::snapshot_to_status_doc;
 use super::error::ApiError;
@@ -246,7 +247,8 @@ async fn auth_and_activity_middleware(
 
 #[must_use]
 pub fn generate_ascii_qr(payload: &str) -> String {
-    if let Ok(code) = qrcode::QrCode::new(payload.as_bytes()) {
+    let payload_bytes = Zeroizing::new(payload.as_bytes().to_vec());
+    if let Ok(code) = qrcode::QrCode::new(&payload_bytes[..]) {
         code.render::<char>()
             .quiet_zone(false)
             .module_dimensions(2, 1)
@@ -345,13 +347,14 @@ async fn api_share(
         .map(PathBuf::from);
     let i_know = body.get("i_know").and_then(Value::as_bool).unwrap_or(false);
     let offer = server.backend.share_initiate(folder, i_know).await?;
-    let qr_code = generate_ascii_qr(&offer.token);
+    let token_sec = Zeroizing::new(offer.token);
+    let qr_code = generate_ascii_qr(&token_sec);
     Ok(Json(json!({
         "command": "share",
         "role": "initiate",
         "status": "pending",
         "folder": offer.folder,
-        "short_code": offer.token,
+        "short_code": &*token_sec,
         "qr_code": qr_code,
         "offer_file": offer.payload_path.map(|p| p.display().to_string()),
         "warnings": offer.secret_warnings,
@@ -466,13 +469,14 @@ async fn api_pair_create(
         })?;
     let req = ferry_ipc::pairing::CreatePairingRequest::new(folder_id.to_string());
     let resp = server.backend.create_pairing_session(req).await?;
-    let qr_code = generate_ascii_qr(&resp.code);
+    let code_sec = Zeroizing::new(resp.code);
+    let qr_code = generate_ascii_qr(&code_sec);
     Ok(Json(json!({
         "command": "pair",
         "role": "create",
         "status": "pending",
-        "code": resp.code,
-        "short_code": resp.code,
+        "code": &*code_sec,
+        "short_code": &*code_sec,
         "qr_code": qr_code,
         "expires_at": resp.expires_at,
     })))
@@ -548,14 +552,15 @@ async fn api_pair_device(
     };
     let req = ferry_ipc::pairing::CreatePairingRequest::new(fid);
     let resp = server.backend.create_pairing_session(req).await?;
-    let qr_code = generate_ascii_qr(&resp.code);
+    let code_sec = Zeroizing::new(resp.code);
+    let qr_code = generate_ascii_qr(&code_sec);
     Ok(Json(json!({
         "command": "pair",
         "role": "device",
         "status": "pending",
         "target_device_id": device_id,
-        "code": resp.code,
-        "short_code": resp.code,
+        "code": &*code_sec,
+        "short_code": &*code_sec,
         "qr_code": qr_code,
         "expires_at": resp.expires_at,
         "message": format!("Pairing handshake initiated with device {device_id}"),

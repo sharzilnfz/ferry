@@ -11,8 +11,11 @@ pub trait Transport: Send + Sync {
 
     fn listen(&self, addr: SocketAddr) -> io::Result<Box<dyn Listener>>;
 
-    fn dial_peer(&self, peer: &PeerId) -> io::Result<Box<dyn Connection>> {
-        self.dial(peer_id_to_addr(peer))
+    fn dial_peer(&self, _peer: &PeerId) -> io::Result<Box<dyn Connection>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "transport does not support dialing raw peer public key without route table",
+        ))
     }
 }
 

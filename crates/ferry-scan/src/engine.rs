@@ -448,7 +448,16 @@ impl ScanEngine {
     }
 
     pub fn scan_once(&self) -> Result<ScanRun, ScanError> {
-        let signals = self.parts.queue.drain();
+        let mut signals = self.parts.queue.drain();
+        if signals.is_empty() {
+            let mismatches = {
+                let c = self.parts.core.lock().expect("core");
+                stat_sweep(&c.disk_root, &Vec::new(), &c.cache, c.ignore.as_ref())
+            };
+            if !mismatches.is_empty() {
+                signals.push(WatchSignal::PolledChanged(mismatches));
+            }
+        }
         self.parts.execute(signals, Trigger::Events)
     }
 

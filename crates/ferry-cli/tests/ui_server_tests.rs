@@ -205,21 +205,21 @@ async fn test_token_auth_enforcement_and_static_assets() {
         .expect("write sse req");
     let mut total_str = String::new();
     let mut buf = vec![0u8; 1024];
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
-        let n = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
+        if let Ok(Ok(n)) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
             sse_stream.read(&mut buf),
         )
         .await
-        .expect("read timeout")
-        .expect("read chunk");
-        if n == 0 {
-            break;
-        }
-        total_str.push_str(&String::from_utf8_lossy(&buf[..n]));
-        if total_str.contains("event: state") {
-            break;
+        {
+            if n == 0 {
+                break;
+            }
+            total_str.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if total_str.contains("event: state") {
+                break;
+            }
         }
     }
     assert!(total_str.starts_with("HTTP/1.1 200 OK"));

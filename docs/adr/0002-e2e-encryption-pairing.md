@@ -1,6 +1,6 @@
 # ADR-0002: End-to-end encryption by default, per-folder keys, explicit pairing
 
-Status: proposed (2026-08-23)
+Status: accepted (2026-08-23)
 
 ## Context
 
@@ -16,12 +16,22 @@ Bowline).
 - Every blob and manifest is encrypted client-side before it ever touches the
   network or another disk. AEAD with ChaCha20-Poly1305 (or AES-256-GCM) in an
   age-STREAM-like chunked construction.
-- Keys are per-folder symmetric keys, generated locally, wrapped to each
-  paired device's public key (X25519, age-style envelopes).
+- Keys are per-folder symmetric keys (Folder Master Key / FMK), generated
+  locally, wrapped to each paired device's public key (X25519, age-style
+  envelopes).
 - Devices pair out-of-band: QR code or short code exchange, no account, no
   password reset story that could become a recovery backdoor. Losing all
   devices loses the data; document this loudly.
 - Relays see ciphertext and metadata only.
+
+## Amendment (2026-08-30): CONFIG_HEAD Commit & Noise Secure Sessions
+
+Folder keys and authorized device memberships are cryptographically committed
+into `CONFIG_HEAD` (`.ferry/config`), forming an immutable signed lineage.
+Transport sessions perform mutual cryptographic authentication using Noise
+handshakes (Noise_XX / IK patterns) over QUIC streams, guaranteeing that
+unauthorized peers cannot initiate sync or observe plaintext manifests even on
+open local networks.
 
 ## Consequences
 

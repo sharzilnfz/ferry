@@ -28,6 +28,6 @@ If a term you need isn't in the glossary yet, note it for `/domain-modeling` rat
 
 ## Flag ADR conflicts
 
-If your output contradicts an existing ADR (0001–0005 currently), surface it explicitly rather than silently overriding:
+If your output contradicts an existing ADR (0001–0008 currently), surface it explicitly rather than silently overriding:
 
 > _Contradicts ADR-0004 (conflicts quarantine), but worth reopening because…_

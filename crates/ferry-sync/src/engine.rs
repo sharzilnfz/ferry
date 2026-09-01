@@ -265,7 +265,7 @@ impl EngineConfig {
             connect_to: None,
             allow_trust_on_first_use: false,
             pin_state_dir: None,
-            quiet: true,
+            quiet: false,
         }
     }
 }
@@ -658,7 +658,7 @@ struct Ctx {
 impl Ctx {
     fn status(&self, line: &str) {
         if !self.cfg.quiet {
-            println!("[{}] {}", self.cfg.tag, line);
+            eprintln!("[{}] {}", self.cfg.tag, line);
         }
     }
 
@@ -802,12 +802,10 @@ impl Ctx {
     }
 
     fn current_policy(&self) -> PeerPolicy {
-        let refreshed = resolve_peer_policy_from_disk(&self.cfg, &self.store);
-        if refreshed != PeerPolicy::default() || self.peer_policy == PeerPolicy::default() {
-            refreshed
-        } else {
-            self.peer_policy.clone()
+        if self.peer_policy != PeerPolicy::default() {
+            return self.peer_policy.clone();
         }
+        resolve_peer_policy_from_disk(&self.cfg, &self.store)
     }
 
     fn dial_discovered_peers(&self) {
@@ -846,6 +844,9 @@ impl Ctx {
                     }
                 },
                 Err(e) => {
+                    if e.kind() == std::io::ErrorKind::Unsupported {
+                        return;
+                    }
                     self.shared.record_peer_connectivity(peer, "unreachable");
                     self.status(&format!(
                         "SESSION autonomous dial to {} error: {e}",
@@ -1261,7 +1262,7 @@ impl SyncEngine {
             connect_to,
             allow_trust_on_first_use: false,
             pin_state_dir: Some(opened.state_dir()),
-            quiet: true,
+            quiet: false,
         };
         let mut engine =
             SyncEngine::with_store(cfg, transport, std::sync::Arc::clone(&opened.store))?;
@@ -1390,11 +1391,12 @@ fn sync_loop(ctx: Arc<Ctx>, shared: Arc<SharedState>, rx: std::sync::mpsc::Recei
                 if backstop_due {
                     last_backstop = Instant::now();
                 }
-                if let Ok(_guard) = ctx.session_lock.try_lock() {
-                    if has_explicit {
+                if has_explicit {
+                    if let Ok(_guard) = ctx.session_lock.try_lock() {
                         ctx.dial_and_run();
                     }
-                    if has_peers {
+                } else if has_peers {
+                    if let Ok(_guard) = ctx.session_lock.try_lock() {
                         ctx.dial_discovered_peers();
                     }
                 }

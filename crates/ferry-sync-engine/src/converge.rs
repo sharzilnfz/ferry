@@ -107,6 +107,7 @@ pub struct ConvergenceResult {
     pub held: Vec<HeldPath>,
 
     pub agreed_manifest_id: Option<BlobId>,
+    pub has_local_wins: bool,
 }
 
 impl ConvergenceResult {
@@ -406,7 +407,7 @@ impl<'a> ConvergenceEngine<'a> {
         }
 
         let mut agreed_manifest_id = None;
-        if plan.conflicts.is_empty() && held.is_empty() && plan.send.is_empty() {
+        if plan.conflicts.is_empty() && held.is_empty() && plan.send.is_empty() && !plan.has_local_wins {
             let bytes = serialize_manifest(remote);
             let id = self.store.put_meta(BlobKind::Manifest, &bytes)?;
             AgreementLedger::new(self.store.store_dir()).record(
@@ -428,6 +429,7 @@ impl<'a> ConvergenceEngine<'a> {
             send: plan.send,
             held,
             agreed_manifest_id,
+            has_local_wins: plan.has_local_wins,
         })
     }
 }
@@ -588,6 +590,7 @@ fn gate_plan(
             .filter(|(_, h)| !**h)
             .map(|(c, _)| c.clone())
             .collect(),
+        has_local_wins: plan.has_local_wins,
     };
 
     Ok((apply, held))

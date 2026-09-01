@@ -86,32 +86,7 @@ impl AgreementLedger {
         let p = self.path_for(folder_id, peer);
         match std::fs::read(&p) {
             Ok(bytes) => Ok(Some(parse_agreed_record(&bytes)?)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let alt = if self.dir.ends_with(".ferry/agreement")
-                    || self.dir.to_string_lossy().contains("/.ferry/")
-                {
-                    self.dir.parent().and_then(|p| p.parent()).map(|pr| {
-                        pr.join("agreement")
-                            .join(format!("{}-{}.agree", hex(folder_id), hex(peer)))
-                    })
-                } else {
-                    self.dir.parent().map(|pr| {
-                        pr.join(".ferry").join("agreement").join(format!(
-                            "{}-{}.agree",
-                            hex(folder_id),
-                            hex(peer)
-                        ))
-                    })
-                };
-                if let Some(alt_p) = alt {
-                    if alt_p != p && alt_p.is_file() {
-                        if let Ok(bytes) = std::fs::read(&alt_p) {
-                            return Ok(Some(parse_agreed_record(&bytes)?));
-                        }
-                    }
-                }
-                Ok(None)
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -158,31 +133,6 @@ impl AgreementLedger {
         folder_id: &[u8; 16],
     ) -> Result<Vec<([u8; 32], AgreedRecord)>, AgreementError> {
         let mut list = self.list_from_dir(&self.dir, folder_id)?;
-        let alt_dir = if self.dir.ends_with(".ferry/agreement")
-            || self.dir.to_string_lossy().contains("/.ferry/")
-        {
-            self.dir
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|pr| pr.join("agreement"))
-        } else {
-            self.dir
-                .parent()
-                .map(|pr| pr.join(".ferry").join("agreement"))
-        };
-        if let Some(alt) = alt_dir {
-            if alt != self.dir && alt.is_dir() {
-                if let Ok(alt_list) = self.list_from_dir(&alt, folder_id) {
-                    let mut seen: std::collections::BTreeSet<[u8; 32]> =
-                        list.iter().map(|(p, _)| *p).collect();
-                    for item in alt_list {
-                        if seen.insert(item.0) {
-                            list.push(item);
-                        }
-                    }
-                }
-            }
-        }
         list.sort_by_key(|(peer, _)| *peer);
         Ok(list)
     }

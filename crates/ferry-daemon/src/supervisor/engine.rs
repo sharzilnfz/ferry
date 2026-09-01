@@ -8,7 +8,7 @@ use ferry_folder::inventory::FolderRecord;
 use ferry_ipc::backend::UiEvent;
 use ferry_ipc::protocol::{EngineSnapshot, ScanStatsView};
 use ferry_store::format::hex as hex_str;
-use ferry_sync::EngineHandle;
+use ferry_sync::{EngineHandle, PeerPolicy};
 use notify::Watcher as _;
 
 use super::SupervisorError;
@@ -276,6 +276,19 @@ impl FolderEngine {
 
     pub fn broadcast_tx(&self) -> &tokio::sync::broadcast::Sender<UiEvent> {
         &self.broadcast_tx
+    }
+
+    pub fn peer_policy(&self) -> Result<PeerPolicy, SupervisorError> {
+        let path = ferry_folder::folder::dot_dir(&self.record.path)
+            .join(ferry_folder::folder::CONFIG_FILE);
+        let bytes = std::fs::read(&path).map_err(|e| SupervisorError {
+            code: "io".to_string(),
+            message: format!("could not read {}: {e}", path.display()),
+        })?;
+        PeerPolicy::from_config_head(&bytes).map_err(|e| SupervisorError {
+            code: "config-corrupt".to_string(),
+            message: format!("invalid config in {}: {e}", path.display()),
+        })
     }
 }
 
