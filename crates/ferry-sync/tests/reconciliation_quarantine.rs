@@ -11,12 +11,20 @@ use common::{default_transport, timeout_from_env, EngineFixture};
 
 const SEED: u64 = 99;
 
-fn wait_until(what: &str, cond: impl Fn() -> bool) {
+fn await_convergence(what: &str, cond: impl Fn() -> bool) {
     let deadline = Instant::now() + timeout_from_env();
+    let mut sleep_ms = 10u64;
     while !cond() {
         assert!(Instant::now() <= deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+        if sleep_ms < 100 {
+            sleep_ms = (sleep_ms * 2).min(100);
+        }
     }
+}
+
+fn wait_until(what: &str, cond: impl Fn() -> bool) {
+    await_convergence(what, cond)
 }
 
 fn read_to_string(root: &Path, rel: &str) -> Option<String> {
