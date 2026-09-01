@@ -1,6 +1,6 @@
 # Ticket 04: Encrypted Iroh Topic P2P Pairing Rendezvous
 
-Status: ready-for-agent
+Status: completed
 Depends on: 03
 Blocks: 06, 09, 10
 
@@ -21,9 +21,9 @@ Extend network pairing from local-only UDP multicast to wide-area Iroh P2P rende
 
 ## Acceptance
 
-- [ ] Pairing handshake succeeds across separate network subnets and Tailscale meshes via Iroh rendezvous.
-- [ ] Local subnet pairing continues to work offline without internet/relay access.
-- [ ] End-to-end tests verify pairing over Iroh transport fixtures.
+- [x] Pairing handshake succeeds across separate network subnets and Tailscale meshes via Iroh rendezvous.
+- [x] Local subnet pairing continues to work offline without internet/relay access.
+- [x] End-to-end tests verify pairing over Iroh transport fixtures.
 
 ## Comments
 

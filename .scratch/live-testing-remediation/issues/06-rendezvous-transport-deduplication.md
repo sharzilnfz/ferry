@@ -1,6 +1,6 @@
 # Ticket 06: Deduplicate Network Rendezvous Wire Functions
 
-Status: ready-for-agent
+Status: completed
 Depends on: 04
 Blocks: 09, 10
 
@@ -18,9 +18,9 @@ Consolidate duplicated wire framing and discovery socket implementations across 
 
 ## Acceptance
 
-- [ ] Network rendezvous socket and framing logic exists in exactly one module (`crates/ferry-iroh/src/rendezvous.rs`).
-- [ ] `crates/ferry-folder/src/pairing.rs` contains zero duplicated socket loop or framing code.
-- [ ] `cargo check --all-targets` and `cargo test -p ferry-folder -p ferry-iroh` pass cleanly.
+- [x] Network rendezvous socket and framing logic exists in exactly one module (`crates/ferry-iroh/src/rendezvous.rs`).
+- [x] `crates/ferry-folder/src/pairing.rs` contains zero duplicated socket loop or framing code.
+- [x] `cargo check --all-targets` and `cargo test -p ferry-folder -p ferry-iroh` pass cleanly.
 
 ## Comments
 
