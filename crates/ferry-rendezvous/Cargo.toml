@@ -1,0 +1,13 @@
+[package]
+name = "ferry-rendezvous"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+socket2.workspace = true
+libc.workspace = true
+
+[lints]
+workspace = true

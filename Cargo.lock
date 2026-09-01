@@ -1904,6 +1904,7 @@ dependencies = [
  "ferry-crypto",
  "ferry-ignore",
  "ferry-platform",
+ "ferry-rendezvous",
  "ferry-scan",
  "ferry-store",
  "libc",
@@ -1981,6 +1982,7 @@ dependencies = [
  "ferry-crypto",
  "ferry-folder",
  "ferry-relay",
+ "ferry-rendezvous",
  "ferry-store",
  "ferry-sync",
  "iroh",
@@ -2051,6 +2053,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ferry-rendezvous"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "libc",
+ "socket2 0.5.10",
 ]
 
 [[package]]
