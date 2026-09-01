@@ -5,54 +5,32 @@
 
 **Secure full-file sync for developers and their agents.**
 
-Your entire project directory — identical on every machine you touch,
-including everything git refuses to carry: `node_modules`, `.env`, build
-caches, agent state, datasets. End-to-end encrypted, peer-to-peer when
-possible, relayed when necessary. Git stays in charge of source history;
-Ferry carries everything else.
+Your entire project directory stays identical on every machine you touch.
+This includes everything git refuses to carry: `node_modules`, `.env`, build caches, agent state, datasets.
+Content is end-to-end encrypted, peer-to-peer when possible, and relayed when necessary.
+Git manages source history; Ferry synchronizes everything else.
 
 ## Why Ferry exists
 
-Git syncs tracked source. Nothing good syncs everything else:
+Git syncs tracked source code.
+Nothing good syncs everything else:
 
-- **Cloud drives** choke on symlinked directories, corrupt `node_modules`,
-  and read every byte of your code on their servers.
-- **General-purpose sync tools** are close but crude for development
-  workflows: weak conflict handling, painful performance on
-  dependency-scale directories, no concept of agent workflows.
-- **rsync/scp** are manual, one-directional, and stateless.
-- **AI coding agents** raised the stakes. An agent can churn through
-  thousands of files overnight on your desktop while you open the same
-  project on a laptop across town. Until now there has been no safe story
-  for that.
+- **Cloud drives** choke on symlinks, corrupt `node_modules`, and inspect code on their servers.
+- **General-purpose sync tools** perform poorly on dependency trees and lack agent awareness.
+- **rsync and scp** are manual, one-directional, and stateless.
+- **AI coding agents** churn through thousands of files overnight. Safe multi-device coordination is necessary.
 
 ## How it works
 
-1. **Sync stores, not trees.** Every machine keeps a content-addressed
-   object store: hash-addressed blobs plus signed manifests. The network
-   layer moves blobs and manifests; each machine materializes its own
-   working tree locally. Hash equality makes delta detection free.
-2. **End-to-end encrypted by default.** Content is encrypted before it
-   leaves a device; no plaintext ever touches a relay or another disk.
-   Devices pair through an explicit out-of-band payload, and `share`
-   secret-scans the folder (flagging `.env`-class files) before you send
-   anything.
-3. **Peer-to-peer first.** Direct connections when possible, with a
-   self-hostable relay as fallback. No vendor cloud is required, and a
-   hosted relay would never be load-bearing.
-4. **Conflicts quarantine, never merge.** Concurrent edits produce
-   explicit conflict files next to the originals plus a structured report.
-   Silent merges destroy trust; agents make concurrent writes common.
-5. **Agentic workflows are a first-class target:** selective sync via
-   layered ignore rules tuned for `node_modules`-scale directories,
-   session pinning that declares one device the active writer for a
-   while, and hydration of heavy dependencies from any peer that already
-   has them.
+1. **Sync stores, not trees.** Every machine maintains a content-addressed store of encrypted chunk packs and signed manifests. Local trees materialize on demand.
+2. **End-to-end encrypted by default.** Content is encrypted with ChaCha20-Poly1305 before leaving the device. Devices pair over shortcode rendezvous or out-of-band envelopes.
+3. **Peer-to-peer first.** Uses direct QUIC connections with mDNS local discovery and blind relay fallback.
+4. **Conflicts quarantine, never merge.** Concurrent edits produce deterministic conflict files (`*.ferry-conflict.*`) and structured logs in `.ferry/conflicts.jsonl`.
+5. **Agentic workflows.** Supports session pinning (`ferry pin start`) to hold remote writes during intense edits, plus layered ignore rules and secret-scan gating.
 
 ## Quick start
 
-Requirements: Rust 1.75+ (stable). macOS, Linux, and Windows are all
-supported and tested in CI.
+Requirements: Rust 1.75+ (stable). macOS, Linux, and Windows are supported.
 
 ```sh
 git clone https://github.com/sharzilnfz/ferry.git
@@ -60,96 +38,93 @@ cd ferry
 cargo build --release
 ```
 
-Two-device sync in five commands per side (or run
-`scripts/quickstart-e2e.sh`, which scripts exactly this flow against two
-local devices and asserts byte-for-byte convergence):
+### Two-device synchronization
 
 ```sh
-# Device A — create a folder and prepare it for sharing
+# Device A: initialize and share
 ferry init
-ferry share            # prints a 6-character code + QR (expires in 10m)
-ferry pair             # or: write an offer file for out-of-band exchange
+ferry share            # displays a 6-character short code and ASCII QR
 
-# Device B — adopt the folder from the code, the QR payload, or the file
+# Device B: join over the network
 ferry join <CODE>
-ferry pair --accept <path>/pair-offer.ferry-pair
 
-# Both devices — watch and exchange continuously
-ferry daemon
+# Both devices: background daemons sync automatically
+ferry status           # check peers, agreements, and pending work
+ferry status --json    # machine-readable status
 ```
 
-Inspect any folder at any time, human-readable or scripted:
+### Frontends and control
 
 ```sh
-ferry status              # peers, agreements, conflicts, pending work
-ferry status --json       # stable JSON document (schema-tested in CI)
-ferry pin start --hours 8 # declare this device the active writer
-ferry conflicts           # structured conflict report
+ferry ui --gui         # native desktop application (Obsidian Dark styling)
+ferry tui              # retro terminal dashboard with live meters
+ferry ui --web         # browser dashboard with real-time SSE stream
+ferry ui token         # retrieve active web session authentication token
+```
+
+### Session pinning and maintenance
+
+```sh
+ferry pin start --paths 'backend/**'  # hold competing remote edits
+ferry pin status                      # inspect held remote edits
+ferry pin release                     # reconcile held edits into tree
+ferry conflicts list                  # list quarantined conflict records
+ferry store gc --dry-run              # report unreferenced store packfiles
 ```
 
 ## Architecture
 
-The workspace is a set of small, sharply separated crates:
+The workspace is structured into specialized crates:
 
 | Crate | Responsibility |
 |---|---|
-| `ferry-cli` | The `ferry` binary: init, share, pair, status, pin, conflicts, ignore |
-| `ferry-daemon` | Background watcher: scans folders and exchanges with peers |
-| `ferry-sync` | Exchange sessions: handshake, encrypted transport, one-shot sync |
-| `ferry-sync-engine` | Three-way reconciliation into explicit action plans |
-| `ferry-materialize` | Guarded atomic applier: temp-write, verify, rename, restore metadata |
-| `ferry-scan` | Working-tree scanner and change engine (native events + rescans) |
-| `ferry-store` | Content-addressed store: chunker, blobs, manifests, snapshots |
-| `ferry-proto` | Wire protocol: framing, hello/offer/agreement messages |
-| `ferry-crypto` | Device identity, key handling, payload sealing |
-| `ferry-relay` | Self-hostable store-and-forward relay |
-| `ferry-iroh` | QUIC-based direct transports (iroh integration) |
-| `ferry-ignore` | Layered ignore rules and presets |
-| `ferry-pin` | Session pinning state and stale-holder detection |
-| `ferry-platform` | Cross-platform file semantics: paths, case folding, links, time |
+| `ferry-cli` | CLI entry point: commands, parsing, and auto-bootstrap supervisor |
+| `ferry-crypto` | Device identity, key derivation, and ChaCha20-Poly1305 sealing |
+| `ferry-daemon` | Central supervisor, device daemon, and web dashboard backend |
+| `ferry-folder` | Folder lifecycle, cryptographic header storage, and pairing rituals |
+| `ferry-gui` | Native desktop application with Obsidian Dark styling |
+| `ferry-ignore` | Layered ignore rules, secret pattern scanner, and presets |
+| `ferry-ipc` | Universal IPC transport, framing, and AutoBackend client fallback |
+| `ferry-iroh` | Direct QUIC transport, UDP hole-punching, and blind relay fallbacks |
+| `ferry-materialize` | Guarded atomic file applier and permission preservation |
+| `ferry-platform` | Cross-platform paths, locking, case-folding, and time utilities |
+| `ferry-proto` | Binary wire protocol framing, streams, and envelope structures |
+| `ferry-relay` | Blind relay server for NAT traversal fallbacks |
+| `ferry-rendezvous` | Network discovery, socket framing, and shortcode rendezvous server |
+| `ferry-scan` | Working tree scanner and change engine with notify event watchers |
+| `ferry-store` | Content-addressable chunk store, Rabin CDC, packfiles, and GC |
+| `ferry-sync` | P2P exchange engine, continuous sync loops, and transport adapters |
+| `ferry-sync-engine` | 3-way reconciliation, session pinning, and conflict logging |
+| `ferry-tui` | Retro terminal dashboard with live meters and in-TUI browser |
 
-Every applied change goes through the same guarded pipeline: resolve
-destinations, verify local losers, write to temp files, re-hash every
-chunk region, then atomically rename — interrupted applies leave either
-the old file or the new file, never half of either.
-
-Cross-platform behavior is deliberate rather than incidental: manifests
-carry mtime and exec-bit metadata, which Windows restores to the last
-100ns-representable value and treats as advisory where NTFS has no
-concept of the bit; symlink policy refuses anything that could escape the
-sync root; reserved device names are refused loudly instead of silently
-misbehaving.
+Every applied change goes through an atomic pipeline: verify local state, stage temp files, re-hash chunk regions, and atomically rename to destination.
 
 ## Platform support
 
 | Platform | CI | Notes |
 |---|---|---|
 | Linux (ubuntu-24.04) | ✅ | Reference platform |
-| macOS (macos-14) | ✅ | Full fidelity incl. nanosecond mtimes |
-| Windows (windows-2022) | ✅ | Exec bits carried in manifests but not stored on disk; symlinks require Developer Mode or admin |
+| macOS (macos-14) | ✅ | Full fidelity including nanosecond timestamps |
+| Windows (windows-2022) | ✅ | Executable bits carried in manifests; symlinks require Developer Mode |
 
 ## Documentation
 
-- [`SPEC.md`](SPEC.md) — v0 specification
-- [`CONTEXT.md`](CONTEXT.md) — glossary of domain terms
-- [`docs/adr/`](docs/adr/) — architecture decision records
-- [`research/use-cases.md`](research/use-cases.md) — archetypes and pain points
-- [`research/landscape.md`](research/landscape.md) — prior art worth borrowing
+- [`docs/manual-testing-guide.md`](docs/manual-testing-guide.md): complete dual-device live verification guide
+- [`SPEC.md`](SPEC.md): specification and milestone definitions
+- [`CONTEXT.md`](CONTEXT.md): glossary of domain terms
+- [`docs/adr/`](docs/adr/): architecture decision records (ADR-0001 through ADR-0008)
+- [`docs/cli-json.md`](docs/cli-json.md): CLI `--json` schema contract
+- [`research/use-cases.md`](research/use-cases.md): developer and agent workflow research
+- [`research/landscape.md`](research/landscape.md): comparative analysis with existing tools
 
 ## Development
 
 ```sh
-cargo test --workspace          # full suite, all platforms in CI
+cargo test --workspace          # run workspace test suite
 cargo clippy --workspace --all-targets -- -D warnings
-bash scripts/skeleton-e2e.sh    # walking-skeleton end-to-end
-bash scripts/quickstart-e2e.sh  # zero-to-two-devices acceptance
-bash scripts/adversarial-fixture.sh  # hostile-filename corpus
+bash scripts/quickstart-e2e.sh  # two-device end-to-end acceptance test
 ```
-
-Status: v0.1.0, pre-release. The wire protocol and store format may still
-change; do not build long-lived data on them yet.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE),
-at your option.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
